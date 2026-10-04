@@ -160,6 +160,55 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
+  test.each(["en", "uk"] as const)("named scheduled, draining and overrun states in %s", (locale) => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: null, green: { state: "green" },
+      blockers: { turns: 1, stages: 1, operatorActiveAt: null, busy: true, busyReason: "seat-tick", memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_worker", engine: "codex", project: "Example", seat: false, stage: null }],
+        stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
+      waitingSince: AT, longWait: true, drain: { state: "scheduled", at: AT } };
+    for (const [state, phrase] of [["scheduled", locale === "en" ? "From" : "Від"], ["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
+      ["overran", locale === "en" ? "held the update for 6 h" : "оновлення вже 6 год"]] as const) {
+      s.auto.drain = { state, at: AT, nextAt: AT };
+      const copy = text(section(render(s), "auto"));
+      expect(copy).toContain(phrase);
+      expect(copy).toContain("build · Finish the feature");
+      expect(copy).toContain("codex · worker");
+      expect(copy).toContain(locale === "en" ? "Orchestrator wake in progress" : "Триває пробудження оркестратора");
+      flushSync(() => root!.unmount());
+      host?.remove();
+    }
+  });
+  test.each(["keep-waiting", "deploy-now"] as const)("the six-hour %s choice posts its identity and broadcasts the accepted snapshot", async (choice) => {
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV, green: { state: "green" },
+      blockers: null, waitingSince: AT, longWait: true,
+      decision: { id: "drain-current", at: AT, project: "Example", blockers: { turns: 1, stages: 0, operatorActiveAt: null, busy: false, memoryMb: null, unreadable: null,
+        turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", stage: null, seat: false }] } } };
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let accepted: unknown;
+    const observe = (event: Event) => { accepted = (event as CustomEvent).detail; };
+    window.addEventListener("llv:auto-drain-decision", observe);
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ...s, auto: { ...s.auto, decision: null } }));
+    }) as typeof fetch;
+    try {
+      const el = render(s);
+      expect(el.querySelector("[data-auto-drain-decision]")?.textContent).toContain("conversation_long_turn");
+      expect(text(section(el, "auto"))).not.toContain("Waiting over");
+      button(el, choice)!.click();
+      await Bun.sleep(0);
+      expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
+      expect(accepted).toMatchObject({ auto: { decision: null } });
+    } finally {
+      globalThis.fetch = savedFetch;
+      window.removeEventListener("llv:auto-drain-decision", observe);
+    }
+  });
+
   test("the switch, blockers, serving revisions and history are visible", () => {
     const s = snapshot();
     s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, green: { state: "green" },
@@ -323,7 +372,7 @@ describe("update available and what changes", () => {
     expect(text(section(el, "header"))).toContain("Available1.2.3 · a1b2c3d");
     const update = section(el, "update")!;
     expect(text(update.querySelector("h2"))).toBe("Update to a1b2c3d (1.2.3)");
-    expect(text(update)).toContain("This builds the new version. Nothing restarts until you choose to.");
+    expect(text(update)).toContain("After you confirm, Delegatus builds and applies the update");
     expect([...update.querySelectorAll("[data-step]")].map(text)).toEqual(["Fetch a1b2c3d", "Check out a1b2c3d", "Install dependencies", "Build", "Ready"]);
     const changes = section(el, "changes")!;
     expect(text(changes.querySelector("[data-summary]"))).toBe("5 commits · 2 changelog entries (1 Added, 1 Fixed)");
@@ -659,7 +708,7 @@ describe("managed install", () => {
 describe("the rest of the surface", () => {
   test("an install that cannot update itself says why and offers nothing", () => {
     const el = render(snapshot({ mode: "unsupported", unsupportedReason: "not-a-checkout" }));
-    expect(text(el)).toContain("This Delegatus install came from a package.");
+    expect(text(el)).toContain("This package needs launcher supervision.");
     expect(button(el, "check")).toBeNull();
   });
 
@@ -740,3 +789,53 @@ describe("the rest of the surface", () => {
     expect(text(button(el, "restart-web"))).toBe("Перезапустити веб");
   });
 });
+
+for (const locale of ["en", "uk"] as const) {
+  test(`install prerequisite renders a single service button in ${locale}`, () => {
+    setLocale(locale);
+    const container = render(snapshot({ action: { id: "restart-service", button: true, unit: "delegatus.service" } }));
+    expect(container.querySelector('[data-action="install-action"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Update it the way");
+    expect(container.textContent).not.toContain("Оновіть її так");
+  });
+}
+
+test.each(["en", "uk"] as const)("every install prerequisite is actionable and localized in %s", (language) => {
+  setLocale(language);
+  for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments"] as const) {
+    const hasButton = ["restart-service", "update-first", "start-service"].includes(id);
+    const el = render(snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id, button: hasButton, command: "bun bin/cli.mjs --port 45123 --no-open" } }));
+    expect(Boolean(button(el, "install-action"))).toBe(hasButton);
+    expect(text(el)).not.toContain("Update it the way you installed it");
+    expect(text(el)).not.toContain("Оновіть її так, як її встановлювали");
+    flushSync(() => root!.unmount()); root = null; host?.remove();
+  }
+});
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `confirmed update instructions describe immediate apply in ${mode}/${locale}, auto=%s`, enabled => {
+    setLocale(locale);
+    const s = snapshot({ mode, available: rev(NEW, "1.0.1"), check: { ...idleCheck(), state: "update-available" } });
+    s.auto = { ...s.auto!, enabled };
+    const copy = text(render(s).querySelector('[data-section="update"]'));
+    expect(copy).toContain(locale === "en" ? "After you confirm" : "Після підтвердження");
+    expect(copy).toContain(locale === "en" ? "launcher, web and runtime host" : "лаунчер, веб і runtime host");
+    expect(copy).not.toContain(locale === "en" ? "Nothing restarts" : "Нічого не перезапускається");
+    expect(copy).not.toContain(locale === "en" ? "next quiet moment" : "найближчої тихої миті");
+  },
+);
+
+for (const mode of ["checkout", "package"] as const) for (const locale of ["en", "uk"] as const) test.each([false, true])(
+  `apply failure copy preserves serving facts in ${mode}/${locale}, rollback=%s`, rolledBack => {
+    setLocale(locale);
+    const update = { ...idleUpdate(), state: "failed" as const, rolledBack, target: NEW, targetShort: NEW.slice(0, 7),
+      startedAt: new Date(NOW - 60_000).toISOString(), finishedAt: new Date(NOW).toISOString(),
+      steps: [...pendingSteps(CHECKOUT_STEPS).map(step => ({ ...step, state: "done" as const })),
+        { ...pendingSteps(["switch"])[0]!, state: "failed" as const, failure: { kind: "error" as const, text: "candidate health failed" } }] };
+    const el = render(snapshot({ mode, update }));
+    const copy = text(el.querySelector('[data-outcome="failed"]'));
+    expect(copy).not.toContain(locale === "en" ? "running processes were not touched" : "Запущені процеси не зачеплено");
+    expect(copy).toContain(locale === "en" ? "Update stopped" : "Оновлення зупинилося");
+    if (rolledBack) expect(copy).toContain(locale === "en" ? "The previous release serves again" : "знову працює попередній реліз");
+  },
+);

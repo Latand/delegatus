@@ -341,6 +341,8 @@ export function mandateTooLargeBody(refusal: Extract<MandatePreflight, { ok: fal
 }
 
 export interface HandoffDigestRequest {
+  /** Re-read at each await seam before admitting an autonomous helper. */
+  autonomousAdmissionHeld?: () => boolean;
   project: string;
   /** Artifact directory name and headless run key. */
   clientRequestId: string;
@@ -461,7 +463,10 @@ function codexAssistantText(row: Record<string, unknown>): string | null {
    failure mode: a digest of decisions, blockers and in-flight work needs none
    of these to be useful, and the fresh handoff — which is not summarized —
    still carries the predecessor's real transcript path. */
-const EMAIL_ADDRESS = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const EMAIL_ADDRESS = new RegExp(
+  String.raw`[A-Za-z0-9._%+-]+@` + String.raw`[A-Za-z0-9.-]+\.[A-Za-z]{2,}`,
+  "g",
+);
 /** The owner segment of a code-hosting URL is an account handle. */
 const FORGE_OWNER = /\b((?:github|gitlab)\.com\/|bitbucket\.org\/)[A-Za-z0-9][A-Za-z0-9-]{0,38}/gi;
 const AT_HANDLE = /(^|[^A-Za-z0-9_@/])@[A-Za-z0-9][A-Za-z0-9._-]{1,38}/g;
@@ -544,7 +549,9 @@ export async function summarizeHandoffsHeadless(
   request: HandoffDigestRequest,
   runtime: HandoffDigestRuntime = productionDigestRuntime,
 ): Promise<HandoffDigestOutcome> {
+  if (request.autonomousAdmissionHeld?.()) return { kind: "fallback", reason: "unavailable" };
   const availability = await runtime.resolveAccount(request.project);
+  if (request.autonomousAdmissionHeld?.()) return { kind: "fallback", reason: "unavailable" };
   if (availability.kind === "exhausted") return { kind: "fallback", reason: "exhausted" };
   if (availability.kind !== "available") return { kind: "fallback", reason: "unavailable" };
   const report = request.predecessor
@@ -553,6 +560,7 @@ export async function summarizeHandoffsHeadless(
   const artifactDir = statePath("orchestrator", "handoff-digests", request.clientRequestId);
   try {
     const result = await runtime.run({
+      autonomousAdmissionHeld: request.autonomousAdmissionHeld,
       key: `orchestrator-handoff:${request.clientRequestId}`,
       /* A fresh empty directory: the summarizer reads only its prompt. */
       cwd: path.join(artifactDir, "cwd"),

@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { POST as deployPost } from "@/app/api/runtime/deployments/route";
+import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,18 +13,21 @@ import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentSt
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
 import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { installAction, runInstallAction } from "./actions";
 import { initialAuto, writeAuto } from "./auto";
-import type { GreenReader, GreenVerdict } from "./green";
+import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
-import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate } from "./routes";
+import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
-import type { Snapshot } from "./types";
+import { idleUpdate, stoppedProcess, type Snapshot } from "./types";
+import { initialCheck } from "./checkState";
+import type { LauncherRecord } from "./launcher";
 
 /*
  * #2007: the Update surface's routes in both install modes, end to end
@@ -122,6 +127,23 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
   };
 }
 
+test("operator drain replies reach the same service and reject stale identities", async () => {
+  const dir = mkdtempSync(join(root, "drain-decision-"));
+  const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1", date: "" };
+  const at = new Date().toISOString();
+  writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled: true,
+    drain: { id: "drain-current", target, since: at, overranAt: at, blockers: null } });
+  const service = new SelfUpdateService(baseDeps(dir, {}));
+  setSelfUpdateServiceForTests(service);
+  try {
+    expect((await postAuto(post("/auto", { decisionId: "drain-stale", choice: "keep-waiting" }))).status).toBe(409);
+    expect((await postAuto(post("/auto", { decisionId: "drain-current", choice: "keep-waiting" }))).status).toBe(202);
+    const saved = JSON.parse(readFileSync(join(dir, "auto.json"), "utf8"));
+    expect(saved.drain).toMatchObject({ id: "drain-current", acknowledgedAt: expect.any(String), force: false });
+    expect((await postAuto(post("/auto", { decisionId: "drain-current", choice: "deploy-now" }))).status).toBe(409);
+  } finally { service.stop(); }
+});
+
 describe("the operator gate", () => {
   test("an agent presenting its capability is refused every mutating route, and nothing is asked of the host", async () => {
     const requests: ViewerDeploymentRequest[] = [];
@@ -130,10 +152,12 @@ describe("the operator gate", () => {
     setCallerConversationResolverForTests(() => "conversation_some_worker");
     const agent = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
     for (const response of [
+      await postInstallAction(post("/action", undefined, agent)),
       await postCheck(post("/check", undefined, agent)),
       await postUpdate(post("/update", { key: "press-1" }, agent)),
       await postRestart(post("/restart", { role: "runtime-host", confirm: true }, agent)),
       await postAuto(post("/auto", { enabled: true }, agent)),
+      await postAuto(post("/auto", { decisionId: "drain", choice: "deploy-now" }, agent)),
     ]) {
       expect(response.status).toBe(403);
     }
@@ -151,6 +175,8 @@ describe("the operator gate", () => {
     })));
     setCallerConversationResolverForTests(() => "conversation_some_worker");
     const agent = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
+    expect((await (await getSnapshot(new Request(`${BASE}?readOnly=1`, { headers: browser }))).json()).check.state).toBe("idle");
+    expect(checks).toEqual([]);
     expect((await snapshot(agent)).check.state).toBe("idle");
     expect((await snapshot({ ...browser, origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" })).check.state).toBe("idle");
     await Bun.sleep(50);
@@ -528,6 +554,197 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
+    const { procBackend } = await import("@/lib/proc");
+    const { ApplyController } = await import("./apply");
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")) as LauncherRecord;
+    const controller = new ApplyController(h.deps.dir);
+    controller.begin(record, firstSha, "operator");
+    controller.patch({ state: "switching" });
+    record.launcher = { ...record.launcher, relaunch: 1, state: "healthy", revision: firstSha, requestId: controller.current!.requestId };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps);
+    try {
+      const healthy = await h.service.snapshot();
+      expect(healthy.processes.runtimeHost.state).toBe("healthy");
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).state).toBe("done");
+      h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity: `${process.pid}:reused`, hostEpoch: 1 });
+      expect((await h.service.snapshot()).processes.runtimeHost.state).toBe("failed");
+    } finally { h.service.stop(); }
+  });
+
+  test("a checkout exact deploy is idempotent, applies once and settles its seat receipt", async () => {
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const body = { revision: tipSha, idempotencyKey: "checkout-exact-press" };
+    const response = await deployPost(post("/runtime/deployments", body));
+    expect(response.status).toBe(202);
+    const receipt = await response.json();
+    const deploymentId = receipt.deploymentId;
+    expect(deploymentId).toMatch(/^checkout-/);
+    expect(receipt).toMatchObject({ state: "accepted", revision: tipSha });
+    const replay = await deployPost(post("/runtime/deployments", body));
+    expect(await replay.json()).toMatchObject({ deploymentId: receipt.deploymentId, replayed: true });
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: tipSha, rollbackPointer: null });
+    const moved = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    moved.launcher = { ...moved.launcher, requestId: request.requestId, state: "healthy", error: null };
+    moved.web.revision = moved.runtimeHost.revision = tipSha.slice(0, 7);
+    writeFileSync(h.recordFile, JSON.stringify(moved));
+    h.service.saveNow(); setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
+    expect((await snapshot()).update).toMatchObject({ state: "done", rolledBack: false });
+    const ledger = ledgerDeployment(deploymentId, { NODE_ENV: "test", LLV_STATE_DIR: h.deps.dir.replace(/self-update$/, "") });
+    expect(ledger).toMatchObject({ state: "ok", value: { phase: "succeeded", terminal: true } });
+  });
+
+  test("Retry after a verified rollback rebuilds and sends another complete apply", async () => {
+    const h = harness();
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    expect((await postUpdate(post("/update", { key: "apply-rollback" }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    const request = JSON.parse(readFileSync(record.requestFile, "utf8")); rmSync(record.requestFile);
+    record.launcher = { ...record.launcher, requestId: request.requestId, state: "healthy", error: { kind: "fell-back", revision: tipSha.slice(0, 7), detail: "candidate health failed" } };
+    writeFileSync(h.recordFile, JSON.stringify(record)); rmSync(record.releasePointer, { force: true });
+    await until(next => next.update.state === "failed");
+    expect((await postUpdate(post("/update", { key: "retry-rollback", retry: true }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ role: "relaunch", target: tipSha });
+  });
+
+  test("an exact deploy of the healthy serving revision settles without restarting it", async () => {
+    const h = harness({ holdBuild: true }); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    record.launcher = { ...record.launcher, relaunch: 1, revision: firstSha, state: "healthy" };
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const response = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "already-serving" }));
+    expect(response.status).toBe(202);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true });
+    expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false); expect(existsSync(record.requestFile)).toBe(false);
+  });
+
+  test.each(["missing", "done"] as const)("cold exact deployment reconciles a receipt with %s apply persistence", async completion => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    const at = new Date().toISOString();
+    const row = { deploymentId: "checkout-orphan", idempotencyKey: "crashed-before-apply", requestedRevision: tipSha, revision: tipSha,
+      phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+      health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 };
+    mkdirSync(h.deps.dir, { recursive: true });
+    writeFileSync(join(h.deps.dir, "deployments.json"), JSON.stringify([row]));
+    if (completion === "done") writeFileSync(join(h.deps.dir, "apply.json"), JSON.stringify({
+      requestId: "completed-before-ledger", target: tipSha, rollbackPointer: null, launcherPid: record.launcher.pid,
+      launcherIdentity: record.launcher.startIdentity, trigger: "seat", deploymentId: row.deploymentId, startedAt: at, state: "done", rolledBack: false,
+    }));
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: completion === "done" ? "succeeded" : "failed", terminal: true });
+    expect((await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "crashed-before-apply" }))).status).toBe(202);
+    expect((await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "after-crash" }))).status).toBe(202);
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+  });
+
+  test("cold ready checkpoint resumes one launcher request", async () => {
+    const h = harness(); const r = JSON.parse(readFileSync(h.recordFile, "utf8")); r.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(r));
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    await postUpdate(post("/update", { key: "before-cold" }));
+    await until(next => next.update.steps.some(step => step.name === "switch" && step.state === "running"));
+    h.service.saveNow();
+    const file = join(h.deps.dir, "apply.json"); const intent = JSON.parse(readFileSync(file, "utf8"));
+    writeFileSync(file, JSON.stringify({ ...intent, state: "ready" })); rmSync(r.requestFile);
+    h.service.stop(); setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
+    expect((await snapshot()).busy).toBe("update");
+    expect(JSON.parse(readFileSync(r.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch", target: tipSha });
+  });
+
+  test("a dialog apply admitted during exact green lookup leaves no orphan receipt", async () => {
+    const h = harness({ holdBuild: true }); const r = JSON.parse(readFileSync(h.recordFile, "utf8")); r.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(r));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const exact = deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "seat-concurrent" }));
+    await reading;
+    expect((await postUpdate(post("/update", { key: "dialog-concurrent" }))).status).toBe(202);
+    releaseGreen({ state: "green" });
+    expect((await exact).status).toBe(409);
+    const ledgerFile = join(h.deps.dir, "deployments.json");
+    expect(existsSync(ledgerFile) ? JSON.parse(readFileSync(ledgerFile, "utf8")) : []).toEqual([]);
+    h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
+  });
+
+  test.each(["accepted", "refused", "overlap"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    h.deps.bun = process.execPath;
+    const releaseDir = join(h.deps.dir, "built-release");
+    await git(checkout, "fetch", "origin");
+    const checkoutResult = await runGit(["worktree", "add", "--detach", releaseDir, tipSha], checkout);
+    if (checkoutResult.code !== 0) throw new Error(checkoutResult.stderr);
+    mkdirSync(join(releaseDir, ".next")); writeFileSync(join(releaseDir, ".next", "BUILD_ID"), "fixture");
+    mkdirSync(join(releaseDir, "bin")); writeFileSync(join(releaseDir, "bin", "launcher-relaunch.mjs"), "delegatus-launcher-relaunch-v1");
+    const entered = join(releaseDir, "preflight-entered");
+    const released = join(releaseDir, "preflight-released");
+    writeFileSync(join(releaseDir, "bin", "cli.mjs"), outcome === "overlap"
+      ? `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(entered)}, ""); while (!fs.existsSync(${JSON.stringify(released)})) await new Promise(r => setTimeout(r, 5));`
+      : 'process.stdout.write("fixture version\\n");');
+    const pointer = JSON.stringify({ sha: tipSha, dir: releaseDir, checkoutHead: firstSha }); writeFileSync(record.releasePointer, pointer);
+    const calls: string[][] = [];
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true }),
+      run: action => { if (outcome === "refused") throw new Error("manager unavailable"); runInstallAction(action, args => calls.push(args)); }, entry: () => join(checkout, "bin", "cli.mjs"),
+    };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    expect((await snapshot()).action?.id).toBe("restart-service");
+    await until(next => next.check.state !== "checking");
+    const first = h.service.performInstallAction();
+    if (outcome === "overlap") {
+      try {
+        const deadline = Date.now() + 2_000;
+        while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+        expect(existsSync(entered)).toBe(true);
+        expect(await h.service.performInstallAction()).toMatchObject({ ok: false, status: 409 });
+        expect(calls).toHaveLength(0);
+      } finally { writeFileSync(released, ""); await first; }
+    }
+    const result = await first;
+    if (outcome === "refused") {
+      expect(result).toMatchObject({ ok: false, status: 503 });
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "failed" });
+      expect(existsSync(record.requestFile.replace(/^(.+\/)request/, "$1trial"))).toBe(false);
+      expect(existsSync(record.releasePointer)).toBe(false);
+      return;
+    }
+    expect(result).toEqual({ ok: true });
+    expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", "delegatus.service"]);
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", target: tipSha, rollbackPointer: null,
+      rollbackWebRevision: firstSha.slice(0, 7), rollbackHostRevision: firstSha.slice(0, 7), externalRestart: true });
+    expect(existsSync(record.requestFile)).toBe(false);
+  });
+
+  test("a legacy terminal deploy returns the dialog prerequisite and sends no restart", async () => {
+    const h = harness(); setSelfUpdateServiceForTests(h.service);
+    const response = await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "old-launcher" }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ state: "action-required", code: "self-update-action-required", action: { id: "update-first", button: true } });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    expect(existsSync(record.requestFile)).toBe(false);
+  });
+
   test("the operator can enable auto-apply for checkout and managed installs", async () => {
     const h = harness({ remote: "https://github.com/example/project.git" });
     h.deps.check = async () => ({ ok: false, error: "fixture", installed: null });
@@ -600,6 +817,59 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(existsSync(record.requestFile)).toBe(false);
   });
 
+  test("an up-to-date relaunch-capable checkout without a pointer needs no prerequisite rebuild", async () => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    const target = await readRevision(checkout, "HEAD");
+    h.deps.check = async () => ({ ok: true, installed: target, available: null, relation: "equal", ahead: 0, behind: 0, delta: null });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await h.service.check();
+    expect((await h.service.snapshot()).action).toBeNull();
+    expect(await h.service.startUpdate("already-supervised")).toMatchObject({ ok: false, code: "no-update" });
+    expect(h.spawned).toEqual([]);
+  });
+
+  test.each(["green", "red", "pending", "unknown"] as const)("legacy update-first builds a green installed SHA without a previous pointer: %s", async verdict => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    const target = await readRevision(checkout, "HEAD");
+    h.deps.remote = "https://github.com/example/fixture.git";
+    h.deps.check = async () => ({ ok: true, installed: target, available: null, relation: "equal", ahead: 0, behind: 0, delta: null });
+    let builds = 0; const reads: unknown[][] = [];
+    h.deps.green = { read: async (...args: unknown[]) => { reads.push(args); return { state: verdict }; } } as unknown as GreenReader;
+    h.deps.createRunner = () => ({ state: idleUpdate(["fetch", "install", "build", "ready"]), restore() {}, logPath: () => "",
+      async start() { builds++; }, async retry() { throw new Error("not a retry"); } });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await h.service.check();
+    expect((await h.service.snapshot())).toMatchObject({ check: { state: "up-to-date" }, action: { id: "update-first", button: true } });
+    expect(existsSync(record.releasePointer)).toBe(false);
+    const result = await h.service.startUpdate("legacy-prerequisite-build");
+    expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: verdict });
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(builds).toBe(verdict === "green" ? 1 : 0);
+    await Bun.sleep(10);
+  });
+
+  for (const legacyToken of [false, true]) test.each(["red", "green"] as const)(`hand-managed rebuild verifies the installed SHA before dispatch, legacyToken=${legacyToken}: %s`, async verdict => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: firstSha, dir: checkout, checkoutHead: tipSha }));
+    const target = await readRevision(checkout, "HEAD");
+    if (legacyToken) h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+    h.deps.remote = "https://github.com/example/fixture.git";
+    h.deps.check = async () => ({ ok: true, installed: target, available: null, relation: "equal", ahead: 0, behind: 0, delta: null });
+    const reads: unknown[][] = []; let builds = 0;
+    h.deps.green = { read: async (...args: unknown[]) => { reads.push(args); return { state: verdict }; } } as unknown as GreenReader;
+    h.deps.createRunner = () => ({ state: idleUpdate(["fetch", "install", "build", "ready"]), restore() {}, logPath: () => "",
+      async start() { builds++; }, async retry() { throw new Error("not a retry"); } });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await h.service.check();
+    expect((await h.service.snapshot()).auto?.availability).toBe(legacyToken ? "launcher-upgrade" : "hand-managed");
+    const result = await h.service.startUpdate("manual-rebuild");
+    expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: "red" });
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(builds).toBe(verdict === "green" ? 1 : 0);
+    await Bun.sleep(10);
+  });
+
   test("a hand-managed checkout at the tracked tip can be rebuilt from the dialog", async () => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8")) as { releasePointer: string };
@@ -639,7 +909,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
 
     expect((await postUpdate(post("/update", { key: "press-1" }))).status).toBe(202);
     s = await until((next) => next.update.state === "done");
-    expect(s.update.steps.map((step) => step.state)).toEqual(["done", "done", "done", "done", "done"]);
+    expect(s.update.steps.map((step) => step.state)).toEqual(["done", "done", "done", "done", "done", "pending"]);
     const releaseDir = s.update.releaseDir!;
     expect(releaseDir.startsWith(join(root))).toBe(true);
     expect(h.spawned.map((command) => command.slice(0, 3).join(" "))).toEqual([
@@ -777,4 +1047,166 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const data = text.split("event: state\ndata: ")[1]!.split("\n")[0]!;
     expect((JSON.parse(data) as Snapshot).mode).toBe("checkout");
   });
+});
+
+
+test.each([
+  ["1.9.1", "1.10.0", "behind"],
+  ["1.10.0", "1.10.0", "equal"],
+  ["1.10.0", "1.9.1", "ahead"],
+  ["1.10.0-rc.2", "1.10.0-rc.10", "behind"],
+  ["1.10.0-rc.10", "1.10.0-rc.2", "ahead"],
+  ["1.10.0-rc.1", "1.10.0", "behind"],
+  ["1.10.0", "1.10.0-rc.1", "ahead"],
+  ["1.10.0-alpha", "1.10.0-alpha.1", "behind"],
+  ["1.10.0-beta", "1.10.0-alpha", "ahead"],
+] as const)("production package check orders installed %s against latest %s", async (installed, latest, relation) => {
+  const dir = mkdtempSync(join(root, "package-order-"));
+  const installRoot = join(dir, "package"); mkdirSync(installRoot);
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: installed }));
+  const record = {
+    version: 1, launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), revision: null },
+    web: { ...stoppedProcess(), startIdentity: null, requestId: null },
+    runtimeHost: { ...stoppedProcess(), startIdentity: null, requestId: null }, checkout: null, installRoot,
+    releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "runtime.sock"), updatedAt: new Date().toISOString(),
+  } as LauncherRecord;
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+    const version = String(input).endsWith("/latest") ? latest : installed;
+    return Response.json({ version, gitHead: version === installed ? "a".repeat(40) : tipSha });
+  }) as typeof fetch);
+  const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
+  try {
+    await service.check();
+    const result = await service.snapshot();
+    expect(result.installed?.version).toBe(installed);
+    expect(result.check).toMatchObject({ relation, state: relation === "behind" ? "update-available" : "up-to-date",
+      behind: relation === "behind" ? 1 : 0, ahead: relation === "ahead" ? 1 : 0 });
+    expect(result.available?.version ?? null).toBe(relation === "behind" ? latest : null);
+  } finally { service.stop(); fetcher.mockRestore(); }
+});
+
+test.each(["manual-upgrade", "missing-artifact", "valid"] as const)("package snapshots validate the installed pointer: %s", async shape => {
+  const dir = mkdtempSync(join(root, "package-pointer-"));
+  const installRoot = join(dir, "package"); const cached = join(dir, "cached");
+  const rootVersion = shape === "manual-upgrade" ? "1.0.2" : "1.0.0";
+  for (const directory of [installRoot, join(cached, "dist", "standalone")]) mkdirSync(directory, { recursive: true });
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: rootVersion }));
+  writeFileSync(join(cached, "package.json"), JSON.stringify({ version: "1.0.1" }));
+  writeFileSync(join(cached, "dist", "standalone", "server.js"), "fixture");
+  if (shape !== "missing-artifact") writeFileSync(join(cached, "dist", "runtime-host.mjs"), "fixture");
+  const record = { version: 1, checkout: null, installRoot, releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "host.sock"), launcher: { pid: 1, startIdentity: "1", relaunch: 1, state: "healthy" },
+    web: { state: "healthy", pid: 2, startIdentity: "2", revision: tipSha.slice(0, 7), error: null }, runtimeHost: { state: "healthy", pid: 3, startIdentity: "3", revision: tipSha.slice(0, 7), error: null } } as LauncherRecord;
+  writeFileSync(record.releasePointer, JSON.stringify({ kind: "package", version: "1.0.1", sha: tipSha, dir: cached, baseVersion: "1.0.0" }));
+  writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: { version: "1.0.1", sha: tipSha, short: tipSha.slice(0, 7), date: "" } } }));
+  const expectedVersion = shape === "valid" ? "1.0.1" : rootVersion;
+  const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
+  const registry = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+    const version = String(input).split("/").pop();
+    return Response.json({ version: version === "latest" ? "1.0.3" : version, gitHead: version === "1.0.1" ? tipSha : "c".repeat(40) });
+  }) as typeof fetch);
+  try {
+    const before = await service.snapshot();
+    expect(before.installed.version).toBe(expectedVersion);
+    if (shape !== "valid") expect(before.installed.sha).not.toBe(tipSha);
+    await service.check();
+    expect((await service.snapshot()).installed).toMatchObject({ version: expectedVersion, sha: shape === "valid" ? tipSha : "c".repeat(40) });
+  } finally { service.stop(); registry.mockRestore(); }
+});
+
+for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.each(["green", "red", "fetch-failed"] as const)(`clean package ${operation} fetches its published source before real green admission: %s`, async verdict => {
+  const dir = mkdtempSync(join(root, "package-empty-repo-")); const installRoot = join(dir, "package"); mkdirSync(installRoot);
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.0.0" }));
+  const repo = await prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "missing", "objects"));
+  const forge = "https://github.com/example/fixture.git";
+  await git(repo, "config", `url.${verdict === "fetch-failed" ? join(dir, "unavailable.git") : remote}.insteadOf`, forge);
+  const expected = verdict === "fetch-failed" ? "unknown" : verdict;
+  const targetSha = operation === "rebuild" ? firstSha : tipSha;
+  const record = { version: 1, checkout: null, installRoot, releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "host.sock"), launcher: { pid: 1, startIdentity: "1", relaunch: operation === "rebuild" ? undefined : 1, state: "healthy" },
+    web: { state: "healthy", pid: 2, startIdentity: "2", revision: firstSha.slice(0, 7), error: null }, runtimeHost: { state: "healthy", pid: 3, startIdentity: "3", revision: firstSha.slice(0, 7), error: null } } as LauncherRecord;
+  const target = { version: operation === "rebuild" ? "1.0.0" : "1.0.1", sha: targetSha, short: targetSha.slice(0, 7), date: "" };
+  const update = operation === "retry" ? { ...idleUpdate(["fetch", "install", "ready"]), state: "failed", target: tipSha, targetVersion: target.version } : null;
+  writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: operation === "rebuild" ? target : null, available: operation === "rebuild" ? null : target, check: { ...initialCheck().check, state: operation === "rebuild" ? "up-to-date" : "update-available", relation: operation === "rebuild" ? "equal" : "behind" } }, update }));
+  const tree = await git(work, "rev-parse", `${targetSha}^{tree}`);
+  const reader = new GreenReader({ now: Date.now, treeOf: async (directory, sha) => {
+    const result = await runGit(["rev-parse", "--verify", `${sha}^{tree}`], directory);
+    if (result.code !== 0) throw new Error("target tree is unreadable"); return result.stdout.trim();
+  }, fetch: (async input => {
+    const url = String(input);
+    return Response.json(url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: targetSha, base: { ref: "main" }, head: { sha: targetSha } }]
+      : url.includes("/check-runs") ? { check_runs: [{ name: "test", status: "completed", conclusion: verdict === "green" ? "success" : "failure" }] }
+      : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: false } : { commit: { tree: { sha: tree } } });
+  }) as typeof fetch });
+  const service = new SelfUpdateService(baseDeps(dir, { remote: forge, mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => repo, green: reader }));
+  let deliveryReads = 0;
+  const registry = spyOn(globalThis, "fetch").mockImplementation((async input => {
+    if (String(input).endsWith("/latest")) return Response.json({ version: target.version, gitHead: targetSha });
+    deliveryReads++; throw new Error("fixture package delivery boundary");
+  }) as typeof fetch);
+  try {
+    expect((await runGit(["cat-file", "-e", `${targetSha}^{commit}`], repo)).code).not.toBe(0);
+    if (operation === "deploy") {
+      const attempt = service.deployRevision({ revision: tipSha, idempotencyKey: "fresh-package-deploy" });
+      if (verdict === "green") expect(await attempt).toMatchObject({ state: "accepted", revision: tipSha });
+      else await expect(attempt).rejects.toThrow(`not green (${expected})`);
+    } else {
+      const result = operation !== "retry" ? await service.startUpdate("fresh-package-update") : await service.retry("fresh-package-retry");
+      expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: expected });
+    }
+    expect((await runGit(["cat-file", "-e", `${targetSha}^{commit}`], repo)).code === 0).toBe(verdict !== "fetch-failed");
+    await Bun.sleep(10);
+    expect(deliveryReads).toBe(verdict === "green" ? 1 : 0);
+    expect(existsSync(record.releasePointer)).toBe(false);
+  } finally { await Bun.sleep(10); service.stop(); registry.mockRestore(); }
+});
+
+for (const operation of ["update", "retry"] as const) {
+  test.each(["red", "pending", "unknown", "green"] as const)(`package ${operation} admits only a green published source: %s`, async verdict => {
+    const dir = mkdtempSync(join(root, "package-green-")); const installRoot = join(dir, "package"); mkdirSync(installRoot);
+    writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.0.0" }));
+    const record = { version: 1, checkout: null, installRoot, releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request-fixture.json"),
+      port: 3000, socket: join(dir, "host.sock"), launcher: { pid: 1, startIdentity: "1", relaunch: 1, state: "healthy" },
+      web: { state: "healthy", pid: 2, startIdentity: "2", revision: firstSha.slice(0, 7), error: null }, runtimeHost: { state: "healthy", pid: 3, startIdentity: "3", revision: firstSha.slice(0, 7), error: null } } as LauncherRecord;
+    const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
+    const slice = { ...initialCheck(), available: target, check: { ...initialCheck().check, state: "update-available", at: new Date().toISOString() } };
+    const update = operation === "retry" ? { ...idleUpdate(["fetch", "install", "ready"]), state: "failed", target: target.sha, targetVersion: target.version } : null;
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ slice, update }));
+    const reads: unknown[][] = [];
+    const deps = baseDeps(dir, { remote: "https://github.com/example/fixture.git", mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => checkout,
+      green: { read: async (...args: unknown[]) => { reads.push(args); return { state: verdict }; } } as unknown as GreenReader });
+    const service = new SelfUpdateService(deps);
+    // Delivery is forbidden before admission. A green case stops at this
+    // fixture boundary instead of reaching the registry or package manager.
+    const registry = spyOn(globalThis, "fetch").mockRejectedValue(new Error("fixture delivery boundary"));
+    try {
+      const result = operation === "update" ? await service.startUpdate("package-update") : await service.retry("package-retry");
+      expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: verdict });
+      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout]]);
+      expect(registry.mock.calls.length).toBe(verdict === "green" ? 1 : 0);
+      await Bun.sleep(10);
+      expect(existsSync(record.releasePointer)).toBe(false);
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(existsSync(join(dir, "apply.json"))).toBe(verdict === "green");
+    } finally { await Bun.sleep(10); registry.mockRestore(); service.stop(); }
+  });
+}
+
+
+test("a fresh manual Viewer writes adoption before its launcher prerequisite", async () => {
+  const dir = mkdtempSync(join(root, "fresh-manual-"));
+  const service = new SelfUpdateService(baseDeps(join(dir, "self-update"), {
+    mode: async () => ({ mode: "unsupported", reason: "no-runtime-host", record: null, installRoot: checkout }),
+    env: { LLV_STATE_OWNER: "viewer", PORT: "34567" },
+    web: { pid: process.pid, port: 34567, startedAt: new Date().toISOString() },
+  }));
+  try {
+    await service.decide();
+    const { cliRuntimeHostConfig } = await import("../../../bin/server-runtime.mjs");
+    const config = cliRuntimeHostConfig(checkout, { env: { LLV_STATE_DIR: dir } });
+    const adopt = join(dir, "self-update", `adopt-${config.installId}.json`);
+    expect(existsSync(adopt)).toBe(true);
+    expect(JSON.parse(readFileSync(adopt, "utf8"))).toMatchObject({ pid: process.pid, startIdentity: readStartIdentity(process.pid), port: 34567, socket: config.socketPath, installRoot: checkout });
+  } finally { service.stop(); }
 });

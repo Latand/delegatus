@@ -1043,3 +1043,77 @@ test("the pipeline engine reads a continuation the successor submitted as arrive
     journal.close();
   }
 });
+
+test("persistent update drain holds a fresh agent turn through queue recovery, while submitted work and operator sends settle", async () => {
+  const { NextRequest } = await import("next/server");
+  const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
+  const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
+  const { handleRuntimeCommand } = await import("./http");
+  const { kickStructuredDeliveryQueue } = await import("./structuredDeliverySignal");
+  const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const registry = new AgentRegistry(path.join(directory, "drain-registry.json"));
+  const artifactPath = path.join(directory, "drain-session.jsonl");
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "fixture", launchProfile: profile,
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString() }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
+  registry.upsert({ key, artifactPath, cwd: directory, accountId: "fixture", launchProfile: profile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "fake:update-drain", process: null, eventCursor: 0,
+      protocolVersion: "fake-v1", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const journal = new RuntimeJournal(path.join(directory, "drain-runtime.sqlite"), { structuredHosts: true });
+  const client = journalClient(journal);
+  const host = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
+  const hosts = [{ key, host }];
+  setCallerConversationResolverForTests(() => "conversation_fixture_sender");
+  try {
+    await bindStructuredDeliveryQueue(hosts as never, { registry, client });
+    const submitted = journal.executeOperation({ kind: "send", conversationId: conversation.id, text: "Already admitted", idempotencyKey: "before-drain", origin: { kind: "agent" } });
+    const since = new Date(Date.parse(submitted.receipt.admittedAt!) + 1).toISOString();
+    writeDrain(drainFile(), { id: "turn-drain", target: "a".repeat(40), since, until: 0, persistent: true });
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes.map(write => write.text)).toEqual(["Already admitted"]);
+    // Give the fresh admission an immutable stamp after the hold boundary.
+    while (Date.now() <= Date.parse(since)) await new Promise(resolve => setTimeout(resolve, 1));
+    const request = new NextRequest("http://127.0.0.1/api/runtime/send", { method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json", [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) },
+      body: JSON.stringify({ conversationId: conversation.id, text: "Fresh autonomous work", idempotencyKey: "during-drain" }) });
+    const response = await handleRuntimeCommand(request, "send", { enabled: () => true, structuredEnabled: () => true,
+      registry: () => registry, client: () => client, recordOperatorRequest: () => null,
+      retireReplySuggestions: () => ({ cleared: false, pending: false }), kick: () => {} });
+    expect(response.status).toBe(202);
+    const accepted = await response.json();
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes).toHaveLength(1);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await bindStructuredDeliveryQueue(hosts as never, { registry, client });
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes).toHaveLength(1);
+    const manual = journal.executeOperation({ kind: "send", conversationId: conversation.id, text: "Operator work", idempotencyKey: "manual-drain", origin: { kind: "operator" } });
+    await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes.map(write => write.text)).toEqual(["Already admitted", "Operator work"]);
+    expect(journal.operationResult(manual.operationId)!.receipt.status).toBe("delivered");
+    releaseDrain(drainFile(), "turn-drain");
+    await kickStructuredDeliveryQueue(); await kickStructuredDeliveryQueue();
+    expect(host.ledger.writes.map(write => write.text)).toEqual(["Already admitted", "Operator work", "Fresh autonomous work"]);
+    expect(host.ledger.writes[2].id).toBe(accepted.operationId);
+  } finally {
+    setCallerConversationResolverForTests(null); releaseDrain(drainFile(), "turn-drain");
+    await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+  }
+});
+
+test("a pending spawn's first prompt retains its original cohort admission time", async () => {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const registry = new AgentRegistry(path.join(directory, "admitted-spawn-registry.json"));
+  const launch = beginLegacySpawnFixture(registry, { engine: "codex", cwd: directory });
+  if (launch.kind !== "created") throw new Error("fixture spawn was not reserved");
+  await new Promise(resolve => setTimeout(resolve, 2));
+  const op = `spawn_message_${launch.receipt.launchId}`;
+  const message = registry.holdDelivery(launch.receipt.conversationId, "Initial accepted prompt", `spawn_${launch.receipt.launchId}`, "text", [], null, { operationId: op });
+  expect(registry.deliveryAdmissionAtForOperation(op)).toBe(launch.receipt.createdAt);
+  expect(Date.parse(message.createdAt)).toBeGreaterThan(Date.parse(launch.receipt.createdAt));
+  const normal = registry.holdDelivery(launch.receipt.conversationId, "New work", "ordinary-message", "text", [], null, { operationId: "ordinary-operation" });
+  expect(registry.deliveryAdmissionAtForOperation("ordinary-operation")).toBe(normal.createdAt);
+});

@@ -26,6 +26,7 @@ import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
 import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -479,6 +480,34 @@ test("gateway spawn with no MCP selection sends the Viewer baseline explicitly",
   await gateway({ clientRequestId: "root-agent-baseline", cwd: "/repo", title: "Root child", ["prompt"]: "inspect" });
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
+});
+
+test("automatic drain refuses autonomous spawns and permits operator launches", async () => {
+  const file = drainFile();
+  let spawns = 0;
+  const control = { post: async () => { spawns++; return { conversationId: "conversation_child", path: null, launchId: "launch_child",
+    state: "starting", initialMessage: "pending", transport: "structured" }; } };
+  const as = (kind: string) => viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_caller", role: "builder" }) } as never).spawn_agent;
+  writeDrain(file, { id: "mcp-test", target: "a".repeat(40), since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    const args = { cwd: "/repo", title: "Work", ["prompt"]: "Finish the work" };
+    await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    expect(spawns).toBe(0);
+    await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
+    expect(spawns).toBe(1);
+  } finally { releaseDrain(file, "mcp-test"); }
+});
+
+test("automatic update answer keeps totals and drain metadata within six KB", async () => {
+  const control = { post: async () => ({}), get: async () => ({ mode: "checkout", auto: { availability: "available", enabled: true, phase: "waiting", longWait: true,
+    drain: { state: "draining", at: "2026-01-01T04:00:00Z" },
+    blockers: { turns: 40, stages: 40, busy: false, unreadable: null, memoryMb: null, operatorActiveAt: null,
+      turnList: Array.from({ length: 20 }, (_, i) => ({ conversationId: `conversation_${i}`, engine: "codex", project: "Example".repeat(20), stage: null, seat: true })),
+      stageList: Array.from({ length: 20 }, (_, i) => ({ pipelineId: `pipeline_${i}`, stageId: "build", cursor: "running", task: "Build the feature".repeat(5), conversationId: `conversation_${i}` })) } } }) };
+  const result = await viewerMcpBindings(undefined, control).auto_updates({ clientRequestId: "bounded-update" });
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(6000);
+  expect(result).toMatchObject({ blockers: { turns: 40, stages: 40 }, drain: { state: "draining" } });
 });
 
 test("spawn_agent stamps the launcher from server attribution and never from the arguments (spawn-completion-notice §1)", async () => {
@@ -4211,7 +4240,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
   const calls: unknown[] = [];
   const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
@@ -4234,7 +4263,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
 
 test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async () => { throw new Error("must not be reached"); },
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
   } as never);
@@ -4248,7 +4277,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "fixture-project", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
@@ -4379,4 +4408,30 @@ test("MCP note authors follow authenticated attribution and round-trip through r
     expect(clear.ok).toBe(true);
     expect(loadTasks()[0]!.note).toBeUndefined();
   }
+});
+
+test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries its autonomous admission restriction to the route", async (kind) => {
+  let sentHeaders: Record<string, string> | undefined;
+  const control = { post: async (_path: string, _body: Record<string, unknown>, headers?: Record<string, string>) => {
+    sentHeaders = headers; return { conversationId: "conversation_fixture_admission", launchId: "fixture-admission", state: "starting", initialMessage: "pending" };
+  } };
+  const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
+  await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
+  expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
+});
+
+test("checkout deploy prerequisite survives the production MCP control response", async () => {
+  const originalFetch = globalThis.fetch;
+  const action = { id: "restart-terminal", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" };
+  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  try {
+    const bindings = viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+      callerProject: () => "proj-a", viewerProjects: () => ["proj-a"],
+      authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+    } as never);
+    const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -5623,6 +5623,7 @@ async function lightboxMain(): Promise<void> {
 /* One browser driver owns the Update dialog geometry too. Its API answer is a
    fixture, so no capture can start a real update or restart. */
 async function selfUpdateAutoMain(): Promise<void> {
+  const messages = { en: (await import("../src/lib/i18n/en")).en, uk: (await import("../src/lib/i18n/uk")).uk };
   seedHome();
   const evidenceDir = process.env.SELF_UPDATE_AUTO_EVIDENCE_DIR?.trim() || null;
   const port = await freePort();
@@ -5642,10 +5643,57 @@ async function selfUpdateAutoMain(): Promise<void> {
   const states: Record<string, Snapshot> = {
     off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
-    longWait: { ...base, auto: { ...auto, longWait: true } },
+    scheduled: { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      busy: true, busyReason: "pipeline-controller", turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_helper", engine: "codex", project: "Example", seat: false, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the feature and publish checks", cursor: "running", conversationId: "conversation_builder" }] } } },
+    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: "2026-01-02T06:00:00Z" }, blockers: { ...auto.blockers,
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }] } } },
+    "long-names": { ...base, auto: { ...auto, drain: { state: "scheduled", at: "2026-01-02T04:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_seat", engine: "codex", project: "Project".repeat(11) + "Name", seat: true, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "T".repeat(80), cursor: "running", conversationId: "conversation_builder" }] } } },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
+  states["install-action"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
+  states["install-switch"] = { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null }, busy: "update",
+    update: { ...idleUpdate(), state: "running", target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z",
+      steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "running", startedAt: "2026-01-02T00:00:00Z", durationMs: null, exitCode: null, tail: [], failure: null }] } };
+  const idleAuto = { ...auto, enabled: false, phase: "idle" as const, blockers: null };
+  states["install-available"] = { ...base, installed: revision(old), available: revision(next),
+    check: { ...base.check, state: "update-available" }, auto: idleAuto };
+  states["install-package"] = { ...states["install-available"]!, mode: "package",
+    installed: revision(old), available: { ...revision(next), version: "1.6.2" },
+    update: idleUpdate(["fetch", "install", "ready"]), auto: { ...idleAuto, availability: "packaged" } };
+  states["install-available-auto"] = { ...states["install-available"]!, auto: { ...idleAuto, enabled: true } };
+  states["install-package-auto"] = { ...states["install-package"]!, auto: { ...idleAuto, enabled: true, availability: "packaged" } };
+  // Commands contain invented install context and exercise wrapping at phone width.
+  const terminalPlan = Buffer.from(JSON.stringify({ target: next, root: "$HOME/Projects/example install",
+    requestFile: "$HOME/.local/state/example install/self-update/request-example.json",
+    releasePointer: "$HOME/.local/state/example install/self-update/release-example.json",
+    rollbackPointer: null, priorRevision: old.slice(0, 7), priorVersion: null, checkout: true })).toString("base64");
+  const command = `env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal '${terminalPlan}' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open`;
+  for (const id of ["restart-terminal", "start-launcher", "start-service", "update-first", "docker-deployments"] as const) {
+    const unsupported = ["start-launcher", "start-service", "docker-deployments"].includes(id);
+    states[`install-${id}`] = { ...base, mode: unsupported ? "unsupported" : "checkout", unsupportedReason: id === "docker-deployments" ? "docker-deployments" : unsupported ? "no-launcher" : null,
+      auto: idleAuto, action: { id, button: ["start-service", "update-first"].includes(id),
+        ...(["restart-terminal", "start-launcher"].includes(id) ? { command } : {}),
+        ...(id === "start-service" ? { unit: "delegatus.service" } : {}),
+        ...(id === "docker-deployments" ? { command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" } : {}) } };
+  }
+  for (const rollback of [false, true]) {
+    states[rollback ? "install-rollback" : "install-failed"] = { ...base, installed: revision(old), auto: { ...idleAuto,
+      off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } },
+      update: { ...idleUpdate(), state: "failed", rolledBack: rollback, target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
+        steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "failed", startedAt: "2026-01-02T00:00:00Z", durationMs: 60_000, exitCode: null, tail: [], failure: { kind: "error", text: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } }] } };
+  }
+  states.overran!.auto!.decision = { id: "drain-example", at: "2026-01-02T06:00:00Z", project: "Delegatus", blockers: {
+    ...auto.blockers,
+    stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Complete the long running feature", cursor: "running", conversationId: "conversation_builder" }],
+    turnList: [{ conversationId: "conversation_long_turn", engine: "codex", project: "Example", seat: false, stage: null }],
+  } };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -5654,42 +5702,120 @@ async function selfUpdateAutoMain(): Promise<void> {
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, false);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    // The isolated install's first-run toast otherwise covers phone choices.
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states).filter(([name]) => !process.env.SELF_UPDATE_INSTALL_ONLY || name.startsWith("install-"))) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
       const page = await context.newPage();
-      await page.route("**/api/self-update", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
+      await page.route(/\/api\/self-update(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
+      await page.route("**/api/self-update/events*", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(snapshot)}\n\n` }));
       await page.goto(`${baseUrl}/`);
       await page.waitForFunction(() => {
         if (document.querySelector("[data-self-update-dialog]")) return true;
         window.dispatchEvent(new Event("llv:open-self-update"));
         return false;
       }, undefined, { timeout: 60_000 });
-      await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
-      const geometry = await page.evaluate(() => {
-        const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
-        const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
-        const button = card.querySelector<HTMLButtonElement>('[data-action="toggle-auto"]')!;
-        const outer = dialog.getBoundingClientRect();
-        const rect = card.getBoundingClientRect();
-        const control = button.getBoundingClientRect();
-        return { overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
-          text: card.innerText.slice(0, 600) };
-      });
       const tag = `${width}-${lang}-${name}`;
-      report.frames[tag] = geometry;
-      if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
-      if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
+      const primarySection = snapshot.mode === "unsupported" ? "install-action" : "auto";
+      await page.waitForSelector(`[data-section="${primarySection}"]`, { timeout: 30_000 });
+      if (snapshot.mode !== "unsupported") {
+        await page.locator('[data-section="auto"]').scrollIntoViewIfNeeded();
+        const geometry = await page.evaluate(() => {
+          const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
+          const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
+          const button = card.querySelector<HTMLButtonElement>('[data-action="toggle-auto"]')!;
+          const outer = dialog.getBoundingClientRect();
+          const rect = card.getBoundingClientRect();
+          const control = button.getBoundingClientRect();
+          const blockerRows = [...card.querySelectorAll<HTMLElement>("ul li")].map((row) => {
+            const range = document.createRange(); range.selectNodeContents(row);
+            const bounds = [...range.getClientRects()];
+            return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+              left: Math.min(...bounds.map((bound) => bound.left)), right: Math.max(...bounds.map((bound) => bound.right)), lines: bounds.length };
+          });
+          return { blockerRows, cardOverflow: card.scrollWidth - card.clientWidth, overflow: dialog.scrollWidth - dialog.clientWidth,
+            card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
+            text: card.innerText.slice(0, 600) };
+        });
+        report.frames[tag] = geometry;
+        if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
+        if (geometry.blockerRows.some(row => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) report.failures.push(`${tag}: blocker text spills beyond card`);
+        if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some(row => row.lines < 2))) report.failures.push(`${tag}: long blocker name did not wrap`);
+        if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
+      }
+      if (name.startsWith("install-")) {
+        const section = snapshot.action ? "install-action" : "update";
+        const target = page.locator(`[data-section="${section}"]`);
+        await target.scrollIntoViewIfNeeded();
+        const installation = await target.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const buttons = [...element.querySelectorAll<HTMLButtonElement>("button")].map(button => {
+            const rect = button.getBoundingClientRect();
+            return { text: button.innerText, width: rect.width, height: rect.height,
+              inside: rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom };
+          });
+          const textBounds = [...element.querySelectorAll<HTMLElement>("p, code")].flatMap(node => {
+            const range = document.createRange(); range.selectNodeContents(node);
+            return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right }));
+          });
+          return { overflow: element.scrollWidth - element.clientWidth, text: element.textContent,
+            action: !!element.querySelector('[data-action="install-action"]'), buttons,
+            clippedText: textBounds.some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1),
+            untranslated: /selfUpdate\.[A-Za-z]/.test(element.textContent ?? "") };
+        });
+        report.frames[`${tag}-installation`] = installation;
+        if (installation.overflow > 1 || installation.clippedText || installation.untranslated
+          || snapshot.action?.button && !installation.action
+          || installation.buttons.some(button => !button.inside || width === 390 && (button.width < 44 || button.height < 44))) report.failures.push(`${tag}: install surface or control is unreadable`);
+        if (snapshot.action) {
+          const key = `selfUpdate.action.${snapshot.action.id}` as const;
+          const instruction = messages[lang][key];
+          if (typeof instruction !== "string" || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
+          if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
+        }
+        if (name === "install-available" || name === "install-available-auto" || name === "install-package" || name === "install-package-auto") {
+          const instruction = messages[lang]["selfUpdate.update.noteApply"];
+          if (typeof instruction !== "string" || !installation.text?.includes(instruction)
+            || /Nothing restarts|next quiet moment|Нічого не перезапускається|найближчу тиху хвилину/.test(installation.text ?? "")) report.failures.push(`${tag}: confirmed update copy contradicts immediate apply`);
+        }
+        if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
+      }
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });
       if (evidenceDir) {
         fs.mkdirSync(evidenceDir, { recursive: true });
         fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+      }
+      if (name === "overran") {
+        await page.keyboard.press("Escape");
+        // This existing case also checks the standing Needs-you control; all
+        // update API answers are fixtures and neither choice is submitted.
+        if (width === 390) {
+          await page.goto(`${baseUrl}/#p=__overview__`);
+          await page.locator('[data-mobile2-open="attention"]').click();
+        } else {
+          await page.locator("[data-attention-island] > button").first().click();
+        }
+        const fold = page.locator('[data-needs-you-fold="Delegatus"]');
+        if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
+        const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
+        await choice.waitFor({ state: "visible", timeout: 30_000 });
+        const choices = await choice.evaluate((element) => ({
+          overflow: element.scrollWidth - element.clientWidth,
+          named: element.textContent?.includes("conversation_long_turn"),
+          choices: element.querySelectorAll("button").length,
+        }));
+        report.frames[`${tag}-needs-you`] = choices;
+        if (choices.overflow > 1 || !choices.named || choices.choices !== 2) report.failures.push(`${tag}: Needs-you decision is unreadable`);
+        await choice.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-needs-you.png`) });
       }
       await context.close();
     }

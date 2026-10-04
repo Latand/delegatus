@@ -91,7 +91,7 @@ export class UpdateRunner {
     };
   }
 
-  async start(target: string, meta: { short?: string; version?: string; trigger?: "operator" | "auto" } = {}): Promise<void> {
+  async start(target: string, meta: { short?: string; version?: string; trigger?: "operator" | "seat" | "auto" } = {}): Promise<void> {
     if (this.state.state === "running") throw new Error("an update is already running");
     this.state = {
       ...idleUpdate(CHECKOUT_STEPS),
@@ -233,7 +233,17 @@ export class UpdateRunner {
         const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
         const fetched = (await this.ports.revParse(TIP_REF, checkout)).trim();
         if (fetched !== target) {
-          throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
+          // Automatic admission freezes a green revision while its original
+          // cohort finishes. Later merges may advance main without invalidating
+          // that revision. Verify it is still on main before building it;
+          // manual updates retain the exact-tip check and rewrites fail closed.
+          const ancestry = ["git", "merge-base", "--is-ancestor", target, fetched];
+          const ancestor = (this.state.trigger === "auto" || this.state.trigger === "seat")
+            && await this.ports.run(ancestry, { cwd: checkout, env, onLine: (line) => push(line), lowPriority: true }) === 0;
+          if (!ancestor) {
+            throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
+          }
+          push(`main advanced to ${shortSha(fetched)}; building its validated ancestor ${shortSha(target)}`, false);
         }
         return code;
       }

@@ -42,6 +42,8 @@ import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
+import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
+import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -957,7 +959,9 @@ function ViewerApp() {
      rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
+  const updateFeed = useSelfUpdateFeed(true);
+  const updateDecision = updateFeed.snapshot?.auto?.decision;
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision), [files, pipelines, clock, closingPipelines, updateDecision]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1336,6 +1340,7 @@ function ViewerApp() {
      returns to the board the operator left. */
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         if (entry.item.project !== project) applyProject(entry.item.project);
         requestFocus(entry.item.file.path);
@@ -1410,6 +1415,7 @@ function ViewerApp() {
      conversation's row, landing on the lane's card. */
   const jumpToEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         jumpToItem(entry.item);
         return;

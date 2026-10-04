@@ -1,6 +1,7 @@
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { activeDrain, flowAwaitingAdmission } from "@/lib/selfUpdate/drain";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1201,6 +1202,7 @@ export async function tickFlow(
     if (round.reviewerPath) round.reviewerPath = currentConversationPath(round.reviewerConversationId, round.reviewerPath);
   }
   if (flow.state === "closed" || flow.state === "paused") return JSON.stringify(flow) !== before;
+  if (flowAwaitingAdmission(flow) && activeDrain()) return JSON.stringify(flow) !== before;
   const decision = flow.agentDecisions?.find((item) => item.disposition === "accepted");
   if (decision) {
     const evidence = await flowTurn(flow);
@@ -1362,12 +1364,26 @@ export async function tickFlow(
       return JSON.stringify(flow) !== before;
     }
     try {
-      const prepared = prepareReviewerLaunch(flow, round);
-      const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(flow, round, signal));
+      const preparedRound = structuredClone(round);
+      const prepared = await withAccountMutationLockAsync(
+        () => {
+          if (!flowRevisionCurrent(flow) || (flowAwaitingAdmission(flow) && activeDrain())) return null;
+          return prepareReviewerLaunch(flow, preparedRound);
+        },
+        { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
+      );
+      if (!prepared) return false;
+      const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(flow, preparedRound, signal));
       if (!observed.current) return false;
-      round.spawnStartedAt = isoNow();
       const reservation = await withAccountMutationLockAsync(
-        () => flowRevisionCurrent(flow) ? reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId) : null,
+        () => {
+          // Account admission may have queued before the update drain began.
+          // Defer before consuming account attempts or interruption markers.
+          if (!flowRevisionCurrent(flow) || (flowAwaitingAdmission(flow) && activeDrain())) return null;
+          Object.assign(round, preparedRound);
+          round.spawnStartedAt = isoNow();
+          return reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
+        },
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );
       if (!reservation || !flowRevisionCurrent(flow)) return false;

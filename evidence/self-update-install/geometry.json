@@ -1,0 +1,2350 @@
+{
+  "commit": "6003279ebd36dd3cd0676f16eda1c3cfd7e75feb",
+  "frames": {
+    "1440-en-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-waiting": {
+      "blockerRows": [
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 341.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 357.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 443.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "1440-en-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 474.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 296.078125,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 341.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 357.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 443.53125,
+          "lines": 1
+        },
+        {
+          "text": "The pipeline controller is working.",
+          "overflow": 0,
+          "left": 222,
+          "right": 400.78125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 474.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 296.078125,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 341.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 357.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 443.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 222,
+          "right": 442.125,
+          "lines": 3
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 341.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 357.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 443.53125,
+          "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 235,
+          "right": 455.125,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 235,
+          "right": 452.203125,
+          "lines": 4
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 388
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nAutomatic update needs your decision\n\nRunning work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nDeploy now\nKeep waiting\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
+    },
+    "1440-en-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 222,
+          "right": 779.40625,
+          "lines": 3
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 222,
+          "right": 657.5625,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 341.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 357.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 222,
+          "right": 443.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-action-installation": {
+      "overflow": 0,
+      "text": "Restart the launcher to enable one-click updates. Your session reconnects when the service returns.Restart launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Restart launcher",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-switch-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbUpdating… step 6 of 6Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 0.0 s",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-available": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-available-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-package": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nAutomatic updates are unavailable for this install."
+    },
+    "1440-en-install-package-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nOn. Green merges will build and apply at a quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nAutomatic updates are unavailable for this install."
+    },
+    "1440-en-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 69.8125,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-restart-terminal": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 416,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-restart-terminal-installation": {
+      "overflow": 0,
+      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-start-launcher-installation": {
+      "overflow": 0,
+      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-start-service-installation": {
+      "overflow": 0,
+      "text": "Start the launcher service to restore supervision and updates.Start launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Start launcher",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-update-first": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-update-first-installation": {
+      "overflow": 0,
+      "text": "Build the launcher upgrade, then load it with the action shown here.Update launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Update launcher",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-docker-deployments-installation": {
+      "overflow": 0,
+      "text": "Enable deployments in the runtime-host Compose profile and recreate the containers. See docs/docker.md.LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-failed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: Runtime host health is unavailable. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-failed-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbRetry from switchUpdate stopped at switch after 1 m 00 s.Runtime host health is unavailableFetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 1 m 00 s",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Retry from switch",
+          "width": 126,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-en-install-rollback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: The replacement rolled back to the previous release. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "1440-en-install-rollback-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbRetry from switchUpdate stopped at switch after 1 m 00 s and rolled back. The previous release serves again.The replacement rolled back to the previous releaseFetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 1 m 00 s",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Retry from switch",
+          "width": 126,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-waiting": {
+      "blockerRows": [
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 390.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 222
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "1440-uk-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 474.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 296.078125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 390.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.171875,
+          "lines": 1
+        },
+        {
+          "text": "Контролер пайплайнів працює.",
+          "overflow": 0,
+          "left": 222,
+          "right": 395.859375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 222,
+          "right": 474.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 222,
+          "right": 296.078125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 390.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 276
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 222,
+          "right": 442.125,
+          "lines": 3
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 390.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.171875,
+          "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 235,
+          "right": 455.125,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 235,
+          "right": 452.203125,
+          "lines": 4
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 388
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nАвтооновлення потребує вашого рішення\n\nПоточна робота стримує оновлення вже 6 год. Нові автономні запуски залишаються стриманими. Оновлення зараз може перервати цю роботу; очікування дозволяє їй завершитися.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nОновити зараз\nЧекати далі\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
+    },
+    "1440-uk-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 222,
+          "right": 779.40625,
+          "lines": 3
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 222,
+          "right": 657.5625,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 222,
+          "right": 364.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 222,
+          "right": 390.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 222,
+          "right": 446.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 258
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
+    },
+    "1440-uk-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-action-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть лаунчер, щоб увімкнути оновлення одним натисканням. Сесія перепідключиться після запуску сервісу.Перезапустити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Перезапустити лаунчер",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-switch-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbОновлюю… крок 6 з 6Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 0.0 с",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-available": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-available-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-package": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "1440-uk-install-package-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nУвімкнено. Після зеленого мерджу оновлення застосовується в тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "1440-uk-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 79.59375,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-restart-terminal": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 416,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-restart-terminal-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-start-launcher-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-start-service-installation": {
+      "overflow": 0,
+      "text": "Запустіть сервіс лаунчера, щоб відновити супровід та оновлення.Запустити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Запустити лаунчер",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-update-first": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 349,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-update-first-installation": {
+      "overflow": 0,
+      "text": "Зберіть оновлення лаунчера, потім завантажте його дією, що з’явиться тут.Оновити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Оновити лаунчер",
+          "width": 1036,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-docker-deployments-installation": {
+      "overflow": 0,
+      "text": "Увімкніть розгортання у профілі runtime-host Compose та перестворіть контейнери. Див. docs/docker.md.LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-failed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: Runtime host health is unavailable. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-failed-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbПовторити з кроку «заміна»Оновлення зупинилося на кроці «заміна» через 1 хв 00 с.Runtime host health is unavailableЗавантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 1 хв 00 с",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Повторити з кроку «заміна»",
+          "width": 190.140625,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "1440-uk-install-rollback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 126
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: The replacement rolled back to the previous release. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "1440-uk-install-rollback-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbПовторити з кроку «заміна»Оновлення зупинилося на кроці «заміна» через 1 хв 00 с. Після відкату знову працює попередній реліз.The replacement rolled back to the previous releaseЗавантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 1 хв 00 с",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Повторити з кроку «заміна»",
+          "width": 190.140625,
+          "height": 32,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-waiting": {
+      "blockerRows": [
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 170.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 186.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 272.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa.\n\nHistory"
+    },
+    "390-en-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 303.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 125.078125,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 170.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 186.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 272.53125,
+          "lines": 1
+        },
+        {
+          "text": "The pipeline controller is working.",
+          "overflow": 0,
+          "left": 51,
+          "right": 229.78125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\nThe pipeline controller is working.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 303.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 125.078125,
+          "lines": 1
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 170.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 186.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 272.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 347.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nDraining since 2 Jan 2026 02:00: new stages and orchestrator wakes are held; nothing running is interrupted. Applies when the listed work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 51,
+          "right": 271.125,
+          "lines": 3
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 170.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 186.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 272.53125,
+          "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 64,
+          "right": 284.125,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 64,
+          "right": 281.203125,
+          "lines": 4
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 477.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Complete the long running feature\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nAutomatic update needs your decision\n\nRunning work has held the update for 6 h. New autonomous launches remain held. Deploy now may interrupt this work; keep waiting lets it finish.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nDeploy now\nKeep waiting\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
+    },
+    "390-en-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 51,
+          "right": 357.28125,
+          "lines": 4
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 51,
+          "right": 355.625,
+          "lines": 2
+        },
+        {
+          "text": "Agent turns running: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 170.09375,
+          "lines": 1
+        },
+        {
+          "text": "Pipeline stages running: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 186.78125,
+          "lines": 1
+        },
+        {
+          "text": "A person was active in Delegatus recently.",
+          "overflow": 0,
+          "left": 51,
+          "right": 272.53125,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 401.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nAgent turns running: 2\nPipeline stages running: 1\nA person was active in Delegatus recently.\n\nNo quiet moment yet. From 2 Jan 2026 06:00 new stage launches are held and the update applies when running work finishes.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: health probe failed. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 233,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 389,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-action-installation": {
+      "overflow": 0,
+      "text": "Restart the launcher to enable one-click updates. Your session reconnects when the service returns.Restart launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Restart launcher",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-switch-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbUpdating… step 6 of 6Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 0.0 s",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-available": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-available-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-package": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nAutomatic updates are unavailable for this install."
+    },
+    "390-en-install-package-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nOn. Green merges will build and apply at a quiet moment.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.1)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn off\n\nAutomatic updates are unavailable for this install."
+    },
+    "390-en-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbb (1.6.2)UpdateAfter you confirm, Delegatus builds and applies the update to the launcher, web and runtime host. Running work resumes after the restart.Fetch bbbbbbbInstall dependenciesReady",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Update",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-restart-terminal": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 642,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-restart-terminal-installation": {
+      "overflow": 0,
+      "text": "Restart this launcher from its terminal once to enable one-click updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-start-launcher-installation": {
+      "overflow": 0,
+      "text": "Restart this install from its terminal with the launcher to enable updates. Run:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-start-service-installation": {
+      "overflow": 0,
+      "text": "Start the launcher service to restore supervision and updates.Start launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Start launcher",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-update-first": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 389,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to build and restart.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-update-first-installation": {
+      "overflow": 0,
+      "text": "Build the launcher upgrade, then load it with the action shown here.Update launcher",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Update launcher",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-docker-deployments-installation": {
+      "overflow": 0,
+      "text": "Enable deployments in the runtime-host Compose profile and recreate the containers. See docs/docker.md.LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-failed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 215,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: Runtime host health is unavailable. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-failed-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbRetry from switchUpdate stopped at switch after 1 m 00 s.Runtime host health is unavailableFetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 1 m 00 s",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Retry from switch",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-en-install-rollback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 215,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nTurned off after a failed automatic update: The replacement rolled back to the previous release. Turn it on to retry.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+    },
+    "390-en-install-rollback-installation": {
+      "overflow": 0,
+      "text": "Update to bbbbbbbRetry from switchUpdate stopped at switch after 1 m 00 s and rolled back. The previous release serves again.The replacement rolled back to the previous releaseFetch bbbbbbbCheck out bbbbbbbInstall dependenciesBuildReadyReplace and verify all processes · 1 m 00 s",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Retry from switch",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-off": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-waiting": {
+      "blockerRows": [
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 219.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 275.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa.\n\nІсторія"
+    },
+    "390-uk-scheduled": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 303.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 125.078125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 219.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.171875,
+          "lines": 1
+        },
+        {
+          "text": "Контролер пайплайнів працює.",
+          "overflow": 0,
+          "left": 51,
+          "right": 224.859375,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\nКонтролер пайплайнів працює.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-draining": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the feature and publish checks",
+          "overflow": 0,
+          "left": 51,
+          "right": 303.078125,
+          "lines": 3
+        },
+        {
+          "text": "codex · helper",
+          "overflow": 0,
+          "left": 51,
+          "right": 125.078125,
+          "lines": 1
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 219.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 365.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the feature and publish checks\ncodex · helper\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nОчікуємо завершення від 2 січ. 2026 р. 02:00: нові етапи та пробудження оркестратора стримуються; поточна робота триває без переривань. Оновлення застосовується, коли перелічена робота завершиться.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-overran": {
+      "blockerRows": [
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 51,
+          "right": 271.125,
+          "lines": 3
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 219.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.171875,
+          "lines": 1
+        },
+        {
+          "text": "build · Complete the long running feature",
+          "overflow": 0,
+          "left": 64,
+          "right": 284.125,
+          "lines": 3
+        },
+        {
+          "text": "codex · Example · conversation_long_turn",
+          "overflow": 0,
+          "left": 64,
+          "right": 281.203125,
+          "lines": 4
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 495.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Complete the long running feature\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nАвтооновлення потребує вашого рішення\n\nПоточна робота стримує оновлення вже 6 год. Нові автономні запуски залишаються стриманими. Оновлення зараз може перервати цю роботу; очікування дозволяє їй завершитися.\n\nbuild · Complete the long running feature\ncodex · Example · conversation_long_turn\nОновити зараз\nЧекати далі\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-overran-needs-you": {
+      "overflow": 0,
+      "named": true,
+      "choices": 2
+    },
+    "390-uk-long-names": {
+      "blockerRows": [
+        {
+          "text": "build · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "overflow": 0,
+          "left": 51,
+          "right": 357.28125,
+          "lines": 4
+        },
+        {
+          "text": "ProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName",
+          "overflow": 0,
+          "left": 51,
+          "right": 355.625,
+          "lines": 2
+        },
+        {
+          "text": "Працюють ходи агентів: 2",
+          "overflow": 0,
+          "left": 51,
+          "right": 193.5,
+          "lines": 1
+        },
+        {
+          "text": "Працюють етапи пайплайна: 1",
+          "overflow": 0,
+          "left": 51,
+          "right": 219.890625,
+          "lines": 1
+        },
+        {
+          "text": "Нещодавно хтось працював у Delegatus.",
+          "overflow": 0,
+          "left": 51,
+          "right": 275.171875,
+          "lines": 1
+        }
+      ],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 401.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName\nПрацюють ходи агентів: 2\nПрацюють етапи пайплайна: 1\nНещодавно хтось працював у Delegatus.\n\nТихої хвилини ще не було. Від 2 січ. 2026 р. 06:00 запуски нових етапів стримуються; оновлення застосовується після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-fallback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: health probe failed. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-managed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 251,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час розгортання."
+    },
+    "390-uk-install-action": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 425,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-action-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть лаунчер, щоб увімкнути оновлення одним натисканням. Сесія перепідключиться після запуску сервісу.Перезапустити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Перезапустити лаунчер",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-switch": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-switch-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbОновлюю… крок 6 з 6Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 0.0 с",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-available": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-available-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-package": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "390-uk-install-package-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-available-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nУвімкнено. Після зеленого мерджу оновлення застосовується в тиху хвилину.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-available-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.1)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-package-auto": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nВимкнути\n\nАвтооновлення недоступне для цієї інсталяції."
+    },
+    "390-uk-install-package-auto-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbb (1.6.2)ОновитиПісля підтвердження Delegatus збере оновлення й одразу оновить лаунчер, веб і runtime host. Поточна робота продовжиться після перезапуску.Завантажити bbbbbbbВстановити залежностіГотово",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Оновити",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-restart-terminal": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 660,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-restart-terminal-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-start-launcher-installation": {
+      "overflow": 0,
+      "text": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:env HOME='$HOME' LLV_STATE_DIR='$HOME/.local/state/example install' XDG_CONFIG_HOME='$HOME/.config/example install' bun '$HOME/.cache/delegatus/example release/bin/launcher-relaunch.mjs' --terminal 'eyJ0YXJnZXQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicm9vdCI6IiRIT01FL1Byb2plY3RzL2V4YW1wbGUgaW5zdGFsbCIsInJlcXVlc3RGaWxlIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZXF1ZXN0LWV4YW1wbGUuanNvbiIsInJlbGVhc2VQb2ludGVyIjoiJEhPTUUvLmxvY2FsL3N0YXRlL2V4YW1wbGUgaW5zdGFsbC9zZWxmLXVwZGF0ZS9yZWxlYXNlLWV4YW1wbGUuanNvbiIsInJvbGxiYWNrUG9pbnRlciI6bnVsbCwicHJpb3JSZXZpc2lvbiI6ImFhYWFhYWEiLCJwcmlvclZlcnNpb24iOm51bGwsImNoZWNrb3V0Ijp0cnVlfQ==' '$HOME/.cache/delegatus/example release/bin/cli.mjs' --port 45678 --hostname 0.0.0.0 --no-open",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-start-service-installation": {
+      "overflow": 0,
+      "text": "Запустіть сервіс лаунчера, щоб відновити супровід та оновлення.Запустити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Запустити лаунчер",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-update-first": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 407,
+        "width": 358,
+        "height": 179.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nВимкнено. Ви самі обираєте час збирання та перезапуску.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-update-first-installation": {
+      "overflow": 0,
+      "text": "Зберіть оновлення лаунчера, потім завантажте його дією, що з’явиться тут.Оновити лаунчер",
+      "action": true,
+      "buttons": [
+        {
+          "text": "Оновити лаунчер",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-docker-deployments-installation": {
+      "overflow": 0,
+      "text": "Увімкніть розгортання у профілі runtime-host Compose та перестворіть контейнери. Див. docs/docker.md.LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d",
+      "action": false,
+      "buttons": [],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-failed": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 233,
+        "width": 358,
+        "height": 197.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: Runtime host health is unavailable. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-failed-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbПовторити з кроку «заміна»Оновлення зупинилося на кроці «заміна» через 1 хв 00 с.Runtime host health is unavailableЗавантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 1 хв 00 с",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Повторити з кроку «заміна»",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    },
+    "390-uk-install-rollback": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 233,
+        "width": 358,
+        "height": 215.5
+      },
+      "controlVisible": true,
+      "text": "Автооновлення\nУвімкнути\n\nАвтооновлення вимкнено після збою: The replacement rolled back to the previous release. Увімкніть знову, щоб повторити.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+    },
+    "390-uk-install-rollback-installation": {
+      "overflow": 0,
+      "text": "Оновити до bbbbbbbПовторити з кроку «заміна»Оновлення зупинилося на кроці «заміна» через 1 хв 00 с. Після відкату знову працює попередній реліз.The replacement rolled back to the previous releaseЗавантажити bbbbbbbОтримати bbbbbbbВстановити залежностіЗібратиГотовоЗамінити й перевірити всі процеси · 1 хв 00 с",
+      "action": false,
+      "buttons": [
+        {
+          "text": "Повторити з кроку «заміна»",
+          "width": 328,
+          "height": 44,
+          "inside": true
+        }
+      ],
+      "clippedText": false,
+      "untranslated": false
+    }
+  },
+  "failures": []
+}

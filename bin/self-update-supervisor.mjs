@@ -28,6 +28,8 @@
 /* FIRST: fold DELEGATUS_* into LLV_* before anything below reads the
    environment (docs/design/rename-delegatus.md §5). */
 import "./envAlias.mjs";
+import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
+import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -36,7 +38,7 @@ import { dirname, join } from "node:path";
 import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
-const REQUEST_ROLES = new Set(["web", "runtime-host"]);
+const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**
  * @param {{ stateDirectory: string, cacheDirectory: string, installId: string }} input
@@ -47,6 +49,8 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     record: join(base, `launcher-${installId}.json`),
     request: join(base, `request-${installId}.json`),
     releasePointer: join(base, `release-${installId}.json`),
+    trial: join(base, `trial-${installId}.json`),
+    adopt: join(base, `adopt-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
     releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
@@ -56,11 +60,24 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
 /** Field 22 of /proc/<pid>/stat: the start time in clock ticks. Null where
     there is no /proc (the record then carries no identity, and the Viewer
     treats the process as unverifiable rather than as the same process). */
-export function readStartIdentity(pid) {
+/** The identity written by the runtime-host fence, distinct from old
+    launcher records which retain bare Linux ticks or macOS ps start time. */
+export function runtimeHostStartIdentity(pid) {
+  if (process.platform === "darwin") return darwinKernelIdentity(pid);
+  const identity = readStartIdentity(pid);
+  return process.platform === "win32" ? identity : identity === null ? null : `${pid}:${identity}`;
+}
+
+export function readStartIdentity(pid, platform = process.platform, run = spawnSync) {
+  if (platform === "win32") return windowsStartIdentity(pid, run);
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
+    if (platform === "darwin") {
+      const result = run("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+      return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
+    }
     return null;
   }
 }
@@ -88,6 +105,13 @@ export function installedRelease(pointerFile, packageRoot) {
   const rootHead = headRevision(packageRoot);
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
+    if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
+      const base = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+      const next = JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8"));
+      if (base.version === parsed.baseVersion && next.version === parsed.version
+        && existsSync(join(parsed.dir, "dist", "standalone", "server.js")) && existsSync(join(parsed.dir, "dist", "runtime-host.mjs")))
+        return { dir: parsed.dir, sha: parsed.sha, published: true };
+    }
     const sha = typeof parsed?.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) ? parsed.sha : null;
     const dir = typeof parsed?.dir === "string" ? parsed.dir : null;
     const rootUnmoved = typeof parsed?.checkoutHead !== "string" || parsed.checkoutHead === rootHead;
@@ -125,7 +149,9 @@ function emptyProcess() {
 export function createLauncherRecord(file, base, clock = () => Date.now()) {
   const record = {
     version: RECORD_VERSION,
-    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1 },
+    launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), autoAdmission: 1,
+      ...(process.platform !== "win32" && typeof process.execve === "function" ? { relaunch: 1 } : {}),
+      revision: null, requestId: null, state: "starting", error: null },
     ...base,
     web: emptyProcess(),
     runtimeHost: emptyProcess(),
@@ -144,7 +170,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
   return {
     file,
     read: () => record,
-    /** @param {"web" | "runtimeHost"} role */
+    /** @param {"web" | "runtimeHost" | "launcher"} role */
     set(role, patch) {
       record[role] = { ...record[role], ...patch };
       flush();
@@ -164,7 +190,25 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
       flush();
     },
     remove() {
-      rmSync(file, { force: true });
+      try {
+        const current = JSON.parse(readFileSync(file, "utf8"));
+        if (current?.launcher?.pid !== record.launcher.pid
+          || current?.launcher?.startIdentity !== record.launcher.startIdentity) return;
+        // Graceful shutdown can land after the Viewer published an apply but
+        // before its request became a durable trial. Keep the original owner
+        // fence until the apply settles; cold recovery must verify that owner.
+        let apply;
+        try { apply = JSON.parse(readFileSync(join(dirname(file), "apply.json"), "utf8")); }
+        catch (error) {
+          if (error.code !== "ENOENT") return; // Unreadable custody is retained.
+        }
+        if (apply?.state === "switching" && apply.launcherPid === record.launcher.pid
+          && apply.launcherIdentity === record.launcher.startIdentity
+          && apply.releasePointer === record.releasePointer) return;
+        rmSync(file, { force: true });
+      } catch (error) {
+        if (error.code !== "ENOENT") console.error("[self-update] could not remove the owned launcher record.");
+      }
     },
   };
 }
@@ -172,12 +216,12 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
 /**
  * Polls for a restart request and hands each one to `handle`, one at a time.
  * A request that arrives while another is handled waits in its file. A
- * request is consumed (its file removed) before it is handled, so a crash
- * mid-restart never replays it.
+ * Ordinary restarts consume before handling. Relaunch consumes only after
+ * its controller has persisted the trial that owns crash recovery.
  *
  * @param {string} requestFile
- * @param {(request: { requestId: string, role: "web" | "runtime-host" }) => Promise<void>} handle
- * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host", autoGateId: string }) => Promise<boolean> }} options
+ * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
+ * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean> }} options
  */
 export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false } = {}) {
   let busy = false;
@@ -195,26 +239,40 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
       return;
     }
     busy = true;
+    let admitted = request.autoGateId === undefined;
+    const rejected = (detail) => {
+      const file = `${requestFile}.result.json`;
+      const temporary = `${file}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ requestId: request.requestId, state: "rejected", detail }), { mode: 0o600 });
+      renameSync(temporary, file);
+    };
     try {
       if (request.autoGateId !== undefined) {
         let gate = null;
         try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* no valid admission */ }
         if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
-          || !await admitAuto(request)) return;
+          || !await admitAuto(request)) {
+          rejected("Final automatic admission was refused or expired");
+          return;
+        }
       }
+      admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
-      rmSync(requestFile, { force: true });
-      await handle({ requestId: request.requestId, role: request.role });
+      if (request.role !== "relaunch") rmSync(requestFile, { force: true });
+      await handle(request);
     } catch (error) {
+      if (!admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (request.autoGateId) {
+      if (request.autoGateId || request.role === "relaunch") {
         try {
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
+      }
+      if (request.autoGateId) {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }

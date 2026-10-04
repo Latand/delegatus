@@ -2,6 +2,9 @@
    else (#2007). `startIdentity` is field 22 of /proc/<pid>/stat (the start
    time in clock ticks), the same identity `bin/self-update-supervisor.mjs`
    records, so a PID reused after an exit never matches its record. */
+import { procBackend } from "@/lib/proc";
+import { spawnSync } from "node:child_process";
+import { windowsStartIdentity } from "../../../bin/windows-process-identity.mjs";
 import { readFileSync } from "node:fs";
 
 export interface RecordedPid { pid: number; startIdentity: string }
@@ -16,14 +19,23 @@ function statFields(pid: number): string[] | null {
   }
 }
 
-export function readStartIdentity(pid: number): string | null {
-  return statFields(pid)?.[19] ?? null;
+export function readStartIdentity(pid: number, platform: NodeJS.Platform = process.platform, run: typeof spawnSync = spawnSync): string | null {
+  if (platform === "win32") return windowsStartIdentity(pid, run);
+  const identity = statFields(pid)?.[19];
+  if (identity) return identity;
+  if (platform === "darwin") {
+    const result = run("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 2_000 });
+    return result.status === 0 && result.stdout.trim() ? `ps:${result.stdout.trim()}` : null;
+  }
+  return null;
 }
 
 /** Alive means present and not a zombie. */
 export function isAlive(pid: number): boolean {
   const state = statFields(pid)?.[0];
-  return state !== undefined && state !== "Z" && state !== "X";
+  if (state !== undefined) return state !== "Z" && state !== "X";
+  if (process.platform !== "linux") { try { process.kill(pid, 0); return true; } catch { return false; } }
+  return false;
 }
 
 export function sameProcess(record: RecordedPid): boolean {
@@ -40,4 +52,14 @@ export function signalGroup(record: RecordedPid, signal: NodeJS.Signals): boolea
   } catch {
     try { process.kill(record.pid, signal); return true; } catch { return false; }
   }
+}
+
+
+/** Health and launcher records use different historical identity encodings.
+    Both must name the same live process before either format is admitted. */
+export function runtimeHostMatches(record: { pid: number | null; startIdentity: string | null },
+  health: { pid: number; startIdentity?: string | null } | null, alive: (pid: number, identity: string) => boolean): boolean {
+  if (!health || record.pid === null || record.startIdentity === null || health.pid !== record.pid
+    || !health.startIdentity || !alive(record.pid, record.startIdentity)) return false;
+  return health.startIdentity === record.startIdentity || health.startIdentity === procBackend.processIdentity(record.pid);
 }

@@ -6,12 +6,19 @@
    shape alone. */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { sameProcess } from "./pid";
 import type { ProcessError, ProcessStateName } from "./types";
 
 export type LauncherRole = "web" | "runtime-host";
+
+/** Companion control files never overwrite the request they describe. */
+export function launcherControlFile(requestFile: string, role: "trial" | "adopt"): string {
+  const name = basename(requestFile);
+  if (!/^request(?:-[^/]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
+  return join(dirname(requestFile), name.replace(/^request/, role));
+}
 
 export interface LauncherProcess {
   state: ProcessStateName;
@@ -25,7 +32,9 @@ export interface LauncherProcess {
 
 export interface LauncherRecord {
   version: 1;
-  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1 };
+  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1; relaunch?: 1; protocol?: string; revision?: string | null;
+    requestId?: string | null; state?: string; error?: ProcessError | null };
+  installRoot?: string;
   /** null for a packaged install: it is updated by its package manager. */
   checkout: string | null;
   releasesDir: string;
@@ -63,7 +72,7 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
   } catch {
     return null;
   }
-  const launcher = parsed.launcher as { pid?: unknown; startIdentity?: unknown; autoAdmission?: unknown } | undefined;
+  const launcher = parsed.launcher as LauncherRecord["launcher"] | undefined;
   const web = processEntry(parsed.web);
   const runtimeHost = processEntry(parsed.runtimeHost);
   if (parsed.version !== 1 || !launcher || typeof launcher.pid !== "number" || !web || !runtimeHost) return null;
@@ -71,7 +80,11 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
   return {
     version: 1,
     launcher: { pid: launcher.pid, startIdentity: typeof launcher.startIdentity === "string" ? launcher.startIdentity : null,
-      ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}) },
+      ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}),
+      ...(launcher.relaunch === 1 ? { relaunch: 1 as const } : {}),
+      ...(typeof launcher.protocol === "string" ? { protocol: launcher.protocol } : {}),
+      revision: launcher.revision ?? null, requestId: launcher.requestId ?? null, state: launcher.state, error: launcher.error ?? null },
+    ...(typeof parsed.installRoot === "string" ? { installRoot: parsed.installRoot } : {}),
     checkout: typeof parsed.checkout === "string" ? parsed.checkout : null,
     releasesDir: parsed.releasesDir as string,
     releasePointer: parsed.releasePointer as string,

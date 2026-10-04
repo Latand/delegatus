@@ -1,3 +1,4 @@
+import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
 /* The self-update service (#2007): one per web process, behind the Update
    surface's routes. It holds the update check, and either the checkout
    install's step runner or the managed install's deployment record, and it
@@ -9,11 +10,15 @@
    `managed.json`, the automatic policy and managed request intent in
    `auto.json`, and the launcher's own record. A fresh process reads them
    back, so the surface carries on where the previous one stopped. */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { runtimeHostMatches } from "./pid";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
+import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -27,8 +32,8 @@ import type { RuntimeHostHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
-import { CheckError, type CheckInput, type CheckOutcome } from "./git";
-import { readLauncherRecord, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
+import { CheckError, ensureCommit, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
+import { readLauncherRecord, launcherControlFile, type LauncherProcess, type LauncherRecord, type LauncherRole } from "./launcher";
 import {
   DeploymentBusyError,
   managedActive,
@@ -41,6 +46,12 @@ import {
   writeManagedRecord,
   type ManagedRecord,
 } from "./managed";
+import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
+import { runGit } from "./git";
+import { comparePackageVersions, manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
+import { installAction, runInstallAction, userUnit } from "./actions";
+import { ApplyController, writeAtomic } from "./apply";
+import { readStartIdentity } from "./pid";
 import { LAUNCHER_RECORD_ENV, type ModeDecision } from "./mode";
 import { ReleasePointer, type Release } from "./release";
 import type { RunnerConfig } from "./steps";
@@ -52,6 +63,7 @@ import {
   stoppedProcess,
   UNKNOWN_REVISION,
   type Busy,
+  type InstallAction,
   type CheckoutStepName,
   type ProcessStatus,
   type ProcessView,
@@ -63,7 +75,7 @@ import {
 
 export interface RunnerPort {
   state: UpdateState;
-  start(target: string, meta?: { short?: string; version?: string; trigger?: "operator" | "auto" }): Promise<void>;
+  start(target: string, meta?: { short?: string; version?: string; trigger?: "operator" | "seat" | "auto" }): Promise<void>;
   retry(): Promise<void>;
   restore(saved: UpdateState): void;
   logPath(step: CheckoutStepName): string;
@@ -79,6 +91,7 @@ export interface ServiceDeps {
   pollMinutes: number;
   bun: string;
   mode(): Promise<ModeDecision>;
+  install?: { action(decision: ModeDecision): InstallAction | null | Promise<InstallAction | null>; run(action: InstallAction): void; entry(record: LauncherRecord): string | null };
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
   createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
@@ -92,10 +105,14 @@ export interface ServiceDeps {
   findDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null>;
   releaseTarget(): { revision: string } | null;
   prepareCheckRepo(): Promise<string>;
+  /** Fresh remote ancestry, including force-rewritten main. */
+  targetOnBranch?(repo: string, target: string): Promise<boolean>;
   buildEnv(scratchRoot: string): Record<string, string>;
   web: { pid: number; port: number | null; startedAt: string };
   green?: GreenReader;
   quiet?: QuietPorts;
+  requestPipelineTick?(): void;
+  updateProject?(): string;
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
 
@@ -145,6 +162,9 @@ class Changes {
 
 export class SelfUpdateService {
   readonly changes = new Changes();
+  private readonly apply: ApplyController;
+  private recoverReadyApply: boolean;
+  private deploying: Promise<unknown> | null = null;
   private slice: CheckSlice = initialCheck();
   private savedUpdate: UpdateState | null = null;
   private checking: Promise<void> | null = null;
@@ -152,6 +172,7 @@ export class SelfUpdateService {
   private runner: RunnerPort | null = null;
   private runnerRecord: string | null = null;
   private managed: ManagedRecord | null;
+  private managedNeedsSave = false;
   private decision: { value: ModeDecision; at: number } | null = null;
   private pendingRestart: PendingManualRestart | null = null;
   private readonly described = new Map<string, Revision>();
@@ -167,6 +188,8 @@ export class SelfUpdateService {
   private readonly greenReader: GreenReader;
 
   constructor(private readonly deps: ServiceDeps) {
+    this.apply = new ApplyController(deps.dir);
+    this.recoverReadyApply = this.apply.current?.state === "ready";
     this.auto = readAuto(join(deps.dir, "auto.json"));
     this.greenReader = deps.green ?? new GreenReader();
     const persisted = this.readPersisted();
@@ -202,11 +225,34 @@ export class SelfUpdateService {
   private get autoFile(): string { return join(this.deps.dir, "auto.json"); }
   private get historyFile(): string { return join(this.deps.dir, "history.jsonl"); }
 
+  /** Host acceptance remains authoritative when the local receipt cannot be
+      written. The durable automatic intent keeps its key for cold lookup. */
+  private saveManaged(): void {
+    if (!this.managed) return;
+    this.managedNeedsSave = true;
+    try {
+      writeManagedRecord(this.managedFile, this.managed);
+      this.managedNeedsSave = false;
+    } catch (error) {
+      console.error("[self-update] deployment receipt persistence failed", error instanceof Error ? error.name : "unknown");
+    }
+    const pending = this.auto.managedPending;
+    if (this.managed.trigger === "auto" && pending
+      && this.managed.idempotencyKey === managedIdempotencyKey(pending.target.sha, pending.clientKey)
+      && pending.deploymentId !== this.managed.deploymentId) {
+      this.auto = { ...this.auto, managedPending: { ...pending, deploymentId: this.managed.deploymentId } };
+      this.saveAuto();
+    }
+  }
+
   private saveAuto(): void { writeAuto(this.autoFile, this.auto); this.persistNow(); this.changes.emit(); }
 
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
     if (this.autoTimer) return;
+    // Restore durable custody before startup hands pending stages or seats to
+    // their controllers, even when future automatic updates are switched off.
+    this.refreshDrain();
     if (this.auto.enabled) this.ensureChecked();
     this.autoTimer = setInterval(() => { void this.autoTick(); }, 60_000);
     this.autoTimer.unref?.();
@@ -279,6 +325,7 @@ export class SelfUpdateService {
       try { restoreFile(this.historyFile, previousHistoryFile); } catch { /* keep the original write failure */ }
       return refuse(500, "auto-persistence-failed", "Automatic update setting could not be recorded", error instanceof Error ? error.message : undefined);
     }
+    if (!enabled && !this.hasAutoCustody()) this.endDrain();
     this.changes.emit();
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
@@ -287,17 +334,27 @@ export class SelfUpdateService {
     return { ok: true, ...(receiptId ? { replaySnapshot } : {}) };
   }
 
+  private unsafeLegacyAuto(decision: ModeDecision): boolean {
+    return decision.mode === "checkout" && decision.record?.launcher.relaunch !== 1
+      && (decision.supervision === "adopted" || !!this.deps.env.LLV_TOKEN);
+  }
+
+  private async handManagedCheckout(record: LauncherRecord): Promise<boolean> {
+    if (!record.checkout) return false;
+    try {
+      const raw = JSON.parse(readFileSync(record.releasePointer, "utf8")) as { checkoutHead?: string };
+      return !raw.checkoutHead || raw.checkoutHead !== await headOf(record.checkout);
+    } catch { return existsSync(record.releasePointer); }
+  }
+
   private async autoAvailability(decision: ModeDecision): Promise<AutoView["availability"]> {
     if (decision.mode === "managed") {
       try { if (!this.deps.releaseTarget()?.revision) return "no-release-target"; }
       catch { return "no-release-target"; }
     } else {
-      if (decision.mode !== "checkout" || !decision.record?.checkout) return "packaged";
-      if (decision.record.launcher.autoAdmission !== 1) return "launcher-upgrade";
-      try {
-        const raw = JSON.parse(readFileSync(decision.record.releasePointer, "utf8")) as { checkoutHead?: string };
-        if (!raw.checkoutHead || raw.checkoutHead !== (await headOf(decision.record.checkout))) return "hand-managed";
-      } catch { if (existsSync(decision.record.releasePointer)) return "hand-managed"; }
+      if (decision.mode !== "checkout" || !decision.record?.checkout) return decision.mode === "package" ? "packaged" : "launcher-upgrade";
+      if (decision.record.launcher.autoAdmission !== 1 || this.unsafeLegacyAuto(decision)) return "launcher-upgrade";
+      if (await this.handManagedCheckout(decision.record)) return "hand-managed";
     }
     if (!githubRepositoryOfRemote(this.deps.remote)) return "not-github";
     if (["ahead", "diverged"].includes(this.slice.check.relation ?? "")) return "diverged";
@@ -307,7 +364,7 @@ export class SelfUpdateService {
   private async autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): Promise<AutoView> {
     const built = snapshot.installed.sha;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
-      : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
+      : auto.drain ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
     const sha = target?.sha ?? null;
     const pending = auto.pending;
     const managedPending = auto.managedPending;
@@ -320,13 +377,25 @@ export class SelfUpdateService {
       : sha && !auto.green[sha] ? "checks" : "idle";
     return { availability: (await this.autoAvailability(decision)), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
-      waitingSince: auto.waitingSince, longWait: phase === "waiting" && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= 24 * 60 * 60_000,
+      waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
+      decision: auto.enabled && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
+      drain: auto.enabled && auto.waitingSince ? auto.drain
+        ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt }
+          : { state: "draining", at: auto.drain.since }
+        : null : null,
       changedAt: auto.changedAt, changedBy: auto.changedBy };
   }
 
   /** Re-read durable facts on every pass. A web restart replaces this object
       between the two restart requests, so no in-memory phase is authoritative. */
   async autoTick(): Promise<void> {
+    // Timer ticks keep admission held even while an earlier GitHub or host
+    // observation waits. Its asynchronous work must not consume the lease.
+    try { this.refreshDrain(); }
+    catch (error) {
+      console.error("[self-update] drain renewal failed", error instanceof Error ? error.name : "unknown");
+      return;
+    }
     if (this.autoRunning) return;
     this.autoRunning = true;
     try { await this.runAutoTick(); }
@@ -334,19 +403,77 @@ export class SelfUpdateService {
     finally { this.autoRunning = false; }
   }
 
+  private finishFailedApply(): void {
+    const intent = this.apply.current;
+    if (!intent || intent.trigger !== "auto" || intent.state !== "failed") return;
+    if (!intent.admissionRefused) this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: intent.target, stage: "restart-web", reason: intent.detail ?? "The release rolled back" } };
+    this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null, lastBlockers: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
+    this.saveAuto(); this.endDrain();
+    if (intent.admissionRefused && this.auto.enabled) void this.check();
+  }
+
   private async runAutoTick(): Promise<void> {
-    if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
+    if (this.apply.current?.state === "switching") {
+      await this.snapshot();
+      if (this.apply.current?.state === "switching") return;
+    }
+    if (this.apply.current?.state === "failed" && this.apply.current.trigger === "auto" && this.auto.drain?.admitted
+      && this.auto.drain.target.sha === this.apply.current.target && !this.auto.pending && !this.auto.managedPending && !this.auto.rollback) this.finishFailedApply();
+    // Recover a switch-off persisted before its lease cleanup during a crash.
+    if (!this.auto.enabled && !this.hasAutoCustody()) this.endDrain();
+    if (!this.auto.enabled && !this.hasAutoCustody()) return;
     // The previous web process may have saved the terminal host status just
     // before it exited. Settle that durable result even if the host is away.
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
-    if (!this.auto.enabled && !this.auto.pending && !this.auto.managedPending) return;
+    if (!this.auto.enabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
+    // Older releases could admit a cohort without ever filing an operation.
+    // Release that orphan only when no durable work still owns its custody.
+    if (this.unsafeLegacyAuto(decision) && this.auto.drain?.admitted && !this.auto.pending
+      && !this.auto.managedPending && !this.auto.rollback
+      && !["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) {
+      this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null,
+        rollbackPointer: null, rollbackCaptured: false, lastBlockers: null };
+      this.endDrain(); this.saveAuto();
+    }
+    if ((!this.auto.enabled || (await this.autoAvailability(decision)) !== "available") && !this.hasAutoCustody()) this.endDrain();
+    else if (this.auto.drain) this.refreshDrain();
+    const drain = this.auto.drain;
+    // Operator attention follows the original cohort's age even when checks
+    // stop a deployment. Observing it grants no release admission.
+    if (this.auto.enabled && drain && !drain.admitted
+      && this.deps.now() - Date.parse(drain.since) >= DRAIN_NOTICE_MS) {
+      await this.waitForAutoQuiet(await this.snapshot(), drain.target.sha, this.deps.now());
+    }
     if (decision.mode === "managed") { await this.runManagedAutoTick(decision); return; }
     if (decision.mode !== "checkout" || !decision.record) return;
     const record = decision.record;
     const snapshot = await this.snapshot();
+    const observedHealthy = [snapshot.processes.web, snapshot.processes.runtimeHost]
+      .every((process) => process.state === "healthy" && process.lastHealthOk === true);
     const now = this.deps.now();
     const pending = this.auto.pending;
+    const manualSuccess = this.auto.drain && snapshot.update.state === "done"
+      && snapshot.update.trigger === "operator" && snapshot.update.target === snapshot.installed.sha
+      && Date.parse(snapshot.update.startedAt ?? "") >= Date.parse(this.auto.drain.since)
+      && (!pending || Date.parse(snapshot.update.startedAt ?? "") >= Date.parse(pending.at));
+    if (manualSuccess) {
+      if (snapshot.busy || existsSync(record.requestFile) || !observedHealthy
+        || [snapshot.serving.web, snapshot.serving.runtimeHost].some((revision) => revision?.sha !== snapshot.installed.sha && revision?.short !== snapshot.installed.short)) return;
+      this.auto = { ...this.auto, pending: null, rollback: null };
+      await this.finishCheckoutDrain(record);
+      return;
+    }
+    if (this.auto.rollback) {
+      const rollback = this.auto.rollback.target;
+      const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
+      const consistent = [rollback, this.auto.drain?.target.sha].some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
+      if (observedHealthy && consistent) {
+        this.auto = { ...this.auto, rollback: null, waitingSince: null, waitingTarget: null, lastBlockers: null };
+        this.endDrain();
+      }
+      return;
+    }
     if (record.launcher.autoAdmission !== 1) {
       const entry = pending?.role === "web" ? record.web : record.runtimeHost;
       if (pending && entry.requestId !== pending.requestId) {
@@ -386,18 +513,30 @@ export class SelfUpdateService {
       }
       return;
     }
-    if (!this.auto.enabled) return;
-    if ((await this.autoAvailability(decision)) !== "available" || !this.auto.enabled || this.auto.pending) return;
+    if (!this.auto.enabled && !this.hasAutoCustody()) return;
+    if ((await this.autoAvailability(decision)) !== "available" || (!this.auto.enabled && !this.hasAutoCustody()) || this.auto.pending) return;
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
-    const target = this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
+    const target = this.auto.drain ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
+    const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
+    if (snapshot.installed.sha === target.sha && observedHealthy && serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
+      if (this.auto.waitingSince) await this.finishCheckoutDrain(record);
+      return;
+    }
+    const cohortQuiet = await this.waitForAutoQuiet(existsSync(record.requestFile) ? { ...snapshot, busy: "restart-web" } : snapshot, target.sha, now);
     let green = await this.autoGreen(target.sha, record.checkout!, now);
-    if (green.state !== "green") return;
+    if (green.state !== "green") {
+      if (green.state === "red") await this.advanceFailedDrain(target, record.checkout!, now);
+      return;
+    }
     if (snapshot.installed.sha !== target.sha) {
+      // Pending updates fence new work before building too: otherwise busy
+      // agents can keep consuming the resources the candidate build needs.
+      if (!this.auto.enabled && !this.hasAutoCustody()) return;
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
-      if (green.state !== "green" || !this.auto.enabled || this.auto.pending || this.slice.available?.sha !== target.sha
+      if (green.state !== "green" || (!this.auto.enabled && !this.hasAutoCustody()) || this.auto.pending || (!this.draining() && this.slice.available?.sha !== target.sha)
         || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
@@ -409,19 +548,8 @@ export class SelfUpdateService {
         .finally(() => this.afterUpdate());
       return;
     }
-    const serves = (revision: Revision | null) => revision?.sha === target.sha || revision?.short === target.short;
-    if (serves(snapshot.serving.web) && serves(snapshot.serving.runtimeHost)) {
-      if (this.auto.waitingSince) {
-        const rollback = this.auto.rollbackPointer;
-        this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
-        this.saveAuto();
-        try { await (this.deps.prune ?? pruneReleaseWorktrees)(record, rollback); }
-        catch (error) { console.error("[self-update] release cleanup failed", error instanceof Error ? error.name : "unknown"); }
-      }
-      return;
-    }
     const quiet = this.deps.quiet;
-    if (!quiet || !await this.waitForAutoQuiet(existsSync(record.requestFile) ? { ...snapshot, busy: "restart-web" } : snapshot, target.sha, now)) return;
+    if (!quiet || !cohortQuiet) return;
     const gateFile = restartGateFile(record.requestFile);
     const gateId = beginRestartGate(gateFile);
     if (!gateId) return;
@@ -433,10 +561,22 @@ export class SelfUpdateService {
         this.saveAuto();
         return;
       }
+      // The launcher may be replaced while the final observations wait.
+      this.decision = null;
+      const current = await this.decide();
+      if (current.mode !== "checkout" || current.record?.launcher.autoAdmission !== 1
+        || current.record.launcher.pid !== record.launcher.pid
+        || current.record.launcher.startIdentity !== record.launcher.startIdentity
+        || (!this.auto.enabled && !this.hasAutoCustody())) return;
+      if (!this.hasAutoCustody() && !await this.targetOnBranch(record.checkout!, target.sha)) {
+        this.auto = { ...this.auto, quietSince: null };
+        this.saveAuto();
+        return;
+      }
       const finalSnapshot = await this.snapshot();
-      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now());
+      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now(), this.draining());
       this.autoBlockers = finalProbe.blockers;
-      if (!finalProbe.quiet || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
+      if (!this.quietAdmits(finalProbe) || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe.blockers };
         this.saveAuto();
         return;
@@ -451,22 +591,31 @@ export class SelfUpdateService {
       // The launcher may have been replaced while GitHub and activity were read.
       // Re-read the record before filing anything an older watcher would take.
       this.decision = null;
-      const current = await this.decide();
-      if (current.mode !== "checkout" || current.record?.launcher.autoAdmission !== 1
-        || current.record.launcher.pid !== record.launcher.pid
-        || current.record.launcher.startIdentity !== record.launcher.startIdentity) return;
+      const admissionDecision = await this.decide();
+      if (admissionDecision.mode !== "checkout" || admissionDecision.record?.launcher.autoAdmission !== 1
+        || admissionDecision.record.launcher.pid !== record.launcher.pid
+        || admissionDecision.record.launcher.startIdentity !== record.launcher.startIdentity) return;
       const admissionSnapshot = await this.snapshot();
-      const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now());
+      const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now(), this.draining());
       this.autoBlockers = admissionProbe.blockers;
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-      const admissionRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
-      if (!this.auto.enabled || this.active() || this.auto.pending || activeRestartGate(gateFile) !== gateId || !admissionProbe.quiet
+      const admissionRecord = recordFile ? readLauncherRecord(recordFile) : admissionDecision.record;
+      if ((!this.auto.enabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || activeRestartGate(gateFile) !== gateId || !this.quietAdmits(admissionProbe)
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== record.launcher.pid
         || admissionRecord.launcher.startIdentity !== record.launcher.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
         || admissionSnapshot.serving.web?.sha !== finalSnapshot.serving.web?.sha
         || admissionSnapshot.serving.runtimeHost?.sha !== finalSnapshot.serving.runtimeHost?.sha) return;
+      if (this.unsafeLegacyAuto(admissionDecision)) return;
+      this.beginAutoCustody(target);
       this.auto = { ...this.auto, rollbackPointer, rollbackCaptured: true, quietSince: null };
+      if (record.launcher.relaunch === 1) {
+        this.apply.begin(record, target.sha, "auto", undefined, { rollbackPointer, state: "ready", autoGateId: gateId });
+        this.apply.send(record, gateId);
+        requested = true;
+        this.changes.emit();
+        return;
+      }
       requestAutoRestart(record, role, target.sha, rollbackPointer, now, gateId, (request) => {
         this.auto = { ...this.auto, pending: request };
         this.persistNow();
@@ -489,32 +638,68 @@ export class SelfUpdateService {
     return green;
   }
 
-  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number, resetOnTargetChange = false): Promise<boolean> {
+  /** A failed revision that never acquired deployment custody may yield to
+      current green main. Keep the cohort's hold and cumulative wait intact. */
+  private async advanceFailedDrain(target: Revision, repo: string, now: number): Promise<void> {
+    const drain = this.auto.drain;
+    const candidate = this.slice.available;
+    const eligible = () => this.auto.enabled && !this.hasAutoCustody() && !this.checking
+      && this.slice.check.state === "update-available" && this.slice.available?.sha === candidate?.sha
+      && this.auto.drain?.id === drain?.id && this.auto.drain?.target.sha === target.sha
+      && this.auto.green[target.sha]?.state === "red"
+      && this.runner?.state.state !== "running" && this.savedUpdate?.state !== "running";
+    if (!drain || !candidate?.sha || candidate.sha === target.sha || !eligible()) return;
+    const cached = await this.autoGreen(candidate.sha, repo, now);
+    if (cached.state !== "green" || !eligible()) return;
+    const green = await this.refreshGreen(candidate.sha, repo, cached);
+    if (green.state !== "green" || !eligible()) return;
+    // Persist the new target before atomically replacing the lease. A crash
+    // between these writes leaves the same persistent hold for cold recovery.
+    this.auto = { ...this.auto, waitingTarget: candidate.sha, quietSince: null,
+      drain: { ...this.auto.drain!, target: candidate } };
+    this.saveAuto();
+    this.refreshDrain();
+    this.changes.emit();
+  }
+
+  private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean> {
+    if (!this.auto.enabled && !this.hasAutoCustody()) return false;
     const at = new Date(now).toISOString();
     if (!this.auto.waitingSince) {
       this.auto = { ...this.auto, waitingSince: at, waitingTarget: target };
       this.saveAuto();
     } else if (this.auto.waitingTarget && this.auto.waitingTarget !== target) {
-      this.auto = resetOnTargetChange
-        ? { ...this.auto, waitingSince: at, waitingTarget: target, quietSince: null, noticeAt: null }
-        : { ...this.auto, waitingTarget: target, quietSince: null };
+      this.auto = { ...this.auto, waitingTarget: target, quietSince: null };
       this.saveAuto();
     } else if (!this.auto.waitingTarget) {
       this.auto = { ...this.auto, waitingTarget: target };
       this.saveAuto();
     }
-    if (this.auto.waitingSince && now - Date.parse(this.auto.waitingSince) >= 24 * 60 * 60_000 && !this.auto.noticeAt) {
-      this.auto = { ...this.auto, noticeAt: at };
-      this.saveAuto();
+    if (!this.draining()) {
+      const revision = snapshot.mode === "checkout" && snapshot.installed.sha === target ? snapshot.installed : snapshot.available;
+      if (revision?.sha === target) {
+        const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
+        // Checkpoint ownership before publishing persistent admission. Both
+        // writes finish before the next asynchronous observation can launch work.
+        this.auto = { ...this.auto, drain, quietSince: null };
+        this.saveAuto();
+        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS, persistent: true });
+      }
     }
     if (!this.deps.quiet) return false;
-    const probe = await probeQuiet(snapshot, this.deps.quiet, now);
+    const probe = await probeQuiet(snapshot, this.deps.quiet, now, this.draining());
     this.autoBlockers = probe.blockers;
     if (JSON.stringify(this.auto.lastBlockers) !== JSON.stringify(probe.blockers)) {
       this.auto = { ...this.auto, lastBlockers: probe.blockers };
       this.saveAuto();
     }
+    const drain = this.auto.drain;
+    if (drain && !drain.overranAt && !probe.quiet && now - Date.parse(drain.since) >= DRAIN_NOTICE_MS) {
+      this.auto = { ...this.auto, drain: { ...drain, overranAt: at, blockers: probe.blockers } };
+      this.saveAuto();
+    }
     this.changes.emit();
+    if (this.auto.drain?.force && this.quietAdmits(probe)) return true;
     if (!probe.quiet) {
       if (this.auto.quietSince) { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); }
       return false;
@@ -527,22 +712,57 @@ export class SelfUpdateService {
     return now - Date.parse(this.auto.quietSince) >= 60_000;
   }
 
-  private finishManagedAuto(): void {
+  private async finishCheckoutDrain(record: LauncherRecord): Promise<void> {
+    this.endDrain();
+    const rollback = this.auto.rollbackPointer;
+    this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
+    this.saveAuto();
+    try { await (this.deps.prune ?? pruneReleaseWorktrees)(record, rollback); }
+    catch (error) { console.error("[self-update] release cleanup failed", error instanceof Error ? error.name : "unknown"); }
+  }
+
+  private finishManagedAuto(snapshot?: Snapshot): void {
     const pending = this.auto.managedPending;
     const record = this.managed;
-    if (!pending || !record || managedActive(record)
-      || record.idempotencyKey !== managedIdempotencyKey(pending.target.sha, pending.clientKey)) return;
-    const failed = record.phase !== "succeeded";
+    // A manual deployment can finish either a waiting cohort or an accepted
+    // recovery. Only its terminal receipt and fresh process health settle custody.
+    const unaccepted = !this.hasAutoCustody() && !managedActive(record) ? this.auto.drain : null;
+    const manualSuccess = this.auto.drain && record?.trigger === "operator" && record.phase === "succeeded"
+      && Date.parse(record.requestedAt) >= Date.parse(this.auto.drain.since)
+      && (!pending || Date.parse(record.requestedAt) >= Date.parse(pending.at));
+    if (!manualSuccess && !unaccepted && (!pending || !record || managedActive(record)
+      || record.idempotencyKey !== managedIdempotencyKey(pending.target.sha, pending.clientKey))) return;
+    const failed = !manualSuccess && !unaccepted && record!.phase !== "succeeded";
+    if (failed) {
+      // A terminal failure can follow web promotion or a failed rollback.
+      // Disable future updates immediately, but keep the accepted transaction
+      // and its custody until a fresh observation establishes safe succession.
+      if (this.auto.enabled || !this.auto.off) {
+        this.auto = { ...this.auto, enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: record!.target,
+          stage: "deploy", reason: record!.error || (record!.lost ? "deployment record was lost" : "deployment failed") } };
+        this.saveAuto();
+      }
+    }
+    const serves = (revision: Revision | null, target: string | null | undefined) => !!target && (revision?.sha === target || revision?.short === shortSha(target));
+    const healthy = snapshot && [snapshot.processes.web, snapshot.processes.runtimeHost]
+      .every((process) => process.state === "healthy" && process.lastHealthOk === true);
+    // A successful operator deployment accepted during this cohort can also
+    // finish it on a newer target. A prior manual receipt cannot release a new drain.
+    const settledTargets = manualSuccess ? [record!.target] : unaccepted ? [unaccepted.target.sha]
+      : failed ? [pending!.from ?? this.slice.installed?.sha, pending!.target.sha] : [pending!.target.sha];
+    const consistent = snapshot && settledTargets
+      .some((target) => serves(snapshot.serving.web, target) && serves(snapshot.serving.runtimeHost, target));
+    if (!healthy || !consistent) return;
+    this.endDrain();
     this.auto = {
       ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
       lastBlockers: null, quietSince: null, noticeAt: null,
-      ...(failed ? { enabled: false, off: { at: new Date(this.deps.now()).toISOString(), target: record.target,
-        stage: "deploy" as const, reason: record.error || (record.lost ? "deployment record was lost" : "deployment failed") } } : {}),
     };
     this.saveAuto();
   }
 
   private finishManagedAutoRefusal(target: Revision, reason: string): void {
+    this.endDrain();
     this.auto = {
       ...this.auto, enabled: false, managedPending: null, waitingSince: null, waitingTarget: null,
       quietSince: null, lastBlockers: null,
@@ -554,6 +774,12 @@ export class SelfUpdateService {
   private async runManagedAutoTick(decision: ModeDecision): Promise<void> {
     const snapshot = await this.snapshot();
     let pending = this.auto.managedPending;
+    // Keep an operator recovery's current receipt through health observation,
+    // including a waiting cohort whose frozen target predates that recovery.
+    if (this.auto.drain && this.managed?.trigger === "operator"
+      && Date.parse(this.managed.requestedAt) >= Date.parse(this.auto.drain.since)
+      && (!pending || Date.parse(this.managed.requestedAt) >= Date.parse(pending.at))
+      && (managedActive(this.managed) || this.managed.phase === "succeeded")) return;
     if (pending) {
       const idempotencyKey = managedIdempotencyKey(pending.target.sha, pending.clientKey);
       if (this.managed?.idempotencyKey === idempotencyKey) return;
@@ -563,16 +789,18 @@ export class SelfUpdateService {
       let accepted: ViewerDeploymentStatus | null;
       try { accepted = await this.deps.findDeploymentByIdempotencyKey(idempotencyKey); }
       catch { return; }
-      if (accepted) {
+      if (accepted || pending.deploymentId) {
         const record: ManagedRecord = {
-          deploymentId: accepted.deploymentId, idempotencyKey, trigger: "auto",
-          target: accepted.revision, targetShort: shortSha(accepted.revision), targetVersion: pending.target.version || null,
-          requestedAt: accepted.createdAt, observed: {}, lastStep: null, finishedAt: null,
+          deploymentId: accepted?.deploymentId ?? pending.deploymentId!, idempotencyKey, trigger: "auto",
+          target: accepted?.revision ?? pending.target.sha, targetShort: shortSha(accepted?.revision ?? pending.target.sha), targetVersion: pending.target.version || null,
+          requestedAt: accepted?.createdAt ?? pending.at, observed: {}, lastStep: null, finishedAt: null,
           phase: null, error: null, servingProgress: null,
         };
         this.managed = observeDeployment(record, accepted);
-        writeManagedRecord(this.managedFile, this.managed);
+        this.saveManaged();
+        if (managedActive(this.managed)) this.watchDeployment();
         this.finishManagedAuto();
+        if (!managedActive(this.managed) && this.auto.managedPending) await this.snapshot();
         this.changes.emit();
         return;
       }
@@ -582,9 +810,11 @@ export class SelfUpdateService {
       if ((this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
         && this.slice.available?.sha !== pending.target.sha) {
         // The host does not know this key and a successful check moved past
-        // its target. Let the current revision start a new admission window.
-        this.auto = { ...this.auto, managedPending: null, waitingSince: null, waitingTarget: null,
-          quietSince: null, lastBlockers: null, noticeAt: null };
+        // its target. No accepted transaction remains to own launch custody.
+        // Recheck admission without resetting the cumulative wait.
+        this.endDrain();
+        this.auto = { ...this.auto, managedPending: null, waitingTarget: null,
+          quietSince: null, lastBlockers: null };
         this.saveAuto();
         pending = null;
       }
@@ -592,21 +822,25 @@ export class SelfUpdateService {
     if (!this.auto.enabled) return;
     if ((await this.autoAvailability(decision)) !== "available" || !this.auto.enabled || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
-    const target = pending?.target ?? this.slice.available;
-    if (this.slice.check.state !== "update-available" || !target?.sha || this.slice.available?.sha !== target.sha
+    const target = this.draining() ? this.auto.drain!.target : pending?.target ?? this.slice.available;
+    if (this.slice.check.state !== "update-available" || !target?.sha || (!this.draining() && this.slice.available?.sha !== target.sha)
       || snapshot.installed.sha === target.sha
       || this.managed?.phase === "succeeded" && this.managed.target === target.sha) return;
     const now = this.deps.now();
+    const cohortQuiet = await this.waitForAutoQuiet(snapshot, target.sha, now);
     const repo = await this.deps.prepareCheckRepo();
     let green = await this.autoGreen(target.sha, repo, now);
-    if (green.state !== "green") return;
-    if (!await this.waitForAutoQuiet(snapshot, target.sha, now, true)) return;
+    if (green.state !== "green") {
+      if (green.state === "red") await this.advanceFailedDrain(target, repo, now);
+      return;
+    }
+    if (!cohortQuiet) return;
     green = await this.refreshGreen(target.sha, repo, green);
     if (green.state !== "green") { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); return; }
     const finalSnapshot = await this.snapshot();
-    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now()) : null;
+    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
-    if (!finalProbe?.quiet || finalSnapshot.available?.sha !== target.sha || finalSnapshot.installed.sha === target.sha
+    if (!this.quietAdmits(finalProbe) || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
       || this.checking || finalSnapshot.check.state === "checking" || !this.auto.enabled) {
       this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe?.blockers ?? this.auto.lastBlockers };
       this.saveAuto();
@@ -622,21 +856,25 @@ export class SelfUpdateService {
       const current = await this.decide();
       if (current.mode !== "managed" || (await this.autoAvailability(current)) !== "available" || !this.auto.enabled
         || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
-        || this.slice.available?.sha !== target.sha) return;
+        || (!this.draining() && this.slice.available?.sha !== target.sha)) return;
       green = await this.refreshGreen(target.sha, repo, green);
+      // Historical green checks do not establish that a frozen target is still
+      // on main. Fetch afresh inside the admission gate, then re-read quiet.
+      const reachable = await this.targetOnBranch(repo, target.sha);
       const admissionSnapshot = await this.snapshot();
-      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now()) : null;
+      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
-      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || green.state !== "green" || !admissionProbe?.quiet || !this.auto.enabled || this.active()
+      if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.active() || this.checking
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
-        || admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha) {
+        || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
         this.saveAuto();
         return;
       }
+      this.beginAutoCustody(target);
       const clientKey = pending?.clientKey ?? randomUUID();
       if (!pending) {
-        this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString() }, quietSince: null };
+        this.auto = { ...this.auto, managedPending: { target, clientKey, at: new Date(this.deps.now()).toISOString(), from: admissionSnapshot.serving.web?.sha ?? null }, quietSince: null };
         this.saveAuto();
       }
       const result = await this.deploy(target, clientKey, "auto");
@@ -644,6 +882,13 @@ export class SelfUpdateService {
     } finally {
       endRestartGate(gateFile, gateId);
     }
+  }
+
+  private async targetOnBranch(repo: string, target: string): Promise<boolean> {
+    try {
+      return await (this.deps.targetOnBranch?.(repo, target)
+        ?? targetOnCurrentBranch(repo, this.deps.remote, this.deps.branch, target));
+    } catch { return false; } // Missing remote evidence holds admission for retry.
   }
 
   private async refreshGreen(target: string, checkout: string, prior: GreenVerdict): Promise<GreenVerdict> {
@@ -659,21 +904,34 @@ export class SelfUpdateService {
     const pending = this.auto.pending;
     const decision = await this.decide();
     const record = decision.record;
+    const apply = this.apply.current;
+    if (apply?.state === "switching" && apply.trigger === "auto" && apply.requestId === requestId && record?.checkout) {
+      if (activeRestartGate(restartGateFile(record.requestFile)) !== gateId || record.launcher.pid !== apply.launcherPid
+        || record.launcher.startIdentity !== apply.launcherIdentity) return false;
+      const green = await this.refreshGreen(apply.target, record.checkout, this.auto.green[apply.target] ?? { state: "unknown" });
+      const snapshot = await this.snapshot();
+      const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true) : null;
+      return green.state === "green" && await this.targetOnBranch(record.checkout, apply.target) && this.quietAdmits(quiet);
+    }
     if (!pending || pending.requestId !== requestId || !record || decision.mode !== "checkout"
       || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
     const green = await this.refreshGreen(pending.target, record.checkout!, this.auto.green[pending.target] ?? { state: "unknown" });
+    // An untaken first web request still needs current main ancestry. Once web
+    // has taken the release, host succession keeps that admitted custody.
+    const reachable = pending.role !== "web" || record.web.requestId === pending.requestId
+      || await this.targetOnBranch(record.checkout!, pending.target);
     const availability = await this.autoAvailability(decision);
     const current = await this.decide();
     const snapshot = await this.snapshot();
-    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now()) : null;
+    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
     // Every asynchronous observation precedes the final admission fence. A
     // later disable, runner/restart/check activity or replacement request
     // must never admit this old request, including during snapshot's Git reads.
     if (JSON.stringify(this.auto.pending) !== JSON.stringify(pending)) return false;
     const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
     const currentRecord = recordFile ? readLauncherRecord(recordFile) : current.record;
-    if (!this.active() && this.slice.check.state !== "checking" && this.auto.enabled
-      && green.state === "green" && quiet?.quiet && snapshot.installed.sha === pending.target
+    if (!this.active() && this.slice.check.state !== "checking" && (this.auto.enabled || this.auto.drain?.admitted === true)
+      && reachable && green.state === "green" && this.quietAdmits(quiet) && snapshot.installed.sha === pending.target
       && availability === "available" && current.mode === "checkout" && currentRecord?.checkout === record.checkout
       && currentRecord.web.state === "healthy" && currentRecord.runtimeHost.state === "healthy"
       && currentRecord.launcher.pid === pending.launcherPid && currentRecord.launcher.startIdentity === record.launcher.startIdentity
@@ -699,6 +957,65 @@ export class SelfUpdateService {
     return `${JSON.stringify({ sha: serving, dir, checkoutHead, publishedAt: new Date(this.deps.now()).toISOString() })}\n`;
   }
 
+  /** An operator may override running turns; the transaction still needs
+      healthy processes, readable evidence and idle state controllers. */
+  private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers } | null): boolean {
+    return !!probe && (probe.quiet || this.auto.drain?.force === true
+      && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
+  }
+
+  private get drainFile(): string { return join(this.deps.dir, "auto-drain.json"); }
+
+  private draining(): boolean { return !!this.auto.drain; }
+
+  /** A switch controls future admission; a persisted accepted transaction owns
+      the hold independently, including the gap between checkout roles. */
+  private hasAutoCustody(): boolean {
+    return !!this.auto.rollback || this.auto.drain?.admitted === true || !!this.auto.pending || !!this.auto.managedPending;
+  }
+
+  private beginAutoCustody(target: Revision): void {
+    const drain = this.draining() ? this.auto.drain! : {
+      id: randomUUID(), target, since: new Date(this.deps.now()).toISOString(), overranAt: null, blockers: null,
+    };
+    // The short gate fences this write. Persist renewable custody before the
+    // request can be accepted and outlive that gate or this service instance.
+    this.auto = { ...this.auto, drain: { ...drain, admitted: true } };
+    this.saveAuto();
+    writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+  }
+
+  private recoverDrainOwner(): void {
+    if (this.auto.drain) return;
+    const lease = activeDrain(this.drainFile, this.deps.now());
+    // A valid older first-publication checkpoint can lack its owner. An
+    // unreadable hold stays fenced for repair instead of being reassigned.
+    if (!lease?.persistent || lease.id === "unreadable" || !/^[a-f0-9]{40}$/i.test(lease.target)) return;
+    const target = [this.auto.managedPending?.target, this.slice.available, this.slice.installed]
+      .find(revision => revision?.sha === lease.target)
+      ?? { ...UNKNOWN_REVISION, sha: lease.target, short: shortSha(lease.target) };
+    const admitted = this.hasAutoCustody();
+    this.auto = { ...this.auto, waitingSince: this.auto.waitingSince ?? lease.since, waitingTarget: lease.target,
+      drain: { id: lease.id, target, since: lease.since, overranAt: null, blockers: this.auto.lastBlockers, admitted } };
+    this.saveAuto();
+  }
+
+  private refreshDrain(): void {
+    this.recoverDrainOwner();
+    const drain = this.auto.drain;
+    if ((this.auto.enabled || this.hasAutoCustody()) && drain) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+  }
+
+  private endDrain(): void {
+    this.recoverDrainOwner();
+    const drain = this.auto.drain;
+    if (!drain) return;
+    releaseDrain(this.drainFile, drain.id);
+    this.auto = { ...this.auto, drain: null };
+    this.saveAuto();
+    this.deps.requestPipelineTick?.();
+  }
+
   private finishAutoRestart(pending: NonNullable<AutoState["pending"]>, outcome: "done" | "failed" | "fell-back", detail: string | undefined, record: LauncherRecord): void {
     appendHistory(this.historyFile, { at: new Date(this.deps.now()).toISOString(), by: "auto", kind: pending.role === "web" ? "restart-web" : "restart-host", target: pending.target, from: pending.from, outcome, detail });
     if (outcome === "done") {
@@ -708,8 +1025,24 @@ export class SelfUpdateService {
       restorePointer(record.releasePointer, pending.rollbackPointer);
       this.auto = { ...this.auto, enabled: false, pending: null, quietSince: null,
         off: { at: new Date(this.deps.now()).toISOString(), target: pending.target, stage: pending.role === "web" ? "restart-web" : "restart-host", reason: detail ?? outcome } };
+      // Restoring the pointer does not move the other process. Keep durable
+      // custody until a later observation proves both are healthy on rollback.
+      this.auto = { ...this.auto, rollback: { target: pending.from } };
     }
     this.saveAuto();
+  }
+
+  /** Only the operator route accepts this decision; the drain identity fences
+      an old tab from forcing a newer update. Keep waiting preserves custody. */
+  async decideDrain(id: string, choice: "deploy-now" | "keep-waiting"): Promise<ActionResult> {
+    const drain = this.auto.drain;
+    if (!this.auto.enabled || !drain || drain.id !== id || !drain.overranAt || drain.acknowledgedAt || drain.admitted) {
+      return refuse(409, "auto-switch-superseded", "This automatic update decision is no longer pending");
+    }
+    this.auto = { ...this.auto, drain: { ...drain, acknowledgedAt: new Date(this.deps.now()).toISOString(), force: choice === "deploy-now" } };
+    this.saveAuto();
+    if (choice === "deploy-now") await this.autoTick();
+    return { ok: true };
   }
 
   private readPersisted(): Persisted | null {
@@ -754,17 +1087,27 @@ export class SelfUpdateService {
 
   async decide(): Promise<ModeDecision> {
     const now = this.deps.now();
-    if (this.decision && now - this.decision.at < MODE_TTL_MS) {
-      const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-      /* The record is re-read on every decision: it is the live state of both
-         processes. */
-      if (this.decision.value.mode === "checkout" && file) {
-        const record = readLauncherRecord(file);
-        if (record) return { ...this.decision.value, record };
-      }
-      return this.decision.value;
-    }
+    if (this.decision?.value.mode === "managed" && now - this.decision.at < MODE_TTL_MS) return this.decision.value;
     const value = await this.deps.mode();
+    if (value.mode === "package" && value.record && !value.record.installRoot) {
+      value.record = { ...value.record, installRoot: packageRoot(value.record) };
+    }
+    if (!value.record && value.mode === "unsupported" && value.reason !== "docker-deployments" && this.deps.web.port) {
+      const root = value.installRoot ?? manualInstallRoot();
+      if (root) value.installRoot = root;
+      const config = root ? cliRuntimeHostConfig(root, { env: { ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) } }) : null;
+      const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET ?? config?.socketPath;
+      const id = socket ? /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1] ?? config?.installId : null;
+      const identity = readStartIdentity(this.deps.web.pid);
+      if (id && socket && identity) writeAtomic(join(this.deps.dir, `adopt-${id}.json`),
+        { pid: this.deps.web.pid, startIdentity: identity, port: this.deps.web.port, socket, ...(root ? { installRoot: root } : {}) });
+    }
+    if (value.supervision === "adopted" && value.record) {
+      const identity = readStartIdentity(this.deps.web.pid);
+      if (identity) writeAtomic(launcherControlFile(value.record.requestFile, "adopt"),
+        { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket,
+          installRoot: value.record.checkout ?? value.record.installRoot });
+    }
     /* A host that does not answer is a moment, never a fact about the
        install: a deployment's own handover replaces the host, and a web
        process promoted mid-deployment asks before the host is back. So that
@@ -788,6 +1131,16 @@ export class SelfUpdateService {
     this.checking = (async () => {
       try {
         const decision = await this.decide();
+        if (decision.mode === "package" && decision.record) {
+          const root = packageRoot(decision.record);
+          const pointer = await new ReleasePointer(decision.record.releasePointer, root).current();
+          const installed = await registryRevision(packageVersion(pointer.dir));
+          const available = await registryRevision();
+          const order = comparePackageVersions(available.version, installed.version);
+          this.slice = applyCheck(this.slice, { ok: true, installed, available: order > 0 ? available : null,
+            relation: order > 0 ? "behind" : order < 0 ? "ahead" : "equal", ahead: order < 0 ? 1 : 0, behind: order > 0 ? 1 : 0, delta: { commits: [], summary: { commitCount: 0, entryCount: 0, counts: [], groups: [] } } }, new Date(this.deps.now()), this.deps.pollMinutes);
+          return;
+        }
         const input = await this.checkInput(decision);
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
@@ -850,6 +1203,12 @@ export class SelfUpdateService {
 
   private runnerFor(record: LauncherRecord): RunnerPort {
     if (this.runner && this.runnerRecord === record.releasePointer) return this.runner;
+    if (!record.checkout) {
+      this.runner = new PackageRunner(record, this.deps.bun, this.deps.buildEnv(join(this.deps.dir, "work")), join(this.deps.dir, "steps"), () => this.changed());
+      this.runnerRecord = record.releasePointer;
+      if (this.savedUpdate) this.runner.restore(this.savedUpdate);
+      return this.runner;
+    }
     const pointer = new ReleasePointer(record.releasePointer, record.checkout!);
     const scratch = join(this.deps.dir, "work");
     this.runner = this.deps.createRunner({
@@ -879,17 +1238,19 @@ export class SelfUpdateService {
     const decision = await this.decide();
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
-    const available = this.slice.available;
-    if (!available && decision.mode === "checkout" && decision.record && (await this.autoAvailability(decision)) === "hand-managed"
-      && this.slice.check.relation === "equal" && snapshot.installed.sha) {
-      const runner = this.runnerFor(decision.record);
-      void runner.start(snapshot.installed.sha, { short: snapshot.installed.short, version: snapshot.installed.version, trigger: "operator" }).catch(() => {}).finally(() => this.afterUpdate());
-      return { ok: true };
-    }
-    if (this.slice.check.state !== "update-available" || !available) return refuse(409, "no-update", "No update is available; run a check first");
-    if (decision.mode === "checkout" && decision.record) {
-      const runner = this.runnerFor(decision.record);
-      void runner.start(available.sha, { short: available.short, version: available.version, trigger: "operator" }).catch(() => {}).finally(() => this.afterUpdate());
+    if (this.apply.current?.state === "ready") return refuse(409, "cannot-update", "Restart the launcher using the install action before another update");
+    let available = this.slice.available;
+    const rebuild = !available && (decision.mode === "checkout" || decision.mode === "package") && decision.record
+      && ((decision.mode === "checkout" && await this.handManagedCheckout(decision.record)) || snapshot.action?.id === "update-first")
+      && this.slice.check.relation === "equal" && !!snapshot.installed.sha;
+    if (rebuild) available = snapshot.installed;
+    if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
+      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
+      if (refusal) return refusal;
+      const fresh = await this.snapshot();
+      if (fresh.busy) return busy(fresh.busy);
+      this.startCheckout(decision.record, available);
       return { ok: true };
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
@@ -898,12 +1259,18 @@ export class SelfUpdateService {
 
   async retry(clientKey: string): Promise<ActionResult> {
     const decision = await this.decide();
-    if (decision.mode === "checkout" && decision.record) {
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
       const runner = this.runnerFor(decision.record);
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
-      if (runner.state.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
-      void runner.retry().catch(() => {}).finally(() => this.afterUpdate());
+      if (runner.state.state !== "failed" && this.apply.current?.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
+      const refusal = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
+      if (refusal) return refusal;
+      const fresh = await this.snapshot();
+      if (fresh.busy) return busy(fresh.busy);
+      this.apply.begin(decision.record, runner.state.target!, "operator");
+      const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
+      void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
       return { ok: true };
     }
     if (decision.mode === "managed") {
@@ -915,21 +1282,232 @@ export class SelfUpdateService {
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
+  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult | null> {
+    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? null
+      : refuse(409, "deployment-refused", "The selected revision is not green", "unknown");
+    const green = await this.installRevisionGreen(record, target);
+    return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+  }
+
+  private async installRevisionGreen(record: LauncherRecord, target: string): Promise<GreenVerdict> {
+    const repo = record.checkout ?? await this.deps.prepareCheckRepo();
+    if (!record.checkout) {
+      try { await ensureCommit(repo, this.deps.remote, this.deps.branch, target); }
+      catch (error) { return { state: "unknown", detail: error instanceof Error ? error.message : String(error) }; }
+    }
+    return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+  }
+
+  private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): void {
+    this.apply.begin(record, target.sha, trigger, deploymentId);
+    const runner = this.runnerFor(record);
+    void runner.start(target.sha, { short: target.short, version: target.version, trigger })
+      .then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
+  }
+
+  private failApply(error: unknown): void {
+    if (this.apply.current?.state !== "switching") this.apply.restoreUntaken();
+    if (this.apply.current) releaseDrain(this.drainFile, this.apply.current.requestId);
+    this.apply.patch({ state: "failed", detail: error instanceof Error ? error.message : String(error) });
+    this.changes.emit();
+  }
+
+  private async applyBuilt(): Promise<void> {
+    if (this.runner?.state.state !== "done") { this.failApply("The release build failed"); return; }
+    if (this.slice.available?.sha === this.runner.state.target) this.slice = { ...this.slice, installed: this.slice.available, available: null,
+      check: { ...this.slice.check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
+    this.saveNow();
+    this.apply.patch({ state: "ready" });
+    const current = await this.decide();
+    if (!current.record) throw new Error("The launcher is unavailable");
+    if (current.record.launcher.relaunch === 1) this.apply.send(current.record);
+    else {
+      const intent = this.apply.current!;
+      let previousEntry: string | undefined;
+      try { previousEntry = readFileSync(`/proc/${current.record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs")); } catch { /* The recorded serving release is available on macOS too. */ }
+      if (!previousEntry) {
+        let previousRoot = current.record.checkout ?? current.record.installRoot;
+        try { previousRoot = JSON.parse(intent.rollbackPointer ?? "{}").dir ?? previousRoot; } catch { /* no prior published release */ }
+        if (previousRoot) previousEntry = join(previousRoot, "bin", "cli.mjs");
+      }
+      if (!previousEntry || !this.deps.processAlive(current.record.launcher.pid, current.record.launcher.startIdentity!)) throw new Error("The launcher identity changed");
+      writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
+        requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
+      });
+      this.apply.patch({ externalRestart: true });
+      if ((await this.actionFor(current))?.id === "restart-service") {
+        const result = await this.performInstallAction();
+        if (!result.ok) throw new Error(result.error);
+      }
+    }
+    // Terminal upgrades remain ready, with the single command on the card.
+    this.changes.emit();
+  }
+
+  private async actionFor(decision: ModeDecision): Promise<InstallAction | null> {
+    return this.deps.install ? this.deps.install.action(decision) : installAction(decision, undefined, decision.record?.checkout ?? (decision.record ? packageRoot(decision.record) : decision.installRoot));
+  }
+
+  async performInstallAction(): Promise<ActionResult> {
+    const decision = await this.decide();
+    const action = await this.actionFor(decision);
+    if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
+    const record = decision.record;
+    if (record && action.id === "restart-service") {
+      let intent = this.apply.current;
+      if (!intent || ["done", "failed"].includes(intent.state)) {
+        const release = await new ReleasePointer(record.releasePointer, record.checkout ?? packageRoot(record)).current();
+        if (!/^[a-f0-9]{40}$/.test(release.sha)) return refuse(409, "cannot-restart", "Build the launcher upgrade first");
+        if (githubRepositoryOfRemote(this.deps.remote)) {
+          const green = await this.installRevisionGreen(record, release.sha);
+          if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+        }
+        if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
+        // Old code may have published the candidate and switched only web.
+        // The resident host identifies the prior coherent release; capturing
+        // the current pointer here would restore the failed candidate again.
+        const serving = await this.snapshot();
+        if (serving.processes.runtimeHost.state !== "healthy" || serving.processes.runtimeHost.lastHealthOk !== true) {
+          return refuse(409, "cannot-restart", "The serving runtime host must be healthy before a launcher upgrade");
+        }
+        const rollbackPointer = record.checkout ? await this.pointerForServing(record, {
+          ...serving, serving: { ...serving.serving, web: serving.serving.runtimeHost },
+        }) : null;
+        if (rollbackPointer === undefined) return refuse(409, "cannot-restart", "The prior serving release cannot be verified");
+        if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
+        this.apply.begin(record, release.sha, "operator", undefined, { rollbackPointer,
+          rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "building" });
+        this.apply.patch({ externalRestart: true });
+        // An old bootstrap cannot read the trial if the new entry fails before
+        // loading its recovery code. Reject that entry before stopping anything.
+        const scratch = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/var/tmp", "delegatus-upgrade-preflight-"));
+        let loads = false;
+        try {
+          mkdirSync(join(scratch, "tmp"));
+          const environment: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])),
+            PATH: process.env.PATH, NODE_ENV: "test", HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"), XDG_CACHE_HOME: join(scratch, "cache"),
+            TMPDIR: join(scratch, "tmp"), LLV_STATE_DIR: join(scratch, "state"), LLV_LAUNCHER_REEXEC: "1",
+            LLV_LAUNCHER_INSTALL_ROOT: record.checkout ?? packageRoot(record) };
+          loads = (await realExec(this.deps.bun, ["--bun", join(release.dir, "bin", "cli.mjs"), "--version"], release.dir, environment,
+            { timeoutMs: 30_000, maxOutputBytes: 64 * 1024 })).code === 0;
+        } finally { rmSync(scratch, { recursive: true, force: true }); }
+        if (!loads) {
+          this.apply.restoreUntaken(record);
+          this.apply.patch({ state: "failed", detail: "The replacement launcher failed its load check before restart" });
+          this.changes.emit();
+          return refuse(503, "cannot-restart", "The replacement launcher could not load; the prior release is restored for the next start");
+        }
+        this.apply.patch({ state: "ready" });
+        const runner = this.runnerFor(record);
+        runner.restore({ ...idleUpdate(CHECKOUT_STEPS), state: "done", target: release.sha, targetShort: release.sha.slice(0, 7), releaseDir: release.dir,
+          startedAt: this.apply.current!.startedAt, finishedAt: new Date(this.deps.now()).toISOString(), steps: idleUpdate(CHECKOUT_STEPS).steps.map(step => ({ ...step, state: "done" })) });
+        this.saveNow(); intent = this.apply.current;
+      }
+      if (!intent || intent.state !== "ready") return refuse(409, "cannot-restart", "A launcher apply is already active");
+      const previousEntry = this.deps.install ? this.deps.install.entry(record)
+        : readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs"));
+      if (!previousEntry || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity!)) return refuse(409, "cannot-restart", "The launcher identity changed");
+      writeAtomic(launcherControlFile(record.requestFile, "trial"), {
+        requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
+      });
+      writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+      this.apply.patch({ state: "switching", externalRestart: true, switchedAt: new Date(this.deps.now()).toISOString() });
+    }
+    try { if (this.deps.install) this.deps.install.run(action); else runInstallAction(action); } catch (error) {
+      if (record && action.id === "restart-service") {
+        this.apply.restoreUntaken(record);
+        const trialFile = launcherControlFile(record.requestFile, "trial");
+        try {
+          if (JSON.parse(readFileSync(trialFile, "utf8")).requestId === this.apply.current?.requestId) rmSync(trialFile);
+        } catch { /* A handoff that was never accepted may have no trial file. */ }
+        this.failApply(error);
+      }
+      return refuse(503, "cannot-restart", "The user service manager did not accept the action");
+    }
+    return { ok: true };
+  }
+
+  async deployRevision(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+    // Serialize target resolution with admission so two exact requests cannot build together.
+    const preceding = this.deploying;
+    const run = (async () => {
+      if (preceding) await preceding.catch(() => {});
+      if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
+      const rows = checkoutDeployments(this.deps.dir);
+      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey);
+      if (previous) {
+        if ((request.revision && previous.requestedRevision !== request.revision) || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
+        return { state: "accepted" as const, deploymentId: previous.deploymentId, revision: previous.revision, replayed: true };
+      }
+      const decision = await this.decide();
+      const record = decision.record;
+      const action = await this.actionFor(decision);
+      if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && userUnit(readFileSync(`/proc/${record.launcher.pid}/cgroup`, "utf8")))))
+        return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
+      const snapshot = await this.snapshot();
+      const active = rows.find(row => !row.terminal);
+      if (snapshot.busy || active) return { state: "busy" as const, deploymentId: active?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: active?.revision ?? snapshot.update.target ?? "" };
+      let target = request.revision ?? "";
+      if (request.ref) {
+        const resolved = await runGit(["ls-remote", this.deps.remote, request.ref], record.checkout ?? this.deps.dir);
+        target = resolved.stdout.trim().split(/\s/)[0] ?? "";
+      }
+      if (!/^[a-f0-9]{40}$/.test(target)) throw new Error("The requested revision was not found on the tracked branch");
+      let revision: Revision;
+      if (record.checkout) {
+        if (!await targetOnCurrentBranch(record.checkout, this.deps.remote, this.deps.branch, target)) throw new Error("The requested revision was not found on the tracked branch");
+        revision = await this.deps.describe(record.checkout, target);
+      } else {
+        revision = await registryRevision();
+        if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
+      }
+      const green = await this.installRevisionGreen(record, target);
+      if (green.state !== "green") throw new Error(`The requested revision is not green (${green.state})`);
+      const health = await this.deps.hostHealth().catch(() => null);
+      const current = await this.decide();
+      if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
+      const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
+      if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state) || admitted)
+        return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
+      const serving = current.record!;
+      const alreadyServing = serving.launcher.state === "healthy" && !serving.launcher.error && serving.launcher.revision === target
+        && serving.web.state === "healthy" && serving.runtimeHost.state === "healthy"
+        && serving.web.revision === target.slice(0, 7) && serving.runtimeHost.revision === target.slice(0, 7)
+        && serving.web.pid !== null && serving.web.startIdentity !== null && this.deps.processAlive(serving.web.pid, serving.web.startIdentity)
+        && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive);
+      const deploymentId = `checkout-${randomUUID()}`;
+      const at = new Date(this.deps.now()).toISOString();
+      saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
+        phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+        health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
+      try { if (!alreadyServing) this.startCheckout(record, revision, "seat", deploymentId); }
+      catch (error) {
+        const row = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === deploymentId)!;
+        saveCheckoutDeployment(this.deps.dir, { ...row, phase: "failed", terminal: true, error: error instanceof Error ? error.message : String(error), updatedAt: new Date(this.deps.now()).toISOString(), revisionNumber: row.revisionNumber + 1 });
+        throw error;
+      }
+      return { state: "accepted" as const, deploymentId, revision: target, replayed: false };
+    })();
+    this.deploying = run;
+    try { return await run; } finally { if (this.deploying === run) this.deploying = null; }
+  }
+
   private async deploy(target: Revision, clientKey: string, trigger: "operator" | "auto" = "operator"): Promise<DeploymentResult> {
     if (managedActive(this.managed)) return busy("update");
+    let record: ManagedRecord;
     try {
-      const record = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now, trigger);
-      writeManagedRecord(this.managedFile, record);
-      this.managed = record;
-      this.watchDeployment();
-      this.changes.emit();
-      return { ok: true };
+      record = await requestManagedUpdate(target, clientKey, this.deps.requestDeployment, this.deps.now, trigger);
     } catch (error) {
       if (error instanceof DeploymentBusyError) return refuse(409, "deployment-busy", error.message);
       const detail = error instanceof Error ? error.message : undefined;
       return { ...refuse(503, "deployment-refused", "The runtime host did not take the deployment", detail),
         ...(isRuntimeHostTransportFailure(error) ? { deliveryUncertain: true } : {}) };
     }
+    this.managed = record;
+    this.saveManaged();
+    this.watchDeployment();
+    this.changes.emit();
+    return { ok: true };
   }
 
   private afterUpdate(): void {
@@ -953,18 +1531,20 @@ export class SelfUpdateService {
       }
     }
     this.saveNow();
-    if (this.runner?.state.state === "done" || (this.runner?.state.state === "failed" && ["remote-moved", "memory", "interrupted"].includes(this.runner.state.steps.find((step) => step.state === "failed")?.failure?.kind ?? ""))) void this.check();
+    if ((this.runner?.state.state === "done" && this.runner.state.trigger === "auto") || (this.runner?.state.state === "failed" && ["remote-moved", "memory", "interrupted"].includes(this.runner.state.steps.find((step) => step.state === "failed")?.failure?.kind ?? ""))) void this.check();
     this.changes.emit();
     if (this.auto.enabled) void this.autoTick();
   }
 
   async restart(role: LauncherRole): Promise<ActionResult> {
     const decision = await this.decide();
-    if (decision.mode !== "checkout" || !decision.record) {
+    if ((decision.mode !== "checkout" && decision.mode !== "package") || !decision.record) {
       return decision.mode === "managed"
         ? refuse(409, "managed-restart", "A managed install restarts its processes through a deployment")
         : refuse(409, "cannot-restart", "This install cannot restart its processes");
     }
+    if (decision.record.launcher.relaunch !== 1 && (decision.supervision === "adopted" || this.deps.env.LLV_TOKEN))
+      return refuse(409, "cannot-restart", "Upgrade the launcher using the install action first");
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
     const requestId = this.deps.requestRestart(decision.record, role);
@@ -1008,19 +1588,23 @@ export class SelfUpdateService {
 
   /** Reads the deployment once more while it is active. */
   async refreshManaged(): Promise<void> {
-    if (!managedActive(this.managed)) return;
+    if (!managedActive(this.managed)) {
+      if (this.managedNeedsSave) this.saveManaged();
+      return;
+    }
     try {
       const status = await this.deps.readDeployment(this.managed!.deploymentId);
       const next = status ? observeDeployment(this.managed!, status) : observeMissing(this.managed!, this.deps.now());
       if (JSON.stringify(next) !== JSON.stringify(this.managed)) {
-        writeManagedRecord(this.managedFile, next);
         this.managed = next;
+        this.managedNeedsSave = true;
         this.changes.emit();
         if (!managedActive(next) && next.phase === "succeeded") void this.check();
       }
     } catch {
       /* The web process is replaced mid-deployment; the next one reads on. */
     }
+    if (this.managedNeedsSave) this.saveManaged();
     this.finishManagedAuto();
   }
 
@@ -1036,6 +1620,7 @@ export class SelfUpdateService {
     const decision = await this.decide();
     const now = this.deps.now();
     const base = {
+      action: await this.actionFor(decision),
       mode: decision.mode,
       unsupportedReason: decision.reason,
       available: this.slice.available,
@@ -1048,7 +1633,7 @@ export class SelfUpdateService {
         serverTime: new Date(now).toISOString(),
       },
     };
-    const snapshot: Snapshot = decision.mode === "checkout" && decision.record ? { ...base, ...await this.checkoutPart(decision.record, now) }
+    const snapshot: Snapshot = (decision.mode === "checkout" || decision.mode === "package") && decision.record ? { ...base, ...await this.checkoutPart(decision.record, now) }
       : decision.mode === "managed" ? { ...base, ...await this.managedPart(now) } : {
       ...base,
       installed: this.slice.installed ?? UNKNOWN_REVISION,
@@ -1057,11 +1642,16 @@ export class SelfUpdateService {
       processes: { web: { ...stoppedProcess(), tail: [] }, runtimeHost: { ...stoppedProcess(), tail: [] } },
       busy: null,
     };
+    if (snapshot.mode === "managed") this.finishManagedAuto(snapshot);
     // Ordinary reads use the controller state after awaited deployment
     // refreshes. Receipt snapshots pass replayAuto to preserve their original
     // immutable response across later changes.
     const auto = replayAuto ?? this.auto;
     snapshot.auto = await this.autoView(decision, snapshot, auto);
+    if (this.deps.quiet) {
+      const { blockers } = await probeQuiet(snapshot, this.deps.quiet, now);
+      snapshot.resumeWork = { turns: blockers.turns, stages: blockers.stages, turnList: blockers.turnList, stageList: blockers.stageList, unreadable: blockers.unreadable };
+    }
     snapshot.history = readHistory(this.historyFile);
     snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;
@@ -1069,11 +1659,42 @@ export class SelfUpdateService {
 
   private async checkoutPart(record: LauncherRecord, now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     const runner = this.runnerFor(record);
-    const pointer = await new ReleasePointer(record.releasePointer, record.checkout!).current();
-    const installed = pointer.sha ? await this.describe(record.checkout!, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
+    if (this.recoverReadyApply) {
+      this.recoverReadyApply = false;
+      const intent = this.apply.current;
+      if (intent?.state === "ready" && record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity
+        && (!intent.externalRestart || (await installAction({ mode: record.checkout ? "checkout" : "package", record, reason: null }))?.id === "restart-service")) {
+        try {
+          if (intent.trigger === "auto") {
+            if (!intent.autoGateId || activeRestartGate(restartGateFile(record.requestFile), this.deps.now()) !== intent.autoGateId) {
+              this.apply.restoreUntaken(record); this.apply.patch({ state: "failed", admissionRefused: true, detail: "The automatic admission expired during recovery" });
+            } else this.apply.send(record, intent.autoGateId);
+          } else await this.applyBuilt();
+        } catch (error) { this.failApply(error); }
+      }
+    }
+    let installed: Revision;
+    if (record.checkout) {
+      const pointer = await new ReleasePointer(record.releasePointer, record.checkout).current();
+      installed = pointer.sha ? await this.describe(record.checkout, pointer.sha) : (this.slice.installed ?? UNKNOWN_REVISION);
+    } else {
+      const pointer = await new ReleasePointer(record.releasePointer, packageRoot(record)).current();
+      const version = packageVersion(pointer.dir);
+      installed = pointer.sha ? { version, sha: pointer.sha, short: pointer.sha.slice(0, 7), date: "" }
+        : this.slice.installed?.version === version ? this.slice.installed : { ...UNKNOWN_REVISION, version };
+      if (installed.sha) this.described.set(installed.sha, installed);
+    }
     let health: RuntimeHostHealth | null = null;
     let healthError: string | null = null;
     try { health = await this.deps.hostHealth(); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
+    const settled = this.apply.observe(record, runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)
+      && record.web.pid !== null && record.web.startIdentity !== null && this.deps.processAlive(record.web.pid, record.web.startIdentity), now);
+    if (settled) {
+      const intent = this.apply.current!;
+      appendHistory(this.historyFile, { at: new Date(now).toISOString(), by: intent.trigger, kind: "apply", target: intent.target, from: null,
+        outcome: intent.rolledBack ? "fell-back" : settled, detail: intent.detail });
+      if (intent.trigger === "auto" && settled === "failed") this.finishFailedApply();
+    }
     const at = new Date(now).toISOString();
 
     const fromRecord = (entry: LauncherProcess, extra: Partial<ProcessStatus>): ProcessView => {
@@ -1101,8 +1722,8 @@ export class SelfUpdateService {
     });
     let host = fromRecord(record.runtimeHost, { socket: record.socket });
     if (host.state === "healthy") {
-      if (health && health.pid === host.pid) host = { ...host, lastHealthAt: at, lastHealthOk: true };
-      else if (healthError) host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError } };
+      if (runtimeHostMatches(record.runtimeHost, health, this.deps.processAlive)) host = { ...host, lastHealthAt: at, lastHealthOk: true };
+      else host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError ?? (health ? "Runtime host health identity does not match the launcher" : "Runtime host health is unavailable") } };
     }
 
     /* Busy follows what the processes are, after the PID check: a "starting"
@@ -1124,13 +1745,22 @@ export class SelfUpdateService {
       }
       else busy = busy ?? (pending.role === "web" ? "restart-web" : "restart-runtime-host");
     }
+    const intent = this.apply.current;
+    const applyState = intent && intent.target === runner.state.target ? intent : null;
+    const update = applyState ? { ...runner.state,
+      state: applyState.state === "switching" ? "running" as const : applyState.state === "failed" ? "failed" as const : applyState.state === "done" ? "done" as const : runner.state.state,
+      rolledBack: applyState.rolledBack,
+      steps: [...runner.state.steps, { name: "switch" as const, state: applyState.state === "done" ? "done" as const : applyState.state === "failed" ? "failed" as const : applyState.state === "switching" ? "running" as const : "pending" as const,
+        startedAt: applyState.startedAt, durationMs: null, exitCode: null, tail: [], failure: applyState.detail ? { kind: "error" as const, text: applyState.detail } : null }],
+    } : runner.state;
+    if (applyState?.state === "switching") busy = "update";
     return {
       installed,
       serving: {
         web: web.pid !== null ? await this.describeShort(record.checkout, web.revision) : null,
         runtimeHost: host.pid !== null ? await this.describeShort(record.checkout, host.revision) : null,
       },
-      update: runner.state,
+      update,
       processes: { web, runtimeHost: host },
       busy,
     };

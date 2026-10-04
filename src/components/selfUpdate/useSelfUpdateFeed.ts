@@ -22,7 +22,7 @@ export interface Feed {
 
 const POLL_MS = 1_000;
 
-export function useSelfUpdateFeed(): Feed {
+export function useSelfUpdateFeed(readOnly = false): Feed {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [live, setLive] = useState<Live>("connecting");
   const [offline, setOffline] = useState(false);
@@ -37,6 +37,7 @@ export function useSelfUpdateFeed(): Feed {
 
   useEffect(() => {
     closed.current = false;
+    const suffix = readOnly ? "?readOnly=1" : "";
     let errors = 0;
     const stopPolling = () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
@@ -45,7 +46,7 @@ export function useSelfUpdateFeed(): Feed {
     const connect = () => {
       if (closed.current) return;
       if (typeof EventSource === "undefined") { startPolling(); return; }
-      const events = new EventSource("/api/self-update/events");
+      const events = new EventSource(`/api/self-update/events${suffix}`);
       source.current = events;
       events.addEventListener("state", (event) => {
         errors = 0;
@@ -68,7 +69,7 @@ export function useSelfUpdateFeed(): Feed {
       let answered = 0;
       const tick = async () => {
         try {
-          const response = await fetch("/api/self-update", { cache: "no-store" });
+          const response = await fetch(`/api/self-update${suffix}`, { cache: "no-store" });
           if (!response.ok) throw new Error(String(response.status));
           accept(await response.json() as Snapshot);
           answered += 1;
@@ -86,14 +87,17 @@ export function useSelfUpdateFeed(): Feed {
       void tick();
       pollTimer.current = setInterval(() => { void tick(); }, POLL_MS);
     };
+    const onDecision = (event: Event) => accept((event as CustomEvent<Snapshot>).detail);
+    window.addEventListener("llv:auto-drain-decision", onDecision);
     connect();
     return () => {
+      window.removeEventListener("llv:auto-drain-decision", onDecision);
       closed.current = true;
       source.current?.close();
       source.current = null;
       stopPolling();
     };
-  }, [accept]);
+  }, [accept, readOnly]);
 
   return { snapshot, live, offline, accept };
 }

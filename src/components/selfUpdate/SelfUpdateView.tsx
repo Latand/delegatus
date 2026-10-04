@@ -1,5 +1,6 @@
 "use client";
 
+import { AutoDrainDecision } from "./AutoDrainDecision";
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -47,6 +48,7 @@ export interface ViewState {
 }
 
 export interface ViewActions {
+  installAction?(): void;
   toggleAuto(): void;
   check(): void;
   update(): void;
@@ -300,7 +302,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             <Button action="update" tone="primary" label={t("selfUpdate.update.button")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} />
           </div>
         </div>
-        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.auto?.enabled ? "selfUpdate.update.noteAuto" : "selfUpdate.update.note")}</p>
+        <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
         {steps(target.short, update.steps.map((step) => ({ ...step, state: "pending", tail: [], durationMs: null, startedAt: null })))}
       </section>
     );
@@ -343,7 +345,8 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   const cause = stepFailureText(failed, t);
   const copy = managed
     ? t(update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
-    : t("selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
+    : t(failed.name === "switch" ? update.rolledBack ? "selfUpdate.update.rolledBackApply" : "selfUpdate.update.failedApply"
+      : "selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
   return (
     <section data-section="update" data-update="failed" className={`${CARD} ${EDGE.danger}`}>
       {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
@@ -396,16 +399,21 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
       </div>
       <p className="m-0 text-ui text-secondary">{available || auto.off || auto.phase === "deploying" ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
       {auto.enabled && blockers && auto.phase === "waiting" ? (
-        <ul className="m-0 list-disc pl-5 text-ui text-secondary">
+        <ul data-auto-blockers className="m-0 list-disc pl-5 text-ui text-secondary [overflow-wrap:anywhere]">
+          {(blockers.stageList ?? []).map((stage) => <li key={`${stage.pipelineId}:${stage.stageId}`}>{stage.stageId} · {stage.task}</li>)}
+          {(blockers.turnList ?? []).filter((turn) => !turn.stage).map((turn) => <li key={turn.conversationId}>{turn.seat && turn.project ? turn.project : `${turn.engine} · ${turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`}</li>)}
           {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
           {blockers.stages > 0 ? <li>{t("selfUpdate.auto.block.stages", { count: blockers.stages })}</li> : null}
           {blockers.operatorActiveAt ? <li>{t("selfUpdate.auto.block.operator")}</li> : null}
-          {blockers.busy ? <li>{t("selfUpdate.auto.block.busy")}</li> : null}
+          {blockers.busy ? <li>{t(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` as MessageKey : "selfUpdate.auto.block.busy")}</li> : null}
           {blockers.memoryMb !== null ? <li>{t("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) })}</li> : null}
           {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
         </ul>
       ) : null}
-      {auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
+      {auto.decision ? <AutoDrainDecision decision={auto.decision} /> : null}
+      {auto.enabled && auto.drain && !auto.decision ? <p className="m-0 text-ui text-secondary" data-drain-state={auto.drain.state}>
+        {t(`selfUpdate.auto.drain.${auto.drain.state}` as MessageKey, { time: `${day(auto.drain.at, locale)} ${clock(auto.drain.at)}`, next: auto.drain.nextAt ? `${day(auto.drain.nextAt, locale)} ${clock(auto.drain.nextAt)}` : "" })}
+      </p> : !auto.decision && auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
       {s.mode === "checkout" && auto.target?.short && (s.serving.web?.short !== auto.target.short || s.serving.runtimeHost?.short !== auto.target.short) ? (
         <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.serving", { web: s.serving.web?.short ?? "—", host: s.serving.runtimeHost?.short ?? "—", built: auto.target.short })}</p>
       ) : null}
@@ -649,6 +657,17 @@ function Footer({ s, live, t }: { s: Snapshot; live: Live; t: TFunction }) {
   );
 }
 
+function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: ViewActions; state: ViewState; t: TFunction }) {
+  const action = s.action;
+  if (!action) return null;
+  return <section data-section="install-action" className={CARD}>
+    <p className="m-0 text-ui text-secondary">{t(`selfUpdate.action.${action.id}`)}</p>
+    {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
+    {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
+      label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+  </section>;
+}
+
 export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot: Snapshot; live: Live; state: ViewState; actions: ViewActions }) {
   const { t, locale } = useLocale();
   const banner = state.waitingForWeb
@@ -667,6 +686,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
         <section data-section="header" className={CARD}>
           <p data-unsupported={s.unsupportedReason ?? ""} className="m-0 text-ui text-secondary">{t(`selfUpdate.unsupported.${s.unsupportedReason ?? "no-launcher"}`)}</p>
         </section>
+        <InstallActionCard s={s} actions={actions} state={state} t={t} />
         <Footer s={s} live={live} t={t} />
       </div>
     );
@@ -674,6 +694,7 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
   return (
     <div data-mode={s.mode} className="flex flex-col gap-4 max-sm:gap-3">
       {banner}
+      <InstallActionCard s={s} actions={actions} state={state} t={t} />
       <Header s={s} state={state} actions={actions} t={t} locale={locale} />
       <AutoSection s={s} state={state} actions={actions} t={t} locale={locale} />
       {/* Two columns from 900 px; below that the restart blocks come first,
