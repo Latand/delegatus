@@ -221,7 +221,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  *
  * @param {string} requestFile
  * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
- * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean> }} options
+ * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean>, isStopping?: () => boolean }} options
  */
 export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false, isStopping = () => false } = {}) {
   let busy = false;
