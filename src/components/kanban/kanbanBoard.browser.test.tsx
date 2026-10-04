@@ -15078,16 +15078,16 @@ describe("task motion and waiting reasons", () => {
   }, 180_000);
 
   /* The Orchestrator row keeps one gap above and below it with the reason filters under the panel, and the
-     filters end where their chips end. Frames at 1440, 1000, 700 and 390 in en and uk go to
+     filters keep an edge of their own under the chips. Frames at 1440, 1280, 1000, 700 and 390 in en and uk go to
      LLV_TASK_STATES_PNG_DIR. */
-  browserTest("the Orchestrator row keeps one gap round it beside the reason filters at 1440, 1000, 700 and 390 px in en and uk", async () => {
+  browserTest("the Orchestrator row keeps one gap round it beside the reason filters, and scrolled content clears the chips, at 1440, 1280, 1000, 700 and 390 px in en and uk", async () => {
     const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
     const gaps: string[] = [];
     try {
-      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1000, 700, 390]) {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1000, 700, 390]) {
         const phone = width === 390;
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-motion`, { width, height: 844 }, "light", locale, "reduce", phone);
         try {
@@ -15105,7 +15105,26 @@ describe("task motion and waiting reasons", () => {
               return { above: seat.top - (filters ?? bar).bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
             });
             if (Math.abs(gap.above - gap.below) > 0.5) gaps.push(`${width}-${locale}: ${gap.above} px above the Orchestrator row, ${gap.below} below it`);
-            if (width < 1168 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+            if (width < 1440 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+            /* The page scrolled by 40 px: the page's top edge is the row's lower edge, so no pixel of the Orchestrator row is drawn within 8 px of a chip. */
+            const scrolled = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>(".kb-page")!;
+              const spacer = document.createElement("div");
+              spacer.style.cssText = "flex:0 0 auto;height:2000px";
+              scroller.append(spacer);
+              scroller.scrollTop = 40;
+              const seat = document.querySelector(".kb-page > .seat")!.getBoundingClientRect();
+              const top = scroller.getBoundingClientRect().top;
+              const chips = [...document.querySelectorAll(".kb > .reason-filter-row .reason-filter")].map((chip) => chip.getBoundingClientRect().bottom);
+              return { scrollTop: scroller.scrollTop, drawnTop: Math.max(seat.top, top), drawn: seat.bottom > top, chipBottom: chips.length ? Math.max(...chips) : null };
+            });
+            await page.screenshot({ path: path.join(out, `orchestrator-gap-scrolled-${width}-${locale}.png`) });
+            await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>(".kb-page")!;
+              scroller.lastElementChild?.remove();
+              scroller.scrollTop = 0;
+            });
+            if (scrolled.chipBottom !== null && scrolled.drawn && scrolled.drawnTop - scrolled.chipBottom < 8) gaps.push(`${width}-${locale}: scrolled by ${scrolled.scrollTop} px the Orchestrator row is drawn ${scrolled.drawnTop - scrolled.chipBottom} px below a chip`);
           }
           expect(pageErrors).toEqual([]);
           await page.screenshot({ path: path.join(out, `orchestrator-gap-${width}-${locale}.png`) });
@@ -15155,6 +15174,61 @@ describe("task motion and waiting reasons", () => {
     } finally { await browser.close(); server.stop(); }
     expect(failures).toEqual([]);
   }, 180_000);
+
+  /* The reason filters stand under the bar when the bar is narrower than 1168 px (1280 with the Tasks panel
+     beside it). Their row's height comes out of the reader and draft height, so a launched agent and the next
+     draft's prompt keep the places they have with the filters in the bar. Window 900 px high, seat closed; the
+     launched agent's share is read where the board shows columns. The prompt may end 24 px above the window's
+     foot at 1440 and 1280; at 1000 it keeps the 2 px main leaves. Frames go to LLV_TASK_STATES_PNG_DIR. */
+  browserTest("a launched agent and the next draft keep their places with the reason filters under the bar at 1440, 1280 and 1000 px in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_TASK_STATES_PNG_DIR ?? ".artifacts/task-states/renders");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 1280, 1000]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=launch-cls`, { width, height: 900 }, "light", locale, "reduce", false);
+        try {
+          const label = `${width}-${locale}`;
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          const seat = page.locator('[data-orchestrator-toggle][aria-pressed="true"]');
+          if (await seat.count()) await seat.click();
+          await page.waitForTimeout(600);
+          const create = async () => {
+            await page.click(`[data-bar-control][aria-label="${locale === "uk" ? "Створити" : "Create"}"]`);
+            await page.getByRole("menuitem", { name: locale === "uk" ? "Нова розмова з агентом" : "New conversation with an agent" }).click();
+          };
+          await create();
+          const prompt = page.locator("[data-kanban-draft] textarea").first();
+          await prompt.waitFor({ timeout: 10_000 });
+          await prompt.fill("Read the README and tell me what this project does");
+          await page.waitForTimeout(800);
+          await page.getByRole("button", { name: locale === "uk" ? "Запустити агента" : "Launch the agent" }).first().click();
+          await page.locator('.col-body[data-status="assigned"] [data-kanban-reader]').first().waitFor({ timeout: 20_000 });
+          await page.waitForTimeout(1500);
+          await create();
+          await page.waitForFunction(() => document.querySelectorAll("[data-kanban-draft] textarea").length >= 1, undefined, { timeout: 10_000 });
+          await page.waitForTimeout(800);
+          const read = await page.evaluate(() => {
+            const reader = document.querySelector<HTMLElement>('.col-body[data-status="assigned"] [data-kanban-reader]');
+            const box = reader?.getBoundingClientRect();
+            const share = box && box.height > 0 ? Math.max(0, Math.min(box.bottom, window.innerHeight) - Math.max(box.top, 0)) / box.height : null;
+            const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
+            return { share, areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
+          });
+          if (width < 1440 !== read.rowShown) failures.push(`${label}: the reason filters ${read.rowShown ? "stand under" : "share"} the bar`);
+          /* At 1000 px the board is tabs and the launched agent's reader stands in a tab that is not shown. */
+          if (width >= 1280 && (read.share === null || read.share <= 0.6)) failures.push(`${label}: the launched agent is ${read.share === null ? "not drawn" : `${(read.share * 100).toFixed(1)}% in the window`}`);
+          const limit = width === 1000 ? 898 : 876;
+          if (read.areaBottom === null || read.areaBottom > limit) failures.push(`${label}: the next draft ends its prompt at ${read.areaBottom}, limit ${limit}`);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `launched-and-draft-${label}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
 });
 
 describe("agent memory isolation", () => {
