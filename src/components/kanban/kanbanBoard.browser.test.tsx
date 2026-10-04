@@ -11932,12 +11932,27 @@ describe("column dwell smooth", () => {
             // Decode captured pixels after recording, so the visibility/start
             // probes cannot introduce forced layouts into the RAF timing gate.
             const pixels = await Promise.all(frames.map(async (frame) => (await sharp(Buffer.from(frame.data, "base64")).removeAlpha().raw().toBuffer({ resolveWithObject: true }))));
+            /* Counts text ink in the column window. A filled dark button (the
+               decision card's "Retry") is not ink: it paints its final wide
+               layout in a still narrow frame for the first frames of a
+               transition, so it moves in and out of the window and swamps the
+               text count. Horizontal dark runs of FILL_RUN pixels or more are
+               fills; the run is measured across the whole row, so the window
+               edge cannot shorten a fill into text-sized pieces. */
+            const FILL_RUN = 24;
             const dark = (index: number, box: typeof narrowBoxes[number]) => {
               const { data, info } = pixels[index]!;
+              const from = Math.ceil(box.left + 20), to = Math.floor(box.left + box.width - 20);
               let count = 0;
-              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) for (let x = Math.ceil(box.left + 20); x < Math.floor(box.left + box.width - 20); x++) {
-                const at = (y * info.width + x) * info.channels;
-                if (data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145) count++;
+              for (let y = Math.ceil(box.top + 20); y < Math.floor(box.bottom - 12); y++) {
+                let x = 0;
+                while (x < info.width) {
+                  const isDark = (at: number) => data[at]! < 145 && data[at + 1]! < 145 && data[at + 2]! < 145;
+                  if (!isDark((y * info.width + x) * info.channels)) { x++; continue; }
+                  const start = x;
+                  while (x < info.width && isDark((y * info.width + x) * info.channels)) x++;
+                  if (x - start < FILL_RUN) count += Math.max(0, Math.min(x, to) - Math.max(start, from));
+                }
               }
               return count;
             };
