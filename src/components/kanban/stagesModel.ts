@@ -1,6 +1,6 @@
 import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { latestAttempt, stageFailEdgeRoundsUsed, stagePromptExtra, type StageChipState } from "@/components/pipelines/pipelineModel";
-import { failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
+import { failEdgeMaxRounds, terminalReviewBudgetSpent, terminalReviewContinuationAvailable } from "@/lib/pipelines/failEdgeBudget";
 
 import { graphOrder, operationalAttempts, type StageView } from "./pipelineGraph";
 
@@ -143,14 +143,15 @@ export function pipelineActionOptions(pipeline: Pipeline): PipelineActionOption[
   const general = draft ? "draft" : ended ? "ended" : null;
   const decisionStage = pipeline.state === "needs_decision" ? pipeline.cursor?.stageId ?? null : null;
   const attempt = decisionStage ? latestAttempt(pipeline, decisionStage)?.n ?? 0 : null;
+  const decisionAttempt = decisionStage ? latestAttempt(pipeline, decisionStage) : null;
   return [
     pipeline.state === "paused"
       ? { action: "resume", refusal: null, stageId: null, attempt: null }
       : { action: "pause", refusal: general, stageId: null, attempt: null },
-    { action: "retry-stage", refusal: general ?? (decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
-    { action: "skip-stage", refusal: general ?? (decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
+    { action: "retry-stage", refusal: general ?? (terminalReviewBudgetSpent(decisionAttempt, true) ? "no-decision" : decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
+    { action: "skip-stage", refusal: general ?? (terminalReviewBudgetSpent(decisionAttempt) ? "no-decision" : decisionStage ? null : "no-decision"), stageId: decisionStage, attempt },
     { action: "close", refusal: general, stageId: null, attempt: null },
-    { action: "continue-review", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
+    { action: "continue-review", refusal: general ?? (pipeline.state === "needs_review" || terminalReviewContinuationAvailable(pipeline) ? null : "no-review"), stageId: null, attempt: null },
     { action: "accept-head", refusal: general ?? (pipeline.state === "needs_review" ? null : "no-review"), stageId: null, attempt: null },
     /* A completed lane's stopped merge (#2187 §4.6): tried again, or left
        with its PR open, which is a dismissal of the need. */
@@ -169,7 +170,8 @@ export function actionObserved(action: PipelineActionKind, stageId: string | nul
   if (action === "pause") return now.state === "paused";
   if (action === "resume") return now.state !== "paused" && !pipelineEnded(now);
   if (action === "close") return now.state === "closed";
-  if (action === "continue-review" || action === "accept-head") return now.state !== "needs_review";
+  if (action === "continue-review") return now.state !== "needs_review" && now.state !== "needs_decision";
+  if (action === "accept-head") return now.state !== "needs_review";
   if (action === "retry-merge") return now.merge !== undefined && now.merge.state !== "blocked" && now.merge.state !== "cancelled";
   if (action === "dismiss") return Boolean(now.dismissedAt);
   return now.state !== "needs_decision" || now.cursor?.stageId !== stageId;

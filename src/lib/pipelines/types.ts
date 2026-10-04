@@ -591,9 +591,11 @@ export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewin
     was never reviewed. Not terminal: `continue-review` grants more rounds. */
 export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
 
-/** Why a pipeline stopped in `needs_review` (#1938): the review whose budget
-    ran out, the fix that followed it, and the two heads they left behind. */
+/** Why review budget stopped this lane: an unreviewed fix in needs_review
+    (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
+  /** A terminal budget re-check judged the current head and failed: fix first. */
+  terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;
   attempt: number;
@@ -603,7 +605,7 @@ export type PipelineReviewPending = {
   /** The head the last review judged; null on a handoff recorded before
       reviewed heads were captured. */
   reviewedHead: string | null;
-  /** The head the fix wrote, which nobody has reviewed. */
+  /** The head the fix wrote; terminalRecheck marks a failed review of it. */
   currentHead: string;
   /** The last review's verdict and how many findings it carried. */
   verdict: StageVerdictStatus;
@@ -617,6 +619,8 @@ export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
   stageId: string;
+  /** Failed terminal attempt whose granted fixes must return to this reviewer. */
+  terminalAttempt?: number;
   rounds: number;
   reviewedHead: string | null;
   currentHead: string;
