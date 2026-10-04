@@ -70,7 +70,15 @@ Pre-commit checks staged whitespace, privacy using the committed known-value
 fingerprints, and eslint on staged source files. These checks read working-tree
 content, including unstaged edits in a partially staged file. Pre-push checks
 publication including commit messages and identities, incremental TypeScript,
-changed-file lint, and touched test files. Tests run by explicit file path under
+changed-file lint, and touched test files. ESLint in both hooks and the merger
+compares each changed file with its version at the merge base with `origin/main`.
+Only additional errors block: counts are matched per file, rule and message,
+excluding locations/source frames embedded in React diagnostics. New files have
+an empty baseline; deleted files are ignored. The output names introduced sites
+and counts existing base errors. Warnings do not block; tool/config failures do.
+Privacy and TypeScript still check absolutely. Base linting runs only for the
+selected files, in the same gate slot as head linting.
+Tests run by explicit file path under
 an isolated home, config, state and temp root. Git repository variables exported
 to hooks are removed from child checks so fixture repositories remain isolated.
 On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits

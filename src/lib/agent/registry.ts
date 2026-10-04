@@ -1261,6 +1261,7 @@ function conversationMigrationForIntent(
     : [];
   return {
     intentId: intent.id,
+    startedAt: changedAt,
     phase,
     targetId: intent.targetId,
     revision: intent.revision,

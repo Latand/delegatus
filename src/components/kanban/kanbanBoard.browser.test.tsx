@@ -8119,7 +8119,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
         pending: Boolean(card.querySelector(".head .title.pending")),
         conversations: card.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations") ?? null,
         notStarted: card.querySelectorAll("[data-launch-not-started]").length,
-        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        notLoaded: Number(card.querySelector("[data-elsewhere-conversations]")?.getAttribute("data-elsewhere-conversations") ?? 0),
         failed: card.querySelectorAll("[data-launch-failed]").length,
         error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
       };
@@ -8165,7 +8165,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
             if (at("t-ghost-fixture")?.conversations !== null) failures.push(`${label}: the launch that never started counts ${at("t-ghost-fixture")?.conversations} conversation(s)`);
             if (at("t-ghost-fixture")?.notStarted !== 1) failures.push(`${label}: no «launch did not start» row`);
             if (!at("t-ghost-young")?.pending) failures.push(`${label}: the young task no longer waits for its agent's name`);
-            if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted with its own open row ${JSON.stringify(at("t-ghost-elsewhere"))}`);
+            if (at("t-ghost-elsewhere")?.conversations !== "1" || at("t-ghost-elsewhere")?.notLoaded !== 1) failures.push(`${label}: the conversation off the board is not counted and folded behind the one line ${JSON.stringify(at("t-ghost-elsewhere"))}`);
             if (at("t-ghost-failed")?.pending || at("t-ghost-failed")?.title === untitled) failures.push(`${label}: the failed launch still waits for a name`);
             if (at("t-ghost-failed")?.conversations !== null || at("t-ghost-failed")?.failed !== 1 || at("t-ghost-failed")?.error !== FAILED_ERROR) failures.push(`${label}: the launch that failed two minutes ago is not listed with its error ${JSON.stringify(at("t-ghost-failed"))}`);
             /* The failed launch opens its launch view: the error and Retry. */
@@ -8187,8 +8187,10 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               await page.keyboard.press("Escape").catch(() => {});
               await page.waitForTimeout(300);
             } else failures.push(`${label}: the failed launch offers no Open`);
-            /* The conversation off the board opens by its own link. */
-            const open = page.locator(`${card("t-ghost-elsewhere")} [data-not-loaded]`);
+            /* The conversation off the board waits behind one line in the folded Past attempts section, and opens from its list. */
+            await page.locator(`${card("t-ghost-elsewhere")} details.history > summary`).click();
+            await page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-toggle]`).click();
+            const open = page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-row] button`);
             if (await open.count()) {
               await open.click();
               await page.waitForTimeout(200);
@@ -8284,8 +8286,8 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
               await elsewhere.first().click();
               await page.waitForTimeout(800);
               await page.screenshot({ path: path.join(pngDir, `${label}-task-t-ghost-elsewhere.png`) });
-              elsewhereScreen = await page.evaluate(() => ({ notLoaded: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
-              if (elsewhereScreen.notLoaded !== 1) failures.push(`${label}: the off-board conversation has no row of its own on the task screen`);
+              elsewhereScreen = await page.evaluate(() => ({ notLoaded: Number(document.querySelector("[data-phone-task-elsewhere]")?.getAttribute("data-phone-task-elsewhere") ?? 0), rows: document.querySelectorAll("[data-phone-task-not-loaded]").length }));
+              if (elsewhereScreen.notLoaded !== 1 || elsewhereScreen.rows !== 0) failures.push(`${label}: the off-board conversation is not folded behind the earlier section's line ${JSON.stringify(elsewhereScreen)}`);
             }
             readings[label] = { titles, ghostScreen: screen, elsewhereScreen, failedScreen };
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
@@ -8333,7 +8335,7 @@ describe("old cards list only the launches that did not start, folded behind one
         summary: card.querySelector("[data-launches-not-started]")?.getAttribute("data-launches-not-started") ?? null,
         summaryText: (card.querySelector("[data-launches-toggle]")?.textContent ?? "").trim() || null,
         dismissAll: (card.querySelector("[data-launches-dismiss-all]")?.textContent ?? "").trim() || null,
-        notLoaded: card.querySelectorAll("[data-not-loaded]").length,
+        notLoaded: Number(card.querySelector("[data-elsewhere-conversations]")?.getAttribute("data-elsewhere-conversations") ?? 0),
         error: (card.querySelector("[data-launch-error]")?.textContent ?? "").trim() || null,
       };
     }
@@ -16324,6 +16326,238 @@ describe("passive task status note", () => {
       }
       fs.mkdirSync("evidence/card-status-note", { recursive: true });
       fs.writeFileSync("evidence/card-status-note/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("a task card folds the conversations outside this board into one line of its Past attempts (#2459)", () => {
+  /* The `elsewhere-wall` scenario: a finished task whose lanes left nine past
+     attempts and whose agents linked two dozen more conversations by
+     transcript path, none loaded on this board, and a finished task holding
+     only such conversations. On the desktop at 1440 px and on the phone at
+     390 px, in en and uk: no row per conversation anywhere, one quiet line
+     inside the Past attempts section that is closed until opened, the count in
+     its header equal to the attempts it lists once each, and a list behind the
+     line that opens every one of the conversations. Frames go to
+     ELSEWHERE_WALL_PNG_DIR; every frame is taken before any gate is read, so the
+     same case renders the "before" frames on a tree without the change. */
+  const ATTEMPTS = 9;
+  const WALL = 24;
+  const ONLY = 12;
+  const lineOf = (lang: "en" | "uk", count: number, listed: boolean) => `${translate(lang, "kanban.past.elsewhere", { count })} · ${translate(lang, listed ? "kanban.past.elsewhereHide" : "kanban.past.elsewhereShow")}`;
+
+  browserTest("no card lists the conversations off the board one by one; one line in the closed Past attempts section opens their list — desktop and phone, en and uk", async () => {
+    const out = path.resolve(".artifacts/elsewhere-wall");
+    const pngDir = process.env.ELSEWHERE_WALL_PNG_DIR ?? "/var/tmp/llv-elsewhere-wall-evidence";
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=elsewhere-wall`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        /* Desktop. */
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 1440, height: 1000 }, "light", lang);
+          try {
+            await page.waitForSelector(card("t-wall"), { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            for (const id of ["t-wall", "t-wall-only"]) {
+              await page.locator(card(id)).scrollIntoViewIfNeeded();
+              await page.locator(card(id)).screenshot({ path: path.join(pngDir, `${label}-${id}-closed.png`) });
+            }
+            const read = (id: string) => page.locator(card(id)).evaluate((element) => {
+              const section = element.querySelector<HTMLDetailsElement>("details.history");
+              return {
+                height: Math.round(element.getBoundingClientRect().height),
+                rows: element.querySelectorAll("[data-not-loaded]").length,
+                lines: element.querySelectorAll("[data-elsewhere-toggle]").length,
+                lineText: (element.querySelector("[data-elsewhere-toggle]")?.textContent ?? "").trim(),
+                listed: element.querySelectorAll("[data-elsewhere-row]").length,
+                sectionOpen: section?.open ?? null,
+                head: (section?.querySelector("summary .hl")?.textContent ?? "").trim(),
+                attempts: [...(section?.querySelectorAll("li[data-past]") ?? [])].map((row) => row.getAttribute("data-past")),
+                lineVisible: (() => { const line = element.querySelector<HTMLElement>("[data-elsewhere-toggle]"); return line ? line.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }) : false; })(),
+              };
+            });
+            const closed = { wall: await read("t-wall"), only: await read("t-wall-only") };
+            /* Open the section: its attempts and the one line. */
+            const wallSummary = page.locator(`${card("t-wall")} details.history > summary`);
+            if (await wallSummary.count()) await wallSummary.click();
+            await page.waitForTimeout(300);
+            await page.locator(card("t-wall")).scrollIntoViewIfNeeded();
+            await page.locator(card("t-wall")).screenshot({ path: path.join(pngDir, `${label}-t-wall-section-open.png`) });
+            const sectionOpen = await read("t-wall");
+            const onlySummary = page.locator(`${card("t-wall-only")} details.history > summary`);
+            if (await onlySummary.count()) await onlySummary.click();
+            await page.waitForTimeout(300);
+            await page.locator(card("t-wall-only")).screenshot({ path: path.join(pngDir, `${label}-t-wall-only-section-open.png`) });
+            /* Open the line: the list that opens each conversation. */
+            const toggle = page.locator(`${card("t-wall")} [data-elsewhere-toggle]`);
+            if (await toggle.count()) {
+              await toggle.click();
+              await page.waitForTimeout(300);
+            }
+            await page.locator(card("t-wall")).screenshot({ path: path.join(pngDir, `${label}-t-wall-list-open.png`) });
+            const listOpen = await read("t-wall");
+            const rowButton = page.locator(`${card("t-wall")} [data-elsewhere-row] button`).nth(4);
+            let hash: string | null = null;
+            if (await rowButton.count()) {
+              await rowButton.click();
+              await page.waitForTimeout(200);
+              hash = await page.evaluate(() => location.hash);
+            }
+            readings[label] = { closed, sectionOpen, listOpen, hash };
+            const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+            if (closed.wall.rows !== 0 || closed.only.rows !== 0 || sectionOpen.rows !== 0 || listOpen.rows !== 0) failures.push(`${label}: rows of «conversation outside this board» stand on the card ${JSON.stringify({ closed, listOpen })}`);
+            if (closed.wall.lines !== 1 || closed.only.lines !== 1) failures.push(`${label}: not exactly one line per card ${JSON.stringify(closed)}`);
+            if (closed.wall.sectionOpen !== false || closed.wall.lineVisible || closed.only.lineVisible) failures.push(`${label}: the line shows while Past attempts is closed ${JSON.stringify(closed)}`);
+            if (closed.wall.listed !== 0) failures.push(`${label}: rows listed before the line is opened`);
+            if (closed.wall.head !== head) failures.push(`${label}: the header reads «${closed.wall.head}», not «${head}»`);
+            if (closed.wall.attempts.length !== ATTEMPTS || new Set(closed.wall.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(closed.wall.attempts)}`);
+            if (closed.wall.lineText !== lineOf(lang, WALL, false)) failures.push(`${label}: the line reads «${closed.wall.lineText}»`);
+            if (closed.only.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only card's header reads «${closed.only.head}»`);
+            if (!sectionOpen.lineVisible) failures.push(`${label}: the line is not visible in the open section`);
+            if (listOpen.listed !== WALL) failures.push(`${label}: the opened list holds ${listOpen.listed} of ${WALL}`);
+            if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        /* Phone. */
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="done"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(600);
+            const screens: Record<string, unknown> = {};
+            for (const id of ["t-wall", "t-wall-only"]) {
+              const element = page.locator(`[data-phone-card="task:${id}"]`);
+              if (!await element.count()) { failures.push(`${label}: no phone card ${id}`); continue; }
+              await element.first().scrollIntoViewIfNeeded();
+              await element.first().click();
+              await page.waitForTimeout(800);
+              const read = () => page.evaluate(() => {
+                const section = document.querySelector<HTMLElement>("[data-phone-task-past]");
+                return {
+                  rows: document.querySelectorAll("[data-phone-task-not-loaded]").length,
+                  sectionPresent: Boolean(section),
+                  head: (section?.querySelector("[data-phone-task-past-toggle]")?.textContent ?? "").trim(),
+                  lines: document.querySelectorAll("[data-phone-task-elsewhere-toggle]").length,
+                  lineText: (document.querySelector("[data-phone-task-elsewhere-toggle]")?.textContent ?? "").trim(),
+                  attempts: [...document.querySelectorAll("[data-phone-task-past-row]")].map((row) => row.getAttribute("data-phone-task-past-row")),
+                  pageHeight: Math.round(document.documentElement.scrollHeight),
+                };
+              });
+              const section = page.locator("[data-phone-task-past]").first();
+              await section.scrollIntoViewIfNeeded().catch(() => {});
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-closed.png`) });
+              const closed = await read();
+              await page.locator("[data-phone-task-past-toggle]").first().click().catch(() => {});
+              await page.waitForTimeout(300);
+              await section.scrollIntoViewIfNeeded().catch(() => {});
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-section-open.png`) });
+              const opened = await read();
+              const toggle = page.locator("[data-phone-task-elsewhere-toggle]");
+              if (await toggle.count()) {
+                await toggle.first().click();
+                await page.waitForTimeout(300);
+                await toggle.first().scrollIntoViewIfNeeded().catch(() => {});
+              }
+              await page.screenshot({ path: path.join(pngDir, `${label}-${id}-list-open.png`) });
+              const listed = await read();
+              let hash: string | null = null;
+              const rowButton = page.locator("[data-phone-task-not-loaded]").nth(4);
+              if (id === "t-wall" && await rowButton.count()) {
+                await rowButton.click();
+                await page.waitForTimeout(300);
+                hash = await page.evaluate(() => location.hash);
+              }
+              screens[id] = { closed, opened, listed, hash };
+              const expected = id === "t-wall" ? WALL : ONLY;
+              if (closed.rows !== 0 || opened.rows !== 0) failures.push(`${label}: ${id} lists rows of its own before the line is opened ${JSON.stringify({ closed, opened })}`);
+              if (closed.lines !== 0) failures.push(`${label}: ${id} shows the line while the section is folded`);
+              if (opened.lines !== 1 || opened.lineText !== lineOf(lang, expected, false)) failures.push(`${label}: ${id}'s line ${JSON.stringify(opened)}`);
+              if (listed.rows !== expected) failures.push(`${label}: ${id}'s list holds ${listed.rows} of ${expected}`);
+              if (id === "t-wall") {
+                const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+                if (closed.head !== head) failures.push(`${label}: the header reads «${closed.head}», not «${head}»`);
+                if (opened.attempts.length !== ATTEMPTS || new Set(opened.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(opened.attempts)}`);
+                if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
+              } else if (opened.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only task's header reads «${opened.head}»`);
+              await page.goBack().catch(() => {});
+              await page.waitForTimeout(500);
+              if (id === "t-wall") await page.goBack().catch(() => {});
+              await page.waitForTimeout(300);
+            }
+            readings[label] = screens;
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/elsewhere-wall", { recursive: true });
+    fs.writeFileSync("evidence/elsewhere-wall/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+
+describe("parallel ask idle fallback", () => {
+  browserTest("composer confirms direct delivery in both languages at desktop and 390 px", async () => {
+    const out = path.resolve(".artifacts/parallel-ask-fallback");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/deputyBlockEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=composer-fallback`, { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const message = locale === "uk" ? "Перевір стан рев'ю" : "Check the review status";
+          const textarea = page.locator("textarea");
+          await textarea.fill(message);
+          await textarea.press("Control+Shift+Enter");
+          const notice = page.getByText(translate(locale, "composer.parallelSentDirectly"), { exact: true });
+          await notice.waitFor({ timeout: 5_000 }).catch(async (error) => {
+            await page.screenshot({ path: path.join(out, "failure.png") });
+            console.error(await page.locator("body").innerText(), pageErrors);
+            throw error;
+          });
+          expect(await textarea.inputValue()).toBe("");
+          const body = await page.evaluate(() => (window as unknown as { parallelFallbackBody: { text: string } }).parallelFallbackBody);
+          expect(body.text).toBe(message);
+          const geometry = await notice.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            const ink = range.getBoundingClientRect();
+            return { x: box.x, right: box.right, bottom: box.bottom, width: box.width, inkWidth: ink.width, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.inkWidth).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.bottom).toBeLessThanOrEqual(900);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          cases.push({ locale, width, message, notice: await notice.innerText(), geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/parallel-ask-fallback", { recursive: true });
+      fs.writeFileSync("evidence/parallel-ask-fallback/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });

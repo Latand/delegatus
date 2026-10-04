@@ -436,3 +436,24 @@ test("an attempt retired on its age bound is stored with its reason and no super
     expect(accounting.readState().retiredWakes).toEqual([]);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test("agenda versions survive retained delivery and reopening, and unsent versions remain owed", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-agenda-"));
+  try {
+    const filename = path.join(dir, "state.sqlite");
+    const accounting = new SeatTickAccounting(filename, "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const wake = { clientMessageId: "agenda", conversationId: CONVERSATION, seatEpoch: 1, operationId: null,
+      commit: { proposal: false, reasons: ["unstarted-task" as const], fingerprint: "one", eventsThrough: 0, children: [], itemsShown: ["task@version"] } };
+    expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+    const reopened = new SeatTickAccounting(filename, "project");
+    expect(reopened.readState().itemsShown).toBeUndefined();
+    expect(reopened.readState().outstandingWake?.commit.itemsShown).toEqual(["task@version"]);
+    expect(reopened.settle("agenda", reopened.readState(), "unsent")).toBe(true);
+    expect(accounting.readState().itemsShown).toBeUndefined();
+    expect(accounting.prepare(accounting.readState(), { ...wake, clientMessageId: "delivered" })).toBe(true);
+    expect(reopened.settle("delivered", { ...reopened.readState(), lastWakeAt: "2026-09-05T12:00:00.000Z" }, "landed")).toBe(true);
+    expect(new SeatTickAccounting(filename, "project").readState().itemsShown).toEqual(["task@version"]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

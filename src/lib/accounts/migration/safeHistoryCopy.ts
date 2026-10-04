@@ -44,16 +44,42 @@ function owned(stat: fs.Stats): boolean {
   return uid === null || stat.uid === uid;
 }
 
-function safeDirectory(pathname: string): fs.Stats {
+function safeDirectory(pathname: string, privateAncestor = false): fs.Stats {
   let stat: fs.Stats;
   try { stat = fs.lstatSync(pathname); } catch { throw new HistorySecurityError("unsafe-root"); }
-  // Codex creates account and date hierarchy directories as 0755. Read and
-  // traverse bits preserve integrity; any peer write bit would permit a path
-  // component swap and remains forbidden.
-  if (!stat.isDirectory() || stat.isSymbolicLink() || !owned(stat) || (stat.mode & 0o022) !== 0) {
+  // History may traverse an owned group-writable directory
+  // behind an already validated owner-only ancestor. Peers cannot traverse
+  // that boundary. Foreign owners, symlinks and other-write stay refused.
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !owned(stat) || (stat.mode & 0o002) !== 0 || ((stat.mode & 0o020) !== 0 && !privateAncestor)) {
     throw new HistorySecurityError("unsafe-root");
   }
   return stat;
+}
+
+/** A private account home protects its provider-created 0775 history root. */
+function historyRoot(root: string): boolean {
+  const lexicalRoot = path.resolve(root);
+  const below: string[] = [];
+  let candidate = lexicalRoot;
+  let privateAncestor = false;
+  for (;;) {
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(candidate); } catch { throw new HistorySecurityError("unsafe-root"); }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !owned(stat) || (stat.mode & 0o002) !== 0) break;
+    below.push(candidate);
+    if ((stat.mode & 0o077) === 0) {
+      privateAncestor = true;
+      break;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  // Validate every traversed component even when the private boundary permits
+  // group-write. No foreign directory, link, or world-write gains an exception.
+  for (const component of below) safeDirectory(component, privateAncestor);
+  safeDirectory(lexicalRoot, privateAncestor);
+  return privateAncestor;
 }
 
 function contained(root: string, candidate: string): boolean {
@@ -72,7 +98,7 @@ export interface ValidatedHistory {
 
 /** Validates the registered transcript boundary and pins file identity. */
 export function validateHistorySource(sourcePath: string, sourceRoot: string, maxBytes = DEFAULT_HISTORY_LIMIT): ValidatedHistory {
-  safeDirectory(sourceRoot);
+  let privateAncestor = historyRoot(sourceRoot);
   const lexicalRoot = path.resolve(sourceRoot);
   const lexicalSource = path.resolve(sourcePath);
   if (!contained(lexicalRoot, lexicalSource) || lexicalRoot === lexicalSource) throw new HistorySecurityError("unsafe-source");
@@ -81,7 +107,8 @@ export function validateHistorySource(sourcePath: string, sourceRoot: string, ma
   const segments = relative.split(path.sep);
   for (const segment of segments.slice(0, -1)) {
     component = path.join(component, segment);
-    safeDirectory(component);
+    const stat = safeDirectory(component, privateAncestor);
+    privateAncestor ||= (stat.mode & 0o077) === 0;
   }
   let rootReal: string;
   let sourceReal: string;
@@ -93,9 +120,10 @@ export function validateHistorySource(sourcePath: string, sourceRoot: string, ma
   }
   if (!contained(rootReal, sourceReal)) throw new HistorySecurityError("unsafe-source");
   const listed = fs.lstatSync(sourcePath);
-  // Installed Codex rollouts are commonly 0644. The migration reads them only
-  // from an owned, write-protected hierarchy and republishes the copy as 0600.
-  if (!listed.isFile() || listed.isSymbolicLink() || listed.nlink !== 1 || !owned(listed) || (listed.mode & 0o022) !== 0) {
+  // Codex also creates 0664 rollouts behind its private account home. Apply
+  // the same traversal boundary and republish every copy as 0600.
+  if (!listed.isFile() || listed.isSymbolicLink() || listed.nlink !== 1 || !owned(listed)
+    || (listed.mode & 0o002) !== 0 || ((listed.mode & 0o020) !== 0 && !privateAncestor)) {
     throw new HistorySecurityError("unsafe-source");
   }
   if (listed.size > maxBytes) throw new HistorySecurityError("history-too-large");
@@ -127,7 +155,7 @@ function safeRelative(relativePath: string): string {
 }
 
 function ensureDirectoryTree(root: string, relativeDirectory: string): string {
-  safeDirectory(root);
+  let privateAncestor = historyRoot(root);
   let current = fs.realpathSync(root);
   for (const segment of relativeDirectory.split(path.sep).filter((item) => item && item !== ".")) {
     if (segment === "." || segment === "..") throw new HistorySecurityError("unsafe-root");
@@ -135,7 +163,8 @@ function ensureDirectoryTree(root: string, relativeDirectory: string): string {
     try { fs.mkdirSync(next, { mode: 0o700 }); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    safeDirectory(next);
+    const stat = safeDirectory(next, privateAncestor);
+    privateAncestor ||= (stat.mode & 0o077) === 0;
     const real = fs.realpathSync(next);
     if (!contained(fs.realpathSync(root), real)) throw new HistorySecurityError("unsafe-root");
     current = real;

@@ -97,6 +97,22 @@ export type SendRow = {
   errorCode: string | null;
 };
 
+/** Private durable inbound obligation. Completed rows remain as dedup tombstones. */
+export interface ReportReplyRow {
+  key: string;
+  botId: string;
+  senderId: string;
+  project: string;
+  seq: number;
+  text: string;
+  state: "pending" | "delivered";
+  attempt: number;
+  recipient: string | null;
+  operationId: string | null;
+  refused: boolean;
+  revision: number;
+}
+
 export type MessagePage = {
   messages: TelegramBotMessageView[];
   nextCursor: string | null;
@@ -270,6 +286,12 @@ export class TelegramBotStore {
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS report_replies (
+          key TEXT PRIMARY KEY,
+          value_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS report_replies_pending ON report_replies(key)
+          WHERE json_extract(value_json, '$.state') = 'pending';
       `);
       /* The name a posted document was shown under; stores from before
          documents gain the column empty. */
@@ -281,6 +303,33 @@ export class TelegramBotStore {
 
   close(): void {
     try { this.db.close(); } catch { /* already closed */ }
+  }
+
+  /** The report log's ids alone cannot prove which bot/chat posted them. */
+  postedReport(reportId: string, conversationId: string, chatId: string, messageId: number): boolean {
+    const prefix = `bridge-report:${reportId}`;
+    const rows = this.db.query<{ client_request_id: string; message_ids: string }, [string, string, string, string]>(`
+      SELECT client_request_id, message_ids FROM sends
+      WHERE state = 'sent' AND chat_id = ?1 AND caller_key IN (?2, ?3)
+        AND substr(client_request_id, 1, length(?4)) = ?4
+    `).all(chatId, `text:${conversationId}`, conversationId, prefix);
+    return rows.some(row => (row.client_request_id === prefix || /^:r\d+$/.test(row.client_request_id.slice(prefix.length)))
+      && (JSON.parse(row.message_ids) as number[]).includes(messageId));
+  }
+
+  admitReportReply(row: ReportReplyRow): void {
+    this.db.query("INSERT OR IGNORE INTO report_replies(key, value_json) VALUES (?, ?)").run(row.key, JSON.stringify(row));
+  }
+
+  pendingReportReplies(): ReportReplyRow[] {
+    return this.db.query<{ value_json: string }, []>("SELECT value_json FROM report_replies WHERE json_extract(value_json, '$.state') = 'pending' ORDER BY rowid")
+      .all().map(row => JSON.parse(row.value_json) as ReportReplyRow);
+  }
+
+  /** CAS prevents a second process from replacing a dispatch's frozen binding. */
+  updateReportReply(previous: ReportReplyRow, next: ReportReplyRow): boolean {
+    return this.db.query("UPDATE report_replies SET value_json = ? WHERE key = ? AND value_json = ?")
+      .run(JSON.stringify({ ...next, revision: previous.revision + 1 }), previous.key, JSON.stringify(previous)).changes === 1;
   }
 
   private transaction<T>(run: () => T): T {

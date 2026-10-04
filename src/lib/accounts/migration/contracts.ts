@@ -177,6 +177,9 @@ export interface NativeGeneration {
 
 export interface ConversationMigration {
   intentId: string;
+  /** This conversation's migration start, preserved through phase transitions.
+      Older records fall back to the intent's creation time. */
+  startedAt?: string;
   phase: MigrationPhase;
   targetId: string;
   revision: number;

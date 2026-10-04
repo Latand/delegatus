@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,8 @@ type Step = {
   uses?: string;
   run?: string;
   if?: string;
+  "working-directory"?: string;
+  "timeout-minutes"?: number;
   with?: Record<string, string>;
 };
 type Job = { env: Record<string, string>; steps: Step[] };
@@ -16,13 +18,41 @@ const names = ["privacy-publication", "privacy-tracker-audit"];
 const workflows = names.map((name) => {
   const source = readFileSync(join(import.meta.dir, "..", ".github/workflows", `${name}.yml`), "utf8");
   return Bun.YAML.parse(source) as {
-    // Bun's YAML 1.1 parser resolves the unquoted `on` key to `true`.
-    true: { push?: { branches: string[] } };
+    // Bun 1.3's YAML 1.1 parser resolves unquoted `on` to `true`; Bun 1.4 keeps it as a string.
+    on?: { push?: { branches: string[] } };
+    true?: { push?: { branches: string[] } };
     jobs: Record<string, Job>;
   };
 });
 const jobs = workflows.map((workflow, index) => workflow.jobs[names[index]!]!);
 const step = (job: Job, name: string) => job.steps.find((entry) => entry.name === name)!;
+
+test("candidate privacy tests run last with a failing time budget", () => {
+  const job = jobs[0]!;
+  const trusted = step(job, "Verify privacy gate behavior");
+  expect(trusted["working-directory"]).toBe("trusted");
+  expect(trusted.run).toBe("bun test scripts/privacy-*.test.ts");
+  const candidate = step(job, "Verify candidate privacy gate behavior within budget");
+  expect(job.steps.at(-1)).toBe(candidate);
+  expect(candidate["working-directory"]).toBe("candidate");
+  expect(candidate["timeout-minutes"]).toBe(3);
+  expect(candidate.run).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
+  const root = mkdtempSync(join(tmpdir(), "privacy-candidate-budget-"));
+  try {
+    // Drive the actual shell with a short budget and a stalled test process.
+    mkdirSync(join(root, "trusted/node_modules"), { recursive: true });
+    mkdirSync(join(root, "candidate"));
+    writeFileSync(join(root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("130s", "0.1s")], {
+      cwd: join(root, "candidate"),
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(124);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // Execute the actual inline workflow shell. The sudo double records apt
 // invocations and refuses a warm install unless network use is disabled.
@@ -134,7 +164,7 @@ test("both required jobs use identical package lists and provisioning", () => {
 // Default-branch caches need a trusted push writer on hosts that give
 // publication/issue events read-only cache tokens.
 test("main pushes populate the same cache without requiring a tracker number", () => {
-  for (const workflow of workflows) expect(workflow.true.push?.branches).toEqual(["main"]);
+  for (const workflow of workflows) expect((workflow.on ?? workflow.true)?.push?.branches).toEqual(["main"]);
   expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
   expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
     .toBe("${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}");

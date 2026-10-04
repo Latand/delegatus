@@ -87,6 +87,21 @@ whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
+Touched tests run one file per process on head and on the merge base with
+`origin/main`, each with fresh state, HOME and TMPDIR under the OS temp root.
+Only new failures block; output lists pre-existing and fixed failures by file,
+describe ancestry and test name, and retains between-tests errors. An incomplete
+baseline blocks as a gate error; an incomplete head names its file and blocks.
+Baseline results are cached by commit, sorted file set, origin URL, Bun version, dependency
+graph and execution environment under the private temp directory
+`delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). A SHA-256
+digest covers each cached baseline payload; missing or mismatched integrity
+rebuilds the baseline. Local dependencies, including relative directory paths
+and Bun lockfile directory resolutions, install independently in the baseline.
+Cache versions invalidate results from earlier dependency isolation rules.
+Deleting that cache is safe. Both runs report elapsed
+time; a warm baseline needs no checkout or test rerun. Budgets are five minutes per file and fifteen minutes
+per baseline/head test run. Privacy, types and ESLint retain their own checks.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.

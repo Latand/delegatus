@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { realExec } from "@/lib/workflows/provision";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -117,27 +118,19 @@ function updateObservationState(hosts: TranscriptHost[], now: number): ReaperSta
   return state;
 }
 
-function checkoutClean(flow: Flow): boolean | null {
-  const result = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
-    cwd: flow.cwd,
-    encoding: "utf8",
-    timeout: 2_000,
-  });
-  if (result.status !== 0) return null;
+async function checkoutClean(flow: Flow): Promise<boolean | null> {
+  const result = await realExec("git", ["status", "--porcelain=v1", "--untracked-files=all"], flow.cwd, undefined, { timeoutMs: 2_000 });
+  if (result.code !== 0) return null;
   return result.stdout.trim().length === 0;
 }
 
-function localBranchMerged(flow: Flow, reviewedHeadSha: string): boolean {
-  if (checkoutClean(flow) !== true) return false;
-  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: flow.cwd, encoding: "utf8", timeout: 2_000 });
-  if (head.status !== 0 || head.stdout.trim() !== reviewedHeadSha) return false;
+async function localBranchMerged(flow: Flow, reviewedHeadSha: string): Promise<boolean> {
+  if (await checkoutClean(flow) !== true) return false;
+  const head = await realExec("git", ["rev-parse", "HEAD"], flow.cwd, undefined, { timeoutMs: 2_000 });
+  if (head.code !== 0 || head.stdout.trim() !== reviewedHeadSha) return false;
   for (const branch of ["origin/main", "origin/master", "main", "master"]) {
-    const result = spawnSync("git", ["merge-base", "--is-ancestor", reviewedHeadSha, branch], {
-      cwd: flow.cwd,
-      stdio: "ignore",
-      timeout: 2_000,
-    });
-    if (result.status === 0) return true;
+    const result = await realExec("git", ["merge-base", "--is-ancestor", reviewedHeadSha, branch], flow.cwd, undefined, { timeoutMs: 2_000 });
+    if (result.code === 0) return true;
   }
   return false;
 }
@@ -262,7 +255,7 @@ export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActua
   const concurrency = Math.max(1, overrides.mergeProbeConcurrency ?? MERGE_PROBE_CONCURRENCY);
   await mapWithConcurrency(flows, concurrency, async (flow) => {
     let evidence = flow.mergeEvidence ?? null;
-    const clean = (overrides.checkoutClean ?? checkoutClean)(flow);
+    const clean = await (overrides.checkoutClean ?? checkoutClean)(flow);
     if (clean === false || (clean === null && fs.existsSync(flow.cwd))) {
       if (evidence?.mergedAt || evidence?.source) {
         evidence.mergedAt = null;
@@ -274,7 +267,7 @@ export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActua
     }
     const reviewedSha = reviewedHeadSha(flow, evidence);
     if (!reviewedSha) return;
-    const identity = (overrides.resolveMergeIdentity ?? resolveFlowMergeIdentity)(flow.cwd);
+    const identity = await (overrides.resolveMergeIdentity ?? resolveFlowMergeIdentity)(flow.cwd);
     if (!identity && fs.existsSync(flow.cwd)) {
       if (evidence?.mergedAt || evidence?.source) {
         evidence.mergedAt = null;
@@ -331,7 +324,7 @@ export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActua
         markChanged(flow);
       }
     }
-    if (!confirmed && (overrides.localBranchMerged ?? localBranchMerged)(flow, reviewedSha)) {
+    if (!confirmed && await (overrides.localBranchMerged ?? localBranchMerged)(flow, reviewedSha)) {
       confirmed = {
         repository: evidence?.repository ?? null,
         headRef: evidence?.headRef ?? null,
@@ -807,10 +800,10 @@ export interface ReaperActuationOverrides {
   processIdentity?: (pid: number) => string | null;
   killProcess?: typeof killHeadlessReviewerIfMatches;
   refreshLifecycle?: typeof refreshLifecycle;
-  resolveMergeIdentity?: typeof resolveFlowMergeIdentity;
+  resolveMergeIdentity?: (cwd: string) => Awaited<ReturnType<typeof resolveFlowMergeIdentity>> | ReturnType<typeof resolveFlowMergeIdentity>;
   probePullRequest?: (evidence: FlowMergeEvidence) => PullRequestProbe | null | Promise<PullRequestProbe | null>;
-  localBranchMerged?: typeof localBranchMerged;
-  checkoutClean?: typeof checkoutClean;
+  localBranchMerged?: (flow: Flow, sha: string) => boolean | Promise<boolean>;
+  checkoutClean?: (flow: Flow) => boolean | null | Promise<boolean | null>;
   mergeProbeTimeoutMs?: number;
   mergeProbeConcurrency?: number;
   saveFlows?: typeof saveFlows;

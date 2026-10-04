@@ -5524,6 +5524,191 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/*
+ * The phone conversation's chrome (2026-10-02): the pinned message and the
+ * background tasks live behind the header's ⋯ menu, nothing sits under the bar,
+ * the seat's report button is back on the bar, and read-aloud sits beside each
+ * assistant message and nowhere in the header.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone chrome"
+ *
+ * Frames go to `$HOME/Pictures/delegatus-review/phone-chrome/`, readings to
+ * `evidence/phone-chrome/readings.json`.
+ */
+describe("phone chrome", () => {
+  browserTest("pinned message and background tasks in the ⋯ menu, read-aloud beside the message, at 390 in en and uk, light and dark", async () => {
+    const out = path.join(os.homedir(), "Pictures/delegatus-review/phone-chrome");
+    const evidence = path.resolve("evidence/phone-chrome");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const speech = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+    const { base, stop } = await serveFixture({ "/api/tts/backend": speech });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const scenes = [
+      { name: "tasks3", query: "chrome=3" },
+      { name: "pinned-only", query: "chrome=0" },
+      { name: "tasks8", query: "chrome=8" },
+      { name: "empty", query: "chrome=0&nopin" },
+    ] as const;
+    /** Every visible control inside `root` that a finger has to hit, under 44 px in either direction. */
+    const smallControls = (page: Page, root: string) => page.evaluate((selector) => {
+      const scope = document.querySelector(selector);
+      if (!scope) return ["missing"];
+      return [...scope.querySelectorAll<HTMLElement>("button, a[href], [role=menuitem]")].flatMap((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.width < 43.5 || rect.height < 43.5 ? [`${node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`] : [];
+      });
+    }, root);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const scene of scenes) {
+        const key = `390-${lang}-${scheme}-${scene.name}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const tasksOn = scene.name === "tasks3" || scene.name === "tasks8";
+        const pinnedOn = scene.name !== "empty";
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${scene.query}&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 20_000 });
+          await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 });
+          await pause(page, 900);
+          /* The bar: its height, its icons, and what sits between it and the feed. */
+          const frame = await page.evaluate(() => {
+            const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+            const feed = document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect();
+            return {
+              barHeight: bar.height, barBottom: bar.bottom, feedTop: feed.top, gap: Math.round(feed.top - bar.bottom),
+              strips: document.querySelectorAll("[data-task-relations], [data-task-relations-slot], [data-flip-key]").length,
+              speechInBar: document.querySelectorAll("[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]").length,
+              reports: !!document.querySelector('[data-mobile2-bar] [data-mobile2-open=reports]'),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              barBadge: document.querySelectorAll("[data-mobile2-bar] [data-mobile2-menu-badge], [data-mobile2-bar] [data-mobile2-notice-dot]").length,
+            };
+          });
+          if (frame.barHeight !== 52) fail(`the bar is ${frame.barHeight}px high`);
+          /* The pane's own card frame (its border and engine stripe) is the 5 px that is always there; a strip is 44 px or more. */
+          if (frame.gap > 8) fail(`${frame.gap}px sit between the bar and the feed`);
+          if (frame.strips) fail(`${frame.strips} strips remain under the bar`);
+          if (frame.speechInBar) fail("a speech control is on the bar");
+          if (!frame.reports) fail("the seat's report button is not on the bar");
+          if (frame.sideways > 0) fail(`the page scrolls sideways by ${frame.sideways}px`);
+          if (frame.barBadge) fail("the bar carries a badge or dot");
+          const barSmall = await smallControls(page, "[data-mobile2-bar]");
+          if (barSmall.length) fail(`bar controls under 44 px: ${barSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-conversation.png`) });
+          /* Read-aloud: in the message's own action row, at 44 px, with copy beside it. */
+          await page.waitForSelector("[data-mobile-message-actions] [data-tts-trigger]", { timeout: 10_000 });
+          const speak = await page.evaluate(() => {
+            const trigger = [...document.querySelectorAll<HTMLElement>("[data-mobile-message-actions] [data-tts-trigger]")].at(-1)!;
+            const rect = trigger.getBoundingClientRect();
+            const row = trigger.closest("[data-mobile-message-actions]")!;
+            return { width: rect.width, height: rect.height, copy: !!row.querySelector("button[aria-label]:not([data-tts-trigger])"), inMessage: !!trigger.closest("[data-mobile-message]"), header: trigger.hasAttribute("data-tts-header"), label: trigger.getAttribute("aria-label") };
+          });
+          if (speak.width < 44 || speak.height < 44) fail(`the read-aloud control is ${speak.width}x${speak.height}`);
+          if (!speak.copy || !speak.inMessage || speak.header) fail(`the read-aloud control sits wrong: ${JSON.stringify(speak)}`);
+          const messageSmall = await smallControls(page, "[data-mobile-message-actions]");
+          if (messageSmall.length) fail(`message controls under 44 px: ${messageSmall.join(", ")}`);
+          await page.locator("[data-mobile-message-actions]").last().scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-read-aloud.png`) });
+          /* The header menu, open. */
+          await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+          await page.waitForSelector("[data-mobile2-sheet=menu]");
+          await pause(page, 500);
+          const rowState = await page.evaluate(() => ({
+            pinned: !!document.querySelector('[data-mobile2-menu-row=pinned]'),
+            background: document.querySelector('[data-mobile2-menu-row=background]')?.textContent?.trim() ?? null,
+            order: [...document.querySelectorAll("[data-mobile2-menu-row]")].slice(0, 2).map((node) => node.getAttribute("data-mobile2-menu-row")),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          }));
+          if (rowState.pinned !== pinnedOn) fail(`pinned row ${rowState.pinned}, expected ${pinnedOn}`);
+          const tasksCount = scene.name === "tasks3" ? 3 : scene.name === "tasks8" ? 8 : 0;
+          const tasksLabel = translate(lang, "mobile2.chat.menuBackground", { count: tasksCount });
+          if ((rowState.background !== null) !== tasksOn || (tasksOn && !rowState.background!.includes(tasksLabel))) fail(`tasks row ${JSON.stringify(rowState.background)}, expected ${tasksOn ? tasksLabel : "none"}`);
+          if (rowState.sideways > 0) fail(`menu scrolls sideways by ${rowState.sideways}px`);
+          const menuSmall = await smallControls(page, "[data-mobile2-sheet=menu]");
+          if (menuSmall.length) fail(`menu controls under 44 px: ${menuSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          const sheets: Record<string, unknown> = {};
+          if (pinnedOn && scene.name === "tasks3") {
+            await page.locator("[data-mobile2-menu-row=pinned]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]");
+            await pause(page, 500);
+            const pinned = await page.evaluate(() => ({ text: document.querySelector("[data-mobile2-pinned-item] p")?.textContent ?? "", open: document.querySelector("[data-mobile2-pinned-open]")?.textContent?.trim() ?? "", sideways: document.documentElement.scrollWidth - innerWidth }));
+            if (!pinned.text.includes("Never leave a lane without an owner.")) fail("the pinned sheet does not show the full text");
+            if (!pinned.open.includes(translate(lang, "mobile2.pinned.openCard"))) fail(`the pinned sheet's button reads ${pinned.open}`);
+            if (pinned.sideways > 0) fail(`pinned sheet scrolls sideways by ${pinned.sideways}px`);
+            const small = await smallControls(page, "[data-mobile2-sheet=pinned]");
+            if (small.length) fail(`pinned sheet controls under 44 px: ${small.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-pinned-sheet.png`) });
+            sheets.pinned = pinned;
+            await page.locator("[data-mobile2-sheet=pinned] [data-mobile2-close]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]", { state: "detached" });
+            await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]");
+          }
+          if (tasksOn) {
+            await page.locator("[data-mobile2-menu-row=background]").click();
+            await page.waitForSelector("[data-mobile2-sheet=background]");
+            await pause(page, 500);
+            const list = await page.evaluate(() => ({
+              rows: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task]").length,
+              standingStop: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task-stop]").length,
+              hostWord: (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Stop host") || (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Зупинити хост"),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              sheetSideways: (() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=background] [data-mobile2-sheet-body]"); return body ? body.scrollWidth - body.clientWidth : 0; })(),
+            }));
+            const expected = scene.name === "tasks3" ? 3 : 8;
+            if (list.rows !== expected) fail(`${list.rows} task rows, expected ${expected}`);
+            if (list.standingStop) fail("a Stop control is visible before a task's ⋯ is opened");
+            if (list.hostWord) fail("the tasks sheet says «host»");
+            if (list.sideways > 0 || list.sheetSideways > 0) fail(`tasks sheet scrolls sideways (${list.sideways}/${list.sheetSideways})`);
+            const listSmall = await smallControls(page, "[data-mobile2-sheet=background]");
+            if (listSmall.length) fail(`tasks sheet controls under 44 px: ${listSmall.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-tasks-sheet.png`) });
+            sheets.tasks = list;
+            if (scene.name === "tasks3") {
+              await page.locator("[data-mobile2-task-menu]").first().click();
+              await page.waitForSelector("[data-mobile2-task-actions]");
+              await pause(page, 300);
+              const taskMenu = await page.evaluate(() => ({
+                head: document.querySelector("[data-mobile2-task-actions]")?.firstElementChild?.textContent?.trim() ?? "",
+                items: [...document.querySelectorAll("[data-mobile2-task-actions] [role=menuitem]")].map((node) => node.textContent?.trim()),
+                sideways: document.documentElement.scrollWidth - innerWidth,
+              }));
+              const wanted = [translate(lang, "task.stopTask"), translate(lang, "task.showOutput"), translate(lang, "task.copyCommand")];
+              if (!/^PID \d+$/.test(taskMenu.head)) fail(`the task menu header reads ${taskMenu.head}`);
+              if (JSON.stringify(taskMenu.items) !== JSON.stringify(wanted)) fail(`the task menu holds ${JSON.stringify(taskMenu.items)}`);
+              if (taskMenu.sideways > 0) fail(`task menu scrolls sideways by ${taskMenu.sideways}px`);
+              const small = await smallControls(page, "[data-mobile2-task-actions]");
+              if (small.length) fail(`task menu controls under 44 px: ${small.join(", ")}`);
+              await page.screenshot({ path: path.join(out, `${key}-task-menu.png`) });
+              sheets.taskMenu = taskMenu;
+            }
+          }
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings.push({ key, frame, speak, rowState, sheets, pageErrors });
+        } catch (error) {
+          failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("fast TTS live latency", () => {
   const liveTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_TTS_LIVE_LATENCY === "1" ? test : test.skip;
   liveTest("interleaves ten cold baseline and candidate tap-to-speech measurements", async () => {
@@ -6340,4 +6525,91 @@ describe("launching an agent on the phone", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); stop(); }
   }, 90_000);
+});
+
+describe("older history on the phone", () => {
+  /*
+   * A real touch drag toward the start of an 800-line conversation, on a
+   * phone at 4x CPU slowdown. The audit that found the desktop walk slow could
+   * not say anything about the phone, because its synthetic touch gestures did
+   * not move the feed; `Input.dispatchTouchEvent` does, and this case drives
+   * it. The feed pages in earlier history as the reader nears the top, every
+   * row the reader had on screen keeps its DOM node, and the walk ends at the
+   * first line. The readings go to `.artifacts/phone-older-history/walk.json`.
+   */
+  const HISTORY_OUT = path.resolve(".artifacts/phone-older-history");
+
+  browserTest("a touch drag brings the earlier pages in without remounting what the reader has", async () => {
+    fs.mkdirSync(HISTORY_OUT, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(HISTORY_OUT, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=200&window=120&page=100`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+        await pause(page, 600);
+        const marked = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+          for (const row of rows) row.setAttribute("data-first-window", "1");
+          const state: number[] = [];
+          (window as unknown as { __frames: number[] }).__frames = state;
+          let last = performance.now();
+          const tick = (now: number) => { state.push(now - last); last = now; requestAnimationFrame(tick); };
+          requestAnimationFrame(tick);
+          return rows.length;
+        });
+        const rect = await rectOf(page, "[data-log-feed-scroller]");
+        if (!rect) throw new Error("no feed");
+        const x = rect.x + rect.width / 2;
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const earlier = [...feed.querySelectorAll("button")].some((button) => /earlier|loading/i.test(button.textContent ?? ""));
+          return {
+            top: Math.round(feed.scrollTop),
+            rows: feed.querySelectorAll("[data-feed-key]").length,
+            kept: feed.querySelectorAll("[data-first-window]").length,
+            loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+            atStart: !earlier,
+          };
+        });
+        const first = await read();
+        let gestures = 0;
+        let last = first;
+        const startedAt = Date.now();
+        for (; gestures < 400; gestures += 1) {
+          await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 10));
+          await pause(page, 120);
+          last = await read();
+          if (last.atStart && last.top < 5) break;
+        }
+        const reachedStartMs = Date.now() - startedAt;
+        const frames = await page.evaluate(() => (window as unknown as { __frames: number[] }).__frames.slice(1));
+        const walk = {
+          gestures, reachedStartMs, loads: last.loads, rows: last.rows, kept: last.kept, marked,
+          frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
+        };
+        fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
+        expect(pageErrors).toEqual([]);
+        /* The drag moved the feed (the audit's gestures did not), earlier
+           pages arrived, the walk ended at the first line, and every row
+           that was on screen at the start is still the same node. */
+        expect(last.top).toBeLessThan(first.top);
+        expect(last.loads).toBeGreaterThanOrEqual(1);
+        expect(last.atStart).toBe(true);
+        expect(last.kept).toBe(marked);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 300_000);
 });

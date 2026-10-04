@@ -89,7 +89,7 @@ function fixture(journal = makeJournal()) {
     },
   } as unknown as EngineHost;
   const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => liveBinding });
-  return { journal, client, executor, calls, queue, startedSubmissionIds, get items() { return items; },
+  return { journal, client, executor, host, calls, queue, startedSubmissionIds, get items() { return items; },
     loseAdd: () => { loseAdd = true; }, race: () => { raceDelete = true; }, refuseDelete: () => { refuseDelete = true; },
     refuseUpdate: (value = true) => { refuseUpdate = value; },
     /* The host goes idle AND the journal's session projection says so: the
@@ -344,6 +344,63 @@ test("two executors competing for the same admitted native add perform one write
   expect(f.calls.filter(c => c.endsWith("/add"))).toHaveLength(1);
   expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("queued");
   f.journal.close();
+});
+
+test("two executors rebinding an unsubmitted add to a successor perform one native write", async () => {
+  const f = fixture();
+  const add = command("op-successor-race");
+  const successor = { threadId: "successor-thread", accountId: "account-b" };
+  f.journal.executeOperation(add);
+  const writes: string[] = [];
+  const host = { ...f.host, nativeQueue: { ...f.host.nativeQueue!, queue: new NativeCodexQueue({ rpc: async (_method, params) => {
+    writes.push(params.clientUserMessageId as string);
+    return { queuedSubmission: { id: "successor-submission", clientUserMessageId: params.clientUserMessageId, input: params.input } };
+  } }, successor.threadId) } };
+  const port = { client: f.client, resolveHost: () => host, binding: () => successor,
+    succession: () => ({ status: "committed" as const, binding: successor }) };
+  try {
+    await Promise.all([new NativeQueueExecutor(port).execute(add), new NativeQueueExecutor(port).execute(add)]);
+    expect(writes).toEqual([add.operationId]);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("applied");
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ state: "queued", binding: successor });
+  } finally { f.journal.close(); }
+});
+
+test("prepared successor binding survives journal reopening with original admission identity and successor proof", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-rebind-"));
+  const filename = path.join(root, "journal.sqlite");
+  let journal = makeJournal(filename);
+  const add = command("op-rebound");
+  const successor = { threadId: "successor-thread", accountId: "account-b" };
+  const input = [{ type: "text" as const, text: add.text! }];
+  try {
+    journal.executeOperation(add);
+    journal.nativeQueueTransition(add.operationId, { phase: "prepared", input, binding: successor });
+    journal.close();
+    journal = new RuntimeJournal(filename, { structuredHosts: true });
+    expect(journal.executeOperation(add)).toMatchObject({ replayed: true, receipt: { status: "delivering" } });
+    journal.nativeQueueTransition(add.operationId, { phase: "acknowledged", nativeSubmissionId: "successor-submission" });
+    const proof = { threadId: successor.threadId, clientUserMessageId: add.operationId, revision: 1, turnId: "turn", itemId: "item", input };
+    expect(() => journal.nativeQueueTransition(add.operationId, { phase: "proven", proof: { ...proof, threadId: binding.threadId } })).toThrow("canonical proof mismatch");
+    journal.nativeQueueTransition(add.operationId, { phase: "proven", proof });
+    expect(journal.nativeQueueRead(conversationId)[0]).toMatchObject({ binding: successor, state: "delivered", proof });
+    expect(journal.operationResult(add.operationId)?.receipt.status).toBe("delivered");
+  } finally { journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a prepared native add cannot be rebound or replayed on a successor", () => {
+  const f = fixture();
+  const add = command("op-frozen-owner");
+  const input = [{ type: "text" as const, text: add.text! }];
+  try {
+    f.journal.executeOperation(add);
+    f.journal.nativeQueueTransition(add.operationId, { phase: "prepared", input });
+    expect(() => f.journal.nativeQueueTransition(add.operationId, { phase: "prepared", input,
+      binding: { threadId: "successor-thread", accountId: "account-b" } })).toThrow("submitted input cannot change ownership");
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ binding, mutationOperationId: add.operationId });
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(f.calls).toEqual([]);
+  } finally { f.journal.close(); }
 });
 
 test("native canonical proof must retain original client, version, content and thread", async () => {
