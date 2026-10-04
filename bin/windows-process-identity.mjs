@@ -18,16 +18,18 @@ export function windowsStartIdentity(pid, run = spawnSync) {
 }
 
 /* One PowerShell start answers for every PID a caller is about to compare.
-   A PID that is gone, or whose start time cannot be read, is left out. */
+   A PID that is gone, or whose start time cannot be read, is left out. The
+   exit status says nothing here: PowerShell exits 1 whenever the last PID of
+   the list was the one that is gone, with every other answer already written.
+   Each line is checked on its own. */
 export function windowsStartIdentities(pids, run = spawnSync) {
   const wanted = [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0 && pid <= 0xffffffff);
   const identities = new Map();
   if (!wanted.length) return identities;
-  const script = `foreach($identityPid in @(${wanted.join(",")})){ $identityProcess=$null; try { $identityProcess=[System.Diagnostics.Process]::GetProcessById($identityPid); if(-not $identityProcess.HasExited){ $identityTime=$identityProcess.StartTime.ToFileTimeUtc(); if(-not $identityProcess.HasExited){ [Console]::Out.WriteLine($identityPid.ToString() + ':' + $identityTime.ToString()) } } } catch { } finally { if($identityProcess){$identityProcess.Dispose()} } }`;
+  const script = `foreach($identityPid in @(${wanted.join(",")})){ $identityProcess=$null; try { $identityProcess=[System.Diagnostics.Process]::GetProcessById($identityPid); if(-not $identityProcess.HasExited){ $identityTime=$identityProcess.StartTime.ToFileTimeUtc(); if(-not $identityProcess.HasExited){ [Console]::Out.WriteLine($identityPid.ToString() + ':' + $identityTime.ToString()) } } } catch { } finally { if($identityProcess){$identityProcess.Dispose()} } }; exit 0`;
   try {
     const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
       { encoding: "utf8", timeout: 5_000, windowsHide: true });
-    if (result.status !== 0) return identities;
     for (const line of (result.stdout ?? "").split(/\r?\n/)) {
       const match = /^([0-9]{1,10}):([0-9]{18,19})$/.exec(line.trim());
       if (!match || !wanted.includes(Number(match[1]))) continue;

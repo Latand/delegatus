@@ -32,7 +32,11 @@ test("one PowerShell start answers for every PID of a record", () => {
   expect(identities.get(10)).toBe(readStartIdentity(10, "win32", run)!);
   // An answer for a PID nobody asked about, or one out of range, is dropped.
   expect([...windowsStartIdentities([10], (() => ({ status: 0, stdout: `11:${FILETIME}\n10:1\n` })) as never)]).toEqual([]);
-  expect([...windowsStartIdentities([10], (() => ({ status: 1, stdout: `10:${FILETIME}\n` })) as never)]).toEqual([]);
+  // PowerShell exits 1 when the last PID of the list is the one that is gone;
+  // what it wrote for the others stands. A shell that never started wrote nothing.
+  expect([...windowsStartIdentities([10, 30], (() => ({ status: 1, stdout: `10:${FILETIME}\r\n` })) as never)]).toEqual([[10, `10:${FILETIME}`]]);
+  expect([...windowsStartIdentities([10], (() => ({ status: null, stdout: null, error: new Error("ENOENT") })) as never)]).toEqual([]);
+  expect([...windowsStartIdentities([10], (() => { throw new Error("spawn failed"); }) as never)]).toEqual([]);
   expect([...windowsStartIdentities([], run)]).toEqual([]);
 });
 
