@@ -374,8 +374,12 @@ test("skip-stage carries the parked stage's unpublished local head in an interna
   // The accepted skip reserves work; the controller tick verifies and adopts it.
   await tickPipelines([], h.ports);
   expect(h.calls.slice(callsBefore).some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
-  expect(loadPipelines()[0]!).toMatchObject({ lastPassedCommit: STAGE_HEAD, cursor: { stageId: "verify" } });
-  expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.state).toBe("running");
+  expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(advanced.cursor).toMatchObject({ stageId: "verify", state: "running" });
+  expect(advanced.runs.find((run) => run.stageId === "verify")!.attempts[0]).toMatchObject({ state: "running" });
+  expect(advanced.runs.find((run) => run.stageId === "build")!.attempts[0]).toMatchObject({ state: "skipped" });
 });
 
 test("retry-stage is refused over a pushed head, which it would reset away (#1756)", async () => {
