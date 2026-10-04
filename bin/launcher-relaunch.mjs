@@ -187,7 +187,12 @@ async function recoverService(file) {
       && readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").includes(trial.previousEntry)
       && await terminalHostHealthy(record) && await probePageAndChunk(record.port, 5000, plan.headers) === null) {
       // Recheck the durable owner after the awaited health observations.
-      if (read(applyFile)?.requestId !== intent.requestId || !restored()) throw new Error("Recovery owner changed during verification");
+      const fresh = read(recordFile); const owned = read(applyFile); const heldTrial = read(trialFile);
+      if (owned?.requestId !== intent.requestId || owned.state !== "switching" || !restored() || existsSync(plan.requestFile)
+        || heldTrial?.requestId !== intent.requestId || heldTrial.state !== "rolled-back"
+        || ["launcher", "web", "runtimeHost"].some(role => fresh?.[role]?.pid !== record[role].pid
+          || fresh[role].startIdentity !== record[role].startIdentity || readStartIdentity(record[role].pid) !== record[role].startIdentity))
+        throw new Error("Recovery owner changed during verification");
       atomic(applyFile, JSON.stringify({ ...current, state: "failed", rolledBack: true, detail: trial.detail }) + "\n");
       const drainFile = join(directory, "auto-drain.json");
       if (read(drainFile)?.id === intent.requestId) rmSync(drainFile, { force: true });
@@ -269,7 +274,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         try { atomic(trialFile, `${JSON.stringify(trial)}\n`); }
         catch { /* Retain the original trial even if the stop marker cannot persist. */ }
       }
-      preflightChild?.kill("SIGTERM");
+      preflightChild?.kill("SIGKILL");
     },
     isStopping: () => stopping,
     retainsCustody: () => trial !== null || existsSync(paths.request),

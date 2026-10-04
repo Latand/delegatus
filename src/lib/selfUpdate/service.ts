@@ -1254,7 +1254,12 @@ export class SelfUpdateService {
       return busy(role === "web" ? "restart-web" : role === "runtime-host" ? "restart-runtime-host" : "update");
     }
     if (this.checking) return busy("update");
-    write();
+    try { write(); }
+    catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST" && existsSync(record.requestFile))
+        return this.reserve(record, () => {}) ?? busy("update");
+      throw error;
+    }
     return null;
   }
 

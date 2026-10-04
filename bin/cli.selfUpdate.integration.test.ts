@@ -1428,14 +1428,18 @@ const intent = JSON.parse(readFileSync(directory + "/apply.json", "utf8"));
 const drain = JSON.parse(readFileSync(directory + "/auto-drain.json", "utf8"));
 if (intent.state !== "switching" || intent.requestId !== drain.id) process.exit(9);
 writeFileSync(${JSON.stringify(path.join(fixture.root, "recovery-custody.json"))}, JSON.stringify({ requestId: intent.requestId, state: intent.state, drain: drain.id }));
-process.kill(record.launcher.pid, "SIGTERM");
+// A service restart stops the recorded bootstrap, which forwards to its
+// installed-launcher child. Both PIDs belong to this fixture.
+const bootstrapPid = ${JSON.stringify(running.child.pid)};
+process.kill(bootstrapPid, "SIGTERM");
 const deadline = Date.now() + 5000;
-while (Date.now() < deadline) { try { process.kill(record.launcher.pid, 0); } catch { break; } await Bun.sleep(25); }
+while (Date.now() < deadline) { try { process.kill(bootstrapPid, 0); } catch { break; } await Bun.sleep(25); }
 spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "bin", "cli.mjs"))}, "--no-open", "--port", ${JSON.stringify(String(running.port))}], { cwd: ${JSON.stringify(fixture.checkout)}, detached: true, stdio: "ignore", env: process.env }).unref();
 `, { mode: 0o700 });
   expect(existsSync(path.join(directory, "apply.json"))).toBe(false);
   let restarting: Promise<void> | undefined;
   let recoveryOutput = "";
+  let recoveryHelper: ReturnType<typeof spawn> | undefined;
   const runner = { state: idleUpdate(), start: async () => {}, retry: async () => {}, restore(state: ReturnType<typeof idleUpdate>) { this.state = state; }, logPath: () => "" };
   const service = new SelfUpdateService({
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
@@ -1452,7 +1456,7 @@ spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "
           const { runInstallAction } = await import("../src/lib/selfUpdate/actions");
           runInstallAction(action, args => {
             const command = args.slice(args.indexOf("--") + 1);
-            const helper = spawn(command[0]!, command.slice(1), { cwd: fixture.checkout, env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, stdio: "pipe" }); children.add(helper);
+            const helper = spawn(command[0]!, command.slice(1), { cwd: fixture.checkout, env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, stdio: "pipe" }); children.add(helper); recoveryHelper = helper;
             // The recovery must outlive the Viewer that requested it.
             helper.stderr?.on("data", chunk => { recoveryOutput += String(chunk); });
           }, recovery);
@@ -1478,6 +1482,8 @@ spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "
       // The action itself must finish owned recovery, without a second restart.
       const settled = readRecord(fixture.state);
       expect(recoveryOutput).toBe("");
+      expect(recoveryHelper?.exitCode).toBe(0);
+      expect(existsSync(path.join(directory, path.basename(record.requestFile).replace(/^request/, "recovery")))).toBe(false);
       expect(settled.web.revision).toBe(settled.runtimeHost.revision);
       expect(settled.web.revision).toBe(prior.sha.slice(0, 7));
       expect(await served(running.port)).toBe(prior.dir);
