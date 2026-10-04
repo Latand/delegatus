@@ -40,8 +40,11 @@ try {
 } catch { exit 1 }
 `;
 function windowsAcl(file, create = false) {
+  // pwsh's module paths survive intermediate processes such as Bun. Windows
+  // PowerShell must construct its own paths to load its built-in ACL cmdlets.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH"));
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(ACL_SCRIPT, "utf16le").toString("base64")], {
-    env: { ...process.env, DELEGATUS_CUSTODY_PATH: file, DELEGATUS_CUSTODY_CREATE: create ? "1" : "0" }, stdio: "ignore", timeout: 10000,
+    env: { ...env, DELEGATUS_CUSTODY_PATH: file, DELEGATUS_CUSTODY_CREATE: create ? "1" : "0" }, stdio: "ignore", timeout: 10000,
   });
   if (result.status !== 0) fail();
 }
