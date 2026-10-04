@@ -1,3 +1,5 @@
+import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -890,6 +892,11 @@ export async function bindStructuredDeliveryQueue(
         const entry = snapshot.entries[sessionKeyId(expectedKey)];
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
+        try {
+          if (pipelineHostHasLiveWork(loadPipelinesForRetirement(), {
+            conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
+          }, id => resolveConversationAlias(snapshot, id as ViewerConversationId))) return false;
+        } catch { return false; }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.
         const seats = readOrchestratorSeatRetirementEvidenceOrNull();

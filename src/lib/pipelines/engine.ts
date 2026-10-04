@@ -102,6 +102,7 @@ import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
+import { pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForProjection, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
@@ -6263,7 +6264,7 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * host. The per-sweep budget protects the transaction, and the durable round
  * ceiling turns a survivor into a visible unconfirmed host.
  */
-async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
+async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts, pipelines: readonly Pipeline[]): Promise<boolean> {
   if (!["running", "needs_decision", "needs_review", "paused", "completed"].includes(pipeline.state)) return false;
   const settledAttempts = new Set(pipeline.terminalReap?.settledAttempts ?? []);
   const unconfirmedAttempts = new Set((pipeline.unconfirmedHosts ?? [])
@@ -6326,6 +6327,10 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
        Keep live work and recheck next tick. A temporary active observation is
        not evidence that this tree was reaped. It consumes no teardown round. */
     if (target.conversationId && await ports.conversationAgentActive(target.conversationId) === true) {
+      liveWork = true;
+      continue;
+    }
+    if (pipelineHostHasLiveWork(pipelines, target)) {
       liveWork = true;
       continue;
     }
@@ -6895,7 +6900,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         }
         if (!pipeline.closeTeardown) {
           pipelineChanged = await reconcileUnconfirmedHosts(pipeline, controllerPorts) || pipelineChanged;
-          pipelineChanged = await reconcileTerminalStageHosts(pipeline, controllerPorts) || pipelineChanged;
+          pipelineChanged = await reconcileTerminalStageHosts(pipeline, controllerPorts, pipelines) || pipelineChanged;
         }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
           && pipeline.state !== "needs_review" && !pipelineSurvivorRefusal(pipeline)) {

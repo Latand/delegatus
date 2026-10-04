@@ -13,7 +13,7 @@ const ambientStructured = process.env.LLV_STRUCTURED_HOSTS;
 process.env.LLV_STATE_DIR = suiteState;
 process.env.LLV_STRUCTURED_HOSTS = "0";
 
-const { tickPipelines } = await import("./engine");
+const { tickPipelines, adoptAttempt } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, pipelineIdentity, savePipelines } = await import("./store");
 type Pipeline = import("./types").Pipeline;
@@ -404,7 +404,7 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 });
 
 
-const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation"];
+const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation", "shared-running-stage", "other-pipeline-running", "running-before-signal", "resumed-stage-before-signal", "publication-pending", "publication-running", "publication-committing", "publication-uncertain", "publication-unknown-result", "publication-malformed-result", "unknown-pipeline-record", "native-queued-work"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
 
 // Task admission caches its store on module load. A fresh process gives each
@@ -575,6 +575,7 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       else (scenario === "malformed-pending-seat" ? damaged.pending : damaged.seats)[seatProject].mandate = null;
       fs.writeFileSync(seatFile, JSON.stringify(damaged));
     }
+    const { Database } = await import("bun:sqlite");
     const journal = journalResource = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
     journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
       conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "running",
@@ -603,6 +604,30 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     let actuationChecked = false;
     let recovered = false;
     let seatAcquired = false;
+    let ownershipAcquired = false;
+    const addRunningOwner = (otherPipeline = false) => {
+      const records = loadPipelines();
+      const record = otherPipeline ? pipelineRecord({ id: "other-owner", state: "needs_decision",
+        attempts: [attempt(1, "conversation_source_owner", true)] }) : records[0]!;
+      const stageId = otherPipeline ? "implement" : "shared-owner";
+      if (!otherPipeline) {
+        record.stages.push({ ...record.stages[0]!, id: stageId });
+        record.runs.push({ stageId, attempts: [attempt(1, "conversation_source_owner", true)] });
+      }
+      expect(adoptAttempt(record, stageId, { conversationId, sourceConversationId: "conversation_source_owner",
+        launchId: finished.launchId, sessionId: key.sessionId, agentPath: transcript, paneId: null,
+        startedAt: "2026-07-31T00:12:00.000Z" })).not.toBeNull();
+      if (otherPipeline) records.push(record);
+      if (ownershipAcquired) {
+        // Inject durable ownership at the signal boundary without recursively
+        // taking the collection lease already held by this controller tick.
+        const db = new Database(statePath("state.sqlite"));
+        try {
+          db.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines',?,?,1,1,1)")
+            .run(record.id, JSON.stringify(record));
+        } finally { db.close(); }
+      } else savePipelines(records);
+    };
     const socket = path.join(root, "runtime.sock");
     process.env.LLV_RUNTIME_HOST_SOCKET = socket;
     process.env.LLV_STRUCTURED_HOSTS = "1";
@@ -654,6 +679,24 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
           rememberSeat();
         }
       }
+      if (request.method === "operation-status" && ["running-before-signal", "resumed-stage-before-signal"].includes(scenario)
+        && !recovered && !ownershipAcquired) {
+        const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`];
+        if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) {
+          ownershipAcquired = true;
+          if (scenario === "running-before-signal") addRunningOwner(true);
+          else {
+            // A resumed stage is durable before its fresh runtime turn appears.
+            const records = loadPipelines();
+            records[0]!.runs[0]!.attempts[0]!.state = "running";
+            records[0]!.state = "needs_decision";
+            const db = new Database(statePath("state.sqlite"));
+            try { db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='pipelines' AND row_key=?")
+              .run(JSON.stringify(records[0]), records[0]!.id); }
+            finally { db.close(); }
+          }
+        }
+      }
       if (request.method === "command") commands.push(request.params?.command);
       return host.handle(request, options);
     } }, failure === "socket" ? { maxConnections: 1 } : {});
@@ -693,6 +736,41 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       publish(false);
       setRegistryBusy(false);
     }
+    if (scenario === "shared-running-stage" || scenario === "other-pipeline-running") addRunningOwner(scenario === "other-pipeline-running");
+    if (scenario.startsWith("publication-")) {
+      const records = loadPipelines();
+      const record = records[0]!;
+      record.state = "needs_decision";
+      if (scenario === "publication-committing") {
+        record.cursor = { stageId: "implement", state: "committing", input: null, activatedBy: null };
+      } else {
+        record.delivery = { target: { repository: "https://example.invalid/repository.git", remote: "https://example.invalid/repository.git", branch: "refs/heads/fixture" },
+          disposition: "owner", publish: "enabled", ownerId: record.id, epoch: 1, active: false, journal: [],
+          operation: { id: "fixture-publication", epoch: 1, sha: record.lastPassedCommit,
+            state: scenario === "publication-pending" ? "pending" : scenario === "publication-running" ? "running" : "settled",
+            ...(scenario === "publication-uncertain" ? { result: { ok: true, sha: record.lastPassedCommit, remote: "unavailable", uncertain: true } } : {}) } };
+      }
+      // The ordinary publication validator preserves optional result fields.
+      // An incomplete result cannot establish that a publisher finished.
+      if (scenario === "publication-malformed-result") record.delivery!.operation!.result = JSON.parse('{"ok":true}');
+      savePipelines(records);
+    }
+    if (scenario === "native-queued-work") {
+      journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status",
+        payload: { ...payload, turn: "idle", activeTurnId: null, capabilities: { ...payload.capabilities, nativeQueue: true } } });
+      const native = journal.executeOperation({ kind: "native-queue", conversationId, operationId: "native-work", idempotencyKey: "native-work",
+        action: "add", binding: { threadId: key.sessionId, accountId: journal.readSession({ conversationId })!.accountId }, text: "queued work" });
+      expect(native.receipt.status).toBe("queued");
+      journal.nativeQueueTransition("native-work", { phase: "prepared", input: [{ type: "text", text: "queued work" }] });
+      journal.nativeQueueTransition("native-work", { phase: "observed-queued", submission: {
+        id: "native-one", clientUserMessageId: "native-work", input: [{ type: "text", text: "queued work" }] } });
+      expect(journal.operationResult("native-work")!.receipt.status).toBe("applied");
+    }
+    const pipelineDb = new Database(statePath("state.sqlite"));
+    try {
+      if (scenario === "unknown-pipeline-record") pipelineDb.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive','unknown-host-owner',?,0,1,0)")
+        .run(JSON.stringify({ id: "unknown-host-owner", state: "future-state", runs: null }));
+    } finally { pipelineDb.close(); }
     unavailable = true;
     const started = Date.now();
     await tick();
@@ -723,6 +801,34 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       }
       if (["resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation"].includes(scenario)) expect(actuationChecked).toBe(true);
       if (scenario === "seat-before-signal") expect(seatAcquired).toBe(true);
+      if (["running-before-signal", "resumed-stage-before-signal"].includes(scenario)) expect(ownershipAcquired).toBe(true);
+      if (["shared-running-stage", "other-pipeline-running", "running-before-signal", "resumed-stage-before-signal"].includes(scenario)
+        || scenario.startsWith("publication-")) {
+        const records = loadPipelines();
+        for (const record of records) {
+          for (const run of record.runs) for (const item of run.attempts) {
+            if (item.conversationId === conversationId) Object.assign(item, { state: "passed", completedAt: "2026-07-31T00:15:00.000Z", verdict: { status: "pass" } });
+          }
+          delete record.delivery;
+          record.cursor = null;
+          record.state = "completed";
+        }
+        savePipelines(records);
+      }
+      if (scenario === "unknown-pipeline-record") {
+        const db = new Database(statePath("state.sqlite"));
+        try { db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key='unknown-host-owner'").run(); }
+        finally { db.close(); }
+      }
+      if (scenario === "native-queued-work") {
+        journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status",
+          payload: { ...payload, turn: "idle", activeTurnId: null, capabilities: { ...payload.capabilities, nativeQueue: true } } });
+        const removed = journal.executeOperation({ kind: "native-queue", conversationId, operationId: "remove-native-work",
+          idempotencyKey: "remove-native-work", action: "delete", entryId: "native-work", expectedRevision: 1,
+          binding: { threadId: key.sessionId, accountId: journal.readSession({ conversationId })!.accountId } });
+        expect(removed.receipt.status).toBe("queued");
+        journal.nativeQueueTransition("remove-native-work", { phase: "acknowledged", deleted: true });
+      }
       if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation"].includes(scenario)) {
         // Idle live seats survive repeated sweeps without spending the budget.
         await tick();
