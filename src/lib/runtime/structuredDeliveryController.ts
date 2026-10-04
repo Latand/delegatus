@@ -14,7 +14,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { canonicalOrchestratorProject, readOrchestratorSeatFileOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -892,7 +892,7 @@ export async function bindStructuredDeliveryQueue(
         const generation = conversation?.generations.at(-1);
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.
-        const seats = readOrchestratorSeatFileOrNull();
+        const seats = readOrchestratorSeatRetirementEvidenceOrNull();
         if (!seats || !conversation) return false;
         const namesConversation = (id: string | null) => id !== null
           && resolveConversationAlias(snapshot, id as ViewerConversationId) === conversation.id;

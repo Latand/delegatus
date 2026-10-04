@@ -404,7 +404,7 @@ test("the sweep budget defers remaining hosts to the next tick instead of stalli
 });
 
 
-const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project"];
+const socketScenarios = ["unavailable", "resumed-after-snapshot", "resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation", "queued-after-actuation-read", "retry-after-actuation-read", "root-exits-before-helper", "legacy-session-read", "idle", "live-seat", "legacy-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "seat-before-signal", "unreadable-seat-store", "running-stage", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation"];
 const socketChild = process.env.LLV_TERMINAL_REAP_SOCKET_CHILD === "1";
 
 // Task admission caches its store on module load. A fresh process gives each
@@ -540,9 +540,9 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       kind: "orchestrator", containerId: project, role: "seat", slot: "orchestrator",
       parentConversationId: null, stageId: null, stageOrder: null, round: null,
     });
-    if (["live-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat"].includes(scenario)) {
-      designate(conversationId, scenario === "pending-seat");
-      if (scenario !== "store-only-seat" && scenario !== "pending-seat") rememberSeat();
+    if (["live-seat", "store-only-seat", "pending-seat", "rotated-seat", "rotated-seat-open-turn", "redesignated-seat", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation"].includes(scenario)) {
+      designate(conversationId, scenario === "pending-seat" || scenario === "malformed-pending-seat");
+      if (scenario !== "store-only-seat" && scenario !== "pending-seat" && !scenario.startsWith("malformed-")) rememberSeat();
     }
     if (["rotated-seat", "rotated-seat-open-turn", "redesignated-seat"].includes(scenario)) {
       designate("conversation_seat_successor");
@@ -564,6 +564,17 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
     if (scenario === "legacy-seat") rememberSeat();
     const seatFile = statePath("orchestrator-seats.json");
     if (scenario === "unreadable-seat-store") fs.writeFileSync(seatFile, "{");
+    let readableSeatFile: string | null = null;
+    if (scenario.startsWith("malformed-")) {
+      readableSeatFile = fs.readFileSync(seatFile, "utf8");
+      const damaged = JSON.parse(readableSeatFile);
+      if (scenario === "malformed-seat-collection") damaged.seats = null;
+      else if (scenario === "malformed-revocation") damaged.revocations.push({ project: seatProject, conversationId,
+        seatEpoch: damaged.seats[seatProject].seatEpoch, revokedAt: "2026-07-31T00:15:00.000Z",
+        successorConversationId: { invalid: true } });
+      else (scenario === "malformed-pending-seat" ? damaged.pending : damaged.seats)[seatProject].mandate = null;
+      fs.writeFileSync(seatFile, JSON.stringify(damaged));
+    }
     const journal = journalResource = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
     journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
       conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "running",
@@ -712,13 +723,14 @@ async function socketScenario(scenario: string, failure?: SetupFailure, ownershi
       }
       if (["resumed-before-actuation", "registry-busy-before-signal", "generation-before-actuation", "queued-before-actuation"].includes(scenario)) expect(actuationChecked).toBe(true);
       if (scenario === "seat-before-signal") expect(seatAcquired).toBe(true);
-      if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal", "seat-in-another-project"].includes(scenario)) {
+      if (["live-seat", "legacy-seat", "store-only-seat", "pending-seat", "redesignated-seat", "seat-before-signal", "seat-in-another-project", "malformed-active-seat", "malformed-pending-seat", "malformed-seat-collection", "malformed-revocation"].includes(scenario)) {
         // Idle live seats survive repeated sweeps without spending the budget.
         await tick();
         expect(procBackend.pidAlive(recordedPid)).toBe(true);
         expect(signals).toEqual([]);
         expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null });
-        if (scenario === "pending-seat") expect(completeOrchestratorSeatIntent({ project: seatProject,
+        if (readableSeatFile !== null) fs.writeFileSync(seatFile, readableSeatFile);
+        if (scenario === "pending-seat" || scenario === "malformed-pending-seat") expect(completeOrchestratorSeatIntent({ project: seatProject,
           clientRequestId: "fixture-seat-1", conversationId, path: transcript }).kind).toBe("activated");
         if (scenario === "legacy-seat") designate(conversationId);
         designate("conversation_seat_successor");
