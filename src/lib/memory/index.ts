@@ -28,6 +28,8 @@ interface MemoryItem {
   flags: string;
 }
 
+type InjectionName = Pick<Candidate, "id" | "title"> & { score: number };
+
 export const MEMORY_RESPONSE_BYTES = 16_000;
 
 function byteBound(text: string, limit: number): string {
@@ -482,7 +484,53 @@ export class MemoryIndex {
     })());
   }
 
-  recordConfirmedInjection(entries: Array<Candidate & { score: number }>, requestId: string, conversation: string) {
+  private preparedInjectionPath(conversation: string, hookId: string) {
+    return path.join(statePath("memory-injection-prepared"), crypto.createHash("sha256").update(JSON.stringify([conversation, hookId])).digest("hex") + ".json");
+  }
+
+  recordPreparedInjection(entries: InjectionName[], requestId: string, conversation: string, hookId: string, expires: number) {
+    const filename = this.preparedInjectionPath(conversation, hookId), directory = path.dirname(filename);
+    fsSync.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const names = fsSync.readdirSync(directory);
+    if (names.length > 1024) throw Error("memory prepared evidence budget");
+    const deadline = performance.now() + 100;
+    let retained = 0;
+    for (const name of names) {
+      if (performance.now() >= deadline) throw Error("memory prepared evidence budget");
+      const old = path.join(directory, name), stat = fsSync.lstatSync(old);
+      if (/^[a-f0-9]{64}\.json$/.test(name) && stat.isFile() && stat.mtimeMs < Date.now() - 31500) fsSync.rmSync(old);
+      else retained++;
+    }
+    if (retained >= 1024) throw Error("memory prepared evidence budget");
+    const evidence = JSON.stringify({ requestId, conversation, preparedAt: Date.now(), expires, retainUntil: expires + 30000,
+      entries: entries.map(({ id, title, score }) => ({ id, title, score })) });
+    const temporary = filename + "." + crypto.randomUUID() + ".tmp";
+    try {
+      fsSync.writeFileSync(temporary, evidence, { mode: 0o600 });
+      fsSync.renameSync(temporary, filename);
+    } finally { fsSync.rmSync(temporary, { force: true }); }
+  }
+
+  confirmPreparedInjection(conversation: string, hookId: string, emittedAt: number) {
+    const filename = this.preparedInjectionPath(conversation, hookId);
+    let stat: fsSync.Stats;
+    try { stat = fsSync.lstatSync(filename); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+    if (!stat.isFile() || stat.size > 128000) throw Error("invalid memory prepared evidence");
+    const row = JSON.parse(fsSync.readFileSync(filename, "utf8"));
+    if (row.conversation !== conversation || typeof row.requestId !== "string"
+      || !Number.isFinite(row.preparedAt) || !Number.isFinite(row.expires) || row.retainUntil !== row.expires + 30000
+      || !Array.isArray(row.entries) || row.entries.length > 15
+      || row.entries.some((entry: InjectionName) => !entry || typeof entry.id !== "string" || typeof entry.title !== "string"
+        || !Number.isFinite(entry.score) || entry.score < .7 || entry.score > 1)) throw Error("invalid memory prepared evidence");
+    if (Date.now() >= row.retainUntil) { fsSync.rmSync(filename); return; }
+    if (!Number.isFinite(emittedAt) || emittedAt < row.preparedAt || emittedAt >= row.expires) return;
+    this.recordConfirmedInjection(row.entries, row.requestId, conversation);
+    // Confirmation is now durable independently of the Viewer generation.
+    fsSync.rmSync(filename, { force: true });
+  }
+
+  recordConfirmedInjection(entries: InjectionName[], requestId: string, conversation: string) {
     const evidence = JSON.stringify({ requestId, conversation, entries: entries.map(({ id, title, score }) => ({ id, title, score })) });
     const directory = statePath("memory-injection-pending");
     const filename = path.join(directory, crypto.createHash("sha256").update(JSON.stringify([conversation, requestId])).digest("hex") + ".json");

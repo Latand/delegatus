@@ -43,7 +43,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-for (const mode of ["delayed input", "delayed body", "delayed confirmation", "contended confirmation", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only successfully emitted output`, async () => {
+for (const mode of ["delayed input", "delayed body", "delayed confirmation", "contended confirmation", "restarted confirmation", "unconfirmed", "successful"] as const) test(`actual hook/controller ${mode} accounts only successfully emitted output`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-output-boundary-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
@@ -69,6 +69,18 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
         confirmationLock.db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
         confirmationLock.db.exec("BEGIN IMMEDIATE");
       }
+      if (mode === "restarted confirmation" && input.delegatus_confirm) {
+        // The confirming process has no module-local state from preparation.
+        const source = `import { AgentRegistry, setAgentRegistryForTests } from ${JSON.stringify(path.resolve(import.meta.dir, "../agent/registry.ts"))};
+          import { offerForHook } from ${JSON.stringify(path.resolve(import.meta.dir, "controller.ts"))};
+          setAgentRegistryForTests(new AgentRegistry(${JSON.stringify(path.join(root, "registry.json"))}, undefined, undefined, { sqliteMode: "off" }));
+          await offerForHook(new Request("http://localhost/api/memory/inject", { headers: ${JSON.stringify(Object.fromEntries(request.headers))} }), ${JSON.stringify(input)});`;
+        const confirmer = Bun.spawn(["bun", "--eval", source], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+        expect(await confirmer.exited).toBe(0);
+        expect(await new Response(confirmer.stderr).text()).toBe("");
+        memoryIndex().close();
+        return "";
+      }
       return prepareForHook(request, input);
     })();
     const block = await finished;
@@ -89,15 +101,15 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
         if (mode === "delayed input") await Bun.sleep(600);
         proc.stdin.write(JSON.stringify(input)); proc.stdin.end();
         expect(await proc.exited).toBe(0);
-        expect((await new Response(proc.stdout).text()).length > 0).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation"));
+        expect((await new Response(proc.stdout).text()).length > 0).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation"));
         await finished;
         confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); confirmationLock.db = null;
       } finally { proc.kill(); await proc.exited; }
     }
     memoryIndex().close();
-    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") ? 1 : 0);
+    expect(memoryIndex().turnOffers(receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 1 : 0);
     const reloaded = memoryIndex().turnOffers(receipt.conversationId);
-    if (mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") {
+    if (mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") {
       expect(reloaded).toHaveLength(1);
       expect(reloaded[0]).toMatchObject({ title: "Widget parser", score: .8 });
       fs.writeFileSync(transcript, JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n");
@@ -110,7 +122,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
       const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
       expect(lookup.memoryFor!(entries.find(entry => entry.item.kind === "user")!.item)).toEqual(["Widget parser"]);
     }
-    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation") ? 0 : 1);
+    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 0 : 1);
   } finally { confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); server.stop(true); }
 }, 5000);
 
@@ -344,7 +356,7 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
 });
 
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) test(`${engine} native tmux ${mode} lost receipt abstains across reload using independent registry evidence`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const historical of [false, true]) test(`${engine} native tmux ${mode} ${historical ? "repeated" : "first"} lost receipt abstains across reload using independent registry evidence`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -379,7 +391,19 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
   const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
   const childEntry = { ...entry, path: child, parent: transcript };
-  // The earlier operator hook ran before its journal row materialized.
+const send = () => deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
+    origin: { kind: mode === "relay" ? "operator" : "agent" } }, { recover: async () => null, targetForKnownPid: async () => "%synthetic",
+    pathAllowed: () => true, listFiles: async () => mode === "relay" ? [entry, childEntry] : [entry],
+    resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
+    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } });
+  if (historical) {
+    expect((await send()).ok).toBe(true);
+    expect(await offerForHook(request, { prompt: wire, hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+      prompt_id: "synthetic-first", turn_id: "synthetic-first", ...(engine === "claude" ? { source: "user" } : {}) })).toBe("");
+    fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
+      ? { type: "user", uuid: "synthetic-first", message: { role: "user", content: wire } }
+      : { type: "response_item", payload: { type: "message", turn_id: "synthetic-first", role: "user", content: [{ type: "input_text", text: wire }] } }) + "\n");
+  }
   const lock = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   lock?.exec("BEGIN IMMEDIATE");
   const originalWrite = fs.writeFileSync;
@@ -388,12 +412,8 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
     if (String(filename).startsWith(pending + path.sep)) throw Object.assign(Error("Synthetic receipt storage unavailable"), { code: "ENOSPC" });
     return originalWrite(filename, ...args);
   }) as typeof fs.writeFileSync;
-  let result;
-  try { result = await deliverConversationMessage({ path: mode === "relay" ? child : transcript, pid: process.pid, text: prompt, images: [],
-    origin: { kind: mode === "relay" ? "operator" : "agent" } }, { recover: async () => null, targetForKnownPid: async () => "%synthetic",
-    pathAllowed: () => true, listFiles: async () => mode === "relay" ? [entry, childEntry] : [entry],
-    resumeSpecFor: (_root, pathname) => mode === "relay" && pathname === child ? null : ({ command: "synthetic", engine, cwd: root, transcript, windowName: "synthetic", launchProfile: emptyLaunchProfile({ cwd: root }) }),
-    deliver: async ({ payload }) => { wire = payload; return { ok: true, target: "%synthetic", outcome: "resumed" }; } }); }
+    let result;
+  try { result = await send(); }
   finally { fs.writeFileSync = originalWrite; lock?.exec("ROLLBACK"); lock?.close(); }
   memoryIndex().close();
   expect(result.ok).toBe(true);

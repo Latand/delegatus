@@ -14,33 +14,19 @@ import { memoryTurnContext } from "./context";
 import { decideMemories, injectMemory } from "./injection";
 import { memoryIndex } from "./service";
 import { sharedMemoryEnabled } from "./settings";
-import type { Candidate } from "./selection";
-
-// Offers remain provisional until the standalone hook confirms a successful
-// stdout write. Prompt expiry stops selection/output, while bounded retained
-// evidence lets a confirmation already sent by the hook finish after expiry.
-const CONFIRMATION_RETENTION_MS = 30000;
-const pendingOffers = new Map<string, { expires: number; preparedAt: number; retainUntil: number; index: ReturnType<typeof memoryIndex>; requestId: string; entries: Array<Candidate & { score: number }> }>();
-
+// Selected names are provisional durable evidence until stdout confirmation;
+// selection expiry and bounded confirmation retention are separate deadlines.
 export async function offerForHook(request: Request, input: Record<string, unknown>): Promise<string> {
   const expires = Math.min(Number(request.headers.get("x-llv-memory-deadline")), Date.now() + 1500);
   const hookId = request.headers.get("x-llv-memory-hook") ?? "";
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
   try {
-    for (const [id, offer] of pendingOffers) if (offer.retainUntil <= Date.now()) pendingOffers.delete(id);
     if (!/^[a-f0-9-]{36}$/.test(hookId)) return "";
     const conversationId = callerConversationId(request);
     if (!conversationId) return "";
-    const offerKey = conversationId + ":" + hookId;
     if (input.delegatus_confirm === true) {
-      const offer = pendingOffers.get(offerKey);
-      const emittedAt = input.delegatus_emitted_at;
-      if (offer && typeof emittedAt === "number" && Number.isFinite(emittedAt)
-        && emittedAt >= offer.preparedAt && emittedAt < offer.expires && offer.index === memoryIndex()) {
-        offer.index.recordConfirmedInjection(offer.entries, offer.requestId, conversationId);
-        pendingOffers.delete(offerKey);
-      }
+      if (typeof input.delegatus_emitted_at === "number") memoryIndex().confirmPreparedInjection(conversationId, hookId, input.delegatus_emitted_at);
       return "";
     }
     if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic()) return "";
@@ -95,10 +81,17 @@ export async function offerForHook(request: Request, input: Record<string, unkno
           delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
           && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
           && !index.hasTerminalDelivery(delivery.command.operationId));
-        const relay = /^User message for your branch «[^\n]*» — forward it or handle it yourself:\n/.test(prompt)
-          && !index.hasTerminalPrompt(conversationId, prompt);
+        const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
+        const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
+        // A relay reservation belongs to its child conversation, while its
+        // terminal receipt belongs to the root. Every matching source delivery
+        // must have evidence; a prior same-text relay cannot cover a lost one.
+        const missingRelayReceipt = relay && (!index.hasTerminalPrompt(conversationId, prompt)
+          || Object.values(snapshot.heldDeliveries).some(delivery =>
+            (delivery.contentDigest === relayDigest || delivery.payloadKind !== "text")
+            && !index.hasTerminalDelivery(delivery.command.operationId)));
         const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
-        if (missingMachineReceipt || missingLaunchReceipt || relay) return "";
+        if (missingMachineReceipt || missingLaunchReceipt || missingRelayReceipt) return "";
       }
       origin = terminalOrigin ?? "operator";
       const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
@@ -136,8 +129,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       decide: (body, signal) => decideMemories(body, key, signal),
       settle: cost => { mutateOperatorAsks(file => { if (file.spend.month === month) file.spend.usd += cost - reserved; }); },
       record: entries => {
-        if (Date.now() >= expires || request.signal.aborted || pendingOffers.size >= 1024) throw Error("memory delivery evidence unavailable");
-        pendingOffers.set(offerKey, { expires, preparedAt: Date.now(), retainUntil: expires + CONFIRMATION_RETENTION_MS, index, requestId, entries });
+        if (Date.now() >= expires || request.signal.aborted) throw Error("memory delivery evidence unavailable");
+        index.recordPreparedInjection(entries, requestId, conversationId, hookId, expires);
       },
     });
   } catch { return ""; }
