@@ -146,19 +146,6 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Prepare verified Windows cleanup handle observer
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'custody-handle.zip'
-          $directory = Join-Path $env:RUNNER_TEMP 'custody-handle'
-          Invoke-WebRequest -Uri 'https://download.sysinternals.com/files/Handle.zip' -OutFile $archive -TimeoutSec 30
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '279aaf8eccb6f79147f4dcc6ba091fb895c4cb8b199a0dd186a4c76bc519d2cd') { throw 'Handle archive checksum mismatch' }
-          Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
-          $exe = Join-Path $directory 'handle64.exe'
-          $signature = Get-AuthenticodeSignature -LiteralPath $exe
-          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') { throw 'Handle publisher signature refused' }
-          "DELEGATUS_TEST_HANDLE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Terminal bootstrap custody with native Windows paths
         env:
           USERPROFILE: ${{ runner.temp }}\llv-home
