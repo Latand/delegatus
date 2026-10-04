@@ -11,6 +11,53 @@ import { headlessCodexThreadConfig } from "../src/lib/codexHeadlessConfig";
 
 const sandboxes: string[] = [];
 
+for (const runtime of ["node", "bun"]) {
+  test(`${runtime} MCP EOF reaps a child that ignores EOF and TERM without touching a live session`, async () => {
+    const { root, launcher } = installedPackage(`
+      const fs = await import("node:fs");
+      process.stdin.resume();
+      process.on("SIGTERM", () => {});
+      fs.writeFileSync(process.env.LLV_TEST_PID, String(process.pid));
+      setInterval(() => {}, 1000);
+    `);
+    const pidFile = path.join(root, "child.pid");
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !key.startsWith("LLV_") && !key.startsWith("DELEGATUS_")));
+    const launcherProcess = spawn(Bun.which(runtime)!, [launcher], {
+      cwd: root,
+      env: { ...environment, NODE_ENV: "test", HOME: root, XDG_CONFIG_HOME: root, LLV_STATE_DIR: path.join(root, "state"),
+        LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_PID: pidFile },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let childPid: number | undefined;
+    const alive = (pid: number) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    };
+    try {
+      const readyDeadline = Date.now() + 5000;
+      while (!fs.existsSync(pidFile) && Date.now() < readyDeadline) await Bun.sleep(10);
+      childPid = Number(fs.readFileSync(pidFile, "utf8"));
+      // Silence alone must never retire a connected client.
+      await Bun.sleep(2500);
+      expect(alive(childPid)).toBe(true);
+      expect(launcherProcess.exitCode).toBeNull();
+      launcherProcess.stdin.end();
+      const deadline = Date.now() + 4000;
+      while ((launcherProcess.exitCode === null || alive(childPid)) && Date.now() < deadline) await Bun.sleep(10);
+      expect(alive(childPid)).toBe(false);
+      expect(launcherProcess.exitCode).toBe(0);
+    } finally {
+      // Only the PIDs this fixture started and recorded are eligible.
+      if (childPid && alive(childPid)) process.kill(childPid, "SIGKILL");
+      if (launcherProcess.exitCode === null && launcherProcess.signalCode === null) launcherProcess.kill("SIGKILL");
+      await new Promise<void>((resolve) => {
+        if (launcherProcess.exitCode !== null || launcherProcess.signalCode !== null) resolve();
+        else launcherProcess.once("exit", () => resolve());
+      });
+    }
+  }, 15_000);
+}
+
 /** Result fields consumed by these fixture-specific RPC assertions. */
 interface TestRpcResponse {
   id?: number | string;
@@ -217,12 +264,25 @@ test("self-update pointer selects the installed MCP bundle and falls back only a
 
 test("one MCP session starts the next installed release when the self-update pointer changes", async () => {
   const { root, launcher, pointer, release, env } = selfUpdateFixture(mcpBundle("checkout"));
-  const first = release("first", mcpBundle("first"));
+  const retiredPidFile = path.join(root, "retired.pid");
+  const first = release("first", `
+    import fs from "node:fs";
+    fs.writeFileSync(process.env.LLV_TEST_RETIRED_PID, String(process.pid));
+    process.on("SIGTERM", () => {});
+    setInterval(() => {}, 1000);
+    ${mcpBundle("first")}
+  `);
   const second = release("second", mcpBundle("second"));
   fs.writeFileSync(pointer, JSON.stringify(first));
-  const session = stdioSession(process.execPath, launcher, root, env);
+  const session = stdioSession(process.execPath, launcher, root, { ...env, LLV_TEST_RETIRED_PID: retiredPidFile });
+  let retiredPid: number | undefined;
+  const retiredAlive = () => {
+    if (!retiredPid) return false;
+    try { process.kill(retiredPid, 0); return true; } catch { return false; }
+  };
   try {
     expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    retiredPid = Number(fs.readFileSync(retiredPidFile, "utf8"));
     session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
     expect((await session.call(2, "tools/call", { name: "release", arguments: {} })).result.content[0].text).toBe("first");
     fs.writeFileSync(pointer, JSON.stringify(second));
@@ -234,8 +294,13 @@ test("one MCP session starts the next installed release when the self-update poi
       await Bun.sleep(50);
     }
     expect(switched).toBe(true);
+    const reapDeadline = Date.now() + 3000;
+    while (retiredAlive() && Date.now() < reapDeadline) await Bun.sleep(10);
+    expect(retiredAlive()).toBe(false);
+    expect((await session.call(30, "tools/call", { name: "release", arguments: {} })).result.content[0].text).toBe("second");
     expect(session.process.exitCode).toBeNull();
   } finally {
+    if (retiredAlive()) process.kill(retiredPid!, "SIGKILL");
     session.process.stdin.end();
     if (session.process.exitCode === null) await new Promise<void>((resolve) => session.process.once("close", () => resolve()));
   }

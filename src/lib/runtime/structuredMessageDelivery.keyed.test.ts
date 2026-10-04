@@ -43,6 +43,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
     capabilities: { steer: true, structuredAttention: true },
   } });
   const before = journal.snapshot().sessions.find(row => row.conversationId === target.id)!;
+  const keyedBefore = { ...before, retirementBlocked: false };
   const socket = runtimeHostEndpoint(root, `keyed-${process.pid}`).socketPath;
   const server = serveRuntimeHost(socket, new RuntimeHost(journal, undefined, undefined, true));
   if (!server.listening) await new Promise<void>(resolve => server.once("listening", resolve));
@@ -50,7 +51,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
   const small: number[] = [];
   for (let i = 0; i < 25; i++) {
     const start = performance.now();
-    expect(await client.readSession({ conversationId: target.id })).toEqual(before);
+    expect(await client.readSession({ conversationId: target.id })).toEqual(keyedBefore);
     small.push(performance.now() - start);
   }
   const db = (journal as unknown as { db: Database }).db;
@@ -91,7 +92,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
     const large: number[] = [];
     for (let i = 0; i < 25; i++) {
       const start = performance.now();
-      expect(await client.readSession({ conversationId: target.id })).toEqual(before);
+      expect(await client.readSession({ conversationId: target.id })).toEqual(keyedBefore);
       registry.conversationDeliverySnapshot({ conversationId: target.id });
       large.push(performance.now() - start);
     }

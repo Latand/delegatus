@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -882,6 +882,7 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
     savePipelines([pipeline]);
     if (collection === "pipelines_archive") await archiveSettledPipelines(Date.parse("2026-08-05T00:00:00.000Z"));
     expect(loadPipelinesForStartup()).toHaveLength(1);
+    expect(loadPipelinesForRetirement()).toHaveLength(1);
     loadPipelines();
     db = new Database(path.join(sandbox, "state.sqlite"));
     const read = () => db!.query("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?").get(collection, pipeline.id) as { value_json: string };
@@ -890,9 +891,11 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
       if (corrupt === "{broken") expect(() => loadPipelinesForStartup()).toThrow();
       else expect(loadPipelinesForStartup()).toEqual([]);
+      expect(() => loadPipelinesForRetirement()).toThrow();
       expect(read().value_json).toBe(corrupt);
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
       expect(loadPipelinesForStartup()).toHaveLength(1);
+      expect(loadPipelinesForRetirement()).toHaveLength(1);
     }
     if (collection === "pipelines_archive") {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);

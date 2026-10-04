@@ -58,6 +58,15 @@ function optionalNullableId(value: unknown, name: string): string | null | undef
   return requiredId(value, name);
 }
 
+export function parseRuntimeIdleKillFence(value: unknown): import("./contracts").RuntimeIdleKillFence {
+  const fence = object(value);
+  if (!Number.isSafeInteger(fence.revision) || (fence.revision as number) < 1
+    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()) {
+    throw new Error("idle kill fence is invalid");
+  }
+  return { revision: fence.revision as number, writerClaim: fence.writerClaim };
+}
+
 function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot"; sessionId: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("sessionKey is invalid");
   const candidate = value as Record<string, unknown>;
@@ -207,6 +216,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(operationId ? { operationId } : {}),
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
+      ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
     };
   }
 
