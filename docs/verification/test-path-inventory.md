@@ -1960,8 +1960,9 @@ injected `EPERM` and returned conservative `worker-cleanup` with all 22
 reported PIDs absent. The fixture now tracks actual injected denial and
 accepts that outcome only for denied success with the exact fresh failed
 `collector-crash` / `worker-cleanup` diagnostic and `EPERM` in its causes.
-Uninjected success still requires `complete`; descendant absence and released
-handles are mandatory in either case. Denial is a retained secondary cause;
+Uninjected success requires `complete` except for the exact ownership
+diagnostic below; descendant absence and released handles are mandatory.
+Denial is a retained secondary cause;
 it does not establish which separate ownership check refused verification.
 
 A later committed-head series was also 19/1, with every reported PID absent:
