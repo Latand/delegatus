@@ -2934,7 +2934,9 @@ export const en = {
   "attention.empty": "Nothing is waiting for you.",
   "attention.reportQuestion": "Question",
   "attention.filterOn": "Show only those waiting on you (F)",
-  "attention.filterOff": "Show all nodes (F)",
+  "attention.filterOff": "Show all cards (F)",
+  "attention.filterOnTouch": "Show only those waiting on you",
+  "attention.filterOffTouch": "Show all cards",
   /* The one decision line every attention surface shares (#1167): the toast
      title, the island popover row and the orchestrator dock badge's tooltip.
      Lower-case to sit beside `rateLimit.badgeUntil`, which names the same class
@@ -3318,6 +3320,7 @@ export const en = {
      Keys are append-only per lane, prefixed by surface. */
   "mobile2.bar.back": "Back",
   "mobile2.bar.switchProject": "Switch project",
+  "mobile2.bar.filterOn": "showing only those waiting on you",
   "mobile2.bar.attention": { one: "{count} needs you", other: "{count} need you" },
   "mobile2.bar.search": "Find your messages",
   "mobile2.bar.more": "More actions",

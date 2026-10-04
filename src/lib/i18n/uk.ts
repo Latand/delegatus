@@ -2879,7 +2879,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "attention.empty": "Ніщо не чекає на вас.",
   "attention.reportQuestion": "Питання",
   "attention.filterOn": "Показати лише тих, хто чекає на тебе (F)",
-  "attention.filterOff": "Показати всі вузли (F)",
+  "attention.filterOff": "Показати всі картки (F)",
+  "attention.filterOnTouch": "Показати лише тих, хто чекає на тебе",
+  "attention.filterOffTouch": "Показати всі картки",
   "attention.decisionQuestion": "питання",
   "attention.decisionPlan": "затвердження плану",
   "attention.decisionPermission": "запит дозволу",
@@ -3253,6 +3255,7 @@ export const uk: Record<keyof typeof en, Message> = {
      примітиви аркуша й квитанції, перемикач проєктів і меню дошки. */
   "mobile2.bar.back": "Назад",
   "mobile2.bar.switchProject": "Змінити проєкт",
+  "mobile2.bar.filterOn": "показано лише тих, хто чекає на вас",
   "mobile2.bar.attention": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекає на вас" },
   "mobile2.bar.search": "Знайти ваші повідомлення",
   "mobile2.bar.more": "Більше дій",
