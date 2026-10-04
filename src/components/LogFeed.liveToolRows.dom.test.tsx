@@ -118,7 +118,7 @@ const session: RuntimeSession = {
   liveTurn: firstTurn(),
 };
 
-const tailState = { lines: [] as string[], loading: false, size: null as number | null, error: null as string | null };
+const tailState = { lines: [] as string[], linesStart: 0, loading: false, size: null as number | null, error: null as string | null };
 /* The hosted session a test renders against; tests swap the live turn. */
 const sessionState = { session };
 
@@ -153,7 +153,7 @@ mock.module("@/hooks/useLogTail", () => ({
   ...actualLogTail,
   useLogTail: () => ({
     lines: tailState.lines,
-    linesStart: 0,
+    linesStart: tailState.linesStart,
     size: tailState.size ?? tailState.lines.length,
     loading: tailState.loading,
     error: tailState.error,
@@ -183,6 +183,7 @@ beforeEach(() => {
   resetOutboxForTests();
   resetCanonicalAssistantClaimsForTests();
   tailState.lines = [];
+  tailState.linesStart = 0;
   tailState.loading = false;
   tailState.size = null;
   tailState.error = null;
@@ -852,4 +853,71 @@ test("a reply painted in flight keeps its node when it completes before the wind
   paint();
   expect(host.querySelector("[data-live-turn]")).toBe(row);
   expect(feedRows(host)).toEqual(["user", "live:unread-window-answer", "user"]);
+});
+
+const LONG_AT = (second: number) => new Date(Date.parse(AT(0)) + second * 1000).toISOString();
+const codexLine = (second: number, payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", timestamp: LONG_AT(second), payload });
+
+/* Codex records carry reasoning ids beside message and call ids, so the capped
+   claim set forgets a reply long before the host lets go of its descriptor. */
+test.each([["stays loaded", false], ["leaves the loaded window", true]] as const)(
+  "a watched reply is one row through 600 later steps of a Codex conversation while its record %s", (_name, trims) => {
+    file.engine = "codex"; file.fmt = "codex";
+    try {
+      const reply = "Reply the pane watched arrive.";
+      let live = projectRuntimeLiveTurnItem(null, "long-turn", { type: "agentMessage", id: "long-reply", text: reply }, "completed", LONG_AT(1))!;
+      tailState.lines = [JSON.stringify({ type: "response_item", timestamp: LONG_AT(0), payload: {
+        type: "message", role: "user", content: [{ type: "input_text", text: "Start the long run" }] } })];
+      sessionState.session = { ...session, liveTurn: live };
+      const { host, paint } = render();
+      expect(liveRows(host)).toEqual(["prose:long-reply"]);
+      tailState.lines = [...tailState.lines, codexLine(1, { type: "message", id: "long-reply", role: "assistant", content: [{ type: "output_text", text: reply }] })];
+      paint();
+      const copies = () => [...host.querySelectorAll<HTMLElement>('[data-live-turn], [data-feed-kind="prose"]')].filter(node => node.textContent?.includes(reply));
+      expect(copies()).toHaveLength(1);
+      for (let step = 1; step <= 600; step += 1) {
+        const second = 1 + step;
+        live = projectRuntimeLiveTurnItem(live, "long-turn", { type: "commandExecution", id: `long-call-${step}`, command: "pwd", status: "completed" }, "completed", LONG_AT(second))!;
+        sessionState.session = { ...session, liveTurn: live, revision: 9 + step };
+        tailState.lines = [...tailState.lines,
+          codexLine(second, { type: "reasoning", id: `long-reasoning-${step}`, summary: [{ type: "summary_text", text: `Thought ${step}` }] }),
+          codexLine(second, { type: "function_call", name: "exec_command", call_id: `long-call-${step}`, arguments: JSON.stringify({ cmd: "pwd" }) }),
+          codexLine(second, { type: "function_call_output", call_id: `long-call-${step}`, output: "/repo" })];
+        if (trims && step === 100) {
+          // The cap trims the front: the reply's record is no longer loaded.
+          tailState.linesStart += 50;
+          tailState.lines = tailState.lines.slice(50);
+        }
+        paint();
+        const live_ = [...host.querySelectorAll<HTMLElement>("[data-live-turn]")].filter(node => node.textContent?.includes(reply));
+        if (live_.length || copies().length > 1) throw new Error(`step ${step}: ${live_.length} live reply rows, ${copies().length} copies`);
+      }
+      const hostKeeps = (live.items ?? []).some(item => item.itemId === "long-reply");
+      expect(hostKeeps).toBe(false);
+    } finally { file.engine = "claude"; file.fmt = "claude"; }
+  }, 240_000);
+
+test("a bound reply keeps its transcript place before the reasoning that follows it", () => {
+  file.engine = "codex"; file.fmt = "codex";
+  try {
+    const reply = "Reply before the next thought.";
+    tailState.lines = [JSON.stringify({ type: "response_item", timestamp: LONG_AT(0), payload: {
+      type: "message", role: "user", content: [{ type: "input_text", text: "Do the thing" }] } })];
+    sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(null, "order-turn", { type: "agentMessage", id: "order-reply", text: reply }, "completed", LONG_AT(1)) };
+    const order = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>("[data-feed-kind], [data-live-turn]")]
+      .map(row => row.textContent?.includes(reply) ? "reply" : row.dataset.feedKind ?? "live");
+    const watched = render();
+    const node = watched.host.querySelector("[data-live-turn]")!;
+    expect(order(watched.host)).toEqual(["user", "reply"]);
+    tailState.lines = [...tailState.lines,
+      codexLine(1, { type: "message", id: "order-reply", role: "assistant", content: [{ type: "output_text", text: reply }] }),
+      codexLine(2, { type: "reasoning", id: "order-reasoning", summary: [{ type: "summary_text", text: "Considering the next step" }] }),
+      codexLine(3, { type: "function_call", name: "exec_command", call_id: "order-call", arguments: JSON.stringify({ cmd: "pwd" }) })];
+    watched.paint();
+    expect(watched.host.querySelector('[data-feed-source-id="order-reply"]')).toBe(node);
+    const fresh = render();
+    expect(order(fresh.host).slice(0, 2)).toEqual(["user", "reply"]);
+    expect(order(fresh.host).length).toBeGreaterThan(3);
+    expect(order(watched.host)).toEqual(order(fresh.host));
+  } finally { file.engine = "claude"; file.fmt = "claude"; }
 });

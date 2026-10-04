@@ -1648,7 +1648,7 @@ export const en = {
 
   // LogFeed
   "feed.processingFailed": "Could not display this record",
-  "feed.processingFailedRecord": "Record: {type} · line {line}",
+  "feed.processingFailedRecord": "Record: {type}",
   "feed.agentEnded": "agent finished",
   "feed.copyCode": "Copy code",
   "feed.copyMd": "Copy message (Markdown)",

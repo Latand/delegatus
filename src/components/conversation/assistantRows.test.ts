@@ -510,3 +510,40 @@ test("a fresh mount keeps an in-flight reply and every reply it watches arrive",
   state = projectAssistantHandoff(state, live("awaiting-echo"), [later], claims, "running", { windowLoading: false });
   expect(rows([later], state).map(row => row.key)).toEqual(["assistant-pending:0", "later"]);
 });
+
+test("a bound reply stays retired once the bounded claim set has dropped its id", () => {
+  let state = projectAssistantHandoff(null, live("awaiting-echo"), [later], claims);
+  const key = state.pending[0].key;
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later, echo], claims);
+  expect(state.pending).toEqual([]);
+  // The host still keeps the descriptor; the claim set no longer names it.
+  for (const feed of [[later, echo], [later]]) {
+    state = projectAssistantHandoff(state, live("awaiting-echo"), feed, new Set());
+    expect(state.pending).toEqual([]);
+    expect(rows(feed, state).map(row => row.key)).toEqual(feed.length === 2 ? [key, "later"] : ["later"]);
+  }
+  expect(state.sequence).toBe(1);
+});
+
+test("a reply a durable claim retired stays retired after the claim is dropped", () => {
+  let state = projectAssistantHandoff(null, live("awaiting-echo"), [later], claims);
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later], new Set(["answer"]));
+  expect(state.pending).toEqual([]);
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later], new Set());
+  expect(state.pending).toEqual([]);
+});
+
+test("a bound reply keeps its transcript place among rows that carry no instant", () => {
+  const user: FeedEntry = { key: "user", anchorKey: "row:0:0", item: { kind: "user", ts: "2026-10-02T09:59:59Z", text: "Request" } };
+  const think: FeedEntry = { key: "think", anchorKey: "row:2:0", item: { kind: "think", text: "Next thought" } as FeedEntry["item"] };
+  const tool: FeedEntry = { key: "tool", anchorKey: "row:3:0", item: { kind: "user", ts: "2026-10-02T10:00:03Z", text: "Dated row after" } };
+  let state = projectAssistantHandoff(null, live("awaiting-echo"), [user], claims);
+  const key = state.pending[0].key;
+  expect(rows([user], state).map(row => row.key)).toEqual(["user", key]);
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [user, echo, think, tool], claims);
+  expect(rows([user, echo, think, tool], state).map(row => row.key)).toEqual(["user", key, "think", "tool"]);
+  // Reasoning written before the reply stays before it.
+  let before = projectAssistantHandoff(null, live("awaiting-echo"), [user], claims);
+  before = projectAssistantHandoff(before, live("awaiting-echo"), [user, think, echo, tool], claims);
+  expect(rows([user, think, echo, tool], before).map(row => row.key)).toEqual(["user", "think", key, "tool"]);
+});

@@ -1921,7 +1921,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     <SpeechScope.Provider value={file.path}>{item.kind === "raw" && item.processingError ? (
                       <div role="alert" data-processing-error className="my-3 rounded-surface border border-danger/40 bg-danger-soft p-3 text-danger [overflow-wrap:anywhere]">
                         <p className="font-semibold">{t("feed.processingFailed")}</p>
-                        <p className="mt-1 text-label">{t("feed.processingFailedRecord", { type: item.processingError.recordType, line: item.processingError.line })}</p>
+                        <p className="mt-1 text-label">{t("feed.processingFailedRecord", { type: item.processingError.recordType })}</p>
                         <p className="mt-1 whitespace-pre-wrap text-body">{item.processingError.message}</p>
                       </div>
                     ) : row.live?.phase === "streaming" ? (

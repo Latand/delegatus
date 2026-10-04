@@ -313,7 +313,7 @@ export type Item = (
      or an internal relay card. Without evidence it renders as this system row. */
   | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
-  | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; line: number; message: string } }
+  | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; message: string } }
 ) & { structuredUserRef?: string };
 
 /* The wire text can begin with marker-shaped literal content. Keep it outside
@@ -3619,11 +3619,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       } catch (error) {
         const recordType = redactTranscriptText(textPart(rec(obj).type)).slice(0, 120) || "unknown";
         const message = redactTranscriptText(error instanceof Error ? error.message : String(error)).slice(0, 1000);
-        const processingError = { recordType, line: curSrc + 1, message };
+        // The window index is no line of the transcript: it starts mid-file,
+        // moves as the cap trims and is negative for prepended history.
+        const processingError = { recordType, message };
         // Do not call translation or tool-card code again in its failure path.
         // The raw fallback also stays readable outside the conversation surface.
         push({ kind: "raw", err: true, processingError,
-          text: `Record processing failed (${recordType}, line ${curSrc + 1}): ${message}` });
+          text: `Record processing failed (${recordType}): ${message}` });
       }
     } else renderPlain(line);
   };

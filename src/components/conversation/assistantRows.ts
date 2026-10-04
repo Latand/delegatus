@@ -22,16 +22,20 @@ export interface AssistantHandoff {
   /** A runtime projection has been seen, so later replies are ones this pane watched arrive. */
   observed: boolean;
   bindings: Map<string, Binding>;
+  /** Reply ids a transcript record took over on this mount. The host keeps
+   * their descriptors long after the bounded claim set has dropped the id. */
+  adopted: ReadonlySet<string>;
   sequence: number;
   retiredAnswers: readonly RetiredAnswer[];
   liveOrder: ReadonlyMap<string, number>;
   hiddenEchoes: ReadonlySet<string>;
 }
-const empty = (): AssistantHandoff => ({ pending: [], held: [], observed: false, bindings: new Map(), sequence: 0, retiredAnswers: [], liveOrder: new Map(), hiddenEchoes: new Set() });
+const empty = (): AssistantHandoff => ({ pending: [], held: [], observed: false, bindings: new Map(), adopted: new Set(), sequence: 0, retiredAnswers: [], liveOrder: new Map(), hiddenEchoes: new Set() });
 const at = (live: RuntimeLiveTurnItem) => {
   const value = Date.parse(live.startedAt ?? live.completedAt ?? "");
   return Number.isFinite(value) ? value : null;
 };
+const ADOPTED_LIMIT = 2 * (LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT);
 const textKey = (text: string) => text.trim().replace(/\s+/g, " ");
 const echoTextMatches = (text: string, live: RuntimeLiveTurnItem): boolean => {
   const canonical = textKey(text), streamed = textKey(live.text);
@@ -94,6 +98,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   const current = runtimeLiveTurnItems(liveTurn);
   const liveOrder = liveTurn ? new Map(current.flatMap((live, index) => live.itemId ? [[live.itemId, index] as const] : [])) : state.liveOrder;
   const usedPending = new Set<number>();
+  const adopted = new Set(state.adopted);
   let sourcePosition = 0;
   for (const [order, live] of current.entries()) {
     // Folded prefixes retain their logical item count. Positions therefore
@@ -103,6 +108,12 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     if (live.tool || live.omittedItems || !live.itemId && retiredAnswers.some(answer =>
       answer.wire.startedAt === live.startedAt && (live.startedAt !== null || answer.turnId === liveTurn!.turnId)
       && answer.occurrence === occurrence && (answer.wire.text === live.text || echoTextMatches(answer.text, live)))) continue;
+    if (live.itemId && adopted.has(live.itemId)) {
+      // Seen again, so it stays the newest: the cap drops ids the host let go of.
+      adopted.delete(live.itemId);
+      adopted.add(live.itemId);
+      continue;
+    }
     const index = pending.findIndex((entry, index) => !usedPending.has(index) && (
       live.itemId && entry.wire.itemId === live.itemId
       || !entry.wire.itemId && entry.wire.startedAt === live.startedAt
@@ -121,7 +132,7 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   }
   const bindings = new Map<string, Binding>();
   const priorBindings = new Map([...state.bindings.values()].map(binding => [binding.identity, binding]));
-  for (const entry of feed) {
+  if (priorBindings.size) for (const entry of feed) {
     const prior = priorBindings.get(bindingIdentity(entry));
     if (prior) bindings.set(entry.key, prior);
   }
@@ -131,6 +142,12 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
   // One assistant record can project into prose, review and citation cards.
   // Reassemble only its own projections; identical later records stay separate.
   const groups = new Map<string, FeedEntry[]>();
+  // The loaded rows by the response id each carries, reasoning members included.
+  const rowsById = new Map<string, FeedEntry[]>();
+  for (const row of feed) {
+    const ids = row.item.kind === "think" && row.item.members ? row.item.members.map(member => member.sourceId) : [];
+    for (const id of new Set([...(source(row.item) ? [source(row.item)!] : []), ...ids])) rowsById.set(id, [...(rowsById.get(id) ?? []), row]);
+  }
   for (const row of feed) if (assistantEchoText(row.item) !== null) {
     const identity = source(row.item) ? `source:${source(row.item)}`
       : row.anchorKey ? `record:${row.anchorKey.replace(/:\d+$/, "")}` : `row:${row.key}`;
@@ -167,9 +184,10 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     const echo = !entry.live.itemId ? echoes.find(echo => echo.rows.every(row => !claimedRows.has(row.key))
       && pendingEchoMatches(echo.text, entry)
       && (at(entry.live) === null || echo.at === null || echo.at >= at(entry.live)!)) : undefined;
-    const matches = entry.live.itemId ? feed.filter(({ item, key }) => !claimedRows.has(key)
-      && (source(item) === entry.live.itemId || item.kind === "think" && item.members?.some(member => member.sourceId === entry.live.itemId))) : echo?.rows ?? [];
-    if (!matches.length && entry.live.itemId && !claims.has(entry.live.itemId) && entry.live.phase === "awaiting-echo") {
+    const matches = entry.live.itemId ? (rowsById.get(entry.live.itemId) ?? []).filter(({ key }) => !claimedRows.has(key)) : echo?.rows ?? [];
+    // A loaded row or a durable claim carries this id: the record owns the reply.
+    const owned = Boolean(entry.live.itemId) && (claims.has(entry.live.itemId!) || rowsById.has(entry.live.itemId!));
+    if (!matches.length && entry.live.itemId && !owned && entry.live.phase === "awaiting-echo") {
       // A legacy Codex agent_message can precede its identified response mirror.
       // Keep the live node until that mirror gives ownership, suppressing just
       // one same-text event within the parser's existing one-second boundary.
@@ -197,10 +215,12 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
         // A structured answer can expand into several cards; each keeps a unique key.
         bindings.set(match.key, bindings.get(match.key) ?? { key: `${entry.key}${index ? `:${index}` : ""}`, at: index ? transcriptInstant(match.item) ?? at(entry.live) : at(entry.live) ?? transcriptInstant(match.item), order: entry.order, identity: bindingIdentity(match) });
       });
-    } else if (!entry.live.itemId || !claims.has(entry.live.itemId)) remaining.push(entry);
+    } else if (!owned) remaining.push(entry);
+    if (entry.live.itemId && (matches.length || owned)) adopted.add(entry.live.itemId);
   }
+  while (adopted.size > ADOPTED_LIMIT) adopted.delete(adopted.values().next().value!);
   while (retiredAnswers.length > LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT) retiredAnswers.shift();
-  return { pending: remaining, held, observed: state.observed || Boolean(liveTurn), bindings, sequence, retiredAnswers, liveOrder, hiddenEchoes };
+  return { pending: remaining, held, observed: state.observed || Boolean(liveTurn), bindings, adopted, sequence, retiredAnswers, liveOrder, hiddenEchoes };
 }
 
 export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTurn | null,
@@ -277,13 +297,17 @@ export function mergeAssistantRows<T extends { key: string; kind: string; item?:
     const index = entry.at === null ? entry.canonicalIndex === undefined ? -1 : result.findIndex(row =>
       (placed.get(row.key)?.canonicalIndex ?? canonicalOrder.get(row.key) ?? -Infinity) > entry.canonicalIndex!) : result.findIndex(row => {
       const other = placed.get(row.key);
-      const instant = (other ? other.at : instantOf(row)) ?? -Infinity;
+      const known = other ? other.at : instantOf(row);
+      const canonicalIndex = other?.canonicalIndex ?? canonicalOrder.get(row.key);
+      // A row with no instant (reasoning, a note) holds its transcript place
+      // against a bound record, which has a transcript place of its own.
+      if (known === null) return entry.canonicalIndex !== undefined && canonicalIndex !== undefined && canonicalIndex > entry.canonicalIndex;
+      const instant = known;
       const order = other?.order ?? orderOf(row);
       if (instant !== entry.at) return instant > entry.at!;
       // Synthetic boundaries have no transcript source order. Their owner
       // supplies the tie rule, before canonical records compare their order.
       if (beforeAtSameInstant(row)) return true;
-      const canonicalIndex = other?.canonicalIndex ?? canonicalOrder.get(row.key);
       if (entry.canonicalIndex !== undefined && canonicalIndex !== undefined) return canonicalIndex > entry.canonicalIndex;
       return order !== undefined && order > entry.order;
     });
