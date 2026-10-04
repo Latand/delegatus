@@ -7,7 +7,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "./snippet";
-import { isFunctionWord, queryUnits, type QueryUnit } from "./queryUnits";
+import { isFunctionWord, queryUnits, widerExpression, type QueryUnit } from "./queryUnits";
 import { resolveProjectScope, type ProjectScope } from "./projectScope";
 
 export const TRANSCRIPT_SEARCH_TOKENIZER = "FTS5 unicode61, remove_diacritics=0, tokenchars=#_";
@@ -1019,10 +1019,14 @@ function validCursorUnit(unit: QueryUnit): boolean {
     || !unit.terms.every((term) => term && typeof term.term === "string"
       && /^[\p{L}\p{N}\p{M}\p{Co}_#]+$/u.test(term.term) && typeof term.prefix === "boolean")) return false;
   const quote = (term: string) => `"${term.replaceAll('"', '""')}"`;
-  if (unit.phrase) return unit.terms.every((term) => !term.prefix)
-    && unit.expression === quote(unit.terms.map((term) => term.term).join(" "));
+  if (unit.phrase && !unit.terms.every((term) => !term.prefix)) return false;
   const terms = unit.terms.map((term) => quote(term.term) + (term.prefix ? "*" : "")).join(" OR ");
-  return unit.expression === (unit.terms.length > 1 ? `(${terms})` : terms);
+  const literal = unit.phrase ? quote(unit.terms.map((term) => term.term).join(" "))
+    : unit.terms.length > 1 ? `(${terms})` : terms;
+  // A widened unit is rebuilt from its literal terms; no other wide expression runs.
+  if (unit.wide !== undefined) return unit.wide === true && unit.quoted === undefined
+    && unit.expression === widerExpression({ ...unit, expression: literal });
+  return unit.expression === literal;
 }
 
 function relevanceSearch(
@@ -1030,7 +1034,9 @@ function relevanceSearch(
   options: TranscriptSearchOptions,
   stats: TranscriptCorpusStats,
   projectScope?: ProjectScope,
-): TranscriptSearchResult {
+  /** Second pass: widen the units that have a wider form; null when none has. */
+  widen = false,
+): TranscriptSearchResult | null {
   const scope = cursorScope(options.query.trim() + "\0relevance", options.project, options.speaker);
   let cursor: RelevanceCursor | undefined;
   let seen = new Set<number>();
@@ -1057,6 +1063,7 @@ function relevanceSearch(
     : db.query<{ last_id: number }, []>("SELECT COALESCE(MAX(id), 0) AS last_id FROM transcript_messages").get()!.last_id);
   const now = cursor?.now ?? options.fence?.timestamp ?? Date.now() / 1000;
   const hasVocabulary = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transcript_messages_vocab'").get());
+  if (widen && !hasVocabulary) return null;
   const frequency = hasVocabulary ? unitFrequency(db) : () => 0;
   const raw = cursor?.units ?? queryUnits(options.query, hasVocabulary ? frequency : undefined, stats.messagesIndexed);
   const ignored: string[] = cursor?.ignored ?? [];
@@ -1090,6 +1097,26 @@ function relevanceSearch(
       let kept = indexed.filter((i) => counts[i] <= stats.messagesIndexed * 0.05);
       if (!kept.length && indexed.length) {
         kept = [indexed.reduce((best, i) => counts[i] < counts[best] ? i : best)];
+      }
+      if (widen) {
+        // Kept and absent units may gain a wider form. Common units stay
+        // ignored, no unit is dropped, and the denominator can only grow.
+        const limit = stats.messagesIndexed * 0.05;
+        const replaced = new Map<QueryUnit, QueryUnit>();
+        for (const [i, unit] of candidates.entries()) {
+          if (counts[i] > 0 && !kept.includes(i)) continue;
+          const expression = widerExpression(unit);
+          if (!expression) continue;
+          const n = Math.min(stats.messagesIndexed, phraseFrequency.get(expression)!.n);
+          if (!n || n > limit || n <= phraseFrequency.get(unit.expression)!.n) continue;
+          if (!counts[i]) kept.push(i);
+          counts[i] = n;
+          candidates[i] = { ...unit, expression, label: `${unit.label}~`, wide: true };
+          replaced.set(unit, candidates[i]);
+        }
+        if (!replaced.size) return null;
+        kept.sort((a, b) => a - b);
+        for (const [i, unit] of raw.entries()) raw[i] = replaced.get(unit) ?? unit;
       }
       units = kept.map((i) => candidates[i]);
       if (!units.length && !candidates.length && raw.length) units = [raw[0]];
@@ -1244,7 +1271,9 @@ function relevanceSearch(
       for (const conversation of group) visited.add(fileIds.get(conversation.path)!);
     }
     return Buffer.from(JSON.stringify({ version: 6, scope, throughId, seen: encodeSeenFiles(visited),
-      now, units, weights, ignored, retrieve } satisfies RelevanceCursor)).toString("base64url");
+      // A continuation never widens, so the quotation mark is not carried.
+      now, units: units.map((u) => u.quoted ? { ...u, quoted: undefined } : u), weights, ignored, retrieve,
+    } satisfies RelevanceCursor)).toString("base64url");
   };
   page.nextCursor = nextCursor();
   // Reserve 610 bytes per item for the route's title (100 UTF-16 units, each
@@ -1271,7 +1300,18 @@ export function searchTranscripts(options: TranscriptSearchOptions): TranscriptS
         options = { ...options, project: projectScope.resolved ?? undefined };
       }
       if (options.order === "relevance") {
-        const page = relevanceSearch(db, options, stats, projectScope);
+        let page = relevanceSearch(db, options, stats, projectScope)!;
+        if (!options.cursor && !page.strongTotal) {
+          // No strong match: compound terms and identifiers get one wider pass.
+          // Its page replaces the literal one only when it holds a strong match.
+          try {
+            const wider = relevanceSearch(db, options, stats, projectScope, true);
+            if (wider?.strongTotal) page = wider;
+          } catch (error) {
+            // A wider page that cannot fit never costs the literal answer.
+            if (!(error instanceof TranscriptSearchPageTooLargeError)) throw error;
+          }
+        }
         if (Buffer.byteLength(JSON.stringify(page)) > TRANSCRIPT_RELEVANCE_PAGE_BYTES) throw new TranscriptSearchPageTooLargeError();
         return page;
       }

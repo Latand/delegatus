@@ -1,3 +1,4 @@
+import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -21,6 +22,7 @@ import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
@@ -99,8 +101,30 @@ const NOISE_CASE = new URLSearchParams(location.search).get("case") ?? "i";
 const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
+const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+const FEED_FAILURES = SCENARIO === "feed-failures";
+/* `&reload=1`: a window opened fresh on a long conversation. The host still
+   keeps the replies of the turns it ran, and this window watched none arrive. */
+const FEED_RELOAD = FEED_CONTINUITY && new URLSearchParams(location.search).get("reload") === "1";
+const reloadReply = (index: number) => L(`Earlier reply ${index + 1}, kept by the host.`, `Раніша відповідь ${index + 1}, яку зберіг хост.`);
+let feedContinuityStep = 0;
+const continuousAnswer = L("The answer stays here while the transcript catches up.", "Відповідь залишається тут, поки запис розмови наздоганяє її.");
+if (FEED_FAILURES) {
+  const parse = JSON.parse;
+  JSON.parse = function (text, reviver) {
+    const value = parse(text, reviver);
+    if (value?.fixtureToolArgs) Object.defineProperty(value, "cmd", {
+      enumerable: false,
+      get() { throw new Error("Fixture record processing failure"); },
+    });
+    return value;
+  };
+}
+const FEED_RECOVERY = SCENARIO === "feed-recovery";
+let feedRecoveryEcho = false;
+const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE;
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* #1765: one task carrying five pipelines — two running, three completed — so
@@ -351,6 +375,7 @@ const searchRev = add(conversation("search-rev", "Review the warm-up gate", { mt
 const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s after the swap", { mtime: now - 90 * MIN }));
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
+if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -359,7 +384,19 @@ function structuredSnapshot() {
     schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      turn: FEED_RELOAD ? "idle" : FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
+      ...(FEED_RELOAD ? { liveTurn: { turnId: "reload-turn", text: "", items: Array.from({ length: 12 }, (_, index) => ({
+        itemId: `reload-reply-${index}`, text: reloadReply(index), phase: "awaiting-echo" as const,
+        startedAt: iso(7_200 - index * 60), completedAt: iso(7_200 - index * 60),
+      })) } } : FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
+        turnId: "continuity-turn", text: continuousAnswer, items: [{ itemId: feedContinuityStep ? "continuity-answer" : null,
+          text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
+          startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
+          ...(feedContinuityStep ? Array.from({ length: 9 }, (_, index) => ({
+            itemId: `continuity-tool-${index}`, text: "", phase: "awaiting-echo" as const, startedAt: iso(20 - index), completedAt: iso(20 - index),
+            tool: { engine: "claude" as const, name: "Bash", args: { command: "pwd" }, status: "ok" as const },
+          })) : [])],
+      } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
     }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
@@ -1604,6 +1641,39 @@ const tasks: BoardTask[] = [
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
+// Structured task motion, over the same real Viewer and existing fixture driver.
+if (SCENARIO === "task-motion") {
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("motion-inbox", "inbox", L("Plan the next audit", "Запланувати наступний аудит"), "", 30 * MIN),
+    task("motion-working", "assigned", L("Finish the running work", "Завершити поточну роботу"), "", 5 * MIN, [exportImpl]),
+    task("motion-stopped", "assigned", L("Finish the remaining work", "Завершити решту роботи"), "", 10 * MIN, [exportExplore]),
+    task("motion-worker", "blocked", L("Wait for a free worker", "Дочекатися вільного агента"), "", 60 * MIN, [], { hold: { kind: "worker", note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(60 * MIN), by: "agent" } }),
+    task("motion-pr", "blocked", L("Wait for the release PR", "Дочекатися PR релізу"), "", 45 * MIN, [], { hold: { kind: "pr", ref: "2190", note: L("After merge", "Після злиття"), since: iso(45 * MIN), by: "agent" } }),
+    task("motion-issue", "blocked", L("Wait for the issue", "Дочекатися issue"), "", 40 * MIN, [], { hold: { kind: "issue", ref: "2044", note: L("After closure", "Після закриття"), since: iso(40 * MIN), by: "agent" } }),
+    task("motion-taskref", "blocked", L("Wait for the linked task", "Дочекатися повʼязаної задачі"), "", 35 * MIN, [], { hold: { kind: "task", ref: "motion-bare", note: L("After the audit review", "Після перевірки аудиту"), since: iso(35 * MIN), by: "agent" } }),
+    task("motion-checklist", "blocked", L("Complete the audit causes", "Усунути причини аудиту"), "", 70 * MIN, [], { steps: [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `fixed-${index + 1}`, text: L(`Fixed cause ${index + 1}`, `Усунена причина ${index + 1}`), state: "done" as const })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `open-${index + 1}`, text: L(`Remaining cause ${index + 1}`, `Невирішена причина ${index + 1}`), state: "open" as const, ...(index === 0 ? { ref: "p-motion-checklist" } : {}), hold: { kind: "worker" as const, note: L("After another task finishes", "Коли завершиться інша задача"), since: iso(70 * MIN), by: "agent" as const } })),
+    ] }),
+    task("motion-operator", "blocked", L("Choose the next release", "Обрати наступний реліз"), "", 20 * MIN, [], { steps: [{ id: "choose-release", text: L("Choose release", "Оберіть реліз"), state: "open", ref: "p-motion-operator", hold: { kind: "operator", note: L("Choose a release to publish", "Оберіть реліз для публікації"), since: iso(20 * MIN), by: "agent" } }] }),
+    task("motion-long", "blocked", L("Migrate the legacy billing integration safely", "Безпечно перенести інтеграцію старих платежів"), "", 25 * MIN, [], { hold: { kind: "external", note: L("Waiting for the external audit team to finish its review of the migration plan and confirm that every legacy billing record has been reconciled before the cutover can proceed without risking customer invoices or payment history", "Очікуємо, поки зовнішня аудиторська команда завершить перевірку плану міграції та підтвердить звірку всіх старих платіжних записів, перш ніж продовжити перенесення без ризику для рахунків клієнтів та історії платежів").slice(0, 200), since: iso(25 * MIN), by: "agent" } }),
+    task("motion-bare", "blocked", L("Review older work", "Переглянути давнішу роботу"), "", 120 * MIN),
+    task("motion-due", "blocked", L("Run the postponed check", "Виконати відкладену перевірку"), "", 120 * MIN, [], { hold: { kind: "postponed", note: L("After green checks", "Після успішних перевірок"), since: iso(120 * MIN), until: iso(60 * MIN), by: "operator" } }),
+    task("motion-done", "done", L("Completed review", "Завершене ревʼю"), "", 10 * MIN, [], { doneAt: iso(10 * MIN) }),
+    task("motion-hidden", "blocked", L("Hidden older work", "Прихована давніша робота"), "", 120 * MIN, [], { groupHidden: { at: iso(60 * MIN), by: "operator", admitted: [] } }),
+  );
+  pipelines.push(pipeline("p-motion-checklist", L("Run one checklist cause", "Виконати одну причину аудиту"), "motion-checklist", "running",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "running", null)] }],
+    { stageId: "implement", state: "running", input: null, activatedBy: null }));
+  pipelines.push(pipeline("p-motion-operator", L("Wait for release choice", "Дочекатися вибору релізу"), "motion-operator", "paused",
+    [stage("implement", "builder", null)],
+    [{ stageId: "implement", attempts: [attempt(1, "passed", null)] }],
+    { stageId: "implement", state: "committing", input: null, activatedBy: null },
+    { pausedAt: iso(10 * MIN), pausedState: "running" }));
+}
+
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
 const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
@@ -1826,6 +1896,22 @@ function transcriptOf(pathname: string): string {
   if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
+  if (FEED_RELOAD && file === searchVer2) return `${[
+    asked(600, L("Please check the result.", "Перевір результат, будь ласка.")),
+    said(590, L("The result holds: every check passed.", "Результат тримається: усі перевірки пройшли.")),
+    asked(300, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка.")),
+    said(290, L("The next step is done.", "Наступний крок виконано.")),
+  ].join("\n")}\n`;
+  if (FEED_CONTINUITY && file === searchVer2) return `${[
+    asked(120, L("Please check the result.", "Перевір результат, будь ласка.")),
+    ...(feedContinuityStep >= 1 ? [asked(30, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка."))] : []),
+    ...(feedContinuityStep >= 3 ? [line(60, { type: "assistant", uuid: "continuity-answer", message: { content: [{ type: "text", text: continuousAnswer }] } })] : []),
+  ].join("\n")}\n`;
+  if (FEED_FAILURES && file === searchVer2) return `${[
+    line(60, { type: "event_msg", payload: { type: "task_complete", error: { message: "fixture provider failure", codex_error_info: "unauthorized" } } }),
+    line(30, { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "fixture-failed-tool", arguments: JSON.stringify({ fixtureToolArgs: true, cmd: "pwd" }) } }),
+  ].join("\n")}\n`;
+  if (FEED_RECOVERY && file === searchVer2) return `${[said(120, L("Ready for the next request.", "Готовий до наступного запиту.")), ...(feedRecoveryEcho ? [asked(0, delayedLaunchText)] : [])].join("\n")}\n`;
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
@@ -1922,7 +2008,37 @@ let board = {
   },
 } as unknown as BoardProjectStateV1;
 
+if (FEED_RECOVERY) searchVer2.generation = 1;
+
 const evidence = {
+  advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
+  /* Replies the runtime store holds for the reloaded conversation, read after a fresh snapshot. */
+  async feedReloadSnapshotReplies() {
+    await getRuntimeBus().refresh();
+    return getRuntimeBus().getState().store.sessions[searchVer2.conversationId!]?.liveTurn?.items?.length ?? 0;
+  },
+  failFeedDelivery() {
+    const id = "fixture-failed-delivery";
+    enqueueOutbox(searchVer2.conversationId!, { id, text: L("Send this follow-up.", "Надішли це уточнення."), images: 0, at: Date.now() });
+    updateOutbox(searchVer2.conversationId!, id, { state: "failed", error: "Fixture delivery refused", settledAt: Date.now() });
+  },
+  seedDelayedLaunch() {
+    const card = searchVer2.conversationId!;
+    const at = Date.now();
+    const seed = { id: "delayed-launch", text: delayedLaunchText, images: 0, at,
+      owner: { conversationId: card, generation: 1 } };
+    seedLaunchOutbox(card, seed);
+    updateOutbox(card, seed.id, { state: "delivered", settledAt: at });
+    for (let i = 0; i < OUTBOX_LIMIT; i++) {
+      const id = `settled-filler-${i}`;
+      enqueueOutbox(card, { id, text: `Settled filler ${i}`, images: 0, at: at + i + 1 });
+      updateOutbox(card, id, { state: "delivered", settledAt: at, responseStartedAt: at });
+    }
+    seedLaunchOutbox(card, seed);
+    return readOutbox(card).find(entry => entry.id === seed.id)?.state;
+  },
+  publishDelayedLaunch() { feedRecoveryEcho = true; },
+  delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
@@ -2248,7 +2364,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
     completeSince: iso(24 * 60 * MIN),
     pr: (number) => prs.find((entry) => entry.number === number),
     byHead: (head) => prs.filter((entry) => entry.headRefName === head),
-    isIssue: () => false,
+    isIssue: (number) => number === 2044,
   };
   const cache: ForgeCacheView = { repository: (name) => (name === repository ? view : null) };
   const delivered = (lane: Pipeline) => ({
@@ -2264,12 +2380,13 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   for (const entry of tasks) {
     const own = entry.id === "t-longtitle" ? { workLinks: [{ repository, number: 2210, kind: "pr" as const, addedAt: iso(MIN), addedBy: "operator" as const }] } : {};
-    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache);
-    if (resolved.links.length) out.tasks[entry.id] = resolved;
+    const numberedHold = (entry.hold?.kind === "pr" || entry.hold?.kind === "issue") && /^\d+$/.test(entry.hold.ref ?? "");
+    const resolved = resolveTaskLinks(own, byTask.get(entry.id) ?? [], cache, numberedHold ? repository : null);
+    if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[entry.id] = resolved;
   }
   return out;
 }
-const workLinks = WORK_LINKS ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
 
 /* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
    that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
@@ -2629,7 +2746,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body.expectedRevision !== undefined && body.expectedRevision !== current.revision) return json({ error: "expectedRevision is stale", code: "TASK_REVISION_MISMATCH", field: "expectedRevision" }, 409);
     /* The route's rules for the fields the board writes (#1695 K4a). */
     const next = { ...current } as BoardTask & Record<string, unknown>;
-    if (body.status) next.status = body.status as TaskStatus;
+    if (body.status) { next.status = body.status as TaskStatus; if (next.status !== "blocked") delete next.hold; }
+    if (Object.hasOwn(body, "hold")) {
+      next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
+      if (next.hold) next.status = "blocked";
+    }
+    if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
     if (typeof body.text === "string") {
       next.text = body.text;
@@ -2868,7 +2990,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if (FIRST_MESSAGE && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }

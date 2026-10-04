@@ -88,6 +88,7 @@ export function reuseKanbanModel(previous: KanbanModel | null, next: KanbanModel
     const cards = reuseList(now.cards, previousById, was.cards);
     const shown = reuseList(now.shown, previousById, was.shown);
     columns[status] = cards === was.cards && shown === was.shown && now.working === was.working && now.needsYou === was.needsYou
+      && now.stopped === was.stopped && now.noReason === was.noReason
       ? was
       : { ...now, cards, shown };
   }

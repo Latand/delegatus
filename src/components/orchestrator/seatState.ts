@@ -4,6 +4,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMa
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { parseSeatDeputyViews, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
+import { taskMotion } from "@/lib/tasks/motion";
 import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
@@ -399,26 +400,16 @@ export function mandateSummaryOf(
  */
 export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead";
 
-/**
- * What the dock's badge NAMES, which is not always the liveness (issue #1167).
- *
- * A seat that is running and a seat that is holding a question up at the
- * operator both read «live», and the second one is the only one that needs
- * anything. So a pending decision is ranked ahead of the liveness, and the
- * badge says «needs you» in the warning tone the rest of the app already uses
- * for a wait.
- */
-export type SeatBadge = "needs-you" | SeatLiveness;
+/** What the dock's badge says from shared task motion, while retaining stronger
+    lifecycle words for stalled, resumable, dead and unresolved seats. */
+export type SeatBadge = "needs-you" | "working" | Exclude<SeatLiveness, "live">;
 
 /**
- * The badge a live seat wears: the decision it owes the operator, or — with
- * nothing owed — its liveness.
+ * The badge a live seat wears: shared task motion for work and attention, or
+ * its lifecycle word when recovery state carries more useful information.
  *
- * A non-null attention id outranks EVERY liveness word, `dead` and `resumable`
- * included, because the queue counting a conversation and the dock badging it
- * have to be the same reading: a seat the island lists as waiting and the dock
- * calls «finished» is one signal described two ways, which is the whole defect
- * this issue names.
+ * Attention and a running turn are projected by `taskMotion`; lifecycle
+ * recovery states remain available when neither motion applies.
  *
  * Nothing is hidden by that. The badge was never the carrier of recovery — the
  * rotation advisory, the «finished, resume it here» notice and the re-bind each
@@ -427,7 +418,15 @@ export type SeatBadge = "needs-you" | SeatLiveness;
  * OPERATOR owes it.
  */
 export function seatBadgeOf(state: OrchestratorLiveState): SeatBadge {
-  return state.attention ? "needs-you" : state.liveness;
+  const motion = taskMotion({
+    status: "assigned",
+    needsYou: Boolean(state.attention),
+    working: state.liveness === "live" ? 1 : 0,
+    inFlight: false,
+    pipelines: [],
+  }, 0);
+  if (motion.key === "needs-you" || motion.key === "working") return motion.key;
+  return state.liveness === "live" ? "working" : state.liveness;
 }
 
 /**

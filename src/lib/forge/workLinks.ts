@@ -49,6 +49,8 @@ export type WorkLink = {
 
 export type ResolvedWorkLinks = {
   links: WorkLink[];
+  /** Known default repository, retained even when no work link was attached. */
+  repository?: string;
   /** A PR was looked for and there is none: the repository's cache is complete
       and no rule produced a pull request. False while the answer is unknown. */
   noPr: boolean;
@@ -335,9 +337,10 @@ export function resolveTaskLinks(
   task: { workLinks?: StoredWorkLink[] },
   pipelines: readonly ResolvedWorkLinks[],
   cache: ForgeCacheView,
+  repository?: string | null,
 ): ResolvedWorkLinks {
   const own = materialize(manualDrafts(task.workLinks), cache);
-  return { links: mergeWorkLinks([own, ...pipelines.map((entry) => entry.links)]), noPr: false };
+  return { links: mergeWorkLinks([own, ...pipelines.map((entry) => entry.links)]), noPr: false, ...(repository ? { repository } : {}) };
 }
 
 /* ── Stored-link edits ──────────────────────────────────────────────────── */

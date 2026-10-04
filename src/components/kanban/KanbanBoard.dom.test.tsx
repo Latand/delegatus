@@ -43,6 +43,7 @@ function task(id: string, status: TaskStatus, text: string, extra: Partial<Board
     project: "fixture",
     text,
     status,
+    ...(status === "done" ? { doneAt: new Date(1_800_000_000 * 1000).toISOString() } : {}),
     placement: "unplaced",
     assignments: [],
     createdAt: "2026-09-14T10:00:00.000Z",
@@ -165,7 +166,7 @@ test("four columns hold every task; an empty task taken off the board is counted
   expect(columnOf(host, "c")).toBe("done");
   expect(columnOf(host, "d")).toBeNull();
   expect(host.querySelector("[data-hidden-pill]")?.getAttribute("data-count")).toBe("1");
-  expect(host.querySelector(".column[data-status=blocked] .empty")?.textContent).toContain("Nothing blocked");
+  expect(host.querySelector(".column[data-status=blocked] .empty")?.textContent).toContain("Nothing waiting");
 });
 
 test("choosing a status moves the card at once, writes it with the guard, and offers Undo", async () => {
@@ -214,14 +215,14 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   expect(host.querySelectorAll(".card .pill")).toHaveLength(0);
   /* The status is still said: by the column, and in the card's own name. */
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
-  expect(card.getAttribute("aria-label")).toContain("Assigned");
+  expect(card.getAttribute("aria-label")).toContain("In progress");
 
   card.focus();
   flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
   const menu = host.querySelector<HTMLElement>(".menu");
   expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
   expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
-  click([...menu!.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent?.includes("Blocked")));
+  click([...menu!.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent?.includes("Waiting")));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   expect(patches).toEqual([{ id: "a", body: { status: "blocked", expectedProject: "fixture", expectedRevision: REV(1) } }]);
@@ -243,7 +244,7 @@ test("a refused write returns the card to its column with an error receipt and R
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
   expect(receiptTexts(host)).toContain("Couldn't save the status of «Repair old links»: disk full");
-  expect(receiptTexts(host)).not.toContain("Moved «Repair old links» to Blocked");
+  expect(receiptTexts(host)).not.toContain("Moved «Repair old links» to Waiting");
   expect([...host.querySelectorAll("[data-kanban-receipt].error .act")].map((node) => node.textContent)).toEqual(["Retry"]);
 });
 
@@ -255,11 +256,11 @@ test("a status changed elsewhere puts the card where the server has it and offer
   };
   const { host } = mount([task("a", "inbox", "Repair old links")], ports);
   click(host.querySelector('.card[data-id="task:a"] [data-menu]'));
-  click([...host.querySelectorAll('.menu [role="menuitemradio"]')].find((item) => item.textContent?.includes("Assigned")));
+  click([...host.querySelectorAll('.menu [role="menuitemradio"]')].find((item) => item.textContent?.includes("In progress")));
   await tick();
   await tick();
   expect(columnOf(host, "a")).toBe("blocked");
-  expect(receiptTexts(host)).toContain("«Repair old links» was changed elsewhere to Blocked");
+  expect(receiptTexts(host)).toContain("«Repair old links» was changed elsewhere to Waiting");
   expect([...host.querySelectorAll("[data-kanban-receipt] .act")].map((node) => node.textContent)).toContain("Move anyway");
 });
 
@@ -325,7 +326,7 @@ test("U undoes the last edit after its receipt has closed (#1856)", async () => 
   await tick();
   expect(patches).toEqual([
     { id: "a", body: { status: "assigned", expectedProject: "fixture", expectedRevision: REV(1) } },
-    { id: "a", body: { status: "inbox", expectedProject: "fixture", expectedRevision: REV(2) } },
+    { id: "a", body: { status: "inbox", restoreHold: null, expectedProject: "fixture", expectedRevision: REV(2) } },
   ]);
   expect(columnOf(host, "a")).toBe("inbox");
   expect(receiptTexts(host)).toEqual(["«Write the release notes» is back in Inbox"]);
