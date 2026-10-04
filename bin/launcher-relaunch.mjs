@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
+import { dispatchActivityVersion, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -295,6 +295,12 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const rollbackPointer = request.rollbackPointer === null || typeof request.rollbackPointer === "string"
         ? request.rollbackPointer
         : previous.published ? `${JSON.stringify({ sha: previous.sha, dir: previous.dir })}\n` : null;
+      const read = file => { try { return readFileSync(file, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
+      const applyFile = join(dirname(paths.request), "apply.json");
+      const gateFile = join(dirname(paths.request), "auto-admission.json");
+      const applyBinding = read(applyFile), gateBinding = request.autoGateId ? read(gateFile) : null;
+      const ownerBinding = JSON.stringify(JSON.parse(read(paths.record))?.launcher);
+      const activity = dispatchActivityVersion(dirname(dirname(paths.request)));
       let intent = { requestId: request.requestId, target: next.sha, rollbackPointer, previousEntry: entry, state: "preflight", at: new Date().toISOString() };
       try { atomic(trialFile, `${JSON.stringify(intent)}\n`); }
       catch (error) { restore(rollbackPointer); throw error; }
@@ -330,6 +336,20 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
           error: { kind: "fell-back", revision: next.sha.slice(0, 7), detail: "The replacement launcher failed its load check." } });
         rmSync(trialFile, { force: true }); trial = null;
         return;
+      }
+      // The load check is the last awaited read. The final fence and starting
+      // intent write form one synchronous dispatch boundary.
+      let currentGate;
+      try { currentGate = JSON.parse(read(gateFile)); } catch { /* refused below */ }
+      const pending = read(paths.request);
+      if (read(applyFile) !== applyBinding || JSON.stringify(JSON.parse(read(paths.record))?.launcher) !== ownerBinding
+        || activity !== dispatchActivityVersion(dirname(dirname(paths.request)))
+        || read(trialFile) !== `${JSON.stringify(intent)}\n`
+        || pending !== null && JSON.parse(pending)?.requestId !== request.requestId
+        || request.autoGateId && (read(gateFile) !== gateBinding || currentGate?.id !== request.autoGateId || currentGate.until <= Date.now())) {
+        if (pending === null) atomic(paths.request, `${JSON.stringify(request)}\n`);
+        atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" }) + "\n");
+        return false;
       }
       intent = { ...intent, state: "starting" };
       atomic(trialFile, `${JSON.stringify(intent)}\n`); trial = intent;

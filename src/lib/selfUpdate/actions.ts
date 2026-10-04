@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { launcherControlFile } from "./launcher";
@@ -39,6 +39,18 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   if (decision.mode === "managed" || decision.record?.launcher.relaunch === 1) return null;
   if (decision.reason === "docker-deployments") return { id: "docker-deployments", button: false,
     command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" };
+  const owner = decision.record ? { ...decision.record.launcher } : null;
+  const custody = () => {
+    const record = decision.record;
+    if (!record?.requestFile) return JSON.stringify(record?.launcher);
+    const files = [launcherControlFile(record.requestFile, "launcher"), record.requestFile,
+      join(dirname(record.requestFile), "apply.json"), join(dirname(record.requestFile), "auto-admission.json"),
+      join(dirname(record.requestFile), "auto-drain.json")];
+    return JSON.stringify([record.launcher, files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
+  };
+  const accepted = custody();
+  const currentCustody = () => accepted === custody() && (!owner || decision.record?.launcher.pid === owner.pid
+    && decision.record.launcher.startIdentity === owner.startIdentity);
   const args: string[] = [];
   const original = decision.record ? ports.argv?.(decision.record.launcher.pid) ?? [] : [];
   for (let i = 0; i < original.length; i++) {
@@ -132,6 +144,9 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
         } else command = "env " + Object.entries(environment).map(([name, value]) => `${name}=${quote(value)}`).join(" ") + " " + invocation;
       }
     }
+    // All release/ancestry reads are complete. Refuse a stale command before
+    // writing protected credential custody; keep the original records intact.
+    if (!currentCustody()) return { id: "secure-handoff", button: false };
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
     if (!unit) {
       try {

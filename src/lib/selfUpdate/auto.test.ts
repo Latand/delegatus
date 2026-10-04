@@ -1358,3 +1358,44 @@ test("cold unsafe legacy admission without an owned operation releases its orpha
   try { await service.autoTick(); expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull(); }
   finally { service.stop(); }
 });
+
+
+test.each(["gate-removed", "gate-expired", "work-started", "launcher-changed", "issuer-changed"] as const)("relaunch dispatch refuses stale custody at the ancestry barrier: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const service = h.service();
+  let release!: () => void, entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const arrival = new Promise<void>(resolve => { entered = resolve; });
+  let dispatched = 0;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { dispatched++; }, {
+    intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = readFileSync(h.record.requestFile, "utf8");
+    const apply = readFileSync(join(h.dir, "apply.json"), "utf8");
+    const drain = readFileSync(join(h.dir, "auto-drain.json"), "utf8");
+    const gateFile = restartGateFile(h.record.requestFile);
+    h.deps.targetOnBranch = async () => { entered(); await barrier; return true; };
+    const polling = watcher.poll(); await arrival;
+    if (change === "gate-removed") rmSync(gateFile);
+    if (change === "gate-expired") {
+      const gate = JSON.parse(readFileSync(gateFile, "utf8"));
+      writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 }));
+    }
+    if (change === "issuer-changed") {
+      const gate = JSON.parse(readFileSync(gateFile, "utf8"));
+      writeFileSync(gateFile, JSON.stringify({ ...gate, issuerPid: -1 }));
+    }
+    if (change === "work-started") h.setTurn(true);
+    if (change === "launcher-changed") h.record.launcher.startIdentity = "successor-launcher";
+    const heldGate = existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null;
+    release(); await polling;
+    expect(dispatched).toBe(0);
+    expect(readFileSync(h.record.requestFile, "utf8")).toBe(request);
+    expect(readFileSync(join(h.dir, "apply.json"), "utf8")).toBe(apply);
+    expect(readFileSync(join(h.dir, "auto-drain.json"), "utf8")).toBe(drain);
+    expect(existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null).toBe(heldGate);
+    expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ state: "rejected" });
+  } finally { release(); watcher.stop(); service.stop(); }
+});

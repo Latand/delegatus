@@ -625,6 +625,36 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     }
   });
 
+  test.each(["work", "custody", "request", "issuer"] as const)("operator apply preserves accepted intent after stale final mode read: %s", async change => {
+    const h = harness({ holdBuild: true, relaunch: true });
+    setSelfUpdateServiceForTests(h.service);
+    let version = "idle";
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [], dispatchVersion: () => version };
+    let entered!: () => void, resume!: () => void;
+    const arrival = new Promise<void>(resolve => { entered = resolve; });
+    const wait = new Promise<void>(resolve => { resume = resolve; });
+    try {
+      await postCheck(post("/check")); await until(s => s.check.state === "update-available");
+      expect((await updatePost(post("/update", { key: "operator-fence" }))).status).toBe(202);
+      await until(() => h.releaseBuild !== null);
+      const decide = h.service.decide.bind(h.service);
+      h.service.decide = async () => { const result = await decide(); entered(); await wait; return result; };
+      h.releaseBuild!(); h.releaseBuild = null;
+      await arrival;
+      const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+      const file = join(h.deps.dir, "apply.json");
+      if (change === "work") version = "new-admitted-turn";
+      if (change === "custody") { record.launcher.startIdentity = "successor"; writeFileSync(h.recordFile, JSON.stringify(record)); }
+      if (change === "request") writeFileSync(record.requestFile, JSON.stringify({ requestId: "another-request", role: "web" }));
+      if (change === "issuer") { const intent = JSON.parse(readFileSync(file, "utf8")); intent.requestId = "another-issuer"; writeFileSync(file, JSON.stringify(intent)); }
+      const binding = readFileSync(file, "utf8");
+      resume(); await Bun.sleep(50);
+      expect(readFileSync(file, "utf8")).toBe(binding);
+      expect(existsSync(record.requestFile)).toBe(change === "request");
+      if (change === "request") expect(JSON.parse(readFileSync(record.requestFile, "utf8")).requestId).toBe("another-request");
+    } finally { resume(); h.releaseBuild?.(); h.service.stop(); }
+  });
+
   const custodyActions = ["Update", "Retry", "web", "runtime-host"] as const;
   for (const delayed of custodyActions) for (const accepted of custodyActions) {
     if (delayed === accepted && (delayed === "Update" || delayed === "Retry")) continue;

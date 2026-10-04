@@ -29,6 +29,8 @@ export interface QuietBlockers {
   registryIssues?: RegistryRecordIssue[];
 }
 export interface QuietPorts {
+  /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
+  dispatchVersion?(): string;
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
@@ -127,4 +129,10 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
   return { quiet: !blockers.turns && !blockers.stages && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers };
+}
+
+export function quietDispatchVersion(ports: QuietPorts | undefined, now: number): string | null {
+  if (!ports) return null;
+  try { return JSON.stringify([ports.dispatchVersion?.(), ports.pipelines(), ports.flows?.(), ports.presence(now)]); }
+  catch { return null; }
 }

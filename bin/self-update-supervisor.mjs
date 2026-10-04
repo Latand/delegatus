@@ -32,7 +32,7 @@ import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
 import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
@@ -240,6 +240,9 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
     }
     busy = true;
     let admitted = request.autoGateId === undefined;
+    let retain = false;
+    const original = readFileSync(requestFile, "utf8");
+    const originalGate = request.autoGateId ? (() => { try { return readFileSync(gateFile, "utf8"); } catch { return null; } })() : null;
     const rejected = (detail) => {
       const file = `${requestFile}.result.json`;
       const temporary = `${file}.${process.pid}.tmp`;
@@ -253,28 +256,41 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         if (typeof request.autoGateId !== "string" || gate?.id !== request.autoGateId || typeof gate.until !== "number" || gate.until <= Date.now()
           || !await admitAuto(request)) {
           if (isStopping()) return;
+          retain = request.role === "relaunch";
           rejected("Final automatic admission was refused or expired");
           return;
         }
       }
       if (isStopping()) return;
+      // The admission HTTP read may outlive its gate or its issuer. This is
+      // synchronous with dispatch and never consumes a stale relaunch request.
+      if (request.autoGateId) {
+        let gate;
+        try { gate = JSON.parse(readFileSync(gateFile, "utf8")); } catch { /* stale */ }
+        if (!gate || gate.id !== request.autoGateId || gate.until <= Date.now()
+          || readFileSync(gateFile, "utf8") !== originalGate) {
+          retain = request.role === "relaunch";
+          rejected("Final automatic dispatch has stale gate or issuer custody"); return;
+        }
+      }
+      if (readFileSync(requestFile, "utf8") !== original) { retain = true; return; }
       admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
       if (request.role !== "relaunch") rmSync(requestFile, { force: true });
-      await handle(request);
+      if (await handle(request) === false) retain = true;
     } catch (error) {
       if (!isStopping() && !admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (!isStopping() && (request.autoGateId || request.role === "relaunch")) {
+      if (!retain && !isStopping() && (request.autoGateId || request.role === "relaunch")) {
         try {
           if (JSON.parse(readFileSync(requestFile, "utf8")).requestId === request.requestId) rmSync(requestFile, { force: true });
         } catch { /* already consumed */ }
       }
-      if (!isStopping() && request.autoGateId) {
+      if (!retain && !isStopping() && request.autoGateId) {
         try {
           if (JSON.parse(readFileSync(gateFile, "utf8")).id === request.autoGateId) rmSync(gateFile, { force: true });
         } catch { /* already removed */ }
@@ -329,4 +345,19 @@ export function exitError(child, startedAt, clock = () => Date.now()) {
     signal: child.signalCode ?? null,
     afterMs: Math.max(0, clock() - startedAt),
   };
+}
+
+/** Durable work can be admitted by another process while a read is awaited. */
+export function dispatchActivityVersion(state, env = process.env) {
+  const files = [join(state, "agent-registry.json"), join(state, "agent-registry.sqlite"), join(state, "agent-registry.sqlite-wal")];
+  if (env.LLV_RUNTIME_JOURNAL) files.push(env.LLV_RUNTIME_JOURNAL, `${env.LLV_RUNTIME_JOURNAL}-wal`);
+  for (const name of ["pipelines", "flows"]) {
+    const dir = join(state, name);
+    try { files.push(...readdirSync(dir).filter(name => name.endsWith(".json")).sort().map(name => join(dir, name))); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+  return JSON.stringify(files.map(file => {
+    try { const stat = statSync(file, { bigint: true }); return [file, String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
+    catch (error) { if (error.code === "ENOENT") return [file, null]; throw error; }
+  }));
 }

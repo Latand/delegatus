@@ -1,7 +1,8 @@
 /* The one self-update service of this web process, wired to the real
    install (#2007). Everything that resolves the state directory runs on the
    first request, never while a module loads (#1905). */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
@@ -116,6 +117,15 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     requestPipelineTick,
     updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
+      dispatchVersion: () => {
+        const journal = process.env.LLV_RUNTIME_JOURNAL;
+        if (!journal) throw new Error("Runtime admission evidence is unavailable");
+        const files = [journal, `${journal}-wal`].map(file => {
+          try { const st = statSync(file, { bigint: true }); return [String(st.ino), String(st.size), String(st.mtimeNs), String(st.ctimeNs)]; }
+          catch (error) { if (file.endsWith("-wal") && (error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+        });
+        return createHash("sha256").update(JSON.stringify([files, agentRegistry().snapshot()])).digest("hex");
+      },
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");

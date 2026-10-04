@@ -23,8 +23,8 @@ import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, rest
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
-import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
-import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
+import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts } from "./quiet";
+import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { memAvailableMb } from "./steps";
@@ -161,6 +161,8 @@ class Changes {
     for (const listener of this.listeners) listener();
   }
 }
+
+class StaleApplyDispatch extends Error {}
 
 export class SelfUpdateService {
   readonly changes = new Changes();
@@ -909,16 +911,35 @@ export class SelfUpdateService {
       taking an automatic request. It is the final read for both restart roles. */
   async admitAutoRestart(requestId: string, gateId: string): Promise<boolean> {
     const pending = this.auto.pending;
+    const activity = quietDispatchVersion(this.deps.quiet, this.deps.now());
     const decision = await this.decide();
     const record = decision.record;
     const apply = this.apply.current;
     if (apply?.state === "switching" && apply.trigger === "auto" && apply.requestId === requestId && record?.checkout) {
-      if (activeRestartGate(restartGateFile(record.requestFile)) !== gateId || record.launcher.pid !== apply.launcherPid
-        || record.launcher.startIdentity !== apply.launcherIdentity) return false;
+      const binding = JSON.stringify(apply);
+      const owner = { ...record.launcher };
+      if (!ownsRestartGate(restartGateFile(record.requestFile), gateId) || owner.pid !== apply.launcherPid
+        || owner.startIdentity !== apply.launcherIdentity) return false;
       const green = await this.refreshGreen(apply.target, record.checkout, this.auto.green[apply.target] ?? { state: "unknown" });
+      const reachable = await this.targetOnBranch(record.checkout, apply.target);
       const snapshot = await this.snapshot();
       const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true) : null;
-      return green.state === "green" && await this.targetOnBranch(record.checkout, apply.target) && this.quietAdmits(quiet);
+      // LAST awaited read precedes this synchronous fence. No state is consumed
+      // by a stale issuer, launcher, request or activity observation.
+      const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
+      const current = recordFile ? readLauncherRecord(recordFile) : decision.record;
+      let request, durable;
+      try {
+        request = JSON.parse(readFileSync(record.requestFile, "utf8"));
+        durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8"));
+      } catch { return false; }
+      return green.state === "green" && reachable && this.quietAdmits(quiet)
+        && activity !== null && activity === quietDispatchVersion(this.deps.quiet, this.deps.now())
+        && binding === JSON.stringify(this.apply.current) && binding === JSON.stringify(durable)
+        && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
+        && current?.launcher.pid === owner.pid && current.launcher.startIdentity === owner.startIdentity
+        && current.requestFile === record.requestFile && this.deps.processAlive(owner.pid, owner.startIdentity!)
+        && ownsRestartGate(restartGateFile(record.requestFile), gateId);
     }
     if (!pending || pending.requestId !== requestId || !record || decision.mode !== "checkout"
       || activeRestartGate(restartGateFile(record.requestFile)) !== gateId) return false;
@@ -1336,6 +1357,7 @@ export class SelfUpdateService {
   }
 
   private failApply(error: unknown): void {
+    if (error instanceof StaleApplyDispatch) { this.changes.emit(); return; }
     if (this.apply.current?.state !== "switching") this.apply.restoreUntaken();
     if (this.apply.current) releaseDrain(this.drainFile, this.apply.current.requestId);
     this.apply.patch({ state: "failed", detail: error instanceof Error ? error.message : String(error) });
@@ -1348,11 +1370,24 @@ export class SelfUpdateService {
       check: { ...this.slice.check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
     this.saveNow();
     this.apply.patch({ state: "ready" });
+    const binding = JSON.stringify(this.apply.current);
+    const activity = quietDispatchVersion(this.deps.quiet, this.deps.now());
     const current = await this.decide();
-    if (!current.record) throw new Error("The launcher is unavailable");
+    if (!current.record) throw new StaleApplyDispatch("The launcher is unavailable; accepted custody is retained");
+    const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
+    const record = file ? readLauncherRecord(file) : current.record;
+    let durable;
+    try { durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
+    // The decision's final await cannot transfer the accepted apply to a
+    // different issuer, launcher, request, or newly started work.
+    if (!record || binding !== JSON.stringify(this.apply.current) || binding !== JSON.stringify(durable)
+      || record.launcher.pid !== this.apply.current?.launcherPid || record.launcher.startIdentity !== this.apply.current?.launcherIdentity
+      || !record.launcher.startIdentity || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity)
+      || existsSync(record.requestFile) || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()))
+      throw new StaleApplyDispatch("Stale apply dispatch was refused; accepted custody is retained");
     if (current.record.launcher.relaunch === 1) {
       const occupied = this.reserve(current.record, () => this.apply.send(current.record!), this.apply.current!.requestId);
-      if (occupied) throw new Error(occupied.ok ? "Apply reservation failed" : occupied.error);
+      if (occupied) throw new StaleApplyDispatch(occupied.ok ? "Apply reservation failed" : occupied.error);
     }
     else {
       const intent = this.apply.current!;
@@ -1747,7 +1782,7 @@ export class SelfUpdateService {
               this.apply.restoreUntaken(record); this.apply.patch({ state: "failed", admissionRefused: true, detail: "The automatic admission expired during recovery" });
             } else {
               const occupied = this.reserve(record, () => this.apply.send(record, intent.autoGateId), intent.requestId);
-              if (occupied) throw new Error(occupied.ok ? "Apply reservation failed" : occupied.error);
+              if (occupied) throw new StaleApplyDispatch(occupied.ok ? "Apply reservation failed" : occupied.error);
             }
           } else await this.applyBuilt();
         } catch (error) { this.failApply(error); }

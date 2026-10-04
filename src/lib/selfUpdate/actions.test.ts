@@ -110,3 +110,14 @@ test("a leftover custody module cannot make an old CLI a credential reader", asy
     { cgroup: () => "", ready: () => false, env: { LLV_STATE_DIR: join(root, "state"), LLV_TOKEN: "synthetic-key" } });
   expect(action).toEqual({ id: "secure-handoff", button: false });
 });
+
+
+test("credential preflight refuses a launcher changed during its awaited readiness read", async () => {
+  const decision = { mode: "checkout", record: { ...record, launcher: { ...record.launcher } } };
+  let release!: () => void, entered!: () => void;
+  const arrival = new Promise<void>(resolve => { entered = resolve; });
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const action = installAction(decision as never, { cgroup: () => "", env: {}, ready: async () => { entered(); await wait; return true; } });
+  await arrival; decision.record.launcher.startIdentity = "successor"; release();
+  expect(await action).toEqual({ id: "secure-handoff", button: false });
+});

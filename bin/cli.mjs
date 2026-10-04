@@ -1347,7 +1347,7 @@ async function main() {
         pauseWebRecovery();
       }
       if (role === "relaunch") {
-        try { await relaunch.begin(request, releaseNow()); }
+        try { return await relaunch.begin(request, releaseNow()); }
         catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           if (relaunch.hasTrial()) await relaunch.failed(detail);
