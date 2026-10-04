@@ -50,10 +50,10 @@ function harness(over: {
 beforeEach(() => clearPipelinePreflightCache());
 
 describe("pipeline repository preflight", () => {
-  test("returns the canonical repository, Git metadata, and future worktree parent", () => {
+  test("returns the canonical repository, Git metadata, and future worktree parent", async () => {
     const { ports, calls } = harness();
 
-    expect(preflightPipelineRepo("~/repo/../repo", ports)).toEqual({
+    expect((await preflightPipelineRepo("~/repo/../repo", ports))).toEqual({
       ok: true,
       repoDir: "/srv/repo",
       gitCommonDir: "/srv/repo/.git",
@@ -66,7 +66,7 @@ describe("pipeline repository preflight", () => {
     expect(calls.some((call) => call.includes("fetch") || call.includes("worktree"))).toBe(false);
   });
 
-  test("distinguishes every repository-admission failure", () => {
+  test("distinguishes every repository-admission failure", async () => {
     const cases: Array<{
       name: string;
       over: Parameters<typeof harness>[0];
@@ -83,41 +83,41 @@ describe("pipeline repository preflight", () => {
 
     for (const item of cases) {
       const { ports } = harness(item.over);
-      expect(preflightPipelineRepo("/candidate", ports), item.name).toEqual({ ok: false, ...item.expected });
+      expect((await preflightPipelineRepo("/candidate", ports)), item.name).toEqual({ ok: false, ...item.expected });
     }
   });
 
   describe("probe fidelity (#353 AC3)", () => {
-    test("a spawn/timeout failure (code null) never masquerades as not_git", () => {
+    test("a spawn/timeout failure (code null) never masquerades as not_git", async () => {
       const { ports } = harness({ topLevel: { code: null, stdout: "", stderr: "spawnSync git ETIMEDOUT" } });
-      const result = preflightPipelineRepo("/candidate", ports);
+      const result = (await preflightPipelineRepo("/candidate", ports));
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("unreachable");
       expect(result.code).toBe("probe_failed");
       expect(result.detail).toContain("ETIMEDOUT");
     });
 
-    test("a transient non-zero exit without the not-a-repo message is probe_failed, preserving stderr", () => {
+    test("a transient non-zero exit without the not-a-repo message is probe_failed, preserving stderr", async () => {
       const { ports } = harness({
         topLevel: { code: 128, stdout: "", stderr: "fatal: detected dubious ownership in repository at '/srv/repo'" },
       });
-      const result = preflightPipelineRepo("/candidate", ports);
+      const result = (await preflightPipelineRepo("/candidate", ports));
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("unreachable");
       expect(result.code).toBe("probe_failed");
       expect(result.detail).toContain("dubious ownership");
     });
 
-    test("a genuine not-a-git-repository verdict is still reported as not_git", () => {
+    test("a genuine not-a-git-repository verdict is still reported as not_git", async () => {
       const { ports } = harness({ topLevel: null });
-      expect(preflightPipelineRepo("/candidate", ports)).toEqual({ ok: false, code: "not_git", path: "/candidate" });
+      expect((await preflightPipelineRepo("/candidate", ports))).toEqual({ ok: false, code: "not_git", path: "/candidate" });
     });
 
-    test("a failing git-common-dir probe preserves the transient reason instead of not_git", () => {
+    test("a failing git-common-dir probe preserves the transient reason instead of not_git", async () => {
       const { ports } = harness({
         gitCommonDir: { code: null, stdout: "", stderr: "spawnSync git ENOMEM" },
       });
-      const result = preflightPipelineRepo("/candidate", ports);
+      const result = (await preflightPipelineRepo("/candidate", ports));
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("unreachable");
       expect(result.code).toBe("probe_failed");
@@ -126,16 +126,16 @@ describe("pipeline repository preflight", () => {
   });
 
   describe("preflight cache (#353 AC2)", () => {
-    test("a repeated request for a valid repository reuses the probe without re-running git", () => {
+    test("a repeated request for a valid repository reuses the probe without re-running git", async () => {
       const first = harness();
-      expect(preflightPipelineRepo("/candidate", first.ports, { cache: true }).ok).toBe(true);
+      expect((await preflightPipelineRepo("/candidate", first.ports, { cache: true })).ok).toBe(true);
       const firstGit = first.calls.filter((call) => call.startsWith("git:"));
       expect(firstGit.length).toBe(2);
 
       // A second request keyed by the canonical repoDir the picker returns must
       // not re-probe git — creation reuses the picker's valid preflight (#353 AC2).
       const second = harness();
-      expect(preflightPipelineRepo("/srv/repo", second.ports, { cache: true })).toEqual({
+      expect((await preflightPipelineRepo("/srv/repo", second.ports, { cache: true }))).toEqual({
         ok: true,
         repoDir: "/srv/repo",
         gitCommonDir: "/srv/repo/.git",
@@ -144,20 +144,20 @@ describe("pipeline repository preflight", () => {
       expect(second.calls.filter((call) => call.startsWith("git:"))).toEqual([]);
     });
 
-    test("failures are never cached (fidelity re-probes every time)", () => {
+    test("failures are never cached (fidelity re-probes every time)", async () => {
       const first = harness({ topLevel: null });
-      expect(preflightPipelineRepo("/candidate", first.ports, { cache: true }).ok).toBe(false);
+      expect((await preflightPipelineRepo("/candidate", first.ports, { cache: true })).ok).toBe(false);
       const second = harness();
       // The same path now resolves — no stale cached failure short-circuits it.
-      expect(preflightPipelineRepo("/candidate", second.ports, { cache: true }).ok).toBe(true);
+      expect((await preflightPipelineRepo("/candidate", second.ports, { cache: true })).ok).toBe(true);
       expect(second.calls.some((call) => call.startsWith("git:"))).toBe(true);
     });
 
-    test("the cache is opt-in; the default path always re-probes", () => {
+    test("the cache is opt-in; the default path always re-probes", async () => {
       const first = harness();
-      expect(preflightPipelineRepo("/candidate", first.ports).ok).toBe(true);
+      expect((await preflightPipelineRepo("/candidate", first.ports)).ok).toBe(true);
       const second = harness();
-      expect(preflightPipelineRepo("/srv/repo", second.ports).ok).toBe(true);
+      expect((await preflightPipelineRepo("/srv/repo", second.ports)).ok).toBe(true);
       expect(second.calls.some((call) => call.startsWith("git:"))).toBe(true);
     });
   });

@@ -18,22 +18,23 @@ function execWith(replies: Record<string, Reply>): { exec: ExecPort; calls: stri
     calls.push([command, ...args, cwd]);
     const key = [command, ...args].join(" ");
     const match = Object.entries(replies).find(([prefix]) => key.startsWith(prefix));
-    return { code: 0, stdout: "", stderr: "", ...(match?.[1] ?? {}) } as ExecResult;
+    return { code: 0, stdout: command === "git" && args[0] === "branch" ? PIPELINE.branch : "", stderr: "", ...(match?.[1] ?? {}) } as ExecResult;
   };
   return { exec, calls };
 }
 
-test("provenance is the head, the branch's pull request and the declared outputs the server found", () => {
+test("provenance is the head, the branch's pull request and the declared outputs the server found", async () => {
   const { exec, calls } = execWith({
     "git status --porcelain": { stdout: "" },
     "git rev-parse HEAD": { stdout: `${HEAD}\n` },
     "git ls-files": { stdout: "docs/report.html\0src/lib/x.ts\0" },
-    "timeout --signal=KILL 10s gh pr list": { stdout: '[{"url":"https://forge.example/x/pull/7","number":7,"state":"OPEN"}]' },
+    "gh pr list": { stdout: '[{"url":"https://forge.example/x/pull/7","number":7,"state":"OPEN"}]' },
   });
 
-  const provenance = collectStageProvenance(PIPELINE, ["docs/report.html", "docs/missing.html"], exec);
+  const provenance = (await collectStageProvenance(PIPELINE, ["docs/report.html", "docs/missing.html"], exec));
 
   expect(provenance).toEqual({
+    state: "complete", pullRequestState: "observed",
     head: HEAD,
     branch: "pipeline/slice-two",
     uncommitted: [],
@@ -44,61 +45,76 @@ test("provenance is the head, the branch's pull request and the declared outputs
     ],
   });
   /* The forge read is bounded and made in the pipeline's own worktree. */
-  expect(calls.find((call) => call[0] === "timeout")).toEqual([
-    "timeout", "--signal=KILL", "10s",
+  expect(calls.find((call) => call[0] === "gh")).toEqual([
     "gh", "pr", "list", "--head", "pipeline/slice-two", "--state", "all", "--limit", "1", "--json", "url,number,state",
     "/work/pipeline",
   ]);
 });
 
-test("a dirty worktree is reported as the paths the server saw, and the report is not refused", () => {
+test("a dirty worktree is reported as the paths the server saw, and the report is not refused", async () => {
   const { exec } = execWith({
     "git status --porcelain": { stdout: " M src/lib/x.ts\n?? notes.md\n" },
     "git rev-parse HEAD": { stdout: `${HEAD}\n` },
-    "timeout --signal=KILL 10s gh pr list": { stdout: "[]" },
+    "gh pr list": { stdout: "[]" },
   });
 
-  const provenance = collectStageProvenance(PIPELINE, [], exec);
+  const provenance = (await collectStageProvenance(PIPELINE, [], exec));
 
   expect(provenance.uncommitted).toEqual(["src/lib/x.ts", "notes.md"]);
   expect(provenance.head).toBe(HEAD);
   expect(provenance.outputs).toEqual([]);
 });
 
-test("provenance follows the branch the stage actually checked out and its PR", () => {
+test("provenance follows the branch the stage actually checked out and its PR", async () => {
   const { exec, calls } = execWith({
     "git branch --show-current": { stdout: "fix/stage-created\n" },
     "git rev-parse HEAD": { stdout: HEAD },
-    "timeout --signal=KILL 10s gh pr list": { stdout: '[{"url":"https://forge.example/x/pull/8","number":8,"state":"OPEN"}]' },
+    "gh pr list": { stdout: '[{"url":"https://forge.example/x/pull/8","number":8,"state":"OPEN"}]' },
   });
-  expect(collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ branch: "fix/stage-created", pullRequest: { number: 8 } });
-  expect(calls.find((call) => call[0] === "timeout")).toContain("fix/stage-created");
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ branch: "fix/stage-created", pullRequest: { number: 8 } });
+  expect(calls.find((call) => call[0] === "gh")).toContain("fix/stage-created");
 });
 
-test("reads the server cannot make are null, never a claim and never a refusal", () => {
+test("reads the server cannot make are null, never a claim and never a refusal", async () => {
   const { exec } = execWith({
     "git status --porcelain": { code: 128, stderr: "not a git repository" },
     "git rev-parse HEAD": { code: 128, stderr: "unknown revision" },
     "git ls-files": { code: 128, stderr: "not a git repository" },
     /* A forge that timed out under the bound, which `timeout` kills. */
-    "timeout --signal=KILL 10s gh pr list": { code: 137, signal: "SIGKILL" },
+    "gh pr list": { code: 137, signal: "SIGKILL" },
   });
 
-  expect(collectStageProvenance(PIPELINE, ["docs/report.html"], exec)).toEqual({
+  expect((await collectStageProvenance(PIPELINE, ["docs/report.html"], exec))).toEqual({
+    state: "unknown", pullRequestState: "unknown",
     head: null,
     branch: "pipeline/slice-two",
     uncommitted: null,
     pullRequest: null,
-    outputs: [{ path: "docs/report.html", present: false }],
+    outputs: [{ path: "docs/report.html", present: null }],
   });
 });
 
-test("a forge answer that is not a pull request record is read as no pull request", () => {
+test("a forge answer that is not a pull request record is read as no pull request", async () => {
   for (const stdout of ["", "not json", "[]", '[{"url":"https://forge.example/x/pull/7"}]']) {
     const { exec } = execWith({
       "git rev-parse HEAD": { stdout: `${HEAD}\n` },
-      "timeout --signal=KILL 10s gh pr list": { stdout },
+      "gh pr list": { stdout },
     });
-    expect(collectStageProvenance(PIPELINE, [], exec).pullRequest).toBeNull();
+    expect((await collectStageProvenance(PIPELINE, [], exec)).pullRequest).toBeNull();
   }
+});
+
+test("empty and whitespace forge answers remain unknown", async () => {
+  for (const stdout of ["", "   ", "\n"]) {
+    const { exec } = execWith({ "git status --porcelain": { stdout: "" }, "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout } });
+    expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "unknown", pullRequestState: "unknown", pullRequest: null });
+  }
+  const { exec } = execWith({ "git status --porcelain": { stdout: "" }, "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout: "[]" } });
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "complete", pullRequestState: "absent" });
+});
+
+test.each([{ code: 128, stdout: "" }, { code: 0, stdout: "" }, { code: 0, stdout: "  \n" }])("an unreadable checkout branch cannot produce complete provenance (%s)", async (branch) => {
+  const { exec } = execWith({ "git branch --show-current": branch,
+    "git rev-parse HEAD": { stdout: HEAD }, "gh pr list": { stdout: "[]" } });
+  expect(await collectStageProvenance(PIPELINE, [], exec)).toMatchObject({ state: "unknown", branch: PIPELINE.branch, pullRequestState: "absent" });
 });

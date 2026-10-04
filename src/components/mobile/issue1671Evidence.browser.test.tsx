@@ -12,6 +12,7 @@ import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
@@ -5524,6 +5525,191 @@ describe("fast TTS header", () => {
   }, 120_000);
 });
 
+/*
+ * The phone conversation's chrome (2026-10-02): the pinned message and the
+ * background tasks live behind the header's ⋯ menu, nothing sits under the bar,
+ * the seat's report button is back on the bar, and read-aloud sits beside each
+ * assistant message and nowhere in the header.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone chrome"
+ *
+ * Frames go to `$HOME/Pictures/delegatus-review/phone-chrome/`, readings to
+ * `evidence/phone-chrome/readings.json`.
+ */
+describe("phone chrome", () => {
+  browserTest("pinned message and background tasks in the ⋯ menu, read-aloud beside the message, at 390 in en and uk, light and dark", async () => {
+    const out = path.join(os.homedir(), "Pictures/delegatus-review/phone-chrome");
+    const evidence = path.resolve("evidence/phone-chrome");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const speech = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+    const { base, stop } = await serveFixture({ "/api/tts/backend": speech });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const scenes = [
+      { name: "tasks3", query: "chrome=3" },
+      { name: "pinned-only", query: "chrome=0" },
+      { name: "tasks8", query: "chrome=8" },
+      { name: "empty", query: "chrome=0&nopin" },
+    ] as const;
+    /** Every visible control inside `root` that a finger has to hit, under 44 px in either direction. */
+    const smallControls = (page: Page, root: string) => page.evaluate((selector) => {
+      const scope = document.querySelector(selector);
+      if (!scope) return ["missing"];
+      return [...scope.querySelectorAll<HTMLElement>("button, a[href], [role=menuitem]")].flatMap((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.width < 43.5 || rect.height < 43.5 ? [`${node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`] : [];
+      });
+    }, root);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const scene of scenes) {
+        const key = `390-${lang}-${scheme}-${scene.name}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const tasksOn = scene.name === "tasks3" || scene.name === "tasks8";
+        const pinnedOn = scene.name !== "empty";
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${scene.query}&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 20_000 });
+          await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 });
+          await pause(page, 900);
+          /* The bar: its height, its icons, and what sits between it and the feed. */
+          const frame = await page.evaluate(() => {
+            const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+            const feed = document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect();
+            return {
+              barHeight: bar.height, barBottom: bar.bottom, feedTop: feed.top, gap: Math.round(feed.top - bar.bottom),
+              strips: document.querySelectorAll("[data-task-relations], [data-task-relations-slot], [data-flip-key]").length,
+              speechInBar: document.querySelectorAll("[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]").length,
+              reports: !!document.querySelector('[data-mobile2-bar] [data-mobile2-open=reports]'),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              barBadge: document.querySelectorAll("[data-mobile2-bar] [data-mobile2-menu-badge], [data-mobile2-bar] [data-mobile2-notice-dot]").length,
+            };
+          });
+          if (frame.barHeight !== 52) fail(`the bar is ${frame.barHeight}px high`);
+          /* The pane's own card frame (its border and engine stripe) is the 5 px that is always there; a strip is 44 px or more. */
+          if (frame.gap > 8) fail(`${frame.gap}px sit between the bar and the feed`);
+          if (frame.strips) fail(`${frame.strips} strips remain under the bar`);
+          if (frame.speechInBar) fail("a speech control is on the bar");
+          if (!frame.reports) fail("the seat's report button is not on the bar");
+          if (frame.sideways > 0) fail(`the page scrolls sideways by ${frame.sideways}px`);
+          if (frame.barBadge) fail("the bar carries a badge or dot");
+          const barSmall = await smallControls(page, "[data-mobile2-bar]");
+          if (barSmall.length) fail(`bar controls under 44 px: ${barSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-conversation.png`) });
+          /* Read-aloud: in the message's own action row, at 44 px, with copy beside it. */
+          await page.waitForSelector("[data-mobile-message-actions] [data-tts-trigger]", { timeout: 10_000 });
+          const speak = await page.evaluate(() => {
+            const trigger = [...document.querySelectorAll<HTMLElement>("[data-mobile-message-actions] [data-tts-trigger]")].at(-1)!;
+            const rect = trigger.getBoundingClientRect();
+            const row = trigger.closest("[data-mobile-message-actions]")!;
+            return { width: rect.width, height: rect.height, copy: !!row.querySelector("button[aria-label]:not([data-tts-trigger])"), inMessage: !!trigger.closest("[data-mobile-message]"), header: trigger.hasAttribute("data-tts-header"), label: trigger.getAttribute("aria-label") };
+          });
+          if (speak.width < 44 || speak.height < 44) fail(`the read-aloud control is ${speak.width}x${speak.height}`);
+          if (!speak.copy || !speak.inMessage || speak.header) fail(`the read-aloud control sits wrong: ${JSON.stringify(speak)}`);
+          const messageSmall = await smallControls(page, "[data-mobile-message-actions]");
+          if (messageSmall.length) fail(`message controls under 44 px: ${messageSmall.join(", ")}`);
+          await page.locator("[data-mobile-message-actions]").last().scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-read-aloud.png`) });
+          /* The header menu, open. */
+          await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+          await page.waitForSelector("[data-mobile2-sheet=menu]");
+          await pause(page, 500);
+          const rowState = await page.evaluate(() => ({
+            pinned: !!document.querySelector('[data-mobile2-menu-row=pinned]'),
+            background: document.querySelector('[data-mobile2-menu-row=background]')?.textContent?.trim() ?? null,
+            order: [...document.querySelectorAll("[data-mobile2-menu-row]")].slice(0, 2).map((node) => node.getAttribute("data-mobile2-menu-row")),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          }));
+          if (rowState.pinned !== pinnedOn) fail(`pinned row ${rowState.pinned}, expected ${pinnedOn}`);
+          const tasksCount = scene.name === "tasks3" ? 3 : scene.name === "tasks8" ? 8 : 0;
+          const tasksLabel = translate(lang, "mobile2.chat.menuBackground", { count: tasksCount });
+          if ((rowState.background !== null) !== tasksOn || (tasksOn && !rowState.background!.includes(tasksLabel))) fail(`tasks row ${JSON.stringify(rowState.background)}, expected ${tasksOn ? tasksLabel : "none"}`);
+          if (rowState.sideways > 0) fail(`menu scrolls sideways by ${rowState.sideways}px`);
+          const menuSmall = await smallControls(page, "[data-mobile2-sheet=menu]");
+          if (menuSmall.length) fail(`menu controls under 44 px: ${menuSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          const sheets: Record<string, unknown> = {};
+          if (pinnedOn && scene.name === "tasks3") {
+            await page.locator("[data-mobile2-menu-row=pinned]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]");
+            await pause(page, 500);
+            const pinned = await page.evaluate(() => ({ text: document.querySelector("[data-mobile2-pinned-item] p")?.textContent ?? "", open: document.querySelector("[data-mobile2-pinned-open]")?.textContent?.trim() ?? "", sideways: document.documentElement.scrollWidth - innerWidth }));
+            if (!pinned.text.includes("Never leave a lane without an owner.")) fail("the pinned sheet does not show the full text");
+            if (!pinned.open.includes(translate(lang, "mobile2.pinned.openCard"))) fail(`the pinned sheet's button reads ${pinned.open}`);
+            if (pinned.sideways > 0) fail(`pinned sheet scrolls sideways by ${pinned.sideways}px`);
+            const small = await smallControls(page, "[data-mobile2-sheet=pinned]");
+            if (small.length) fail(`pinned sheet controls under 44 px: ${small.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-pinned-sheet.png`) });
+            sheets.pinned = pinned;
+            await page.locator("[data-mobile2-sheet=pinned] [data-mobile2-close]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]", { state: "detached" });
+            await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]");
+          }
+          if (tasksOn) {
+            await page.locator("[data-mobile2-menu-row=background]").click();
+            await page.waitForSelector("[data-mobile2-sheet=background]");
+            await pause(page, 500);
+            const list = await page.evaluate(() => ({
+              rows: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task]").length,
+              standingStop: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task-stop]").length,
+              hostWord: (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Stop host") || (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Зупинити хост"),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              sheetSideways: (() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=background] [data-mobile2-sheet-body]"); return body ? body.scrollWidth - body.clientWidth : 0; })(),
+            }));
+            const expected = scene.name === "tasks3" ? 3 : 8;
+            if (list.rows !== expected) fail(`${list.rows} task rows, expected ${expected}`);
+            if (list.standingStop) fail("a Stop control is visible before a task's ⋯ is opened");
+            if (list.hostWord) fail("the tasks sheet says «host»");
+            if (list.sideways > 0 || list.sheetSideways > 0) fail(`tasks sheet scrolls sideways (${list.sideways}/${list.sheetSideways})`);
+            const listSmall = await smallControls(page, "[data-mobile2-sheet=background]");
+            if (listSmall.length) fail(`tasks sheet controls under 44 px: ${listSmall.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-tasks-sheet.png`) });
+            sheets.tasks = list;
+            if (scene.name === "tasks3") {
+              await page.locator("[data-mobile2-task-menu]").first().click();
+              await page.waitForSelector("[data-mobile2-task-actions]");
+              await pause(page, 300);
+              const taskMenu = await page.evaluate(() => ({
+                head: document.querySelector("[data-mobile2-task-actions]")?.firstElementChild?.textContent?.trim() ?? "",
+                items: [...document.querySelectorAll("[data-mobile2-task-actions] [role=menuitem]")].map((node) => node.textContent?.trim()),
+                sideways: document.documentElement.scrollWidth - innerWidth,
+              }));
+              const wanted = [translate(lang, "task.stopTask"), translate(lang, "task.showOutput"), translate(lang, "task.copyCommand")];
+              if (!/^PID \d+$/.test(taskMenu.head)) fail(`the task menu header reads ${taskMenu.head}`);
+              if (JSON.stringify(taskMenu.items) !== JSON.stringify(wanted)) fail(`the task menu holds ${JSON.stringify(taskMenu.items)}`);
+              if (taskMenu.sideways > 0) fail(`task menu scrolls sideways by ${taskMenu.sideways}px`);
+              const small = await smallControls(page, "[data-mobile2-task-actions]");
+              if (small.length) fail(`task menu controls under 44 px: ${small.join(", ")}`);
+              await page.screenshot({ path: path.join(out, `${key}-task-menu.png`) });
+              sheets.taskMenu = taskMenu;
+            }
+          }
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings.push({ key, frame, speak, rowState, sheets, pageErrors });
+        } catch (error) {
+          failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 describe("fast TTS live latency", () => {
   const liveTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_TTS_LIVE_LATENCY === "1" ? test : test.skip;
   liveTest("interleaves ten cold baseline and candidate tap-to-speech measurements", async () => {
@@ -6279,6 +6465,251 @@ describe("state writes disk-full alert", () => {
 });
 
 /*
+ * Whole-card drag on the phone (operator, 2026-10-02): hold 0.35 s and the card
+ * lifts with a dock of the four columns at the bottom; a release over a column
+ * moves it, a release in place opens today's menu, and scrolling and swiping
+ * between columns keep working. The board is the kanban scene with 44 more tasks
+ * (`&cards=44`), measured under CPU throttling x4 from a recorded trace
+ * (`kanban/dragFrameMeter.ts`). `LLV_DRAG_LABEL` names the record written to
+ * `evidence/whole-card-drag/<label>-phone.json`.
+ */
+describe("whole-card drag on the phone", () => {
+  const LABEL = process.env.LLV_DRAG_LABEL ?? "run";
+  const DRAG_OUT = path.resolve(".artifacts/whole-card-drag");
+  const open = async (browser: Awaited<ReturnType<typeof launchChromium>>, base: string, record?: { dir: string }) => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      ...(record ? { recordVideo: { dir: record.dir, size: { width: 390, height: 844 } } } : {}),
+    });
+    await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+    await pause(page, 800);
+    return { context, page, pageErrors, cdp: await context.newCDPSession(page) };
+  };
+  /** The first task card on screen in Assigned, and a point on it clear of its controls. */
+  const grabPoint = async (page: Page, key?: string): Promise<Point> => {
+    const card = key ? page.locator(`[data-phone-kanban-column="assigned"] [data-phone-card="${key}"]`) : page.locator('[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]').first();
+    await card.scrollIntoViewIfNeeded();
+    await pause(page, 300);
+    const box = (await card.boundingBox())!;
+    return [box.x + box.width / 2, box.y + 18];
+  };
+
+  browserTest("a 3 s drag under 4x CPU throttling holds the display rate on a 48-card board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        const from = await grabPoint(page);
+        /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
+           the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
+        let tile!: Rect;
+        const lift = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone-lift`, async () => {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 700);
+          tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+          expect(tile, "the dock is drawn after the hold").not.toBeNull();
+          return 0;
+        });
+        const reading = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone`, () =>
+          playPath(cdp, [from, [from[0] + 60, from[1] - 140], [from[0] - 40, from[1] - 260], [tile.x + tile.width / 2, tile.y + tile.height / 2]], 3000, 16, true));
+        expect(await page.locator("[data-phone-lift-ghost]").count(), "the card is lifted").toBe(1);
+        expect(await page.locator('[data-phone-dock-tile="blocked"][data-over]').count(), "the finger is over Blocked").toBe(1);
+        await page.screenshot({ path: path.join(DRAG_OUT, `${LABEL}-phone-mid-drag.png`) });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 600);
+        expect(await page.locator("[data-phone-dock]").count(), "the dock goes with the finger").toBe(0);
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${LABEL}-phone.json`, `${JSON.stringify({ board: "phone kanban scene plus 44 tasks with long titles and lanes", viewport: "390x844 touch", cpuThrottling: 4, path: "hold 0.35 s, then 3 s with one move per 16 ms", lift: { ...lift, trace: undefined }, drag: { ...reading, trace: undefined } }, null, 2)}\n`);
+        console.log(JSON.stringify({ lift, drag: reading }));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_ANIMATIONS !== "running") {
+          expect(reading.frameMs.p95, "p95 frame time at x4").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms at x4").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the hold, the lift, the drag and the drop as a video, with a dot where the finger is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a phone drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+        recordVideo: { dir: VIDEO!, size: { width: 390, height: 844 } },
+      });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+        const dot = document.createElement("div");
+        dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+        const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+        addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+        addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+        document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+      });
+      const page = await context.newPage();
+      await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 1000);
+      const cdp = await context.newCDPSession(page);
+      const from = await grabPoint(page);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+      await pause(page, 900);
+      const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+      const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+      for (const [x, y] of [...along(from, [from[0] + 30, from[1] - 120], 20), ...along([from[0] + 30, from[1] - 120], [from[0] - 20, from[1] - 220], 20), ...along([from[0] - 20, from[1] - 220], target, 30)]) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+        await pause(page, 24);
+      }
+      await pause(page, 600);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await pause(page, 1500);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "phone-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+
+  browserTest("with the finger on a dock tile, the ghost is above the dock and the tile's label is uncovered, at 390 and 320", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      for (const width of [390, 320]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 640 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+          await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+          await pause(page, 800);
+          const cdp = await context.newCDPSession(page);
+          const from = await grabPoint(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 520);
+          for (const status of ["blocked", "done", "inbox"]) {
+            const tile = (await rectOf(page, `[data-phone-dock-tile="${status}"]`))!;
+            const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+            for (const [x, y] of along(from, target, 8)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+            await pause(page, 120);
+            const ghost = (await rectOf(page, "[data-phone-lift-ghost]"))!;
+            const dock = (await rectOf(page, "[data-phone-dock]"))!;
+            const label = (await page.evaluate((sel) => {
+              const tileEl = document.querySelector(sel)!;
+              const text = [...tileEl.querySelectorAll("*")].find((node) => node.children.length === 0 && (node.textContent ?? "").trim() !== "") ?? tileEl;
+              const box = text.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height };
+            }, `[data-phone-dock-tile="${status}"]`));
+            expect(ghost.y + ghost.height, `${width}px ${status}: the ghost's bottom edge is above the dock`).toBeLessThanOrEqual(dock.y + 0.5);
+            expect(label.y, `${width}px ${status}: the label is below the ghost`).toBeGreaterThanOrEqual(ghost.y + ghost.height - 0.5);
+            expect(ghost.x, `${width}px: the ghost stays on the screen`).toBeGreaterThanOrEqual(-0.5);
+            expect(ghost.x + ghost.width, `${width}px: the ghost stays on the screen`).toBeLessThanOrEqual(width + 0.5);
+            expect(await page.locator(`[data-phone-dock-tile="${status}"][data-over]`).count(), `${width}px: the finger is over ${status}`).toBe(1);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  browserTest("a release over a column moves the task, in place opens the menu, elsewhere does nothing; scrolling and the pager still work", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        const card = '[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]';
+        const where = (selector: string) => page.evaluate((sel) => document.querySelector(sel)?.closest("[data-phone-kanban-column]")?.getAttribute("data-phone-kanban-column") ?? null, selector);
+        const first = await page.locator(card).first().getAttribute("data-phone-card");
+        const id = `[data-phone-card="${first}"]`;
+        const from = await grabPoint(page);
+
+        /* Held and released where it was: today's menu, nothing moved. */
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+        await pause(page, 520);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "the menu waits for the release").toBe(0);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await page.locator('[data-mobile2-sheet="card"]').count()).toBe(1);
+        expect(await where(id)).toBe("assigned");
+        await touch(cdp, [[195, 40]]);
+        await pause(page, 500);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a tap outside closes the menu").toBe(0);
+
+        /* Lifted and let go over nothing: back where it was. */
+        const at = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at[0], y: at[1] }] });
+        await pause(page, 520);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: at[0] + 10, y: at[1] - 200 }] });
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 400);
+        expect(await where(id)).toBe("assigned");
+        expect(await page.locator("[data-mobile2-sheet]").count()).toBe(0);
+
+        /* Lifted and let go over Blocked: it moves, with the usual receipt. */
+        const again = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: again[0], y: again[1] }] });
+        await pause(page, 520);
+        const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+        const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+        for (const [x, y] of along(again, target, 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await where(id)).toBe("blocked");
+        expect(await page.locator("[data-mobile2-receipt]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a drop opens no menu").toBe(0);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([[first!.replace("task:", ""), "blocked"]]);
+
+        /* The column scrolls under a finger that moves at once, and no dock appears. */
+        const scroller = '[data-phone-kanban-column="assigned"]';
+        const before = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await touch(cdp, along([195, 600], [198, 300], 14), 16);
+        await pause(page, 500);
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a vertical drag scrolls the column").toBeGreaterThan(before + 40);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(0);
+
+        /* The pager swipes between columns. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        await touch(cdp, along([330, 500], [60, 506], 14), 16);
+        await pause(page, 700);
+        expect(await page.evaluate(() => document.querySelector("[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")), "a swipe left changes the column").toBe("blocked");
+
+        /* A finger held on a card and then moved scrolls nothing: the card is the thing in hand. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        const held = await grabPoint(page);
+        const top = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: held[0], y: held[1] }] });
+        await pause(page, 520);
+        for (const [x, y] of along(held, [held[0], held[1] - 220], 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a lifted card does not scroll the column").toBe(top);
+        expect(await page.locator("[data-phone-lift-ghost]").count()).toBe(1);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+});
+
+/*
  * Launching an agent from the phone's draft screen: the screen is the new
  * agent's conversation from the first frame and stays so while the scan swaps
  * the launch window for the transcript, and one Back leaves it. The running
@@ -6340,4 +6771,91 @@ describe("launching an agent on the phone", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); stop(); }
   }, 90_000);
+});
+
+describe("older history on the phone", () => {
+  /*
+   * A real touch drag toward the start of an 800-line conversation, on a
+   * phone at 4x CPU slowdown. The audit that found the desktop walk slow could
+   * not say anything about the phone, because its synthetic touch gestures did
+   * not move the feed; `Input.dispatchTouchEvent` does, and this case drives
+   * it. The feed pages in earlier history as the reader nears the top, every
+   * row the reader had on screen keeps its DOM node, and the walk ends at the
+   * first line. The readings go to `.artifacts/phone-older-history/walk.json`.
+   */
+  const HISTORY_OUT = path.resolve(".artifacts/phone-older-history");
+
+  browserTest("a touch drag brings the earlier pages in without remounting what the reader has", async () => {
+    fs.mkdirSync(HISTORY_OUT, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(HISTORY_OUT, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=200&window=120&page=100`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+        await pause(page, 600);
+        const marked = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+          for (const row of rows) row.setAttribute("data-first-window", "1");
+          const state: number[] = [];
+          (window as unknown as { __frames: number[] }).__frames = state;
+          let last = performance.now();
+          const tick = (now: number) => { state.push(now - last); last = now; requestAnimationFrame(tick); };
+          requestAnimationFrame(tick);
+          return rows.length;
+        });
+        const rect = await rectOf(page, "[data-log-feed-scroller]");
+        if (!rect) throw new Error("no feed");
+        const x = rect.x + rect.width / 2;
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const earlier = [...feed.querySelectorAll("button")].some((button) => /earlier|loading/i.test(button.textContent ?? ""));
+          return {
+            top: Math.round(feed.scrollTop),
+            rows: feed.querySelectorAll("[data-feed-key]").length,
+            kept: feed.querySelectorAll("[data-first-window]").length,
+            loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+            atStart: !earlier,
+          };
+        });
+        const first = await read();
+        let gestures = 0;
+        let last = first;
+        const startedAt = Date.now();
+        for (; gestures < 400; gestures += 1) {
+          await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 10));
+          await pause(page, 120);
+          last = await read();
+          if (last.atStart && last.top < 5) break;
+        }
+        const reachedStartMs = Date.now() - startedAt;
+        const frames = await page.evaluate(() => (window as unknown as { __frames: number[] }).__frames.slice(1));
+        const walk = {
+          gestures, reachedStartMs, loads: last.loads, rows: last.rows, kept: last.kept, marked,
+          frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
+        };
+        fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
+        expect(pageErrors).toEqual([]);
+        /* The drag moved the feed (the audit's gestures did not), earlier
+           pages arrived, the walk ended at the first line, and every row
+           that was on screen at the start is still the same node. */
+        expect(last.top).toBeLessThan(first.top);
+        expect(last.loads).toBeGreaterThanOrEqual(1);
+        expect(last.atStart).toBe(true);
+        expect(last.kept).toBe(marked);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 300_000);
 });

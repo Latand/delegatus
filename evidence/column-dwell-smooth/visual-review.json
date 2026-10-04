@@ -1,0 +1,26 @@
+{
+  "source": "repeatability.json/sourceSha256",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "cpu": 4,
+  "cards": 18,
+  "locales": [
+    "en",
+    "uk"
+  ],
+  "transitions": [
+    "hover-widen",
+    "button-narrow"
+  ],
+  "reviewed": "All decoded moving-edge frames and adjacent source/settled frames from the fifth consecutive passing run, plus full-board frames.",
+  "observations": [
+    "Card edges widen, narrow and slide progressively; no one-frame width snap.",
+    "Text remains visible at its natural size; cards do not overlap.",
+    "Blocked and Done columns retain their positions.",
+    "Cleanup preserves the settled card geometry."
+  ],
+  "artifacts": ".artifacts/column-dwell-smooth/final-proof/",
+  "result": "pass"
+}

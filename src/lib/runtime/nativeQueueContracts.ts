@@ -71,7 +71,7 @@ export interface NativeQueueRecord {
   reason: string | null;
 }
 export type NativeQueueTransition =
-  | { phase: "prepared"; input: NativeQueueInput[] }
+  | { phase: "prepared"; input: NativeQueueInput[]; binding?: NativeQueueBinding }
   | { phase: "acknowledged"; nativeSubmissionId?: string; deleted?: boolean; turnId?: string }
   | { phase: "observed-queued"; submission: NativeQueuedSubmission }
   | { phase: "withdrawn" }

@@ -6,6 +6,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { buildBranchGroups } from "@/components/projectModel";
 
 /*
  * The phone's CONVERSATION SCREEN (docs/design/mobile-v2/README.md §3.2, §3.3,
@@ -170,7 +172,7 @@ const pipeline = {
 /** Hand-off drafts the screen asked the board for, by conversation path. */
 const handoffs: string[] = [];
 
-function mount(nav: MobileNav, files: FileEntry[], focus: string | null, pipelines: Pipeline[] = []): void {
+function mount(nav: MobileNav, files: FileEntry[], focus: string | null, pipelines: Pipeline[] = [], boardTasks: BoardTask[] = [], onOpenTask?: (task: BoardTask) => void, grouped = false): void {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -180,13 +182,14 @@ function mount(nav: MobileNav, files: FileEntry[], focus: string | null, pipelin
       <MobileFocusView
         project="demo"
         projectName="atlas"
-        groups={[]}
+        groups={grouped ? buildBranchGroups(files, "demo") : []}
         manual={files}
         files={files}
         flows={[]}
         pipelines={pipelines}
         surfacePipelines={pipelines}
-        tasks={[]}
+        tasks={boardTasks}
+        onOpenTask={onOpenTask}
         drafts={[]}
         loaded
         focus={focus}
@@ -678,4 +681,85 @@ test("a conversation that does not hold the seat has no seat row", async () => {
   flushSync(() => more.click());
   await settle();
   expect(dom.document.querySelector('[data-testid="mobile-menu-seat"]')).toBeNull();
+});
+
+/*
+ * The pinned message and the background tasks leave the column (2026-10-02):
+ * 0 px under the bar, a row each in the `⋯` menu, and no speech control on the
+ * bar (read-aloud sits beside each message).
+ */
+const backgroundTask = (index: number) => entry({
+  path: `/tmp/claude/demo/session/tasks/bg${index}.output`, title: `Background task bg${index}`, root: "claude-tasks", engine: "shell" as FileEntry["engine"],
+  kind: "background" as FileEntry["kind"], parent: stageConversation.path, activity: "live", proc: "running", pid: 7_000 + index, mtime: 9_500,
+  cmd: `sleep ${index}`, cmdDesc: `Wait ${index}`,
+});
+const pinnedTask = {
+  id: "task-pin", project: "demo", status: "assigned", text: "Keep every lane owned.\nReport what changed.", placement: "unplaced", board: "shown",
+  assignments: [{ path: stageConversation.path, conversationId: "conv-implement", panePid: null, state: "delivered", error: null, at: "2026-10-02T10:00:00Z", engine: "claude" }],
+  createdAt: "2026-10-02T09:00:00Z", updatedAt: "2026-10-02T10:00:00Z",
+} as unknown as BoardTask;
+const menuRows = () => [...dom.document.querySelectorAll("[data-mobile2-menu-row]")].map((node) => node.getAttribute("data-mobile2-menu-row"));
+
+test("with tasks and a pinned message nothing sits under the bar, the bar carries no speech control, and the menu leads with both rows", async () => {
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  const opened: string[] = [];
+  mount(nav, [stageConversation, backgroundTask(1), backgroundTask(2), backgroundTask(3)], stageConversation.path, [], [pinnedTask], (task) => opened.push(task.id), true);
+  await settle();
+
+  expect(dom.document.querySelector("[data-task-relations]")).toBeNull();
+  expect(dom.document.querySelector("[data-task-relations-slot]")).toBeNull();
+  expect(dom.document.querySelector('[data-testid="mobile-focused-pane"] [data-flip-key]')).toBeNull();
+  expect(dom.document.querySelector('[data-testid="mobile-focused-pane"] [aria-label^="Expand background task"]')).toBeNull();
+  /* The bar keeps its four-icon budget: no read-aloud control, no badge. */
+  expect(bar().querySelector("[data-tts-trigger]")).toBeNull();
+  expect(bar().querySelector("[data-tts-header]")).toBeNull();
+
+  flushSync(() => (dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  expect(menuRows().slice(0, 2)).toEqual(["pinned", "background"]);
+  expect(dom.document.querySelector('[data-mobile2-menu-row="background"]')?.textContent).toContain("Background tasks · 3");
+
+  /* The tasks row swaps the menu for the tasks sheet. */
+  flushSync(() => (dom.document.querySelector('[data-mobile2-menu-row="background"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  expect(dom.document.querySelector('[data-mobile2-sheet="menu"]')).toBeNull();
+  expect(dom.document.querySelectorAll('[data-mobile2-sheet="background"] [data-mobile2-task]')).toHaveLength(3);
+
+  /* ...and the pinned row opens the pinned sheet, whose button opens the card. */
+  flushSync(() => nav.openSheet("menu"));
+  await settle();
+  flushSync(() => (dom.document.querySelector('[data-mobile2-menu-row="pinned"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  expect(dom.document.querySelector('[data-mobile2-sheet="pinned"]')?.textContent).toContain("Report what changed.");
+  flushSync(() => (dom.document.querySelector('[data-mobile2-pinned-open="task-pin"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  expect(opened).toEqual(["task-pin"]);
+});
+
+test("with no tasks and no pinned message the menu has neither row", async () => {
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [stageConversation], stageConversation.path);
+  await settle();
+  flushSync(() => (dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  expect(menuRows()).not.toContain("pinned");
+  expect(menuRows()).not.toContain("background");
+});
+
+test("a tasks or pinned sheet with nothing behind it closes instead of standing invisible", async () => {
+  const { host } = browser();
+  const nav = createMobileNav(host);
+  detach = nav.attach();
+  mount(nav, [stageConversation], stageConversation.path);
+  await settle();
+  flushSync(() => nav.openSheet("background"));
+  await settle();
+  expect(nav.getState().sheet).toBeNull();
+  flushSync(() => nav.openSheet("pinned"));
+  await settle();
+  expect(nav.getState().sheet).toBeNull();
 });

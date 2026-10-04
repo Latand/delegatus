@@ -117,7 +117,7 @@ test("a launch that never started is no conversation: the card lists it apart an
   expect(ghostCard).not.toBeNull();
   /* No «1 conversation»: nothing on this card opens. */
   expect(ghostCard.querySelector("[data-foot-conversations]")).toBeNull();
-  expect(ghostCard.querySelector("[data-not-loaded]")).toBeNull();
+  expect(ghostCard.querySelector("[data-elsewhere-toggle]")).toBeNull();
   const row = ghostCard.querySelector('[data-launch-not-started="launch-ghost"]') as HTMLElement | null;
   expect(row?.textContent).toContain("Launch did not start");
   flushSync(() => (ghostCard.querySelector('[data-launch-dismiss="launch-ghost"]') as HTMLElement).click());
@@ -143,7 +143,7 @@ test("stage attempts that started are no launch rows: the card counts them and l
   const lanesCard = card(host, "lanes")!;
   expect(lanesCard.querySelectorAll("[data-launch-not-started]").length).toBe(0);
   expect(lanesCard.querySelector("[data-launches-not-started]")).toBeNull();
-  expect(lanesCard.querySelectorAll("[data-not-loaded]").length).toBe(0);
+  expect(lanesCard.querySelector("[data-elsewhere-toggle]")).toBeNull();
   expect(lanesCard.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations")).toBe("43");
 });
 
@@ -184,7 +184,9 @@ test("every conversation a card counts opens on click, loaded on this board or n
   const host = mount([elsewhere]);
   const elsewhereCard = card(host, "elsewhere")!;
   expect(elsewhereCard.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations")).toBe("1");
-  const open = elsewhereCard.querySelectorAll("[data-not-loaded]");
+  /* One line folds the conversation; its list opens it. */
+  flushSync(() => (elsewhereCard.querySelector("[data-elsewhere-toggle]") as HTMLElement).click());
+  const open = elsewhereCard.querySelectorAll("[data-elsewhere-row] button");
   expect(open.length).toBe(1);
   flushSync(() => (open[0] as HTMLElement).click());
   expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_elsewhere", path: "/elsewhere/conversation-9.jsonl" }));
@@ -218,4 +220,62 @@ test("a failed launch shows at once with its error, opens its launch view, and c
   expect(launchView?.textContent).toContain("account limit reached");
   flushSync(() => (launchView!.querySelector("[data-launch-retry]") as HTMLElement).click());
   expect(retried).toEqual(["spawn:launch-failed"]);
+});
+
+/* The wall of «conversation outside this board» rows (#2459): a task that
+   ran for a day collects an assignment per helper conversation, each with a
+   transcript path and no stage id, none loaded here. */
+const wall = (count: number) => Array.from({ length: count }, (_, index) => ({
+  conversationId: `conversation_wall_${index}`, path: `/elsewhere/wall-${index}.jsonl`, panePid: null, state: "linked", error: null, at: iso(NOW - 3600 + index * 60),
+}));
+
+test("many conversations the board did not load fold into one line inside the collapsed Past attempts section, and the line opens a list that opens each", () => {
+  const busy = task("busy", { text: "Finish the privacy gate", assignments: wall(30) as BoardTask["assignments"] });
+  const host = mount([busy]);
+  const busyCard = card(host, "busy")!;
+  /* The card counts all thirty and lists none by itself. */
+  expect(busyCard.querySelector("[data-foot-conversations]")?.getAttribute("data-foot-conversations")).toBe("30");
+  expect(busyCard.querySelectorAll("[data-not-loaded]").length).toBe(0);
+  expect(busyCard.querySelectorAll("[data-elsewhere-row]").length).toBe(0);
+  /* One line, inside the section that is closed until the operator opens it. */
+  const toggles = busyCard.querySelectorAll("[data-elsewhere-toggle]");
+  expect(toggles.length).toBe(1);
+  expect(toggles[0]!.textContent).toBe("+30 conversations outside this board · Open list");
+  const section = toggles[0]!.closest("details.history") as HTMLDetailsElement;
+  expect(section).not.toBeNull();
+  expect(section.open).toBe(false);
+  /* Nothing to count as an attempt: the header names the conversations. */
+  expect(section.querySelector("summary .hl")?.textContent).toBe("Conversations outside this board · 30");
+  /* The list opens on the line and each row opens its own conversation. */
+  flushSync(() => (toggles[0] as HTMLElement).click());
+  expect(toggles[0]!.getAttribute("aria-expanded")).toBe("true");
+  const rows = busyCard.querySelectorAll("[data-elsewhere-row] button");
+  expect(rows.length).toBe(30);
+  flushSync(() => (rows[7] as HTMLElement).click());
+  expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_wall_7", path: "/elsewhere/wall-7.jsonl" }));
+});
+
+test("Past attempts counts exactly the attempts it lists once each, and the conversations off the board are no part of that count", async () => {
+  const { PastAttempts } = await import("./PipelineSection");
+  const attempt = (n: number) => ({
+    key: `p1:build:attempt:${n}`, pipelineId: "p1", stageId: "build", kind: "attempt" as const, n, of: 9, attempt: null, ordinal: n, ambiguous: false,
+    state: "passed", verdict: "pass", atMs: (NOW - 3600 + n * 60) * 1000, conversation: { path: `/attempts/${n}.jsonl`, conversationId: `conversation_attempt_${n}` },
+  });
+  const rows = Array.from({ length: 9 }, (_, index) => attempt(index + 1));
+  const elsewhere = Array.from({ length: 22 }, (_, index) => ({ key: `conversation_off_${index}`, path: `/off/${index}.jsonl`, conversationId: `conversation_off_${index}` }));
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  flushSync(() => root.render(<PastAttempts rows={rows} elsewhere={elsewhere} names={new Map([["p1", new Map([["build", "Build"]])]])} nowMs={NOW * 1000} onOpen={() => {}} />));
+  const section = host.querySelector("details.history") as HTMLDetailsElement;
+  expect(section.open).toBe(false);
+  expect(section.querySelector("summary .hl")?.textContent).toBe("Past attempts · 9");
+  const listed = [...section.querySelectorAll("li[data-past]")].map((row) => row.getAttribute("data-past"));
+  expect(listed.length).toBe(9);
+  expect(new Set(listed).size).toBe(9);
+  /* The one line states its own number and lists nothing until asked. */
+  expect(section.querySelectorAll("[data-elsewhere-toggle]").length).toBe(1);
+  expect(section.querySelector("[data-elsewhere-toggle]")?.textContent).toContain("+22 conversations");
+  expect(section.querySelectorAll("[data-elsewhere-row]").length).toBe(0);
 });

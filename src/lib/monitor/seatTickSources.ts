@@ -345,7 +345,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
       return "unreachable";
     }
   };
-  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
+  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
   if (evidence.kind === "absent") {
     if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
     const journal = await asked(wake.operationId);
@@ -367,7 +367,24 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
     current = settled;
   }
-  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  if (current.state === "delivered") {
+    // A caller may supply the generic resolver's late-confirmation projection.
+    // Preserve the provenance even when it has already projected arrival.
+    if (evidence.receipt.state !== "delivered" && ports.confirmed) {
+      let confirmed = false;
+      try { confirmed = await ports.confirmed(wake, evidence.operationId); } catch { /* The delivered receipt still stands. */ }
+      if (confirmed) {
+        const journal = await asked(evidence.operationId);
+        const written = await ports.settleFromJournal?.(
+          { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+          { status: "delivered", reason: null },
+        );
+        return { state: "landed", evidence: { ...withRecord(written ?? evidence.receipt, journal), confirmation: "claude-ledger",
+          ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+      }
+    }
+    return { state: "landed", evidence: withRecord(current, "unasked") };
+  }
   /* `safe` is the fenced, proven non-delivery and the only failure the record
      alone can license raising the wake again on. */
   if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
