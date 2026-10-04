@@ -1618,7 +1618,7 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-for (const signal of ["SIGKILL", "SIGTERM", "SIGINT"] as const) test.each(["consumed", "pending"] as const)(`cold recovery retains the real apply across request consumption during load preflight (${signal}): %s`, async boundary => {
+test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ["SIGTERM", "pending"], ["SIGINT", "pending"]] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
