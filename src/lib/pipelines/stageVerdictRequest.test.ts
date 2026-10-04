@@ -371,8 +371,11 @@ test("skip-stage carries the parked stage's unpublished local head in an interna
   const skipped = await patchPipeline(pipeline.id, { action: "skip-stage" }, h.ports);
 
   expect(skipped.error).toBeUndefined();
+  // The accepted skip reserves work; the controller tick verifies and adopts it.
+  await tickPipelines([], h.ports);
   expect(h.calls.slice(callsBefore).some((call) => call.includes("reset --hard") || call.includes("clean -fd"))).toBe(false);
-  expect(loadPipelines()[0]!).toMatchObject({ lastPassedCommit: STAGE_HEAD, cursor: { stageId: "verify", state: "pending" } });
+  expect(loadPipelines()[0]!).toMatchObject({ lastPassedCommit: STAGE_HEAD, cursor: { stageId: "verify" } });
+  expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
 });
 
 test("retry-stage is refused over a pushed head, which it would reset away (#1756)", async () => {

@@ -1862,10 +1862,11 @@ O23: owned by lane 909814bf (PR #2430) / lane d713000d (PR #2474).
 | `src/runtime-host/viewerEntries.test.ts` | P | P | — |
 | `src/styles/tokens.contrast.test.ts` | P | P | — |
 
-## PR #2489 grouped pre-push observation
+## PR #2489 historical grouped pre-push observation
 
-The pre-push touched-tests command runs all 101 selected paths in one Bun
-process. The hook reported 286 failures and 14 errors. A controlled reproduction
+Before PR #2501, the pre-push touched-tests command ran all 101 selected
+paths in one Bun process. This is the historical observation retained at
+reviewed head `c39ea135bd282cc9313c67919aa8bf47b026615f`, not the refreshed hook. The hook reported 286 failures and 14 errors. A controlled reproduction
 in a disposable checkout reported 1,092 pass, 2 skip, 287 fail and 14 errors
 across the same 101 files in 170.95s. Three of five sampled failing paths passed
 when run alone, showing cross-file interference in the grouped process, which
@@ -1886,6 +1887,80 @@ passed by exact path with separate `HOME`, `LLV_STATE_DIR` and `TMPDIR`.
 
 The grouped phase was not repeated on a clean `origin/main` export; even the
 candidate reproduction took nearly three minutes before the five path runs.
-This is an outside-spec hook observation for follow-up: the grouped touched-test
-phase accumulates cross-file failures for a PR touching many test files, while
-those files can pass independently by path.
+PR #2501 replaced that grouped phase with one process per exact test path and
+merge-base failure comparison. The historical grouped run accumulated cross-file
+failures while those files could pass independently by path.
+
+
+## PR #2489 resources refresh observation
+
+On 2026-10-04, before any repository code change, the named test
+`resource recurring reads > TERM-handler escaped descendants are absent before every worker outcome settles`
+ran ten times per revision. The reviewed head was
+`c39ea135bd282cc9313c67919aa8bf47b026615f`; current main was
+`beef5fb33b8a23c01332a5db72db960cba0b3bb0`. The merged sample was a clean
+export of the `git merge-tree --write-tree` result for those two commits.
+No branch was created or switched. Bun 1.4.0 and Node on PATH were used.
+
+Every invocation used a fresh isolated `HOME`, `LLV_STATE_DIR`, config and
+`TMPDIR`, under `flock /var/tmp/llv-heavy-gate.lock`. A diagnostic preload
+recorded the fixture's reported root/escaped PID files immediately before
+fixture deletion; after each Bun process exited, every recorded PID was
+checked with signal 0 and was absent. It did not change the fixture or its
+assertions. All repetitions completed; no process was stopped by name,
+pattern or port. The competing load was a separately recorded, owned PID,
+terminated and reaped by its parent after the series.
+
+| Observation conditions | Reviewed pass / fail | Main pass / fail | Merged pass / fail |
+| --- | --- | --- | --- |
+| Normal scheduling, named test | 10 / 0 | 10 / 0 | 10 / 0 |
+| One CPU, named test | 8 / 2 | 10 / 0 | 10 / 0 |
+| One CPU with competing CPU load, named test | 4 / 6 | 6 / 4 | 2 / 8 |
+| Whole `src/lib/resources.test.ts` by path | 69 / 0 | 69 / 0 | 69 / 0 |
+
+The first three rows count invocations; the last counts tests within one
+whole-file invocation per revision. The normal named-test series checked
+720 reported PIDs; none remained. Failures under constrained scheduling also
+left no reported PID behind. This selects the flaky-on-main case: the
+collector source is identical across all three revisions, and the named
+fixture differs only in Node executable selection. The earlier resolution
+preserved shell-quoted Node paths and worker cleanup intent.
+
+The escaped child previously wrote its host PID only after starting a new
+Node runtime in the collector's 40 ms cleanup grace. Kernel containment could
+remove the entire tree before that bootstrap wrote its receipt, causing
+`ENOENT` even though cleanup succeeded. The TERM handler now records its one
+spawned child's host PID from `/proc/thread-self/children` before exiting.
+Success and malformed-output cases still spawn their detached descendant
+from the collector's cleanup TERM; crash and timeout retain their original
+pre-trigger. Both pipe modes and denied individual signals remain covered.
+No production code, timeout, skip or cleanup expectation changed. The
+post-settlement polling was removed, so liveness is sampled immediately when
+the read settles; a late cleanup can no longer hide a leak. A positive-PID
+assertion prevents an empty receipt from turning signal 0 into a group check.
+
+The corrected named test passed **20 consecutive invocations under the same
+one-CPU contention**, checking all 480 reported PIDs absent after exit. The
+whole corrected file passed **69 tests, 0 failures**, checking 94 reported
+PIDs absent. Node executable portability remains intact.
+
+Three other already-touched files reproduced the merger's five pre-existing
+failures. Test-only fixture corrections make their whole-path runs pass:
+
+| Path | Measured whole-file result | Correction |
+| --- | --- | --- |
+| `src/components/mobile/MobileTaskScreen.entry.dom.test.tsx` | 7 pass, 0 fail | Open the current pinned-message menu; preserve task/back-stack assertions. |
+| `src/lib/mcp/retryStageLaunch.integration.test.ts` | 6 pass, 0 fail | Both receipt reads use the same synthetic ledger. |
+| `src/lib/pipelines/stageVerdictRequest.test.ts` | 9 pass, 0 fail | Tick the accepted skip before checking adoption; assert no destructive Git operation after that tick. |
+
+### Notes
+
+A flaky main test read once on each side can be reported as **NEW** when the
+baseline passes and head fails. The hook's cached baseline can retain that
+single passing sample. This is a false-refusal risk worth a gate follow-up;
+it does not establish a branch regression. The earlier merger reported
+1 new, 5 pre-existing, 407 fixed and 7 removed/skipped failures. Those are
+historical hook counts, not the counts of the refreshed push. The renamed
+phone test now describes the pinned-message menu, so the hook may classify
+its former strip-based name as removed/skipped even though all seven tests
+execute and pass.

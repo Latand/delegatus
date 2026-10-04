@@ -1645,11 +1645,9 @@ describe("resource recurring reads", () => {
           writeFileSync(escapedScript, [
             `#!${NODE_BIN}`,
             'const fs = require("node:fs");',
-            'const [pidFile, readyFile] = process.argv.slice(2);',
+            'const [readyFile] = process.argv.slice(2);',
             'process.on("SIGTERM", () => {});',
             'process.on("SIGINT", () => {});',
-            'const hostPid = fs.readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0];',
-            'fs.writeFileSync(pidFile, hostPid);',
             'fs.writeFileSync(readyFile, "ready");',
             'setInterval(() => {}, 1_000);',
             '',
@@ -1664,7 +1662,13 @@ describe("resource recurring reads", () => {
             '  if (handled) return;',
             '  handled = true;',
             '  const stdio = pipes === "inherited" ? ["ignore", "inherit", "inherit"] : "ignore";',
-            '  const child = spawn(process.execPath, [escapedScript, escapedPid, escapedReady], { detached: true, stdio });',
+            '  const child = spawn(process.execPath, [escapedScript, escapedReady], { detached: true, stdio });',
+            // /proc is mounted in the host PID namespace. The spawning thread
+            // has exactly one child, whose host PID is available immediately;
+            // the child's Node bootstrap must not race the cleanup deadline.
+            '  const hostPid = fs.readFileSync("/proc/thread-self/children", "utf8").trim();',
+            '  if (!/^\\d+$/.test(hostPid)) throw new Error("expected one escaped child");',
+            '  fs.writeFileSync(escapedPid, hostPid);',
             '  child.unref();',
             '  process.exit(0);',
             '});',
@@ -1712,10 +1716,10 @@ describe("resource recurring reads", () => {
                 headroomMs: 250,
               },
             }).read(true);
-            for (let attempt = 0; attempt < 20 && !existsSync(escapedPidFile); attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 5));
-            }
+            // Read the completed receipt and sample liveness at settlement;
+            // waiting here would allow a late cleanup to hide a leak.
             escapedPid = Number(readFileSync(escapedPidFile, "utf8"));
+            expect(escapedPid, `${pipes} ${fixture.name} escaped PID`).toBeGreaterThan(0);
             leaked = processExists(escapedPid);
           } finally {
             kill?.mockRestore();

@@ -85,7 +85,13 @@ async function protocol(overrides?: Record<string, unknown>) {
 function engineWithReceipts(spawnReceipt: (launchId: string) => PipelineSpawnReceipt | null, extra: Record<string, unknown> = {}) {
   /* A failed receipt is claimed for the retry in the agent registry, which this
      sandbox leaves empty; the claim is the engine's and succeeds here. */
-  const ports = { ...defaultPipelinePorts(), spawnReceipt, claimSpawnRetry: () => "claimed" as const };
+  const ports = {
+    ...defaultPipelinePorts(),
+    spawnReceipt,
+    // Both receipt reads must consult the same synthetic launch ledger.
+    spawnReceiptState: (launchId: string) => spawnReceipt(launchId)?.state ?? null,
+    claimSpawnRetry: () => "claimed" as const,
+  };
   return protocol({
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
     readPipelineRecord: getPipeline,
@@ -140,7 +146,7 @@ test("retry-stage by stage retries a stage whose agent started and ended on a fa
 
     const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build" });
     expect(retried.raw).not.toContain("retry was cancelled");
-    expect(retried.isError).toBe(false);
+    expect(retried.isError, retried.raw).toBe(false);
     /* Accepted: the lane leaves its park and re-provisions for attempt 3. */
     expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
   } finally {
@@ -155,7 +161,7 @@ test("retry-stage by stage still retries a launch that failed, with or without i
     const p = await engineWithReceipts(receiptFor("failed"));
     try {
       const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", ...(launchId ? { launchId } : {}) });
-      expect(retried.isError).toBe(false);
+      expect(retried.isError, retried.raw).toBe(false);
       expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
     } finally {
       await p.close();
@@ -176,7 +182,7 @@ test("retry-stage naming the completed launch of a stage whose host was lost ret
   try {
     const retried = await p.call("pipeline_action", { pipelineId: pipeline.id, action: "retry-stage", stageId: "build", launchId: LAUNCH });
     expect(retried.raw).not.toContain("retry was cancelled");
-    expect(retried.isError).toBe(false);
+    expect(retried.isError, retried.raw).toBe(false);
     expect(loadPipelines()[0]!.state).not.toBe("needs_decision");
   } finally {
     await p.close();
