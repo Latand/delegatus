@@ -202,9 +202,18 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
         catch (error) {
           if (error.code !== "ENOENT") return; // Unreadable custody is retained.
         }
-        if (["building", "ready", "switching"].includes(apply?.state) && apply.launcherPid === record.launcher.pid
-          && apply.launcherIdentity === record.launcher.startIdentity
-          && apply.releasePointer === record.releasePointer) return;
+        if (apply?.launcherPid === record.launcher.pid && apply.launcherIdentity === record.launcher.startIdentity
+          && apply.releasePointer === record.releasePointer) {
+          if (["building", "ready", "switching"].includes(apply.state)) return;
+          // Terminal persistence and hold release are separate writes. Retain
+          // the original owner across a signal between those two boundaries.
+          let drain, gate;
+          try { drain = JSON.parse(readFileSync(join(dirname(file), "auto-drain.json"), "utf8")); }
+          catch (error) { if (error.code !== "ENOENT") return; }
+          try { gate = JSON.parse(readFileSync(join(dirname(file), "auto-admission.json"), "utf8")); }
+          catch (error) { if (error.code !== "ENOENT") return; }
+          if (drain?.id === apply.requestId || apply.autoGateId && gate?.id === apply.autoGateId) return;
+        }
         rmSync(file, { force: true });
       } catch (error) {
         if (error.code !== "ENOENT") console.error("[self-update] could not remove the owned launcher record.");

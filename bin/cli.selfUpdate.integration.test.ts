@@ -1749,18 +1749,22 @@ test.each([...(["SIGKILL", "SIGTERM", "SIGINT"] as const).flatMap(signal => (["b
     expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch" });
     expect(existsSync(trialFile)).toBe(false);
   }
+  const atCrash = readRecord(fixture.state);
   const killed = new Promise(resolve => running.child.once("exit", resolve));
-  process.kill(before.launcher.pid, signal);
+  process.kill(atCrash.launcher.pid, signal);
   if (boundary === "pending" && signal !== "SIGKILL") process.kill(before.launcher.pid, "SIGCONT");
   await Promise.race([killed, Bun.sleep(6000).then(() => { throw new Error("Launcher ignored termination at the custody boundary"); })]);
   if (boundary !== "settled") expect(readRecord(fixture.state).launcher).toMatchObject({ pid: before.launcher.pid, startIdentity: before.launcher.startIdentity });
   // A crashed launcher leaves its recorded children. Stop only these fixture
   // PIDs; cold startup then exercises the durable handoff on the same install.
-  for (const role of [before.web, before.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
-  await until(() => !isAlive(before.web.pid!) && !isAlive(before.runtimeHost.pid!));
+  for (const role of [atCrash.web, atCrash.runtimeHost]) if (role.pid && isAlive(role.pid)) process.kill(role.pid, "SIGTERM");
+  await until(() => !isAlive(atCrash.web.pid!) && !isAlive(atCrash.runtimeHost.pid!));
   await Bun.sleep(2200);
-  const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: "ignore" }); children.add(child);
-  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
+  const child = spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: fixture.checkout, env: cleanTerminalEnv(fixture), stdio: ["ignore", "ignore", "pipe"] }); children.add(child);
+  let recoveryError = "";
+  child.stderr!.on("data", bytes => { recoveryError = (recoveryError + bytes.toString()).slice(-4096); });
+  const after = await until(() => { const r = readRecord(fixture.state); return r.launcher.pid !== before.launcher.pid && r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; })
+    .catch(error => { throw new Error(`${String(error)}; cold exit=${child.exitCode}; ${recoveryError.replaceAll(key, "<redacted>")}`); });
   expect(await socketAnswers(after.socket)).toBe(true); await perimeterRemains(running.port, key);
   const terminalBeforeBoot = boundary === "settlement" || boundary === "settled";
   if (!terminalBeforeBoot) expect(after.launcher.requestId).toBe(apply.current!.requestId);
