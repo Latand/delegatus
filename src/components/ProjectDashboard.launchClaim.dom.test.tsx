@@ -202,6 +202,8 @@ function mount(files: FileEntry[]): HTMLElement {
 
 test("a failed-delivery launch record on a scanned transcript path never hides the conversation", async () => {
   const path = "/claude-projects/repo-fixture/conversation-claim.jsonl";
+  // Keep this conversation on the board independently of settled-worker folding.
+  boardManual = [path];
   const host = mount([conversationWithFailedLaunchRecord(path)]);
 
   /* The conversation is real board content: it must keep its tile on the Board (the kanban, #1695). */

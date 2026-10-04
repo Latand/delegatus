@@ -125,7 +125,7 @@ const LEGACY_STAGES = [
 
 async function legacyDraft(ports: PipelinePorts, stages: unknown[] = LEGACY_STAGES): Promise<Pipeline> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Legacy review", spec: "AC", repoDir: "/repo", baseBranch: "main", baseRef: BASE, stages: stages as never, autoStart: false, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Legacy review", spec: "AC", repoDir: "/repo", baseBranch: "main", baseRef: BASE, publication: "internal", stages: stages as never, autoStart: false, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   /* A draft stored before #2187, whose review-loop creation did not convert. */
   const draft = asStoredLegacyReviewLane(created.pipeline, created.convertedStages);
@@ -175,7 +175,7 @@ test("preview answers the converted plan and writes nothing, for hot and archive
   await archiveSettledPipelines(Date.parse("2026-09-22T00:00:00.000Z"));
   expect(loadPipelines()).toEqual([]);
   const archived = await patchPipeline(draft.id, { action: "preview-legacy-review" } as never, h.ports);
-  expect(archived.legacyReviewPreview).toMatchObject({ ok: true, reviewLimit: 5, reviewLimitSource: "default" });
+  expect(archived.legacyReviewPreview).toMatchObject({ ok: true, reviewLimit: 3, reviewLimitSource: "default" });
   const refused = await convert(findPipelineRecord(draft.id)!, {}, h.ports);
   expect(refused.status).toBe(409);
   expect(refused.error).toContain("archived");
@@ -392,7 +392,7 @@ test("an unlimited flow limit is refused with an editable recommendation, then c
   h.flows.set("flow-old", { id: "flow-old", state: "closed", roundLimit: 0, rounds: [] } as unknown as Flow);
   const lane = parkedLegacyLane(draft, {});
   const preview = await patchPipeline(lane.id, { action: "preview-legacy-review" } as never, h.ports);
-  expect(preview.legacyReviewPreview).toMatchObject({ ok: false, reviewLimit: null, recommendedReviewLimit: 5, refusals: [{ code: "unlimited-limit" }] });
+  expect(preview.legacyReviewPreview).toMatchObject({ ok: false, reviewLimit: null, recommendedReviewLimit: 3, refusals: [{ code: "unlimited-limit" }] });
   expect((await convert(lane, {}, h.ports)).status).toBe(409);
   expect((await convert(lane, { clientRequestId: "convert-5", reviewLimit: 5 }, h.ports)).legacyReviewConversion).toMatchObject({ reviewLimit: 5, reviewLimitSource: "request" });
 });

@@ -1,3 +1,5 @@
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
+import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,7 +13,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
 const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
-const { agentRegistry } = await import("@/lib/agent/registry");
+const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
 const { retiredAccountArchive } = await import("./removal");
@@ -19,6 +21,7 @@ const { resetAccountCollectionsForTests } = await import("./accountsStore");
 const { persistedAccountRegistry, persistedAccountState, seedAccountRegistry } = await import("./accountsStoreFixture");
 
 beforeEach(() => {
+  closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "accounts"), { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "shared"), { recursive: true, force: true });
@@ -26,6 +29,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  closeAgentRegistryForTests();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CODEX_HOME;
@@ -335,9 +339,10 @@ test("a Codex removal killed after the agent registry retired the account comple
   });
   const delivery = store.holdDelivery(fixture.conversation.id, "owed on the removed account");
   store.setEngineRouting("codex", fixture.account.id);
-  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
-  raw.conversations[fixture.conversation.id].pinnedAccountId = fixture.account.id;
-  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const raw = store.snapshot();
+  raw.conversations[fixture.conversation.id]!.pinnedAccountId = fixture.account.id;
+  const persisted = new SqliteAgentRegistryStore(defaultRegistrySqliteFilename(store.filename), { initialSnapshot: raw, normalize: normalizeRegistry });
+  try { expect(persisted.replace(raw, persisted.snapshot().revision).replaced).toBe(true); } finally { persisted.close(); }
   await crashCodexRemovalAt(fixture.account.id, "registry-retired");
   expect(codexRegistryJson().removals).toHaveLength(1);
 

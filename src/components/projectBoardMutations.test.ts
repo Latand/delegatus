@@ -116,7 +116,8 @@ test("18: planBoardConvergence orders remap before reconciliation and keeps a hi
 
   /* Predecessor hidden before the batch; successor active as a root. */
   const result = applyBoardMutations(boardOf({ hidden: ["/old"] }), batch);
-  expect(result.prefs.hidden).toEqual(["/new"]);
+  // Archive keeps the concrete predecessor path as well as its successor.
+  expect(result.prefs.hidden).toEqual(["/old", "/new"]);
   expect(result.prefs.manual).not.toContain("/new");
 
   /* Reversing the order would let reconciliation seed /new before the remap moved
@@ -127,7 +128,7 @@ test("18: planBoardConvergence orders remap before reconciliation and keeps a hi
   /* Even reversed, normalization keeps hidden dominant. The canonical batch
      carries an explicit ordering guarantee. */
   expect(batch.map((mutation) => mutation.kind)).toEqual(["remap-paths", "reconcile-roots"]);
-  expect(reversed.prefs.hidden).toEqual(["/new"]);
+  expect(reversed.prefs.hidden).toEqual(["/old", "/new"]);
 });
 
 test("18b: planSuccessionRemap emits one deduped pair per successor and null when none", () => {

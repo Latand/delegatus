@@ -103,7 +103,7 @@ test("a child started by an entry point sees no DELEGATUS_ names", () => {
   const root = sandbox("llv-env-alias-child-");
   fs.mkdirSync(path.join(root, "bin"));
   fs.mkdirSync(path.join(root, "dist"));
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "appDir.mjs", "envAlias.mjs"]) {
+  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs"]) {
     fs.copyFileSync(path.join(import.meta.dir, name), path.join(root, "bin", name));
   }
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), `

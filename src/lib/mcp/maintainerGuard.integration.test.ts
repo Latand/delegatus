@@ -193,6 +193,6 @@ test("the real transcript projection permits gone history and refuses a verified
   snapshot.entries["codex:fixture-real-history"] = { key: { engine: "codex", accountId: null, sessionId: "fixture-real-history" }, status: "live", artifactPath: transcriptPath, host: null, updatedAt: new Date(now).toISOString(), structuredHost: { process: { pid: 424242, startIdentity: "fixture-process-start" } } } as never;
   mutateTasks(tasks => ({ tasks: tasks.map(t => t.id === taskId ? { ...t, status: "assigned" } : t), result: undefined }));
   const live = await tools.callTool("agent_activity", { clientRequestId: "real-live-idle-activity", conversationId: historyId, full: true });
-  expect((live as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject({ lifecycle: "stalled", turnState: "idle", host: { state: "alive" }, evidenceSource: "transcript" });
+  expect((live as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "host_alive_turn_idle", turnState: "idle", host: { state: "alive" }, evidenceSource: "transcript" });
   expect(await tools.callTool("update_task", { clientRequestId: "real-live-idle-closure", taskId, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
 });

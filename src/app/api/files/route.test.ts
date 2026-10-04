@@ -1,3 +1,4 @@
+import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -77,6 +78,8 @@ beforeEach(() => {
   // touches the real ~/.config/agent-log-viewer state.
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-route-state-"));
   process.env.LLV_STATE_DIR = stateDir;
+  // Activation imports this collection before serving requests.
+  readAttentionDismissals();
   setAgentRegistryForTests(withLegacySpawnFixtureTitles(new AgentRegistry(path.join(registryRoot, "registry.json"))));
   resetFilesRouteCacheForTests();
   resetFilesProjectionCacheForTests();
@@ -1516,7 +1519,7 @@ test("a corrupt completed snapshot falls back to a cold scan and repairs persist
   expect(scans).toBe(1);
   const persisted = JSON.parse(fs.readFileSync(path.join(stateDir, "files-scan-snapshot.json"), "utf8"));
   expect(persisted.version).toBe(1);
-  expect(persisted.schemaVersion).toBe(11);
+  expect(persisted.schemaVersion).toBe(12);
 });
 
 test("repeated first-ever incomplete scans stay unpublished until recovery", async () => {
@@ -3528,6 +3531,8 @@ test("issue 1168: the seat's open bridge ask rides the files payload and clears 
   expect(asking.files.find((entry) => entry.path === seatPath)?.bridgeAsk).toEqual({
     id: "lane-4-blocked",
     at: filed!.at,
+    seq: filed!.seq,
+    body: filed!.body,
   });
   /* The ask belongs to the seat alone — no other scanned row carries it. */
   expect(asking.files.find((entry) => entry.path === "/sessions/worker.jsonl")?.bridgeAsk).toBeUndefined();

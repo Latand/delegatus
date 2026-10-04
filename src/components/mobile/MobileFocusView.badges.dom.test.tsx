@@ -22,7 +22,9 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
 const dom = new HappyWindow({ innerWidth: 390, innerHeight: 844 });
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 Object.assign(globalThis, {
-  window: dom, document: dom.document, navigator: dom.navigator,
+  window: dom,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom), document: dom.document, navigator: dom.navigator,
   Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
   Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
   PointerEvent: dom.PointerEvent ?? dom.MouseEvent,

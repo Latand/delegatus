@@ -533,46 +533,52 @@ test("a carried-over host released mid-registration is released once and stays g
 
 test("an inactive carried-over host retired mid-registration is detached and stays gone (#1191)", async () => {
   const { registry, journal, directory, client, close } = fixture("handover-terminate");
-  await bindStructuredDeliveryQueue([], { registry, client });
-  const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
-  const { host, releases } = releaseCountingHost();
-  await publishStructuredDeliveryHost({ key, host });
+  let gate: ReturnType<typeof producerCursorGate> | undefined;
+  let rebind: Promise<void> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client });
+    const { conversationId, key } = seedConversation(registry, directory, "handover-terminate-session");
+    const { host, releases } = releaseCountingHost();
+    await publishStructuredDeliveryHost({ key, host });
 
-  const gate = producerCursorGate(client, journal);
-  const rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
-  await Promise.race([gate.started, rebind]);
-  expect(hasStructuredDeliveryHost(key)).toBe(true);
+    gate = producerCursorGate(client, journal);
+    rebind = bindStructuredDeliveryQueue([], { registry, client: gate.client });
+    await Promise.race([gate.started, rebind]);
+    expect(hasStructuredDeliveryHost(key)).toBe(true);
 
-  /* A kill effect drains through the controller's termination path while the
-     registration is still parked. */
-  // This fake host has no process. Publish that fact so the registry's
-  // inactive-row termination fence can authorize its teardown.
-  registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!, status: "unhosted" });
-  journal.executeOperation({
-    kind: "kill",
-    operationId: "operation-handover-terminate",
-    idempotencyKey: "handover-terminate",
-    conversationId,
-    sessionKey: key,
-  });
-  await kickStructuredDeliveryQueue();
-  await settles(() => {
-    const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
-    return status === "delivered" || status === "failed" || status === "rejected";
-  }, "the kill receipt");
-  expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
-  // Inactive-row retirement detaches the transport. Without process identity
-  // it cannot authorize the transport's release callback to signal anything.
-  expect(releases.count).toBe(0);
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
+    /* A kill effect drains through the controller's termination path while the
+       registration is still parked. */
+    // This fake host has no process. Publish that fact so the registry's
+    // inactive-row termination fence can authorize its teardown.
+    registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!, status: "unhosted" });
+    journal.executeOperation({
+      kind: "kill",
+      operationId: "operation-handover-terminate",
+      idempotencyKey: "handover-terminate",
+      conversationId,
+      sessionKey: key,
+    });
+    await kickStructuredDeliveryQueue();
+    await settles(() => {
+      const status = journal.operationResult("operation-handover-terminate")?.receipt.status;
+      return status === "delivered" || status === "failed" || status === "rejected";
+    }, "the kill receipt");
+    expect(journal.operationResult("operation-handover-terminate")?.receipt.status).toBe("delivered");
+    // Inactive-row retirement detaches the transport. Without process identity
+    // it cannot authorize the transport's release callback to signal anything.
+    expect(releases.count).toBe(0);
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
 
-  gate.open();
-  await rebind;
+    gate.open();
+    await rebind;
 
-  expect(hasStructuredDeliveryHost(key)).toBe(false);
-  expect(releases.count).toBe(0);
-
-  await close();
+    expect(hasStructuredDeliveryHost(key)).toBe(false);
+    expect(releases.count).toBe(0);
+  } finally {
+    gate?.open();
+    try { await rebind; }
+    finally { await close(); }
+  }
 });
 
 test("a carried-over host whose registration fails is retried and delivers exactly once (#1191)", async () => {

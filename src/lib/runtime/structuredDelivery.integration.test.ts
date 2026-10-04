@@ -15,6 +15,7 @@ import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
@@ -1295,8 +1296,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     return { target: null, path: artifactPath, conversationId, spawned: true } as const;
   };
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client, recover });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client, recover });
     const sendOperationId = "operation-send-before-kill";
     journal.executeOperation({
       kind: "send",
@@ -1355,9 +1361,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
-    await ownedProcess.stop();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
@@ -1435,8 +1440,13 @@ test("a failed kill projection retries through the coalesced drain and terminali
     },
   });
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client });
     const operationId = "operation-kill-projection-retry";
     journal.executeOperation({
       kind: "kill",
@@ -1457,9 +1467,8 @@ test("a failed kill projection retries through the coalesced drain and terminali
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
-    await ownedProcess.stop();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
