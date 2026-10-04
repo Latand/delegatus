@@ -18,7 +18,6 @@ const fixtures: string[] = [];
 const fixtureRoots = new Map<string, { tempRoot: string; dev: number; ino: number; label: string }>();
 let cleanupCase: string | null = null;
 const children = new Set<ReturnType<typeof spawn>>();
-const closedChildren = new WeakSet<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
 const terminalOwners = new Map<number, { startIdentity: string; role: string; fixtureCwd: boolean }>();
 const ownedIdentity = (pid: number) => process.platform === "win32" ? windowsBackend.processIdentity(pid) : readStartIdentity(pid);
@@ -34,7 +33,6 @@ function assertFixtureRoot(root: string) {
 }
 function track(child: ReturnType<typeof spawn>) {
   children.add(child);
-  child.once("close", () => closedChildren.add(child));
   if (child.pid) { const identity = ownedIdentity(child.pid); if (identity) owners.set(child.pid, identity); }
 }
 function observeTerminal(child: ReturnType<typeof spawn>, root: string) {
@@ -85,35 +83,6 @@ async function removeFixture(root: string, ports: {
     }
   }
 }
-function handleEvidence(root: string, childFacts: Record<string, unknown>[]) {
-  if (process.platform !== "win32") return;
-  const within = (cwd: string | null) => {
-    if (cwd === null) return false;
-    const relative = path.relative(root, cwd);
-    return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
-  };
-  cleanupEvidence("busy-test-process", { pid: process.pid, startIdentity: ownedIdentity(process.pid), kernelCwdInsideFixture: within(windowsBackend.readCwd(process.pid)), jsCwdInsideFixture: within(process.cwd()), childFacts });
-  const exe = process.env.DELEGATUS_TEST_HANDLE_EXE;
-  if (!exe) { cleanupEvidence("handle-observer-unavailable"); return; }
-  const result = spawnSync(exe, ["-accepteula", "-nobanner", "-vt", path.basename(root)], { encoding: "utf8", timeout: 10000, maxBuffer: 65536, windowsHide: true });
-  const lines = (result.stdout ?? "").trim().split(/\r?\n/).map(line => line.split("\t").map(field => field.replace(/^"|"$/g, "")));
-  const header = lines[0]?.map(field => field.toLowerCase()) ?? [];
-  const column = (name: string, fallback: number) => { const index = header.indexOf(name); return index === -1 ? fallback : index; };
-  resetWindowsSnapshotForTests();
-  const holders = lines.flatMap(fields => {
-    const pid = Number(fields[column("pid", 1)]), target = fields[column("name", 4)] ?? "";
-    if (!Number.isInteger(pid) || pid <= 0 || !target.toLowerCase().includes(path.basename(root).toLowerCase())) return [];
-    const startIdentity = ownedIdentity(pid), parentPid = windowsBackend.readPpid(pid);
-    const rawClass = fields[column("process", 0)]?.toLowerCase();
-    const processClass = ["bun.exe", "node.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "msmpeng.exe"].includes(rawClass ?? "") ? rawClass : "other";
-    const handle = fields[column("handle", 3)] ?? "";
-    return [{ pid, startIdentity, processClass, self: pid === process.pid, recordedOwner: owners.get(pid) === startIdentity,
-      parentPid, parentRecorded: parentPid !== null && owners.has(parentPid), cwdInsideFixture: within(windowsBackend.readCwd(pid)),
-      handle: /^[\da-f]+$/i.test(handle) ? handle : "unparsed", type: fields[column("type", 2)] === "File" ? "File" : "other",
-      entry: target.toLowerCase().endsWith(path.basename(root).toLowerCase()) ? "fixture-root" : /[/\\]package$/i.test(target) ? "package-directory" : /[/\\]environment\.json$/i.test(target) ? "credential-file" : "fixture-entry" }];
-  }).slice(0, 32);
-  cleanupEvidence("busy-handles", { exit: result.status, spawnError: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null, stderrPresent: Boolean(result.stderr), stdoutBytes: Buffer.byteLength(result.stdout ?? ""), holders });
-}
 async function stop(child: ReturnType<typeof spawn>) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (!child.pid || owners.get(child.pid) !== ownedIdentity(child.pid)) throw new Error("Owned child identity could not be verified");
@@ -124,7 +93,6 @@ async function stop(child: ReturnType<typeof spawn>) {
 afterEach(async () => {
   cleanupEvidence("teardown-start", { terminalOwners: [...terminalOwners].map(([pid, record]) => ({ pid, ...record, exited: ownerExited(pid, record.startIdentity) })) });
   for (const child of children) await stop(child);
-  const childFacts = [...children].map(child => ({ pid: child.pid, startIdentity: child.pid ? owners.get(child.pid) : null, closeObserved: closedChildren.has(child), stdoutDestroyed: child.stdout?.destroyed ?? true, stderrDestroyed: child.stderr?.destroyed ?? true }));
   children.clear();
   for (const [pid, identity] of owners) {
     if (ownerExited(pid, identity)) { cleanupEvidence("owner-exited", { pid, startIdentity: identity }); continue; }
@@ -148,10 +116,6 @@ afterEach(async () => {
     catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
       cleanupEvidence("removal-refused", { elapsedMs: Date.now() - started, code: code ?? "non-filesystem-error" });
-      if (code === "EBUSY" || code === "EPERM") {
-        try { handleEvidence(root, childFacts); }
-        catch { cleanupEvidence("handle-observer-failed"); }
-      }
       throw error;
     }
     if (existsSync(root)) throw new Error("Fixture removal did not complete");
