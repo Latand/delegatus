@@ -62,3 +62,28 @@ test("a feed with no feed rows still reads every row", () => {
   scroller.append(item);
   expect(rowEdgeCut(scroller)).toEqual({ hidden: 30, shown: 70 });
 });
+
+test("a rest on a row boundary reads the rows beside the edge, however many rows are mounted", () => {
+  /* The browser's hit test at the edge lands on the container that holds the
+     rows, not on a row: the probes of the ink reading would then walk one
+     rectangle per mounted row. On a boundary nothing crosses the edge, so they
+     are not asked. */
+  const readsAtBoundary = (count: number) => {
+    const feed = feedAt(count, (count / 2) * ROW_PX);
+    const content = document.createElement("div") as unknown as HTMLElement;
+    content.getBoundingClientRect = () => ({ top: -(count / 2) * ROW_PX, bottom: (count / 2) * ROW_PX, height: count * ROW_PX, left: 0, right: 390, width: 390 }) as DOMRect;
+    content.append(...Array.from(feed.scroller.children));
+    feed.scroller.append(content);
+    let probes = 0;
+    Object.assign(document, { elementFromPoint: () => { probes += 1; return content; } });
+    expect(restingDelta(feed.scroller)).toBe(0);
+    expect(probes).toBe(0);
+    return feed.reads();
+  };
+  const few = readsAtBoundary(150);
+  const many = readsAtBoundary(1_500);
+  expect(many).toBeLessThan(40);
+  /* The bisection to the edge is logarithmic: ten times the rows costs a few
+     more reads, not ten times as many. */
+  expect(many).toBeLessThanOrEqual(few + 6);
+});
