@@ -1955,25 +1955,25 @@ failures. Test-only fixture corrections make their whole-path runs pass:
 
 ### Notes
 
-One later candidate series was 19 pass / 1 fail: a denied-success fixture
-injected `EPERM` and returned conservative `worker-cleanup` with all 22
-reported PIDs absent. The fixture now tracks actual injected denial and
-accepts that outcome only for denied success with the exact fresh failed
-`collector-crash` / `worker-cleanup` diagnostic and `EPERM` in its causes.
-Uninjected success requires `complete` except for the exact ownership
-diagnostic below; descendant absence and released handles are mandatory.
-Denial is a retained secondary cause;
-it does not establish which separate ownership check refused verification.
+Later 19/1 candidate series exposed two fixture races. The TERM handler exited
+immediately after spawning its child, allowing the owner identity to change
+during cleanup verification. The redirected fixture also used a short `sleep`
+loop, which continuously created and removed namespace members. The handler now
+stays alive until cleanup's later `SIGKILL`, and the worker uses one persistent
+blocking child with `wait`; the process tree stays stable without consuming a
+CPU. This retains the TERM-created escaped child and leaves the production
+ownership diagnostic strict.
 
-A later committed-head series was also 19/1, with every reported PID absent:
-redirected success returned the exact namespace-member identity-change cleanup
-diagnostic. Production reads a member identity, then its namespace and identity
-again; a member exiting between those probes conservatively fails ownership
-verification even when containment subsequently proves absence. Success
-fixtures now also accept only that exact two-cause `worker-cleanup` diagnostic.
-`EPERM` still requires the denied-success fixture and actual injected denial.
-Any other cleanup cause fails. Immediate escaped-PID absence and released
-handles are asserted before either diagnostic branch.
+Final verification on this repaired head passed the named test **20/20** in
+separate processes, each with isolated `HOME`, `LLV_STATE_DIR` and `TMPDIR`;
+the whole `src/lib/resources.test.ts` path passed **69/0**. The test samples
+each escaped PID immediately at outcome settlement and requires zero
+referenced handles. Both ordinary success and the denied-signal success case
+  require exact `fresh: true, status: complete`; the latter also asserts that its
+  `EPERM` was actually injected. Any cleanup diagnostic on either success case
+  fails. The malformed-output, crash and timeout cases retain their exact
+expected outcomes; a substituted `status: failed` cannot satisfy the
+healthy-success expectation.
 
 A flaky main test read once on each side can be reported as **NEW** when the
 baseline passes and head fails. The hook's cached baseline can retain that

@@ -1670,7 +1670,9 @@ describe("resource recurring reads", () => {
             '  if (!/^\\d+$/.test(hostPid)) throw new Error("expected one escaped child");',
             '  fs.writeFileSync(escapedPid, hostPid);',
             '  child.unref();',
-            '  process.exit(0);',
+            // Keep the owner present while cleanup verifies its identity. The
+            // later SIGKILL removes it and the escaped child together.
+            '  setInterval(() => {}, 1_000);',
             '});',
             'fs.writeFileSync(memberReady, "ready");',
             'setInterval(() => {}, 1_000);',
@@ -1688,7 +1690,9 @@ describe("resource recurring reads", () => {
               : fixture.name === "timeout"
                 ? `kill -TERM "$member_pid"; while [ ! -e "${escapedReady}" ]; do sleep 0.005; done`
               : fixture.output,
-            "while :; do sleep 0.01; done",
+            // Avoid short-lived sleep children racing namespace ownership
+            // verification; one blocking child keeps the process tree stable.
+            "tail -f /dev/null & wait",
           ];
         }, async (directory) => {
           const baseline = referencedHandles();
@@ -1734,30 +1738,8 @@ describe("resource recurring reads", () => {
 
           expect(leaked, `${label} escaped descendant`).toBe(fixture.escapedAtSettlement);
           expect(newReferencedHandleCount(baseline), `${label} referenced handles`).toBe(0);
-          if ((fixture.name === "success" || fixture.name === "denied success cleanup")
-            && outcome.diagnostic.status === "failed") {
-            // A process can exit between ownership probes. Cleanup still
-            // proves absence but conservatively refuses an unverified success.
-            const identityChange = "resource collector PID namespace member identity changed before cleanup";
-            const secondaryCause = outcome.diagnostic.failure?.causes?.[1];
-            if (secondaryCause === "EPERM") {
-              expect(fixture.name, `${label} denied fixture`).toBe("denied success cleanup");
-              expect(injectedDenial, `${label} injected denial`).toBeTrue();
-            } else {
-              expect(secondaryCause, `${label} ownership race`).toBe(identityChange);
-            }
-            expect(outcome.diagnostic, label).toMatchObject({
-              fresh: true,
-              status: "failed",
-              degradedReason: "collector-crash",
-              failure: {
-                cause: "worker-cleanup",
-                causes: ["resource collector worker cleanup ownership verification failed", secondaryCause],
-              },
-            });
-          } else {
-            expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
-          }
+          if (fixture.denyEscaped) expect(injectedDenial, `${label} injected denial`).toBeTrue();
+          expect(outcome.diagnostic, label).toMatchObject(fixture.expected);
         });
       }
     }
