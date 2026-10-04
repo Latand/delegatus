@@ -122,10 +122,9 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(content ? { text: content.content.text, images: content.content.images, contentDigest: content.contentDigest } : {}),
       ...(runtime ? { runtime } : {}), ...(turnId !== undefined ? { turnId } : {}),
       ...(parseSelectedContextRef(body.selectedContext) ? { selectedContext: parseSelectedContextRef(body.selectedContext)! } : {}),
-      /* #1117 authorship, which the route stamps server-side before this reads
-         it. A queued message is a message, and it carries the same provenance a
-         message sent straight through does. */
-      ...(withContent && parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
+      /* The route stamps authorship server-side. Controls retain it too so
+         autonomous dispatch cannot become operator work during journal replay. */
+      ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
     };
   }
 

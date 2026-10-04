@@ -444,6 +444,8 @@ export function launchDetached(input: {
 }
 
 export interface HeadlessCodexRunRequest {
+  /** Autonomous callers carry their admission fence through publication waits. */
+  autonomousAdmissionHeld?: () => boolean;
   /** `runs` map key; a duplicate while a run is live resolves `failed`. */
   key: string;
   /** The child's working directory, created if it does not exist. */
@@ -467,6 +469,7 @@ export interface HeadlessCodexRunRequest {
  * the detached child finishes its own turn and exits.
  */
 export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Promise<HeadlessRunResult> {
+  if (request.autonomousAdmissionHeld?.()) return { status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null };
   const outputPath = path.join(request.artifactDir, "last-message.md");
   const stdoutPath = path.join(request.artifactDir, "stdout.log");
   const stderrPath = path.join(request.artifactDir, "stderr.txt");
@@ -519,6 +522,10 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
         signal: exit?.signal ?? null,
       });
     };
+    if (request.autonomousAdmissionHeld?.()) {
+      resolve({ status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null });
+      return;
+    }
     const launched = launchDetached({
       key: request.key,
       built,

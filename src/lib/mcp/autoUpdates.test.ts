@@ -59,6 +59,8 @@ let controlOrigin = "";
 let routeRequests: { method: string; pathname: string }[] = [];
 let service: SelfUpdateService | null = null;
 let releaseTarget: { revision: string } | null = { revision: RELEASE };
+/** The revision the runtime host answers health from; null is a host that does not answer. */
+let hostRevision: string | null = null;
 let heldAutoAnswer: { applied(): void; release: Promise<void>; used: boolean } | null = null;
 let heldSnapshotHealth: { entered(): void; release: Promise<void>; used: boolean; skip: number } | null = null;
 let deploymentAnswer: ViewerDeploymentStatus | null = null;
@@ -116,6 +118,7 @@ beforeEach(() => {
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
   deploymentAnswer = null;
+  hostRevision = null;
 });
 
 afterEach(() => {
@@ -130,6 +133,7 @@ afterEach(() => {
   heldAutoAnswer = null;
   heldSnapshotHealth = null;
   deploymentAnswer = null;
+  hostRevision = null;
 });
 
 function serviceDeps(dir: string): ServiceDeps {
@@ -147,6 +151,7 @@ function serviceDeps(dir: string): ServiceDeps {
     createRunner: () => { throw new Error("no runner in managed mode"); },
     requestRestart: () => { throw new Error("no restart in this fixture"); },
     processAlive: () => true,
+    processIdentity: () => null,
     hostHealth: async () => {
       if (heldSnapshotHealth && heldSnapshotHealth.skip > 0) {
         heldSnapshotHealth.skip -= 1;
@@ -157,7 +162,7 @@ function serviceDeps(dir: string): ServiceDeps {
         heldSnapshotHealth.entered();
         await heldSnapshotHealth.release;
       }
-      return null;
+      return hostRevision ? { pid: 102, startIdentity: "fixture", hostEpoch: 1, generation: { revision: hostRevision } } : null;
     },
     requestDeployment: async () => { throw new Error("no deployment in this fixture"); },
     readDeployment: async () => deploymentAnswer,
@@ -252,9 +257,14 @@ function seedTerminalRollback(): void {
   const deploymentId = "rollback-deployment";
   const idempotencyKey = `self-update-${RELEASE.slice(0, 12)}-${clientKey}`;
   const at = "2026-09-30T10:00:00.000Z";
+  /* The rollback left both processes on the release the deployment started
+     from: a failed deployment keeps its custody until that is observed. */
+  const previous = "9".repeat(40);
+  releaseTarget = { revision: previous };
+  hostRevision = previous;
   fs.mkdirSync(path.dirname(autoFile()), { recursive: true });
   writeAuto(autoFile(), { ...initialAuto(), enabled: true,
-    managedPending: { target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, clientKey, at } });
+    managedPending: { target: { sha: RELEASE, short: RELEASE.slice(0, 7), version: "", date: "" }, clientKey, at, from: previous } });
   writeManagedRecord(path.join(sandbox, "self-update", "managed.json"), {
     deploymentId, idempotencyKey, trigger: "auto", target: RELEASE, targetShort: RELEASE.slice(0, 7), targetVersion: null,
     requestedAt: at, observed: { image: at }, lastStep: "image", finishedAt: null, phase: "building", error: null, servingProgress: null,

@@ -13,6 +13,7 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-engine
 const { createWorkflowFromRequest, patchWorkflow, tickWorkflows } = await import("./engine");
 const { accountManager } = await import("@/lib/accounts/manager");
 const { loadWorkflows, saveWorkflows } = await import("./store");
+const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
 
 type Workflow = import("./types").Workflow;
 type WorkflowPorts = import("./engine").WorkflowPorts;
@@ -275,6 +276,22 @@ test("createWorkflowFromRequest stamps the scanner project key, basename as fall
     ports,
   ));
   expect(fallback.workflow?.project).toBe("tool-dir");
+});
+
+test.each(["auto", "manual"] as const)("update admission holds fresh %s workflow stages without consuming their launch identity", async (mode) => {
+  const { ports, state } = makeHarness();
+  const workflow = await createWf(ports, { mode });
+  await tickWorkflows([], ports); // Provision before establishing the hold.
+  writeDrain(drainFile(), { id: "workflow-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  try {
+    for (let i = 0; i < 3; i++) await tickWorkflows([], ports);
+    expect(state.spawnCount).toBe(mode === "auto" ? 0 : 1);
+    if (mode === "auto") expect(load(workflow.id).stageRuns[0]?.startedAt).toBeNull();
+    releaseDrain(drainFile(), "workflow-drain");
+    for (let i = 0; i < 3; i++) await tickWorkflows([], ports);
+    expect(state.spawnCount).toBe(1);
+    expect(load(workflow.id).stageRuns[0]?.paneId).toBe("%1");
+  } finally { releaseDrain(drainFile(), "workflow-drain"); }
 });
 
 test("long workflow tasks retain a distinct stage suffix", async () => {

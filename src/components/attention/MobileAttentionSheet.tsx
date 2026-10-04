@@ -19,10 +19,12 @@ import type { FrameRole } from "@/lib/roleFrames";
 import type { AttentionItem } from "../attention";
 import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fileModelLabel, fmtAgeSeconds } from "../utils";
+import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
+import { openSelfUpdate } from "../selfUpdate/openSelfUpdate";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
+import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -121,6 +123,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const navState = useMobileNav();
   const here = screen ?? topScreen(navState);
   const open = (entry: MobileAttentionEntry) => {
+    if (entry.kind === "update") { openSelfUpdate(); return; }
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
@@ -128,6 +131,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const clear = (list: readonly MobileAttentionEntry[], text: string) => {
     if (!list.length) return;
     const { target, subjects } = needsYouDismissal(list);
+    if (!subjects.length) return;
     showReceipt(text, { kind: "undo", run: () => void dismiss(target, subjects, { undo: true, surface: "phone" }) });
     void dismiss(target, subjects, { surface: "phone" }).then((result) => {
       if (!result.ok) showReceipt(t("attention.dismissFailed", { error: result.error }), null, { error: true });
@@ -137,11 +141,14 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     const since = needsYouEntrySince(entry);
     return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
   };
-  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
+  const dismissible = needsYouDismissibleCount(entries);
   const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
+    // The card keeps the sheet's content gutter; a bare card ran edge to edge.
+    if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
@@ -168,7 +175,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
-      extra={entries.length || onToggleFilter ? (
+      extra={dismissible || onToggleFilter ? (
         <>
           {onToggleFilter ? (
             <button
@@ -183,15 +190,15 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
               <Filter className="h-[18px] w-[18px]" aria-hidden />
             </button>
           ) : null}
-          {entries.length ? (
+          {dismissible ? (
             <button
               type="button"
               data-needs-you-dismiss-all=""
               className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               title={t("attention.dismissAllTitle")}
-              onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: entries.length }) }))}
+              onClick={() => clear(entries, t("needs.dismissedReceipt", { title: t("attention.dismissAll", { count: dismissible }) }))}
             >
-              {t("attention.dismissAll", { count: entries.length })}
+              {t("attention.dismissAll", { count: dismissible })}
             </button>
           ) : null}
         </>
@@ -240,15 +247,15 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
                       <span className="shrink-0 text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
                     </MobileSheetSection>
                   </button>
-                  <button
+                  {needsYouDismissibleCount(section.entries) ? <button
                     type="button"
                     data-needs-you-dismiss-section={section.project}
                     aria-label={t("attention.dismissAllIn", { project: name })}
                     className="inline-flex min-h-11 shrink-0 items-center rounded-[8px] px-3 text-label font-semibold text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
                     onClick={() => clear(section.entries, t("needs.dismissedReceipt", { title: name }))}
                   >
-                    {t("attention.dismissSection", { count: section.entries.length })}
-                  </button>
+                    {t("attention.dismissSection", { count: needsYouDismissibleCount(section.entries) })}
+                  </button> : null}
                 </div>
                 {isFolded ? null : section.entries.map(row)}
               </div>

@@ -33,6 +33,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -114,6 +115,9 @@ import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import { statePath } from "@/lib/configDir";
+import { readAuto } from "@/lib/selfUpdate/auto";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
@@ -1435,6 +1439,18 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  let autonomous = !!dependencies;
+  if (dependencies) {
+    try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
+    catch { /* Unavailable attribution retains the autonomous admission restriction. */ }
+  }
+  const hold = dependencies ? activeDrain() : null;
+  if (hold && autonomous) {
+    throw new McpToolRefusal("new launches are held while the automatic update drains running work", {
+      code: "launch_held_for_update", target: hold.target, since: hold.since,
+      blockers: readAuto(statePath("self-update", "auto.json")).lastBlockers,
+    });
+  }
   validateExplicitMcpLaunchModel(args);
   if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
     const caller = dependencies ? attributionOf(dependencies) : null;
@@ -1477,7 +1493,9 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     }
   }
   const launcher = mcpSpawnLauncher(dependencies);
-  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), spawnControlHeaders());
+  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
+    ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
+  });
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
@@ -4065,7 +4083,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
   const auto = objectRecord(snapshot.auto) ? snapshot.auto : {};
   const target = objectRecord(auto.target) ? auto.target : null;
   const history = Array.isArray(snapshot.history) ? snapshot.history.filter(objectRecord) : [];
-  return {
+  const answer: McpToolPayload = {
     mode: snapshot.mode ?? null,
     availability: auto.availability ?? null,
     enabled: auto.enabled === true,
@@ -4073,9 +4091,14 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
     phase: auto.phase ?? null,
     target: target ? { sha: target.sha ?? null, short: target.short ?? null, version: target.version || null } : null,
     green: auto.green ?? null,
-    blockers: auto.blockers ?? null,
+    blockers: objectRecord(auto.blockers) ? { ...auto.blockers,
+      turnList: Array.isArray(auto.blockers.turnList) ? auto.blockers.turnList.slice(0, 20) : [],
+      stageList: Array.isArray(auto.blockers.stageList) ? auto.blockers.stageList.slice(0, 20) : [],
+    } : null,
     waitingSince: auto.waitingSince ?? null,
     longWait: auto.longWait === true,
+    drain: auto.drain ?? null,
+    decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,
     changedAt: auto.changedAt ?? null,
     changedBy: auto.changedBy ?? null,
     recentChanges: history
@@ -4083,6 +4106,15 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
       .slice(0, 5)
       .map((entry) => ({ at: entry.at, enabled: entry.kind === "auto-on", writer: entry.writer ?? null })),
   };
+  // Names share a byte budget; totals and drain times survive truncation.
+  const bounded = JSON.parse(JSON.stringify(answer, (_key, value) => typeof value === "string" ? value.slice(0, 400) : value)) as McpToolPayload;
+  const blockers = objectRecord(bounded.blockers) ? bounded.blockers : null;
+  const turns = Array.isArray(blockers?.turnList) ? blockers.turnList : [];
+  const stages = Array.isArray(blockers?.stageList) ? blockers.stageList : [];
+  while (Buffer.byteLength(JSON.stringify(bounded)) >= 5_800 && (turns.length || stages.length)) {
+    if (turns.length >= stages.length) turns.pop(); else stages.pop();
+  }
+  return bounded;
 }
 
 /**

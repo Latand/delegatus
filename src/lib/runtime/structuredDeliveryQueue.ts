@@ -17,6 +17,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
+import { StructuredRecoveryHeldForUpdateError, type StructuredRecoveryRequest } from "./structuredRecovery";
 
 export interface StructuredDeliveryEffect {
   id: string;
@@ -44,6 +45,8 @@ interface StructuredOperationStatus {
 export interface StructuredDeliveryQueuePort {
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
+  /** Hold a fresh autonomous turn while original accepted work settles. */
+  autonomousTurnHeld?(operationId: string, admittedAt?: string): boolean;
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
@@ -113,7 +116,7 @@ export type StructuredHostResolver = (conversationId: string) => EngineHost | nu
     whether it started one. A {@link StructuredRecoveryContendedError} says the
     attempt was refused before it reserved anything; the queue keeps the
     operation queued and tries again on a bounded schedule (#1716). */
-export type StructuredHostRecovery = (conversationId: string) => Promise<boolean>;
+export type StructuredHostRecovery = (conversationId: string, admission?: Pick<StructuredRecoveryRequest, "origin" | "operationId" | "admittedAt">) => Promise<boolean>;
 export type StructuredKillRefusal = (conversationId: string) => string | null | Promise<string | null>;
 
 const STRUCTURED_DELIVERY_BATCH_SIZE = 100;
@@ -940,6 +943,7 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+    let updateHeld = false;
     if (this.port.handoffHeld?.()) return true;
     if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
       && this.nativeExecutionRetries.get(effects[0]!.conversationId)?.ready() === false) {
@@ -1108,6 +1112,13 @@ export class StructuredDeliveryQueue {
         continue;
       }
       if (effect.kind === "native-queue") {
+        const admission = durableStatuses.get(effect.operationId);
+        const startsWork = effect.action === "add" || effect.action === "start" || effect.action === "send-now";
+        if (startsWork && effect.origin?.kind === "agent" && admission?.status !== "delivering"
+          && this.port.autonomousTurnHeld?.(effect.operationId, admission?.admittedAt ?? admission?.at)) {
+          updateHeld = true;
+          continue;
+        }
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
         if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
           ? "conversation was intentionally terminated" : undefined)) return true;
@@ -1162,10 +1173,14 @@ export class StructuredDeliveryQueue {
         continue;
       }
       const host = this.resolveHost(effect.conversationId);
+      const heldForUpdate = () => (effect.kind === "send" || effect.kind === "steer") && effect.origin?.kind === "agent"
+        && !!this.port.autonomousTurnHeld?.(effect.operationId, durableStatuses.get(effect.operationId)?.admittedAt
+          ?? durableStatuses.get(effect.operationId)?.at);
       if (!host) {
+        if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
-        await this.recoverUnavailableHost(effect);
+        await this.recoverUnavailableHost(effect, durableStatuses.get(effect.operationId));
         return true;
       }
       /* The live host's state, and the fence that decides whether this message
@@ -1176,9 +1191,10 @@ export class StructuredDeliveryQueue {
       if (!state.readable) return this.fenceUnavailable();
       const health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
+        if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
-        await this.recoverUnavailableHost(effect);
+        await this.recoverUnavailableHost(effect, durableStatuses.get(effect.operationId));
         return true;
       }
       /* #1560: injection leaves the group here, before a single line of the
@@ -1203,6 +1219,9 @@ export class StructuredDeliveryQueue {
          already ended leaves nothing to interrupt and the message simply starts
          one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
       const steerByInterrupt = !steerOrQueue && steerRequested && host.steerFallback === "interrupt";
+      // Only in-turn steering joins the original cohort. Interrupt fallback
+      // replaces that turn and must wait along with other fresh turn starts.
+      if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; continue; }
       /* A host that DECLARED it cannot steer, which is the Claude broker: its
          write would land as an interrupt the operator never asked for, so the
          message is refused here rather than delivered as something else.
@@ -1438,7 +1457,7 @@ export class StructuredDeliveryQueue {
           : {}),
       });
     }
-    return Boolean(switchDeferred) || nativeReceiptUnavailable;
+    return Boolean(switchDeferred) || nativeReceiptUnavailable || updateHeld;
   }
 
   private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {
@@ -2041,10 +2060,14 @@ export class StructuredDeliveryQueue {
    * in recovery arrives unmarked and settles failed with every other failure,
    * since trying again there could reserve a second successor.
    */
-  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId">): Promise<void> {
+  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId"> & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
     try {
-      const recovered = await this.recoverHost(effect.conversationId);
+      const recovered = await this.recoverHost(effect.conversationId, {
+        operationId: effect.operationId,
+        origin: effect.origin,
+        admittedAt: status?.admittedAt ?? status?.at,
+      });
       this.contendedRecoveries.delete(effect.operationId);
       if (recovered) {
         this.rerun = true;
@@ -2054,6 +2077,10 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
+      if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        this.retrySoon();
+        return;
+      }
       let reason = `structured host recovery failed: ${failureReason(error)}`;
       if (error instanceof StructuredRecoveryContendedError) {
         const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;

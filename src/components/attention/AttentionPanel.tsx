@@ -7,6 +7,7 @@ import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 
+import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
@@ -15,6 +16,7 @@ import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay"
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
+  needsYouDismissibleCount,
   needsYouEntryRole,
   needsYouEntrySince,
   needsYouLaneLine,
@@ -127,6 +129,7 @@ export function AttentionPanel({
   const run = useCallback((entries: readonly MobileAttentionEntry[]) => {
     if (!entries.length) return;
     const { target, subjects } = needsYouDismissal(entries);
+    if (!subjects.length) return;
     setError(null);
     setLast({ target, subjects });
     void dismiss(target, subjects, { surface: "desktop" }).then((result: DismissalRequestOutcome) => {
@@ -147,6 +150,7 @@ export function AttentionPanel({
   }, [dismiss, last, t]);
 
   const docked = placement === "docked";
+  const dismissible = needsYouDismissibleCount(queue);
   const title = t("attention.panelTitle", { count: queue.length });
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
@@ -164,9 +168,9 @@ export function AttentionPanel({
           <Undo2 className="h-3.5 w-3.5" aria-hidden />
         </button>
       ) : null}
-      {queue.length ? (
+      {dismissible ? (
         <button type="button" className={QUIET} data-needs-you-dismiss-all="" title={t("attention.dismissAllTitle")} onClick={() => run(queue)}>
-          {t("attention.dismissAll", { count: queue.length })}
+          {t("attention.dismissAll", { count: dismissible })}
         </button>
       ) : null}
       {docked || canDock ? (
@@ -211,7 +215,7 @@ export function AttentionPanel({
                 <span className="min-w-0 truncate">{name}</span>
                 <span className="text-caption font-semibold tabular-nums text-muted" data-needs-you-section-count="">{section.entries.length}</span>
               </button>
-              <button
+              {needsYouDismissibleCount(section.entries) ? <button
                 type="button"
                 className={QUIET}
                 data-needs-you-dismiss-section={section.project}
@@ -219,8 +223,8 @@ export function AttentionPanel({
                 title={t("attention.dismissAllIn", { project: name })}
                 onClick={() => run(section.entries)}
               >
-                {t("attention.dismissSection", { count: section.entries.length })}
-              </button>
+                {t("attention.dismissSection", { count: needsYouDismissibleCount(section.entries) })}
+              </button> : null}
             </div>
             {isFolded ? null : section.entries.map((entry) => (
               <NeedsYouRow
@@ -274,6 +278,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   onDismiss: () => void;
 }) {
   const { t } = useLocale();
+  if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const title = entry.kind === "conversation" ? entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90) : entry.row.task;

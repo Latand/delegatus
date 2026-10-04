@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -247,6 +249,7 @@ export interface PipelinePorts {
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
+  drainHold?(): DrainLease | null;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -324,6 +327,9 @@ export interface PipelinePorts {
     policy?: "queue";
     project?: string;
     cwd?: string;
+    /** Admission time of the attempt this message continues. An update drain
+        delivers a follow-up to an attempt it found running and holds the rest. */
+    cohortAt?: string;
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
@@ -639,33 +645,39 @@ async function spawnPipelineAgent(
   const creatorConversationId = input.creatorConversationId?.startsWith("conversation_")
     ? registry.canonicalConversationId(input.creatorConversationId as ViewerConversationId)
     : null;
-  const begun = await registry.beginSpawnRequestAsync({
-    engine: input.role.engine,
-    cwd: input.cwd,
-    transport: "structured",
-    accountId: account.accountId,
-    accountPin: input.role.engine !== "claude" || Boolean(input.requestedAccountId),
-    parentConversationId: parent.conversationId,
-    parentSessionKey: parent.sessionKey,
-    parentArtifactPath: parent.conversationId ? input.parentPath : null,
-    role: input.role.roleId,
-    /* Container origin (#393): admission keys on the pipeline creator, so a
-       reviewer-lineage-parent stage stays admissible while a reviewer-created
-       pipeline is terminally rejected. Retries reuse the same origin, so
-       delegation depth is stable across rounds. */
-    origin: {
-      kind: "container",
-      container: "pipeline",
-      containerId: input.membership.containerId,
-      creatorConversationId,
-    },
-    memberships: [{ ...input.membership, parentConversationId: parent.conversationId }],
-    launchProfile,
-    clientAttemptId: input.clientAttemptId,
-    requestDigest: digest,
-    supersedes,
-    supersedesReason: "stage-retry",
-  });
+  const begun = await withAccountMutationLockAsync(() => {
+    // Recovery can reach this adapter with a reserving checkpoint but no
+    // receipt. Recheck fresh admission after the downstream account wait;
+    // an existing receipt keeps its original custody through the drain.
+    if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
+    return registry.beginSpawnRequestAsync({
+      engine: input.role.engine,
+      cwd: input.cwd,
+      transport: "structured",
+      accountId: account.accountId,
+      accountPin: input.role.engine !== "claude" || Boolean(input.requestedAccountId),
+      parentConversationId: parent.conversationId,
+      parentSessionKey: parent.sessionKey,
+      parentArtifactPath: parent.conversationId ? input.parentPath : null,
+      role: input.role.roleId,
+      /* Container origin (#393): admission keys on the pipeline creator, so a
+         reviewer-lineage-parent stage stays admissible while a reviewer-created
+         pipeline is terminally rejected. Retries reuse the same origin, so
+         delegation depth is stable across rounds. */
+      origin: {
+        kind: "container",
+        container: "pipeline",
+        containerId: input.membership.containerId,
+        creatorConversationId,
+      },
+      memberships: [{ ...input.membership, parentConversationId: parent.conversationId }],
+      launchProfile,
+      clientAttemptId: input.clientAttemptId,
+      requestDigest: digest,
+      supersedes,
+      supersedesReason: "stage-retry",
+    });
+  }, { holder: "pipeline spawn admission", caller: "spawn" });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({
@@ -1270,6 +1282,7 @@ export function defaultPipelinePorts(
        binds one, so a spawn issued there can only ever fail (#1191). With
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
+    drainHold: () => activeDrain(),
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -1519,6 +1532,7 @@ export function defaultPipelinePorts(
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
+        ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       });
       return result?.ok === true;
     },
@@ -2085,7 +2099,7 @@ async function recoverProviderCut(
   try {
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
-      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir });
+      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
     return true;
@@ -4203,6 +4217,9 @@ async function requestStageVerdictOnce(
     text: VERDICT_REQUEST_TEXT,
     project: pipeline.project,
     cwd: pipeline.repoDir,
+    /* The request continues this attempt; a recovered activation replays its
+       reserved start, so the stamp is the attempt's admission. */
+    ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
   });
   /* A refused admission leaves the request owed; the next tick asks again under
      the same identity, until the bound above runs out. */
@@ -4264,6 +4281,27 @@ class ActivationSuperseded extends Error {
   constructor() { super("stage activation changed before dispatch or settlement"); }
 }
 
+class PipelineAdmissionHeld extends Error {
+  constructor() { super("pipeline admission held for the automatic update"); }
+}
+
+function activationAwaitingAdmission(attempt: PipelineStageAttempt): boolean {
+  return attempt.activation?.phase === "reserved"
+    || attempt.activation?.phase === "reserving" && !attempt.launchId
+      && !agentRegistry().spawnReceiptForClientAttempt(attempt.activation.clientAttemptId);
+}
+
+/** Proven-unsubmitted custody is quiet while held. Preserve the counted
+ * downstream key when moving back to the reserved checkpoint. */
+function holdActivationAdmission(attempt: PipelineStageAttempt): void {
+  if (!attempt.activation) return;
+  delete attempt.activation.owner;
+  if (attempt.activation.phase === "reserving") {
+    attempt.activation.phase = "reserved";
+    attempt.activation.replay = true;
+  }
+}
+
 /** Controls and graph edits fence actuation, including a pause followed by resume. */
 function activationFence(pipeline: Pipeline): string {
   return JSON.stringify([pipeline.state, pipeline.cursor?.stageId, pipeline.stages,
@@ -4283,6 +4321,20 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
     for (const run of snapshot.runs) for (const original of run.attempts) {
       const reservation = original.activation;
       if (!reservation || activeActivations.has(reservation.id)) continue;
+      // Both checkpoints can precede registry admission; keep their identity.
+      if (ports.drainHold?.() && activationAwaitingAdmission(original)) {
+        if (!reservation.owner || processIdentityStatus(reservation.owner) === "dead") {
+          await withPipelineMutation((pipelines, persist) => {
+            const live = pipelines.find((item) => item.id === snapshot.id);
+            const attempt = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === original.n);
+            if (attempt?.activation && JSON.stringify(attempt.activation) === JSON.stringify(reservation)) {
+              holdActivationAdmission(attempt);
+              persist([live!]);
+            }
+          });
+        }
+        continue;
+      }
       const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && reservation.owner?.pid === owner.pid
         && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
       if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
@@ -4292,6 +4344,12 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           const pipeline = pipelines.find((item) => item.id === snapshot.id);
           const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
           if (!pipeline || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+          // The mutation lease may have waited while update admission closed.
+          if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
+            holdActivationAdmission(attempt);
+            persist([pipeline]);
+            return null;
+          }
           attempt.activation.owner = owner;
           if (reservation.phase !== "reserved") attempt.activation.replay = true;
           persist([pipeline]);
@@ -4322,6 +4380,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           });
         };
         let finished = false;
+        let admissionHeld = false;
         try {
           if (activation.phase === "settled") {
             finished = true;
@@ -4341,6 +4400,9 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             finished = true;
           }
         } catch (error) {
+          // No receipt was admitted. Retain the checkpoint and its original
+          // downstream key so release can recover it without another attempt.
+          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; continue; }
           if (!(error instanceof ActivationSuperseded)) throw error;
           // The callback has not granted a permit when its fresh-state CAS fails.
           finished = true;
@@ -4352,7 +4414,8 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             if (!live || current?.activation?.id !== activation.id) return;
             if (!finished) {
               // Leave uncertain dispatch in custody, readable by every generation.
-              delete current.activation.owner;
+              if (admissionHeld) holdActivationAdmission(current);
+              else delete current.activation.owner;
               persist([live]);
               return;
             }
@@ -4598,11 +4661,33 @@ async function spawnRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
+    if (error instanceof PipelineAdmissionHeld) {
+      if (attempt.activation) throw error;
+      // The legacy executor also waits at account admission. Its last call
+      // created no receipt, so release may reuse that call's counted key.
+      attempt.spawnCalls = Math.max(0, (attempt.spawnCalls ?? 1) - 1);
+      attempt.state = "pending";
+      setCursorState(pipeline, stage.id, "pending");
+      holdStageLaunch(pipeline, ports, () => {});
+      await persist();
+      return;
+    }
     park(pipeline, error instanceof Error ? error.message : String(error), attempt);
   } finally {
     /* The key only means "this spawn is in flight in this process". */
     spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
   }
+}
+
+function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
+  const hold = ports.drainHold?.();
+  if (hold) {
+    const detail = `held for the automatic update to ${hold.target.slice(0, 7)} since ${hold.since}`;
+    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
+    return true;
+  }
+  if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  return false;
 }
 
 async function tickRunStage(
@@ -4646,6 +4731,7 @@ async function tickRunStage(
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
     if (publication === "unbound") return;
+    if (holdStageLaunch(pipeline, ports, persist)) return;
     if (waitForMemory(pipeline, stage, attempt, ports)) return;
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
@@ -5291,6 +5377,7 @@ async function tickReviewStage(
     if (await approvedReviewHeadHolds(pipeline, attempt, ports)) await commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
+  if (attempt.state === "pending" && holdStageLaunch(pipeline, ports, persist)) return;
   const implementer = latestAcceptedRun(pipeline, stage.id);
   if (!implementer?.agentPath) {
     park(pipeline, "review-loop stage requires an accepted run session", attempt);
@@ -7258,7 +7345,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && (pipeline.cursor?.state === "pending" || (settledGitIds.has(pipeline.id)
+      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.()) || (settledGitIds.has(pipeline.id)
         && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
         && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));

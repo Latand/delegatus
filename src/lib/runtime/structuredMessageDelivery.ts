@@ -33,7 +33,7 @@ import {
   type RuntimeSession,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -79,6 +79,10 @@ export interface StructuredMessageRequest {
       (#2051). The registry honours it only for the launch that created the
       conversation's current generation, on that generation's account. */
   launchId?: string;
+  /** Admission time of the work this message continues (a stage attempt the
+      controller follows up on). Kept on the reservation so an update drain
+      treats the message as part of that cohort. */
+  cohortAt?: string;
 }
 
 export type StructuredMessageResult =
@@ -286,6 +290,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.policy ? { policy: request.policy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
+    ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
   };
 }
 
@@ -708,6 +713,9 @@ async function recoverReclaimedMessage(
     recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
       path: request.path || conversation.generations.at(-1)?.path || "",
       conversationId: conversation.id,
+      origin: reservation.command.origin,
+      operationId: reservation.command.operationId,
+      admittedAt: reservation.createdAt,
     }, {
       registry,
       client,
@@ -776,7 +784,7 @@ export async function deliverHeldStructuredMessage(
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
-  if (!session) {
+  if (!session || (isStructuredHostKind(session.hostKind) && (session.host === "dead" || session.host === "unhosted"))) {
     const owner = persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
       return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
@@ -799,6 +807,8 @@ export async function deliverHeldStructuredMessage(
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
         conversationId: request.conversationId,
+        origin: request.command?.origin,
+        operationId: request.command?.operationId ?? request.deliveryId,
       }, {
         registry,
         client,
@@ -808,6 +818,7 @@ export async function deliverHeldStructuredMessage(
       });
       return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
     } catch (error) {
+      if (error instanceof StructuredRecoveryHeldForUpdateError) return "held";
       return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1192,6 +1203,9 @@ export async function enqueueStructuredMessage(
       recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path || session.artifactPath || "",
         conversationId: session.conversationId as ViewerConversationId,
+        origin: recoveryReservation?.command.origin,
+        operationId: recoveryReservation?.command.operationId,
+        admittedAt: recoveryReservation?.createdAt,
       }, { registry, client });
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;

@@ -8,6 +8,7 @@ import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -741,6 +742,13 @@ export async function bindStructuredDeliveryQueue(
   const queue = new StructuredDeliveryQueue(
     {
       handoffHeld: () => !!activeRestartGate(statePath("self-update", "auto-admission.json")),
+      autonomousTurnHeld: (operationId, admittedAt) => {
+        const hold = activeDrain();
+        if (!hold) return false;
+        const acceptedAt = registry.deliveryAdmissionAtForOperation(operationId) ?? admittedAt;
+        const accepted = Date.parse(acceptedAt ?? "");
+        return !Number.isFinite(accepted) || accepted >= Date.parse(hold.since);
+      },
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
@@ -1017,7 +1025,7 @@ export async function bindStructuredDeliveryQueue(
       return true;
     },
     () => scheduleAutomaticRetry(),
-    async (conversationId) => {
+    async (conversationId, admission = {}) => {
       if (!conversationId.startsWith("conversation_")) return false;
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
@@ -1027,6 +1035,7 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...admission,
       }, {
         registry,
         client,
