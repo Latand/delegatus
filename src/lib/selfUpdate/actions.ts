@@ -128,7 +128,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     }
     const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
     return unit ? { id: "restart-service", button: true, unit }
-      : { id: "restart-terminal", button: false, command };
+      : { id: "restart-terminal", button: false, command, ...(windows ? { terminalEveryUpdate: true } : {}) };
   }
   const unit = serviceFor(root);
   return unit ? { id: "start-service", button: true, unit } : { id: "start-launcher", button: false, command };

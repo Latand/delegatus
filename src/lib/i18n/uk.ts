@@ -5029,6 +5029,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.stepName.switch": "заміна",
   "selfUpdate.action.restart-service": "Перезапустіть лаунчер, щоб увімкнути оновлення одним натисканням. Сесія перепідключиться після запуску сервісу.",
   "selfUpdate.action.restart-terminal": "Перезапустіть цей лаунчер у його терміналі один раз, щоб увімкнути оновлення одним натисканням. Виконайте:",
+  "selfUpdate.action.restart-terminal-windows": "Для кожного оновлення на Windows застосуйте зібраний реліз із термінала цього лаунчера. Виконайте:",
   "selfUpdate.action.start-service": "Запустіть сервіс лаунчера, щоб відновити супровід та оновлення.",
   "selfUpdate.action.start-launcher": "Перезапустіть цю інсталяцію з її термінала через лаунчер, щоб увімкнути оновлення. Виконайте:",
   "selfUpdate.action.update-first": "Зберіть оновлення лаунчера, потім завантажте його дією, що з’явиться тут.",

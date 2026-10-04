@@ -661,7 +661,7 @@ function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: Vie
   const action = s.action;
   if (!action) return null;
   return <section data-section="install-action" className={CARD}>
-    <p className="m-0 text-ui text-secondary">{t(`selfUpdate.action.${action.id}`)}</p>
+    <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`)}</p>
     {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
     {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
       label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}

@@ -839,3 +839,14 @@ for (const mode of ["checkout", "package"] as const) for (const locale of ["en",
     if (rolledBack) expect(copy).toContain(locale === "en" ? "The previous release serves again" : "знову працює попередній реліз");
   },
 );
+
+for (const locale of ["en", "uk"] as const) test(`Windows terminal prerequisite describes every update in ${locale}`, async () => {
+  const { installAction } = await import("../../lib/selfUpdate/actions");
+  setLocale(locale);
+  const action = await installAction({ mode: "checkout", reason: null, record: {
+    launcher: { pid: 12, startIdentity: "synthetic-owner" }, checkout: "/srv/fixture", releasePointer: "/srv/fixture/pointer", port: 45123,
+  } } as never, { cgroup: () => "", ready: () => true, platform: "win32", env: {} });
+  const el = render(snapshot({ action }));
+  expect(text(el)).toContain(locale === "en" ? "For each update" : "Для кожного оновлення");
+  expect(text(el)).not.toContain(locale === "en" ? "once to enable one-click" : "один раз");
+});

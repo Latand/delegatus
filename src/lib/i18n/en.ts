@@ -5120,6 +5120,7 @@ export const en = {
   "selfUpdate.stepName.switch": "switch",
   "selfUpdate.action.restart-service": "Restart the launcher to enable one-click updates. Your session reconnects when the service returns.",
   "selfUpdate.action.restart-terminal": "Restart this launcher from its terminal once to enable one-click updates. Run:",
+  "selfUpdate.action.restart-terminal-windows": "For each update on Windows, apply the built release from this launcher’s terminal. Run:",
   "selfUpdate.action.start-service": "Start the launcher service to restore supervision and updates.",
   "selfUpdate.action.start-launcher": "Restart this install from its terminal with the launcher to enable updates. Run:",
   "selfUpdate.action.update-first": "Build the launcher upgrade, then load it with the action shown here.",

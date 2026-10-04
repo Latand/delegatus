@@ -202,6 +202,8 @@ export interface Snapshot {
 }
 
 export interface InstallAction {
+  /** Native Windows has no launcher exec capability. */
+  terminalEveryUpdate?: boolean;
   id: "restart-service" | "restart-terminal" | "start-service" | "start-launcher" | "update-first" | "docker-deployments";
   button: boolean;
   unit?: string;

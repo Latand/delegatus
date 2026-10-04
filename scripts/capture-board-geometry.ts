@@ -5683,6 +5683,10 @@ async function selfUpdateAutoMain(): Promise<void> {
         ...(id === "start-service" ? { unit: "delegatus.service" } : {}),
         ...(id === "docker-deployments" ? { command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" } : {}) } };
   }
+  states["install-windows-terminal"] = { ...states["install-restart-terminal"]!, action: {
+    id: "restart-terminal", button: false, terminalEveryUpdate: true,
+    command: "& 'bun' '$HOME/example install/bin/launcher-relaunch.mjs' --terminal '<synthetic-plan>' '$HOME/example release/bin/cli.mjs' --port=45678 --no-open; exit $LASTEXITCODE",
+  } };
   for (const rollback of [false, true]) {
     states[rollback ? "install-rollback" : "install-failed"] = { ...base, installed: revision(old), auto: { ...idleAuto,
       off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } },
@@ -5775,7 +5779,7 @@ async function selfUpdateAutoMain(): Promise<void> {
           || snapshot.action?.button && !installation.action
           || installation.buttons.some(button => !button.inside || width === 390 && (button.width < 44 || button.height < 44))) report.failures.push(`${tag}: install surface or control is unreadable`);
         if (snapshot.action) {
-          const key = `selfUpdate.action.${snapshot.action.id}` as const;
+          const key = snapshot.action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${snapshot.action.id}` as const;
           const instruction = messages[lang][key];
           if (typeof instruction !== "string" || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
           if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
