@@ -1649,10 +1649,16 @@ if (OVERVIEW_SCENE) {
 }
 /** Long-history scene uses the real parser, rows, scroll controller and CSS.
  * Only the transport is synthetic; the driver resolves an in-flight page. */
+/** `?long-operator=1` lengthens the operator's messages past the 500
+ * characters at which the feed folds one into a `<details>`; the default scene
+ * sits exactly on that limit. */
+const LONG_OPERATOR = new URLSearchParams(location.search).has("long-operator");
 const historyMessage = (n: number) => JSON.stringify({ type: "response_item", payload: {
   type: "message", id: `history-${n}`, role: n % 2 ? "assistant" : "user",
   content: [{ type: n % 2 ? "output_text" : "input_text", text: `Message ${n}\n\n` +
-    (n % 3 === 0 ? "```ts\n" + "const value = 42;\n".repeat(12) + "```" : "A synthetic paragraph with enough words to wrap on a phone.\n\n".repeat(8)) }],
+    (n % 3 === 0 && !(LONG_OPERATOR && n % 2 === 0)
+      ? "```ts\n" + "const value = 42;\n".repeat(12) + "```"
+      : "A synthetic paragraph with enough words to wrap on a phone.\n\n".repeat(LONG_OPERATOR && n % 2 === 0 ? 14 : 8)) }],
 }});
 const historyLines = Array.from({ length: 180 }, (_, n) => historyMessage(n));
 let finishHistory: ((count: number) => void) | undefined;

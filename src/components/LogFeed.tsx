@@ -201,15 +201,36 @@ function rowForAnchor(scroller: HTMLElement, key: string): HTMLElement | null {
    screen, and the reader rests deep inside it; a late image above the reader
    in that same row leaves the row's top where it was, so only the block
    under the reader can say that the content moved. The block is held as an
-   element, never in the scroll memory, which outlives the page's nodes. */
-interface ReaderAnchor extends ViewportAnchor {
+   element, never in the scroll memory, which outlives the page's nodes.
+
+   Offsets are in the scroller's own layout pixels, the unit of `scrollTop`.
+   A pane under the canvas's zoom changes every rectangle without a scroll
+   event, so an offset kept in window pixels would read the next zoom as the
+   content having moved. */
+interface ReaderAnchor {
+  path: string;
+  key: string;
+  offset: number;
   inner: { el: Element; offset: number } | null;
+}
+
+/** On-screen height over layout height: 1 on the phone, below 1 for a pane
+    under the canvas's zoom. */
+function layoutScale(scroller: HTMLElement): number {
+  const scale = scroller.offsetHeight ? scroller.getBoundingClientRect().height / scroller.offsetHeight : 1;
+  return scale > 0 ? scale : 1;
+}
+
+/** A closed `<details>` leaves its summary's other label in the DOM with no
+    box, and its rectangle then reads as zeros. */
+function hasBox(el: Element): boolean {
+  return el.getClientRects().length > 0;
 }
 
 const INNER_DEPTH = 8;
 const INNER_CHILD_CAP = 400;
 
-function innerBlock(row: HTMLElement, top: number): ReaderAnchor["inner"] {
+function innerBlock(row: HTMLElement, top: number, scale: number): ReaderAnchor["inner"] {
   let node: Element = row;
   for (let depth = 0; depth < INNER_DEPTH; depth += 1) {
     if (!node.children.length || node.children.length > INNER_CHILD_CAP) break;
@@ -221,29 +242,35 @@ function innerBlock(row: HTMLElement, top: number): ReaderAnchor["inner"] {
     if (style.display === "inline" || style.display === "contents" || (style.position !== "static" && style.position !== "relative")) break;
     node = next;
   }
-  return node === row ? null : { el: node, offset: node.getBoundingClientRect().top - top };
+  return node === row ? null : { el: node, offset: (node.getBoundingClientRect().top - top) / scale };
 }
 
 function readerAnchorAt(scroller: HTMLElement, path: string): ReaderAnchor | null {
   const viewportTop = scroller.getBoundingClientRect().top;
   const row = firstRowPastTop(readingRows(scroller), viewportTop);
   const key = row?.dataset.feedKey;
+  const scale = layoutScale(scroller);
   return row && key
-    ? { path, key, offset: row.getBoundingClientRect().top - viewportTop, inner: innerBlock(row, viewportTop) }
+    ? { path, key, offset: (row.getBoundingClientRect().top - viewportTop) / scale, inner: innerBlock(row, viewportTop, scale) }
     : null;
 }
 
-/** How far the reader's anchor has moved from where it was taken, in
-    viewport pixels; null when neither the block nor its row is on the page. */
+/** How far the reader's anchor has moved from where it was taken, in layout
+    pixels. A block with no box is as good as gone and the row stands in for
+    it; null when neither the block nor its row can say. */
 function anchorDrift(scroller: HTMLElement, anchor: ReaderAnchor): number | null {
+  if (!hasBox(scroller)) return null;
   const top = scroller.getBoundingClientRect().top;
+  const scale = layoutScale(scroller);
   const inner = anchor.inner;
-  if (inner && inner.el.isConnected && scroller.contains(inner.el)) return inner.el.getBoundingClientRect().top - top - inner.offset;
+  if (inner && inner.el.isConnected && scroller.contains(inner.el) && hasBox(inner.el)) {
+    return (inner.el.getBoundingClientRect().top - top) / scale - inner.offset;
+  }
   const row = rowForAnchor(scroller, anchor.key);
-  return row ? row.getBoundingClientRect().top - top - anchor.offset : null;
+  return row && hasBox(row) ? (row.getBoundingClientRect().top - top) / scale - anchor.offset : null;
 }
 
-/** The anchor after the reader's own travel of `distance` viewport pixels. */
+/** The anchor after the reader's own travel of `distance` layout pixels. */
 function anchorAfterTravel(anchor: ReaderAnchor, distance: number): ReaderAnchor {
   return {
     ...anchor,
@@ -288,13 +315,13 @@ class PrependViewport extends Component<PrependViewportProps> {
       : null);
     if (!row) return;
     // Measure the residual so an already restored layout is not compensated twice.
-    const bounds = el.getBoundingClientRect();
-    const delta = row.getBoundingClientRect().top - bounds.top - anchor.offset;
     // Compact panes can sit inside the scaled project canvas. DOM rectangles
-    // use viewport pixels while scrollTop uses untransformed layout pixels.
-    const scale = el.offsetHeight ? bounds.height / el.offsetHeight : 1;
-    if (delta && scale > 0) {
-      el.scrollTop += delta / scale;
+    // use viewport pixels while scrollTop and the anchor use layout pixels.
+    if (!hasBox(row)) return;
+    const bounds = el.getBoundingClientRect();
+    const delta = (row.getBoundingClientRect().top - bounds.top) / layoutScale(el) - anchor.offset;
+    if (delta) {
+      el.scrollTop += delta;
       this.props.onRestore(el);
     }
     this.props.readerAnchor.current = { path: anchor.path, key: row.dataset.feedKey!, offset: anchor.offset, inner: anchor.inner };
@@ -985,10 +1012,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         const anchor = readerAnchor.current;
         if (!anchor) return;
         const delta = anchorDrift(el, anchor);
-        const scale = el.offsetHeight ? el.getBoundingClientRect().height / el.offsetHeight : 1;
-        if (delta && scale > 0) {
+        if (delta) {
           markProgrammaticScroll();
-          el.scrollTop += delta / scale;
+          el.scrollTop += delta;
           ownTopRef.current = el.scrollTop;
         }
       }
@@ -1833,8 +1859,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             /* The feed's own write is already in the anchor; whatever else
                moved the offset is the reader's momentum, so the anchor moves
                with it instead of reading it back as drift. */
-            const scale = el.offsetHeight ? el.getBoundingClientRect().height / el.offsetHeight : 1;
-            const travel = (el.scrollTop - ownTop) * scale;
+            const travel = el.scrollTop - ownTop;
             if (travel) readerAnchor.current = anchorAfterTravel(readerAnchor.current, travel);
           }
           if (!tail.loadingOlder && !tail.loading) {

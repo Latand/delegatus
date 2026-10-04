@@ -7319,4 +7319,156 @@ describe("long conversation scroll", () => {
     // a frame of the page's own rendering can be long on a busy machine.
     expect(Math.max(...long!.restMs)).toBeLessThan(100);
   }, 300_000);
+
+  /*
+   * Folding a long operator message under the reader. Its «collapse» label is
+   * the deepest block under the top edge while the message is open; folding
+   * leaves the label in the DOM with no box, and a label with no box reads as
+   * a rectangle of zeros, which the feed used to take for the content having
+   * moved by the feed's own offset from the window. The message must stay put
+   * at every depth the label can sit at, and a row appended at the tail
+   * afterwards must not push it either.
+   */
+  browserTest("folding a long message under the reader leaves it where it was", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const depth of [-3, 3, 8, 14]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${base}/?scroll-history=1&compact=1&long-operator=1`);
+          await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+          await page.waitForTimeout(500);
+          const cdp = await context.newCDPSession(page);
+          const scroller = page.locator("[data-log-feed-scroller]");
+          // The twelfth long operator message, opened with a tap on its summary.
+          const mark = () => page.evaluate(() => {
+            const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            const details = feed.querySelectorAll<HTMLElement>("[data-user-bubble] details")[12]!;
+            details.dataset.probe = "1";
+            details.closest<HTMLElement>("[data-feed-key]")!.dataset.probeRow = "1";
+            feed.scrollTop += details.getBoundingClientRect().top - feed.getBoundingClientRect().top - 300;
+          });
+          await mark();
+          await page.waitForTimeout(400);
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(400);
+          const rowTop = () => page.evaluate(() => document.querySelector<HTMLElement>("[data-probe-row]")!.getBoundingClientRect().top
+            - document.querySelector<HTMLElement>("[data-log-feed-scroller]")!.getBoundingClientRect().top);
+          await scroller.evaluate((el, target) => {
+            const row = el.querySelector<HTMLElement>("[data-probe-row]")!;
+            el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - target;
+          }, depth);
+          await page.waitForTimeout(300);
+          // One real wheel step releases the tail, so the feed keeps an anchor of its own.
+          await scroller.hover();
+          await page.mouse.wheel(0, 1);
+          await page.waitForTimeout(900);
+          const before = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-before.png`) });
+          await tap(page, cdp, "[data-probe] > summary");
+          await page.waitForTimeout(900);
+          const folded = await rowTop();
+          const closed = await page.evaluate(() => !document.querySelector<HTMLDetailsElement>("[data-probe]")!.open);
+          for (let n = 0; n < 5; n += 1) {
+            await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+            await page.waitForTimeout(150);
+          }
+          await page.waitForTimeout(500);
+          const appended = await rowTop();
+          await page.screenshot({ path: path.join(out, `fold-${locale}-${depth}-after.png`) });
+          const reading = { locale, depth, before: Math.round(before * 100) / 100, folded: Math.round(folded * 100) / 100,
+            appended: Math.round(appended * 100) / 100, closed };
+          readings.push(reading);
+          console.log(`scroll-history fold ${JSON.stringify(reading)}`);
+          expect(errors).toEqual([]);
+          expect(closed).toBe(true);
+          expect(Math.abs(folded - before)).toBeLessThanOrEqual(3);
+          expect(Math.abs(appended - before)).toBeLessThanOrEqual(3);
+          await cdp.detach();
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "fold.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 240_000);
+
+  /*
+   * The desktop canvas scales a pane with a transform, and a zoom moves the
+   * pane's rectangles without a scroll event. The reader's anchor is kept in
+   * the scroller's own layout pixels, so a zoom between taking it and the next
+   * layout change is not read as the content having moved: after a real wheel
+   * walk off the tail, the pane is scaled to 0.6, 1, 0.8 and 0.5 with a row
+   * appended after each, and neither scrollTop nor the row under the reader
+   * (in layout pixels) may move by more than 3.
+   */
+  browserTest("a zoom of the pane between layout changes does not move the reader", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/scroll-history");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 844 } });
+      try {
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?scroll-history=1&compact=1`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length === 120);
+        await page.waitForTimeout(500);
+        const scroller = page.locator("[data-log-feed-scroller]");
+        await scroller.hover();
+        for (let step = 0; step < 6; step += 1) {
+          await page.mouse.wheel(0, -260);
+          await page.waitForTimeout(200);
+        }
+        await page.waitForTimeout(900);
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const bounds = feed.getBoundingClientRect();
+          const scale = bounds.height / feed.offsetHeight;
+          const row = [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")].find((node) => node.getBoundingClientRect().bottom > bounds.top + 1)!;
+          return { scrollTop: feed.scrollTop, scale, key: row.dataset.feedKey!, rowTop: (row.getBoundingClientRect().top - bounds.top) / scale };
+        });
+        let last = await read();
+        expect(last.scrollTop).toBeGreaterThan(0);
+        await page.screenshot({ path: path.join(out, "zoom-before.png") });
+        for (const zoom of [0.6, 1, 0.8, 0.5]) {
+          await page.evaluate((zoom) => {
+            const root = document.getElementById("root")!;
+            root.style.transformOrigin = "top left";
+            root.style.transform = `scale(${zoom})`;
+          }, zoom);
+          await page.waitForTimeout(200);
+          const zoomed = await read();
+          await page.evaluate(() => (window as unknown as { historyFixture: { append(): void } }).historyFixture.append());
+          await page.waitForTimeout(700);
+          const after = await read();
+          const reading = { zoom, scale: Math.round(after.scale * 100) / 100, scrollTopMoved: Math.round((after.scrollTop - last.scrollTop) * 100) / 100,
+            sameRow: after.key === last.key, rowMoved: Math.round((after.rowTop - last.rowTop) * 100) / 100,
+            zoomItselfMoved: Math.round((zoomed.scrollTop - last.scrollTop) * 100) / 100 };
+          readings.push(reading);
+          console.log(`scroll-history zoom ${JSON.stringify(reading)}`);
+          expect(Math.abs(reading.scrollTopMoved)).toBeLessThanOrEqual(3);
+          expect(reading.sameRow).toBe(true);
+          expect(Math.abs(reading.rowMoved)).toBeLessThanOrEqual(3);
+          last = after;
+        }
+        await page.screenshot({ path: path.join(out, "zoom-after.png") });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    } finally {
+      await browser.close(); stop();
+      fs.writeFileSync(path.join(out, "zoom.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+    }
+  }, 120_000);
 });
