@@ -4,21 +4,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AccountBadge } from "./AccountBadge";
 
 // Server render assumes desktop (useIsMobile → false), so these exercise the
-// chip variant; the account store has no accounts server-side, so the Hint
-// falls back to the health-free label.
+// chip variant. The hover/focus Hint is closed during server rendering.
 
 test("desktop chip shows the @-prefixed account id and a deterministic hue dot", () => {
-  const html = renderToStaticMarkup(<AccountBadge engine="claude" accountId="botfatherdev-2" />);
-  expect(html).toContain("@ botfatherdev-2");
+  const html = renderToStaticMarkup(<AccountBadge engine="claude" accountId="fixture-acct-2" />);
+  expect(html).toContain("@ fixture-acct-2");
   // The leading dot's fill is a color-mix over a theme token — never a raw hex.
   expect(html).toContain("color-mix(in srgb, hsl(");
   expect(html).not.toMatch(/background-color:\s*#/i);
 });
 
-test("the full id, engine, and open affordance ride in the Hint / aria label", () => {
+test("the closed server-rendered chip names the full account and open affordance", () => {
   const html = renderToStaticMarkup(<AccountBadge engine="codex" accountId="terra" />);
-  expect(html).toContain("Account terra · Codex");
-  expect(html).toContain("Open accounts for terra");
+  expect(html).toContain('aria-label="Open accounts for terra"');
 });
 
 test("a long account id truncates to ~14ch with an ellipsis", () => {

@@ -305,7 +305,7 @@
   position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: var(--inset-card); border-radius: var(--radius-surface); background: var(--surface-card);
   border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base), filter var(--motion-base);
   touch-action: pan-y; outline-offset: 2px;
   content-visibility: auto; contain-intrinsic-size: auto 132px;
 }

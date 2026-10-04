@@ -229,7 +229,7 @@ test("actual Viewer Compose keys remain covered by the candidate generator", () 
   const mounts = valuesAfter(args, "--mount");
   const externalTmpdir = "/run/user/1000/agent-log-viewer";
   const composeAlreadyMountsSupervisor = service.volumes.some((volume) => volume.target === externalTmpdir);
-  expect(mounts).toHaveLength(service.volumes.length + (composeAlreadyMountsSupervisor ? 0 : 1));
+  expect([...mounts, ...valuesAfter(args, "--volume")]).toHaveLength(service.volumes.length + (composeAlreadyMountsSupervisor ? 0 : 1));
   expect(mounts).toContain(`type=bind,source=${externalTmpdir},target=${externalTmpdir}`);
   expect(args[args.indexOf("--restart") + 1]).toBe(service.restart);
   expect(environment.LLV_ALLOW_LEGACY_VIEWER).toBe("1");
@@ -405,4 +405,26 @@ test("candidate authentication requirement comes from its persisted Compose conf
     services: { viewer: { ...composeService, environment: { ...composeService.environment, LLV_TOKEN: "token with spaces" } } },
   }))).toBe("token with spaces");
   expect(() => viewerCandidateGateKey("{broken")).toThrow();
+});
+
+test.each([true, false, undefined])("candidate preserves Compose create_host_path=%s", (createHostPath) => {
+  const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: {
+    ...composeService,
+    volumes: [{ type: "bind", source: "/fixture/missing", target: "/data", read_only: true, bind: { create_host_path: createHostPath } }],
+  } } }));
+  const args = viewerCandidateDockerArgs(candidate, service, { runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux" });
+  expect(valuesAfter(args, "--volume")).toEqual(createHostPath === true ? ["/fixture/missing:/data:ro"] : []);
+  expect(valuesAfter(args, "--mount")).toEqual(createHostPath === true ? [] : ["type=bind,source=/fixture/missing,target=/data,readonly"]);
+});
+
+test("candidate refuses unsupported or malformed bind options", () => {
+  for (const bind of [{ create_host_path: "true" }, { propagation: "rshared" }]) {
+    expect(() => viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: {
+      ...composeService, volumes: [{ ...composeService.volumes[0], bind }],
+    } } }))).toThrow();
+  }
+  for (const [source, bind] of [["/source:other", { create_host_path: true }], ["/source,readonly", {}], ["relative", {}]] as const) {
+    expect(() => viewerCandidateDockerArgs(candidate, { ...composeService, volumes: [{ type: "bind", source, target: "/data", bind }] },
+      { runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux" })).toThrow();
+  }
 });

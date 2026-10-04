@@ -208,7 +208,14 @@ export interface RuntimeAttention {
   turnId?: string | null;
 }
 
+export interface RuntimeRetirementClaim {
+  executorId: string;
+  process: import("@/lib/processIdentity").ProcessIdentity;
+}
+
 export interface RuntimeOperationReceipt {
+  /** Exclusive automatic teardown authority, held until actuation ends. */
+  retirementClaim?: RuntimeRetirementClaim | null;
   nativeQueue?: {
     entryId: string;
     nativeSubmissionId: string | null;
@@ -273,6 +280,8 @@ export interface RuntimeTransitionDetails {
 }
 
 export interface RuntimeTransitionOptions {
+  /** Competing transitions cannot release a live automatic teardown executor. */
+  retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
   /** Marks a terminal transition as owed a durable projection, inside the same
@@ -381,8 +390,27 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
   turnId?: string | null;
 }
 
+/** Automatic retirement is bound to one observed idle session revision and writer. */
+export interface RuntimeIdleKillFence {
+  revision: number;
+  writerClaim: string;
+}
+
+export function runtimeIdleKillMatches(
+  session: RuntimeSession | null | undefined,
+  key: RuntimeKillCommand["sessionKey"],
+  fence: RuntimeIdleKillFence,
+): boolean {
+  return !!session && session.host === "hosted" && session.turn === "idle"
+    && session.activeTurnId === null && session.attentionIds.length === 0
+    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
+    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
+    && session.retirementBlocked !== true;
+}
+
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  onlyIfIdle?: RuntimeIdleKillFence;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 
@@ -534,6 +562,9 @@ export interface RuntimeInjectionBinding {
 }
 
 export interface RuntimeSession {
+  /** Fresh keyed session reads derive this from all open operations and native
+      queue entries. Absence is insufficient evidence for automatic retirement. */
+  retirementBlocked?: boolean;
   /** Structured writer identity published with this session generation. */
   writerClaim?: string | null;
   diagnostics?: RuntimeHostDiagnostics;

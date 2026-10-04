@@ -2,12 +2,145 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 
 import { MemoryIndex } from "./index";
+import type { Candidate } from "./selection";
 
 const roots: string[] = [];
 const previousState = process.env.LLV_STATE_DIR;
+test("a contended derivative never holds hook claims or ledger writes behind SQLite's default wait", async () => {
+  const index = new MemoryIndex();
+  await index.refresh([{ path: fixture("locked.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+  const candidates = index.injectionCandidates("widget", "project-a", "claude", "locked-conversation").map(c => ({ ...c, score: .8 }));
+  index.recordInjection(candidates, "original-turn", "locked-conversation");
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const run of [
+      () => index.claimHook("locked-conversation", "new-turn"),
+      () => index.recordInjection(candidates, "new-turn", "locked-conversation"),
+      () => index.recordCitations("locked-conversation", "<oai-mem-citation>\nlocked.md:3-3|note=[widget rule]\n</oai-mem-citation>"),
+    ]) {
+      const start = performance.now();
+      expect(run).toThrow();
+      expect(performance.now() - start).toBeLessThan(500);
+    }
+  } finally { db.exec("ROLLBACK"); db.close(); index.close(); }
+}, 20000);
+test("large mirrored stores fail open within the candidate budget", () => {
+  const index = new MemoryIndex();
+  index.search({ query: "widget" });
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  try {
+    db.transaction(() => {
+      for (let i = 0; i < 3000; i++) {
+        const title = "Widget rule " + Array.from({ length: 15 }, (_, k) => `item${i}word${k}`).join(" ");
+        const summary = Array.from({ length: 30 }, (_, k) => `item${i}summary${k}`).join(" ");
+        const body = Array.from({ length: 50 }, (_, k) => `item${i}body${k}`).join(" ");
+        for (const engine of ["codex", "claude"]) {
+          const id = `${engine}-${i}`;
+          db.query("INSERT INTO memory_entries VALUES (?, ?, 'preference', 'global', NULL, 'fixture.md', 'codex_summary', ?, ?, ?, '2026-10-01', '[]')").run(id, engine, title, summary, body);
+          db.query("INSERT INTO memory_fts VALUES (?, ?, ?, ?)").run(id, title, summary, body);
+        }
+      }
+    })();
+    const start = performance.now();
+    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(500);
+    // An aborted scan must leave its prepared statements reusable.
+    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toEqual([]);
+  } finally { db.close(); index.close(); }
+}, 20000);
+test("injection candidates exclude native near matches and foreign projects; opening updates the injection ledger", async () => {
+  const index = new MemoryIndex();
+  const note = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nmetadata:\n  type: project\n---\n${description}\n`;
+  try {
+    await index.refresh([
+      { path: fixture("cross.md", note("Widget cache", "Widget cache requires invalidation on every parser revision.")), engine: "claude", sourceKind: "claude_memory", project: "project-a" },
+      { path: fixture("foreign.md", note("Widget remote", "Widget remote requires a dedicated socket.")), engine: "claude", sourceKind: "claude_memory", project: "project-b" },
+      { path: fixture("duplicate.md", note("Widget encoding", "Widget encoding uses eight byte blocks for every record.")), engine: "claude", sourceKind: "claude_memory", project: "project-a" },
+      { path: fixture("native.md", "v1\n## User preferences\n- Widget encoding uses eight byte blocks for every record.\n"), engine: "codex", sourceKind: "codex_summary" },
+    ]);
+    const candidates = index.injectionCandidates("widget", "project-a", "codex", "conversation-fixture");
+    expect(candidates.map(c => c.title)).toEqual(["Widget cache"]);
+    index.recordInjection(candidates.map(c => ({ ...c, score: .8 })), "turn-fixture", "conversation-fixture");
+    index.recordInjection(candidates.map(c => ({ ...c, score: .8 })), "turn-fixture", "conversation-fixture");
+    expect(index.offers(candidates[0].id)).toMatchObject([{ channel: "inject", score: .8 }]);
+    expect(index.injectionCandidates("widget", "project-a", "codex", "conversation-fixture")).toEqual([]);
+    index.open(candidates[0].id, "open-fixture", "conversation-fixture");
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("opened");
+    index.recordCitations("conversation-fixture", `The identifier ${candidates[0].id} is available.`);
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("opened");
+    index.recordCitations("conversation-fixture", "<oai-mem-citation>\n<citation_entries>\ncross.md:7-8|note=[cache rule]\n</citation_entries>\n</oai-mem-citation>");
+    expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("cited");
+    expect(index.turnOffers("conversation-fixture")).toMatchObject([{ requestId: "turn-fixture", title: "Widget cache" }]);
+  } finally { index.close(); }
+});
+test("another project's native Claude note cannot suppress a global cross-engine offer", async () => {
+  const index = new MemoryIndex();
+  const summary = "Widget parser records require escaped delimiter pairs.";
+  try {
+    await index.refresh([
+      { path: fixture("global.md", `v1\n## User preferences\n- ${summary}\n`), engine: "codex", sourceKind: "codex_summary" },
+      { path: fixture("native-b.md", `---\nname: Widget parser\ndescription: ${summary}\nmetadata:\n  type: project\n---\n${summary}\n`), engine: "claude", sourceKind: "claude_memory", project: "project-b" },
+    ]);
+    expect(index.injectionCandidates("widget parser", "project-a", "claude", "conversation-a")).toHaveLength(1);
+    expect(index.injectionCandidates("widget parser", "project-b", "claude", "conversation-b")).toHaveLength(0);
+  } finally { index.close(); }
+});
+test("native FTS hits do not consume the thirty cross-engine candidate places", async () => {
+  const index = new MemoryIndex();
+  try {
+    const native = Array.from({ length: 30 }, (_, i) => ({
+      path: fixture(`native-${i}.md`, `---\nname: Widget\ndescription: Widget native clause number ${i}.\nmetadata:\n  type: project\n---\nNative widget clause ${i}.\n`),
+      engine: "claude" as const, sourceKind: "claude_memory" as const, project: "project-a",
+    }));
+    await index.refresh([...native, { path: fixture("cross-candidate.md", "v1\n## User preferences\n- Widget delimiters require a quoted encoding policy for every parser.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+    expect(index.injectionCandidates("widget", "project-a", "claude", "candidate-fixture")).toHaveLength(1);
+  } finally { index.close(); }
+});
+test("citation accounting stays inside the hook budget for a large source and long offer ledger", async () => {
+  const index = new MemoryIndex();
+  const source = fixture("bulk.md", "v1\n## User preferences\n" + Array.from({ length: 1000 }, (_, i) => `- Widget key${i} value${i} guard${i}.\n  ${(`filler${i} `).repeat(320)}\n`).join(""));
+  try {
+    await index.refresh([{ path: source, engine: "codex", sourceKind: "codex_summary" }]);
+    // Seed a long existing ledger directly; candidate retrieval is separately
+    // deadline-tested and may intentionally abstain under CPU contention.
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    const entries = db.query<Candidate, []>("SELECT * FROM memory_entries ORDER BY id").all();
+    db.close();
+    for (let offset = 0; offset < entries.length; offset += 15)
+      index.recordInjection(entries.slice(offset, offset + 15).map(c => ({ ...c, score: .8 })), `turn-${offset}`, "bulk-conversation");
+    expect(index.turnOffers("bulk-conversation")).toHaveLength(1000);
+    const block = "<oai-mem-citation>\n<citation_entries>\nbulk.md:3-3|note=[widget rule]\n</citation_entries>\n</oai-mem-citation>";
+    const started = performance.now();
+    index.recordCitations("bulk-conversation", block);
+    expect(performance.now() - started).toBeLessThan(500);
+    const first = index.search({ query: "key0", limit: 1 }).items[0];
+    expect(index.offers(first.id)[0].outcome).toBe("cited");
+  } finally { index.close(); }
+}, 20000);
+test("turn provenance retains the latest offers after the bounded ledger window fills", async () => {
+  const index = new MemoryIndex();
+  try {
+    await index.refresh([{ path: fixture("offers.md", "v1\n## User preferences\n" + Array.from({ length: 1001 }, (_, i) => `- Widget offer key${i} requires delimiter verification.\n`).join("")), engine: "codex", sourceKind: "codex_summary" }]);
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    let entries: Candidate[];
+    try {
+      entries = db.query<Candidate, []>("SELECT * FROM memory_entries ORDER BY id").all();
+      db.transaction(() => {
+        for (const entry of entries.slice(0, 1000))
+          db.query("INSERT INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, "older-turn", "offers-conversation", "2026-01-01T00:00:00.000Z", .8);
+      })();
+    } finally { db.close(); }
+    index.recordInjection([{ ...entries[1000], score: .9 }], "latest-turn", "offers-conversation");
+    const offers = index.turnOffers("offers-conversation");
+    expect(offers).toHaveLength(1000);
+    expect(offers.at(-1)).toMatchObject({ id: entries[1000].id, requestId: "latest-turn", score: .9 });
+  } finally { index.close(); }
+});
 beforeEach(() => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "memory-state-"));
   roots.push(state);
@@ -148,7 +281,7 @@ test("search is ranked and byte bounded; ingest redacts secrets and opening a hi
     expect(opened?.body).toContain("[redacted]");
     expect(Buffer.byteLength(opened!.body)).toBeLessThanOrEqual(2048);
     index.open(page.items[0].id, "open-once", "conversation-fixture");
-    expect(index.offers(page.items[0].id)).toEqual([{ channel: "search", outcome: "opened", conversationId: "conversation-fixture" }]);
+    expect(index.offers(page.items[0].id)).toEqual([{ channel: "search", score: null, outcome: "opened", conversationId: "conversation-fixture" }]);
     expect(index.open(page.items[0].id, "wrong-project", null, "project-b")).not.toBeNull(); // global skill
     const rawStore = fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite-wal"));
     expect(rawStore.includes(Buffer.from(secret))).toBe(false);
@@ -197,5 +330,165 @@ test("a previously indexed source that becomes oversized stops returning stale c
     fs.writeFileSync(source.path, "x".repeat(4 * 1024 * 1024 + 1));
     expect(await index.refresh([source])).toMatchObject({ filesSkipped: 1 });
     expect(index.search({ query: "widget" }).items).toHaveLength(0);
+  } finally { index.close(); }
+});
+
+test("native text remains unknown until independent operator ownership is established", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-cursor-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const index = new MemoryIndex();
+  try {
+    const transcript = path.join(root, "synthetic.jsonl");
+    fs.writeFileSync(transcript, "");
+    index.recordTerminalDelivery("synthetic-delivery", "synthetic-conversation", "Repeat synthetic input", "agent", transcript);
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-queued", message: { role: "user", content: "Earlier queued input" } }) + "\n");
+    index.close(); // Pending authorship survives an unrelated journal and reload.
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-other", "Different typed input", transcript, "claude")).toBeNull();
+    fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Repeat synthetic input" } }) + "\n");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-earlier", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
+  } finally {
+    index.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("injected names remain the offered names after source edits, removal and reload", async () => {
+  const index = new MemoryIndex();
+  const source = { path: fixture("historical.md", "---\nname: Widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n"), engine: "claude" as const, sourceKind: "claude_memory" as const, project: "project-a" };
+  try {
+    await index.refresh([source]);
+    const candidates = index.injectionCandidates("widget parser", "project-a", "codex", "historical-conversation");
+    expect(candidates).toHaveLength(1);
+    index.recordInjection(candidates.map(entry => ({ ...entry, score: .8 })), "historical-turn", "historical-conversation");
+    index.close();
+    // Existing releases have the eight-column ledger and no name snapshot.
+    const legacy = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    legacy.exec("DROP TABLE memory_injection_names"); legacy.close();
+    fs.writeFileSync(source.path, "---\nname: Renamed widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nChanged parser reference.\n");
+    await index.refresh([source]);
+    index.close();
+    expect(index.turnOffers("historical-conversation")).toMatchObject([{ title: "Widget parser", score: .8 }]);
+    await index.refresh([], { complete: true });
+    index.close();
+    expect(index.turnOffers("historical-conversation")).toMatchObject([{ title: "Widget parser", score: .8 }]);
+    expect(index.offers(candidates[0].id)).toHaveLength(1);
+  } finally { index.close(); }
+});
+
+
+test("confirmed emissions survive contention and reload with exactly one original scored name", async () => {
+  const index = new MemoryIndex();
+  await index.refresh([{ path: fixture("confirmed.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+  const entries = index.injectionCandidates("widget", "project-a", "claude", "confirmed-conversation").map(entry => ({ ...entry, score: .8 }));
+  expect(entries).toHaveLength(1);
+  const writer = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    index.recordConfirmedInjection(entries, "confirmed-turn", "confirmed-conversation");
+    index.recordConfirmedInjection(entries, "confirmed-turn", "confirmed-conversation");
+    expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending"))).toHaveLength(1);
+  } finally { writer.exec("ROLLBACK"); writer.close(); index.close(); }
+  try {
+    // Remove the source before replay: the durable evidence keeps the offer.
+    await index.refresh([], { complete: true });
+    expect(index.turnOffers("confirmed-conversation")).toMatchObject([{ title: entries[0].title, score: .8 }]);
+    index.recordConfirmedInjection(entries.map(entry => ({ ...entry, title: "Later title" })), "confirmed-turn", "confirmed-conversation");
+    index.close();
+    expect(index.turnOffers("confirmed-conversation")).toMatchObject([{ title: entries[0].title, score: .8 }]);
+    expect(index.turnOffers("confirmed-conversation")).toHaveLength(1);
+    expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending"))).toHaveLength(0);
+  } finally { index.close(); }
+});
+
+test("a confirmed backlog drains in bounded batches after contention and reload", async () => {
+  const index = new MemoryIndex(), conversation = "backlog-conversation";
+  await index.refresh([{ path: fixture("backlog.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+  expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(1);
+  const writer = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  const pending = path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending");
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < 257; i++) {
+      const hook = `backlog-hook-${i}`;
+      index.recordPreparedInjection([{ id: `synthetic-${i}`, title: "Synthetic emitted memory", score: .8 }], `backlog-turn-${i}`, conversation, hook, Date.now() + 1500);
+      index.confirmPreparedInjection(conversation, hook, Date.now());
+    }
+    expect(fs.readdirSync(pending)).toHaveLength(257);
+  } finally { writer.exec("ROLLBACK"); writer.close(); index.close(); }
+  try {
+    // Retrieval drains one batch and abstains until every confirmation is
+    // accounted for, so an unprocessed offer cannot be injected again.
+    expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(0);
+    expect(fs.readdirSync(pending).length).toBeGreaterThan(0);
+    expect(fs.readdirSync(pending).length).toBeLessThan(257);
+    for (let i = 0; fs.readdirSync(pending).length && i < 257; i++) {
+      const started = performance.now();
+      expect(() => index.turnOffers(conversation)).not.toThrow();
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+    expect(fs.readdirSync(pending)).toHaveLength(0);
+    const offers = index.turnOffers(conversation);
+    expect(offers).toHaveLength(257);
+    expect(new Set(offers.map(offer => offer.requestId)).size).toBe(257);
+    index.recordConfirmedInjection([{ id: "synthetic-0", title: "Later title", score: .9 }], "backlog-turn-0", conversation);
+    index.close();
+    expect(index.turnOffers(conversation)).toHaveLength(257);
+    expect(index.turnOffers(conversation).find(offer => offer.requestId === "backlog-turn-0")).toMatchObject({ title: "Synthetic emitted memory", score: .8 });
+    expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(1);
+  } finally { index.close(); }
+}, 30000);
+
+test("cold hook bookkeeping fails open on contention and retries initialization after unlock", () => {
+  const index = new MemoryIndex();
+  index.search({ query: "widget" });
+  index.close();
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  db.exec("DROP TABLE memory_injection_names; BEGIN IMMEDIATE");
+  try {
+    const started = performance.now();
+    expect(() => index.claimHook("cold-conversation", "cold-turn")).toThrow();
+    expect(performance.now() - started).toBeLessThan(500);
+  } finally { db.exec("ROLLBACK"); db.close(); }
+  try { expect(index.claimHook("cold-conversation", "cold-turn")).toBeTrue(); }
+  finally { index.close(); }
+});
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} ambiguous identical journal rows cannot establish operator authorship`, () => {
+  const transcript = fixture("ambiguous.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  const line = (id: string) => JSON.stringify(engine === "claude"
+    ? { type: "user", uuid: id, message: { role: "user", content: prompt } }
+    : { type: "response_item", payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n";
+  try {
+    index.recordTerminalDelivery("ambiguous-machine", "ambiguous-conversation", prompt, "agent", transcript);
+    fs.appendFileSync(transcript, line("synthetic-queued") + line("synthetic-machine"));
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
+    index.close();
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
+    // Positive ownership protects that operator id; other same-text ids stay unknown.
+    index.recordNativeTurn("ambiguous-conversation", "native:synthetic-queued", transcript, 0, prompt);
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
+    fs.appendFileSync(transcript, line("synthetic-typed"));
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("unknown");
+    index.recordNativeTurn("ambiguous-conversation", "native:synthetic-typed", transcript, 0, prompt);
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("operator");
+  } finally { index.close(); }
+});
+
+for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts cannot prove native operator authorship`, () => {
+  const transcript = fixture("queued.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  try {
+    index.recordTerminalDelivery("queued-first", "queued-conversation", prompt, "agent", transcript);
+    index.recordTerminalDelivery("queued-second", "queued-conversation", prompt, "agent", transcript);
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-first", prompt, transcript, engine)).toBe("unknown");
+    const line = JSON.stringify(engine === "claude" ? { type: "user", uuid: "synthetic-first", message: { role: "user", content: prompt } }
+      : { type: "response_item", payload: { type: "message", turn_id: "synthetic-first", role: "user", content: [{ type: "input_text", text: prompt }] } });
+    fs.appendFileSync(transcript, line + "\n");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-second", prompt, transcript, engine)).toBe("unknown");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("unknown");
   } finally { index.close(); }
 });

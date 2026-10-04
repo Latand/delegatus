@@ -78,8 +78,7 @@ test("the latest deployment is the newest one, not the one the id ordering happe
   const latest = latestLedgerDeployment(env);
   expect(latest).toEqual({ state: "ok", value: HISTORY[3]!.status });
 
-  /* The bounded history read also selects the newest deployment now, rather
-     than the deployment with the largest random id. */
+  /* Snapshot and bounded reads both choose the newest deployment by start order. */
   const tail = ledgerDeployments(1, env);
   expect(tail).toEqual({ state: "ok", value: [HISTORY[3]!.status] });
 });

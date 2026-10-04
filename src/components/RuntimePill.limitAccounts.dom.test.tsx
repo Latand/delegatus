@@ -214,7 +214,7 @@ test("with no limit the account group is still there, naming the account the con
   const group = document.querySelector("[data-runtime-sheet-accounts]");
   expect(group).not.toBeNull();
   /* It says which account this conversation runs on, in the group's own head… */
-  expect(group!.querySelector("[data-runtime-sheet-account-current]")!.textContent).toContain("acct-two");
+  expect(group!.querySelector("[data-runtime-sheet-account-current]")!.textContent).toContain("runs on Account two");
   /* …its row carries the same word, and the account the NEXT message will go
      to — a different fact, held by the accounts store — is the checked, inert
      one. Every other authenticated account is a one-tap select, this

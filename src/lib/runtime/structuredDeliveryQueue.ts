@@ -1,11 +1,13 @@
+import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
-import { parseRuntimeCommand, parseRuntimeSendSettings } from "./commands";
+import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
-import type { RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
+import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
+import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
@@ -26,6 +28,7 @@ export interface StructuredDeliveryEffect {
 export type StructuredDeliveryTransition = "queued" | "delivering" | "applying" | "delivered" | "applied" | "answered" | "interrupted" | "failed" | "uncertain";
 
 interface StructuredOperationStatus {
+  retirementClaim?: RuntimeRetirementClaim | null;
   status: string;
   revision?: number;
   reason?: string | null;
@@ -60,6 +63,7 @@ export interface StructuredDeliveryQueuePort {
     operationId: string,
     status: StructuredDeliveryTransition,
     details?: RuntimeTransitionDetails,
+    options?: RuntimeTransitionOptions,
   ): Promise<void>;
   /** Persist the concrete generation a fresh retry is about to reach. */
   bindDeliveryGeneration?(operationId: string, generationId: string): boolean | Promise<boolean>;
@@ -186,6 +190,7 @@ interface ControlEffect {
   operationId: string;
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
@@ -401,6 +406,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
       conversationId,
       kind: "kill",
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      ...(effect.payload.onlyIfIdle !== undefined
+        ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
       eventSeq: effect.eventSeq,
     };
   }
@@ -627,6 +634,29 @@ async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispa
   throw new Error("structured delivery retry budget exhausted");
 }
 
+interface RetirementExecutor {
+  claim: RuntimeRetirementClaim;
+  retired: boolean;
+  draining: boolean;
+  pendingClaims: Set<string>;
+}
+
+// Keep unfinished claim custody across controller/module replacement in this
+// Viewer process. A retired executor cannot drain again; its final drain's
+// completion proves that none of its signal ladders can still act.
+const retirementProcess = process as typeof process & {
+  __llvStructuredRetirementExecutors?: Map<string, RetirementExecutor>;
+};
+const retirementExecutors = retirementProcess.__llvStructuredRetirementExecutors ??= new Map<string, RetirementExecutor>();
+
+function forgetRetirementOperation(operationId: string, executorId?: string): void {
+  for (const [id, executor] of retirementExecutors) {
+    if (executorId !== undefined && executorId !== id) continue;
+    executor.pendingClaims.delete(operationId);
+    if (!executor.draining && executor.pendingClaims.size === 0) retirementExecutors.delete(id);
+  }
+}
+
 export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
   private rerun = false;
@@ -640,6 +670,10 @@ export class StructuredDeliveryQueue {
       in the one that replaced it — is a different executor by construction,
       which is what a recovered row has to be able to tell (#1131). */
   private readonly executorId = crypto.randomUUID();
+  private readonly retirementClaim: RuntimeRetirementClaim = { executorId: this.executorId, process: captureProcessIdentity(process.pid) };
+  private readonly retirementExecutor: RetirementExecutor = {
+    claim: this.retirementClaim, retired: false, draining: false, pendingClaims: new Set(),
+  };
   private readonly interruptAcknowledged = new Set<string>();
   private readonly refusedSteerTurns = new Map<string, string | null>();
   private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void> }>();
@@ -682,6 +716,8 @@ export class StructuredDeliveryQueue {
     private readonly terminateHost: (
       conversationId: string,
       sessionKey: { engine: "codex" | "claude"; sessionId: string },
+      onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
+      authority?: { operationId: string; claim: RuntimeRetirementClaim },
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -699,15 +735,24 @@ export class StructuredDeliveryQueue {
   ) {}
 
   drain(): Promise<void> {
+    if (this.retirementExecutor.retired) return Promise.resolve();
     if (!this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       this.rerun = true;
       return this.activeDrain;
     }
+    this.retirementExecutor.draining = true;
     this.activeDrain = this.drainUntilSettled().finally(() => {
       this.activeDrain = null;
+      this.retirementExecutor.draining = false;
+      if (this.retirementExecutor.pendingClaims.size === 0) retirementExecutors.delete(this.executorId);
     });
     return this.activeDrain;
+  }
+
+  retire(): void {
+    this.retirementExecutor.retired = true;
+    this.rerun = false;
   }
 
   lastTargetError(conversationId: string): string | null {
@@ -734,7 +779,7 @@ export class StructuredDeliveryQueue {
         this.lastPassError = failureReason(error);
         throw error;
       }
-    } while (this.rerun);
+    } while (this.rerun && !this.retirementExecutor.retired);
   }
 
   private async drainPass(): Promise<void> {
@@ -935,9 +980,26 @@ export class StructuredDeliveryQueue {
         return this.fenceUnavailable();
       }
       if (durable.value && TERMINAL_DELIVERY_STATUSES.has(durable.value.status)) {
+        forgetRetirementOperation(effect.operationId);
         this.firstDispatches.delete(effect.operationId);
         this.contendedRecoveries.delete(effect.operationId);
         continue;
+      }
+      if (effect.kind === "kill" && effect.onlyIfIdle && durable.value?.status === "delivering") {
+        const owner = durable.value.retirementClaim;
+        const localOwner = owner ? retirementExecutors.get(owner.executorId) : undefined;
+        const finishedLocalOwner = !!owner && !!localOwner && localOwner.retired && !localOwner.draining
+          && localOwner.pendingClaims.has(effect.operationId)
+          && sameRecordedProcessIdentity(owner.process, localOwner.claim.process);
+        if (!owner || (owner.executorId !== this.executorId && !finishedLocalOwner && !processIdentityProvenDead(owner.process))) {
+          this.retrySoon();
+          return true;
+        }
+        await this.port.transition(effect.operationId, "queued", { reason: "retirement executor ended" },
+          { retirementClaim: finishedLocalOwner ? localOwner!.claim : this.retirementClaim, fromStatuses: ["delivering"] });
+        forgetRetirementOperation(effect.operationId, owner.executorId);
+        this.retrySoon();
+        return true;
       }
       /* An account pick is an intent, and it waits for the next engagement however long that is (#1846):
          the settlement window is for a control that got stuck, which a switch nobody has engaged is not. */
@@ -1556,9 +1618,10 @@ export class StructuredDeliveryQueue {
     operationId: string,
     status: StructuredDeliveryTransition,
     details?: RuntimeTransitionDetails,
+    options?: RuntimeTransitionOptions,
   ): Promise<boolean> {
     try {
-      await this.port.transition(operationId, status, details);
+      await this.port.transition(operationId, status, details, options);
       return true;
     } catch (error) {
       const durable = await this.readStatus(operationId);
@@ -2037,43 +2100,86 @@ export class StructuredDeliveryQueue {
 
   private async drainControl(effect: ControlEffect): Promise<ControlDrainResult> {
     if (effect.kind === "kill") {
+      if (effect.onlyIfIdle && this.retirementExecutor.retired) return { blocked: true, terminated: false };
+      if (effect.onlyIfIdle) {
+        this.retirementExecutor.pendingClaims.add(effect.operationId);
+        retirementExecutors.set(this.executorId, this.retirementExecutor);
+        // Acquire before awaited health/refusal reads. A CAS loser cannot
+        // actuate or settle the winner, even if both observed queued together.
+        try {
+          await this.port.transition(effect.operationId, "delivering", undefined,
+            { retirementClaim: this.retirementClaim, fromStatuses: ["pending", "queued"] });
+        } catch { this.retrySoon(); return { blocked: true, terminated: false }; }
+        const claimed = await this.readStatus(effect.operationId);
+        if (!claimed.readable || !claimed.value) { this.retrySoon(); return { blocked: true, terminated: false }; }
+        if (claimed.value.status !== "delivering") {
+          forgetRetirementOperation(effect.operationId, this.executorId);
+          return { blocked: false, terminated: false };
+        }
+        if (claimed.value.retirementClaim?.executorId !== this.executorId) {
+          forgetRetirementOperation(effect.operationId, this.executorId);
+          // An older host cannot grant exclusivity; no actuation has begun.
+          if (!claimed.value.retirementClaim) await this.transitionUnlessSettled(effect.operationId, "failed",
+            { reason: "retirement claim protocol unavailable" });
+          return { blocked: true, terminated: false };
+        }
+      }
+      const transition = async (status: StructuredDeliveryTransition, details?: RuntimeTransitionDetails) => {
+        const settled = await this.transitionUnlessSettled(effect.operationId, status, details,
+          effect.onlyIfIdle ? { retirementClaim: this.retirementClaim } : undefined);
+        if (effect.onlyIfIdle && settled && status !== "delivering") forgetRetirementOperation(effect.operationId, this.executorId);
+        return settled;
+      };
+      const authority = effect.onlyIfIdle ? { operationId: effect.operationId, claim: this.retirementClaim } : undefined;
       const refusal = await this.killRefusal(effect.conversationId);
       if (refusal) {
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: refusal });
+        await transition("failed", { reason: refusal });
         return { blocked: false, terminated: false };
       }
       const host = this.resolveHost(effect.conversationId);
+      if (effect.onlyIfIdle && host) {
+        const state = await this.readHealth(host);
+        if (!state.readable || state.value.status !== "idle" || state.value.activeTurnRef !== null
+          || state.value.pendingAttention.length > 0 || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
+          await transition("failed", { reason: "idle-retirement-deferred" });
+          return { blocked: false, terminated: false };
+        }
+      }
       if (!effect.sessionKey) {
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "structured host termination target is unavailable" });
+        await transition("failed", { reason: "structured host termination target is unavailable" });
         return { blocked: false, terminated: false };
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey)) {
+          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+            if (effect.onlyIfIdle) {
+              await transition("failed", { reason: "idle-retirement-deferred" });
+              return { blocked: false, terminated: false };
+            }
             return { blocked: true, terminated: false };
           }
-          if (!await this.transitionUnlessSettled(effect.operationId, "delivering")) {
+          if (!effect.onlyIfIdle && !await transition("delivering")) {
             return { blocked: false, terminated: true };
           }
-          await this.transitionUnlessSettled(effect.operationId, "delivered");
+          await transition("delivered");
           return { blocked: false, terminated: true };
         } catch (error) {
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: failureReason(error) });
+          await transition("queued", { reason: failureReason(error) });
           throw error;
         }
       }
-      if (!await this.transitionUnlessSettled(effect.operationId, "delivering")) {
+      if (!effect.onlyIfIdle && !await transition("delivering")) {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey)) {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "structured host termination is unavailable" });
+        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+          await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
-        await this.transitionUnlessSettled(effect.operationId, "delivered");
+        await transition("delivered");
         return { blocked: false, terminated: true };
       } catch (error) {
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: failureReason(error) });
+        await transition("queued", { reason: failureReason(error) });
         throw error;
       }
     }

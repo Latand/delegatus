@@ -153,7 +153,7 @@ for (const scenario of [
     if (scenario.oldScan) expect(first.headers.get("x-llv-files-cache")).toBe("miss");
     expect(first.headers.get("x-llv-files-projection-cache")).toBe("miss");
     await drainCaches();
-    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(11);
+    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(12);
 
     // Both consumers and their subsequent cache hits retain the same values.
     for (const view of ["full", "summary"] as const) {
@@ -181,7 +181,9 @@ test("compatible restart reuses persisted scan and full body with known, null an
   try {
     const scan = await cachedFileScan(undefined, undefined, 0);
     expect(scan.generation).toBe(0);
-    expect(scan.cacheStatus).toBe("hit");
+    // A process restart starts membership revalidation while serving the
+    // persisted snapshot, so this generation is retained as stale.
+    expect(scan.cacheStatus).toBe("stale");
     expectActivity(scan.snapshot.files);
     const full = await readFiles("full");
     expect(full.headers.get("x-llv-files-projection-cache")).toBe("stale");
