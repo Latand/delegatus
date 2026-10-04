@@ -13,7 +13,6 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
-import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { installAction, runInstallAction } from "./actions";
 import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
