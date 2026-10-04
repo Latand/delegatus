@@ -233,7 +233,9 @@
 /* The layout helper owns the visible width transition. Reflowing tracks on
    every frame repeatedly wraps every card on the board. */
 .kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
-.kb .board, .kb .col-body { overflow-anchor: none; }
+/* Tabs show one column and animate no width. Scroll anchoring stays on there:
+   it holds a draft opened under a launched agent in the window at 1000 px. */
+.kb .board:not(.tabs), .kb .board:not(.tabs) .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
