@@ -1973,3 +1973,11 @@ historical hook counts, not the counts of the refreshed push. The renamed
 phone test now describes the pinned-message menu, so the hook may classify
 its former strip-based name as removed/skipped even though all seven tests
 execute and pass.
+
+Main advanced during the first successful push to
+`9eea521e0409069f2cdf2ffba2dd6bbf5c1ee3ed`. That change leaves the resource
+collector and fixture unchanged. A clean export of this new main passed the
+named test 10/10 times, with all 240 reported PIDs absent. A second merge,
+`3e8fe66e043fa9aa4779fae3c8e6584785727235`, incorporated it without conflicts.
+The initial push hook reported 0 new, 0 pre-existing, 412 fixed and 8
+removed/skipped failures; the final refreshed push is checked separately.
