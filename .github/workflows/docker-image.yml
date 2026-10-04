@@ -1,26 +1,9 @@
 name: Docker image
 
 on:
+  # The scope job checks the complete PR diff before admitting a build.
+  # GitHub paths filters only inspect the first 300 files and can hide inputs.
   pull_request:
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'package.json'
-      - 'bun.lock'
-      - 'bunfig.toml'
-      - 'tsconfig.json'
-      - 'next.config.*'
-      - 'postcss.config.*'
-      - 'src/**'
-      - 'public/**'
-      - 'bin/**'
-      - 'patches/**'
-      - 'vendor/**'
-      - 'scripts/build-mcp.ts'
-      - 'scripts/whisper_transcribe.py'
-      - 'scripts/runtime-host-viewer-adapter.ts'
-      - 'scripts/runtime-host-healthcheck.ts'
-      - 'scripts/published-image-entrypoint.sh'
   push:
     branches: [main]
     tags: ["v*"]
@@ -34,7 +17,27 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
+  scope:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.inputs.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check image inputs in the complete PR diff
+        id: inputs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
   build:
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ github.event_name == 'pull_request' && 45 || 360 }}
     steps:
@@ -75,3 +78,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+    # One image build across all refs leaves runners for required checks.
+    # Workflow-level concurrency still cancels superseded pushes on one ref.
+    # queue:max retains other PRs instead of replacing the single pending job.
+    concurrency:
+      group: docker-image-build
+      cancel-in-progress: false
+      queue: max
