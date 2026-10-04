@@ -586,13 +586,13 @@ browserTest("composer queue: a lost seat read drains once on the phone and survi
  *
  *   LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "microphone hint"
  *
- * Chromium stands in for Safari on an iPhone: the user agent is Safari's and
- * the Permissions API answers "prompt", which is what Safari reports while its
- * per-site Microphone setting reads Ask. Readings go to
+ * Chromium stands in for Edge on an iPhone, the operator's browser: the user
+ * agent is Edge's and the Permissions API answers "prompt", which is what a
+ * WebKit view reports when it will ask. Readings go to
  * `evidence/mic-permission-hint/phone.json`; frames to
  * `.artifacts/mic-permission-hint/`, which is not committed.
  */
-const MIC_HINT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+const MIC_HINT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/138.0.0.0 Mobile/15E148 Safari/604.1";
 
 browserTest("microphone hint: the record button with and without the hint at 390, en and uk, dark", async () => {
   const { base, stop } = await serveFixture();
@@ -670,7 +670,7 @@ browserTest("microphone hint: the record button with and without the hint at 390
             continue;
           }
           if (!reading.hint || reading.hintCount !== 1) { failures.push(`${at}: expected one visible hint, found ${reading.hintCount}`); continue; }
-          if (reading.hintText !== translate(locale, "mic.hint.iosSafari")) failures.push(`${at}: hint text is ${reading.hintText}`);
+          if (reading.hintText !== translate(locale, "mic.hint.iosOtherBrowser")) failures.push(`${at}: hint text is ${reading.hintText}`);
           if (reading.hintCut) failures.push(`${at}: the hint's text is cut`);
           if (!reading.dismissTarget || reading.dismissTarget.width < 44 || reading.dismissTarget.height < 44) failures.push(`${at}: the dismiss target is under 44 px`);
           if (reading.hint.x < 0 || reading.hint.x + reading.hint.width > viewport.width) failures.push(`${at}: the hint leaves the viewport`);
@@ -696,7 +696,7 @@ browserTest("microphone hint: the record button with and without the hint at 390
   } finally { await browser.close(); stop(); }
   const evidence = path.resolve("evidence/mic-permission-hint");
   fs.mkdirSync(evidence, { recursive: true });
-  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ viewport, scheme: "dark", readings, failures }, null, 2)}\n`);
+  fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ viewport, scheme: "dark", browser: "Edge on iOS (user agent)", readings, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 180_000);
 

@@ -3,9 +3,11 @@
 
    A site cannot make a grant permanent: the browser decides, from a setting
    the operator owns. Safari on iOS keeps a grant for the life of one document
-   while its per-site Microphone setting reads "Ask"; a Home Screen web app on
-   iOS keeps none between launches; Chrome on Android forgets an "Allow this
-   time" answer when the page closes. What a site can do is notice that it is
+   while its per-site Microphone setting reads "Ask"; every other browser on
+   iOS is an app around a WebKit view, asks on its own account and has no
+   per-site setting at all; a Home Screen web app on iOS keeps none between
+   launches; Chrome on Android forgets an "Allow this time" answer when the
+   page closes. What a site can do is notice that it is
    being asked again on a device where it was already allowed, and name the
    setting that ends the question. */
 
@@ -14,7 +16,7 @@
 export type MicPermissionState = "granted" | "prompt" | "denied" | "unavailable";
 
 /** Which browser's setting the hint names. */
-export type MicHintPlatform = "iosSafari" | "iosWebApp" | "androidChrome" | "other";
+export type MicHintPlatform = "iosSafari" | "iosOtherBrowser" | "iosWebApp" | "androidChrome" | "other";
 
 const GRANTED_KEY = "llv_mic_granted";
 const HINT_SEEN_KEY = "llv_mic_hint_seen";
@@ -67,9 +69,10 @@ export function micHintPlatform({ userAgent, standalone, maxTouchPoints }: MicPl
   const ios = /iphone|ipad|ipod/.test(ua) || (ua.includes("macintosh") && maxTouchPoints > 1);
   if (ios) {
     if (standalone) return "iosWebApp";
-    /* Every other iOS browser is WebKit behind its own shell, with its own
-       settings screen; only Safari has the per-site Microphone setting. */
-    return /crios|fxios|edgios|opios/.test(ua) ? "other" : "iosSafari";
+    /* Edge, Chrome, Firefox and the rest on iOS are WebKit behind the app's
+       own shell. Only Safari has the per-site Microphone setting, so their
+       hint sends the operator there. */
+    return /crios|fxios|edgios|opios|opt\/|duckduckgo|yabrowser/.test(ua) ? "iosOtherBrowser" : "iosSafari";
   }
   if (ua.includes("android") && ua.includes("chrome") && !/edga|opr\/|firefox|samsungbrowser/.test(ua)) return "androidChrome";
   return "other";

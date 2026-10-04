@@ -4,6 +4,7 @@
     "height": 844
   },
   "scheme": "dark",
+  "browser": "Edge on iOS (user agent)",
   "readings": [
     {
       "locale": "en",
@@ -47,11 +48,11 @@
       "scene": "hint",
       "hint": {
         "x": 11,
-        "y": 662.625,
+        "y": 647.5,
         "width": 368,
-        "height": 63.375
+        "height": 78.5
       },
-      "hintText": "Safari asks for the microphone again after every reload. To be asked once: Page Menu button in the address bar → Website Settings → Microphone → Allow.",
+      "hintText": "On iOS this browser asks for the microphone after every reload and has no setting that stops it. Safari has one: open Delegatus in Safari, then Page Menu button → Website Settings → Microphone → Allow.",
       "hintCount": 1,
       "hintCut": false,
       "dismissTarget": {
@@ -131,11 +132,11 @@
       "scene": "hint",
       "hint": {
         "x": 11,
-        "y": 647.5,
+        "y": 632.375,
         "width": 368,
-        "height": 78.5
+        "height": 93.625
       },
-      "hintText": "Safari питає про мікрофон після кожного перезавантаження. Щоб питав один раз: кнопка меню сторінки в адресному рядку → параметри вебсайту → «Мікрофон» → «Дозволити».",
+      "hintText": "На iOS цей браузер питає про мікрофон після кожного перезавантаження, і налаштування, яке це вимикає, у нього немає. У Safari воно є: відкрийте Delegatus у Safari, далі кнопка меню сторінки → параметри вебсайту → «Мікрофон» → «Дозволити».",
       "hintCount": 1,
       "hintCut": false,
       "dismissTarget": {

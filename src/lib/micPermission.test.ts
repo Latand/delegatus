@@ -69,6 +69,8 @@ describe("when the hint is owed", () => {
 describe("which browser's setting the hint names", () => {
   const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
   const IPAD_AS_MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
+  const IPHONE_EDGE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/138.0.0.0 Mobile/15E148 Safari/604.1";
+  const IPHONE_FIREFOX = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/140.0 Mobile/15E148 Safari/605.1.15";
   const IPHONE_CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/138.0.0.0 Mobile/15E148 Safari/604.1";
   const ANDROID_CHROME = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36";
   const ANDROID_SAMSUNG = "Mozilla/5.0 (Linux; Android 15; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/27.0 Chrome/125.0.0.0 Mobile Safari/537.36";
@@ -88,8 +90,10 @@ describe("which browser's setting the hint names", () => {
     expect(micHintPlatform({ userAgent: IPAD_AS_MAC, standalone: false, maxTouchPoints: 0 })).toBe("other");
   });
 
-  test("another browser's shell on iOS has no per-site Safari setting", () => {
-    expect(micHintPlatform({ userAgent: IPHONE_CHROME, standalone: false, maxTouchPoints: 5 })).toBe("other");
+  test("Edge, Chrome and Firefox on an iPhone are sent to Safari: their shells have no per-site setting", () => {
+    for (const userAgent of [IPHONE_EDGE, IPHONE_CHROME, IPHONE_FIREFOX]) {
+      expect(micHintPlatform({ userAgent, standalone: false, maxTouchPoints: 5 })).toBe("iosOtherBrowser");
+    }
   });
 
   test("Chrome on Android, and the Android browsers that are not Chrome", () => {
