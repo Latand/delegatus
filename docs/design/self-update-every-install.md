@@ -183,7 +183,7 @@ The automatic path (after #2430) files the same request under #2430's custody. T
 
 | id | When | Button |
 | --- | --- | --- |
-| `restart-service` | launcher without `relaunch`, its PID's cgroup is `user@<uid>.service/…/<unit>.service`, and the pointer's release passes the bootstrap's checks and contains the relaunch marker | yes: write the trial intent, then `systemd-run --user --collect --quiet --unit delegatus-apply-<id> -- systemctl --user restart <unit>`. Precedent: `src/lib/runtime/agentMemory.ts:61` |
+| `restart-service` | launcher without `relaunch`, its PID's cgroup is `user@<uid>.service/…/<unit>.service`, that unit is proven to run this launcher (its unit file under `~/.config/systemd/user` starts this install's `bin/cli.mjs`, or the service manager names the launcher as the unit's `MainPID`), and the pointer's release passes the bootstrap's checks and contains the relaunch marker. A cgroup alone proves nothing: a launcher started in a terminal multiplexer pane, a terminal emulator or a desktop autostart scope sits in that unit, and restarting it would end everything else in it and bring no launcher back. Such a launcher gets `restart-terminal`. The proof is read again when the action runs and by the recovery helper before it restarts a unit; the card names the unit | yes: write the trial intent, then `systemd-run --user --collect --quiet --unit delegatus-apply-<id> -- systemctl --user restart <unit>`. Precedent: `src/lib/runtime/agentMemory.ts:61` |
 | `restart-terminal` | same, in a terminal | no; the exact command from the bootstrap's argv |
 | `update-first` | the pointer's release lacks the marker | the normal Update button |
 | `start-service` | no live launcher; a `~/.config/systemd/user/*.service` whose `ExecStart` runs this checkout's `bin/cli.mjs` | yes, via `systemd-run` (the new launcher takes over through P1.2) |
@@ -218,6 +218,7 @@ Also in P2:
 - **Bootstrap.** Packaged bootstraps from this version on hand off to the pointer while their own version equals `baseVersion`. A package upgraded by hand wins, mirroring `checkoutHead`.
 - **Root.** No root is needed, so `npm -g` works too.
 - **Mode.** New mode `package`.
+- **Revision.** A release is identified by the commit it was packed from, which the updater reads as `gitHead` from the published manifest. The release publishes a tarball, and npm reads `gitHead` from a git directory, so no version up to 1.9.0 carries it. `scripts/prepack.mjs` now writes it into the packed manifest (`scripts/package-revision.mjs`; `postpack` takes it out of the working tree again), and the release workflow refuses to publish a tarball whose manifest lacks it or names another commit. A published version without a revision is named in the dialog with the package-manager instruction and is never installed from it; the check completes for an installed version the registry does not know. The one-click path has run only against fixtures: its first proof on the real registry is the first release published with the stamp.
 
 ### Docker
 
@@ -231,7 +232,7 @@ Nothing is built. The managed snapshot carries no action. S8 shows `docker-deplo
 | S3 | re-adopted; one click; the launcher replaces the orphan |
 | S4 | `start-service` button, or the command (Delegatus did not launch this Viewer) |
 | S5 | `restart-service` button under systemd; one terminal command otherwise. One time per install, because the running process predates the code that could replace it |
-| S6 | one click after the first start on a version that has P4. Old versions (≤ 1.9.0) run old code and need one `bunx delegatus-cli@latest` |
+| S6 | one click once both the running version has P4 and the published version names its revision. Old versions (≤ 1.9.0) run old code and need one `bunx delegatus-cli@latest`; until a version is published with a revision the dialog names the new version and gives that instruction |
 | S7 | unchanged, one click |
 | S8 | instruction |
 | S10 | build plus today's separate restarts; a launcher change needs one manual restart |
@@ -497,6 +498,25 @@ accepted target. Health proves launcher, Viewer and host together before the
 Viewer settles the original apply and releases its hold. A terminal write that
 outlived the process retains its receipt and releases only its own remaining
 hold after cold serving verification.
+
+**The previous state is what the apply captured, never what the pointer
+implies.** The launcher, web and the runtime host need not serve what the
+pointer names: a checkout whose HEAD moved past its pointer serves that HEAD
+(S9), a checkout launcher can supervise a release, and a web that fell back
+serves the release before. `apply.begin` records the revision of each of the
+three. A failed load check and a refused request stop nothing, so they settle
+when each process still serves what it served then; a rollback that restarted
+the children settles on the release the restored pointer selects. Either way
+the apply ends `failed` and its hold is released. Requiring the three to equal
+the pointer's commit left such an apply `switching` for good, with every
+action refused and the hold in place.
+
+Cold startup follows the same rule. When the apply names no prior launcher the
+start can verify, a start that is not the candidate puts the pointer back,
+writes the apply `failed`, removes the apply's own hold and request, and
+serves what the pointer selects by the rule of every start. A start that is
+the candidate rolls itself back through the install's own `bin/cli.mjs`. In
+neither case does the launcher refuse to start.
 
 `A` is the verified source, `B` the built target, `I` the original accepted
 apply identity, `H` its admission hold, `Q` the launcher request, `T` its trial,

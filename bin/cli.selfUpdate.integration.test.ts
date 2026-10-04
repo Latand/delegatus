@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 import {
   ADMISSION_LOG, BROKEN_HOST, STUB_HOST, STUB_NEXT, WORK_STARTED, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile,
-  protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, socketAnswers, start, stateText, until, version,
+  protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceUnit, socketAnswers, start, stateText, until, version,
   type LauncherRecord,
 } from "./__fixtures__/cli-self-update";
 
@@ -1221,13 +1221,15 @@ launcher.unref();
     install: { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }), entry: () => path.join(prior.dir, "bin", "cli.mjs"), run: (action, recovery) => {
       if (recovery) {
         restarting = (async () => {
-          const { runInstallAction } = await import("../src/lib/selfUpdate/actions");
+          const { runInstallAction, unitRunsLauncher } = await import("../src/lib/selfUpdate/actions");
+          // The unit file in the install's home proves the service, here and in the helper.
+          const owner = serviceUnit(fixture);
           runInstallAction(action, args => {
             const command = args.slice(args.indexOf("--") + 1);
             const helper = spawn(command[0]!, command.slice(1), { cwd: fixture.checkout, env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, stdio: "pipe" }); children.add(helper); recoveryHelper = helper;
             // The recovery must outlive the Viewer that requested it.
             helper.stderr?.on("data", chunk => { recoveryOutput += String(chunk); });
-          }, recovery);
+          }, recovery, owner, (unit, root, pid) => unitRunsLauncher(unit, root, pid, () => null, fixture.env.HOME));
         })();
         return;
       }
@@ -1678,7 +1680,7 @@ for (const outcome of ["refused", "settled"] as const) (outcome === "refused" ||
   const { readRevision } = await import("../src/lib/selfUpdate/git");
   const { readStartIdentity } = await import("../src/lib/selfUpdate/pid");
   const { idleUpdate } = await import("../src/lib/selfUpdate/types");
-  const { runInstallAction } = await import("../src/lib/selfUpdate/actions");
+  const { runInstallAction, unitRunsLauncher } = await import("../src/lib/selfUpdate/actions");
   let f: ReturnType<typeof install>, candidate: ReturnType<typeof release>, key: string;
   if (outcome === "refused") ({ f, candidate, key } = await protectedInstall("checkout", "LLV_TOKEN"));
   else {
@@ -1742,7 +1744,7 @@ launcher.unref();
         const command = args.slice(args.indexOf("--") + 1), env = cleanTerminalEnv(f);
         helper = spawn(command[0]!, command.slice(1), { cwd: f.checkout, env: { ...env, PATH: managerDir + path.delimiter + env.PATH }, stdio: ["ignore", "pipe", "pipe"] }); children.add(helper);
         helper.stderr?.on("data", chunk => { helperOutput += String(chunk); });
-      }, recovery);
+      }, recovery, serviceUnit(f), (unit, root, pid) => unitRunsLauncher(unit, root, pid, () => null, f.env.HOME));
     } },
   });
   try {

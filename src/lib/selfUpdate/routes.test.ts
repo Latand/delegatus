@@ -14,7 +14,7 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
-import { installAction, runInstallAction } from "./actions";
+import { installAction, launcherService, runInstallAction } from "./actions";
 import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
@@ -847,6 +847,33 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
   });
 
+  /* A launcher started in a multiplexer pane sits in that unit's cgroup.
+     Restarting the unit would end every pane and bring no launcher back. */
+  test.each(["built", "unbuilt"] as const)("a unit not proven to be this launcher's service is never restarted, by the dialog or by a seat: %s", async built => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    const calls: string[][] = []; const asked: string[] = [];
+    const proven = (unit: string) => { asked.push(unit); return false; };
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/tmux.service\n", ready: () => built === "built", env: {}, proven }),
+      run: action => runInstallAction(action, args => calls.push(args), undefined, { root: checkout, launcherPid: record.launcher.pid }, proven),
+      entry: () => join(checkout, "bin", "cli.mjs"), unit: () => launcherService(record.launcher.pid, checkout, () => "0::/user.slice/user-1000.slice/user@1000.service/tmux.service\n", proven),
+    };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const action = (await snapshot()).action;
+    if (built === "built") {
+      expect(action).toMatchObject({ id: "restart-terminal", button: false });
+      expect(action?.unit).toBeUndefined();
+      expect(asked).toContain("tmux.service");
+    } else expect(action).toMatchObject({ id: "update-first", button: true });
+    await until(next => next.check.state !== "checking");
+    const receipt = await h.service.deployRevision({ revision: tipSha, idempotencyKey: `unproven-unit-${built}` });
+    expect(receipt).toMatchObject({ state: "action-required", code: "self-update-action-required", action: { id: built === "built" ? "restart-terminal" : "update-first" } });
+    expect(await h.service.performInstallAction()).toMatchObject({ ok: false, status: 409, code: "cannot-restart" });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false);
+    expect(existsSync(join(h.deps.dir, "deployments.json"))).toBe(false);
+  });
+
   test.each(["accepted", "refused", "overlap"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {
     const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     h.deps.bun = process.execPath;
@@ -864,8 +891,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const pointer = JSON.stringify({ sha: tipSha, dir: releaseDir, checkoutHead: firstSha }); writeFileSync(record.releasePointer, pointer);
     const calls: string[][] = [];
     h.deps.install = {
-      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true }),
-      run: action => { if (outcome === "refused") throw new Error("manager unavailable"); runInstallAction(action, args => calls.push(args)); }, entry: () => join(checkout, "bin", "cli.mjs"),
+      action: decision => installAction(decision, { cgroup: () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service", ready: () => true, proven: () => true }),
+      run: action => { if (outcome === "refused") throw new Error("manager unavailable"); runInstallAction(action, args => calls.push(args), undefined, { root: checkout, launcherPid: record.launcher.pid }, () => true); }, entry: () => join(checkout, "bin", "cli.mjs"),
     };
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     expect((await snapshot()).action?.id).toBe("restart-service");
@@ -1218,6 +1245,42 @@ test.each([
     expect(result.check).toMatchObject({ relation, state: relation === "behind" ? "update-available" : "up-to-date",
       behind: relation === "behind" ? 1 : 0, ahead: relation === "ahead" ? 1 : 0 });
     expect(result.available?.version ?? null).toBe(relation === "behind" ? latest : null);
+  } finally { service.stop(); fetcher.mockRestore(); }
+});
+
+/* The registry as it answers today: no published version carries a revision,
+   and an installed version may be one the registry never had. */
+test.each(["published", "never-published"] as const)("a package install checks against the registry as it answers, installed version %s", async installedShape => {
+  const published = readFileSync(join(import.meta.dir, "__fixtures__", "registry-delegatus-cli-1.9.0.json"), "utf8");
+  const dir = mkdtempSync(join(root, "package-registry-"));
+  const installRoot = join(dir, "package"); mkdirSync(installRoot);
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "1.8.0" }));
+  const record = {
+    version: 1, launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), revision: null, relaunch: 1 },
+    web: { ...stoppedProcess(), startIdentity: null, requestId: null },
+    runtimeHost: { ...stoppedProcess(), startIdentity: null, requestId: null }, checkout: null, installRoot,
+    releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "runtime.sock"), updatedAt: new Date().toISOString(),
+  } as LauncherRecord;
+  const asked: string[] = [];
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+    asked.push(String(input));
+    if (String(input).endsWith("/latest")) return new Response(published, { headers: { "content-type": "application/json" } });
+    if (installedShape === "never-published") return new Response('"version not found: 1.8.0"', { status: 404 });
+    return Response.json({ ...JSON.parse(published), version: "1.8.0" });
+  }) as typeof fetch);
+  const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
+  try {
+    await service.check();
+    const result = await service.snapshot();
+    expect(asked.sort()).toEqual(["https://registry.npmjs.org/delegatus-cli/1.8.0", "https://registry.npmjs.org/delegatus-cli/latest"]);
+    expect(result.check).toMatchObject({ state: "update-available", relation: "behind", error: null });
+    expect(result.available).toMatchObject({ version: "1.9.0", sha: "" });
+    expect(result.installed.version).toBe("1.8.0");
+    // The version is named; nothing unverified is installed from the dialog.
+    expect(await service.startUpdate("package-registry")).toMatchObject({ ok: false, status: 409, code: "cannot-update" });
+    expect(existsSync(join(dir, "apply.json"))).toBe(false);
+    await expect(service.deployRevision({ revision: tipSha, idempotencyKey: "package-registry" })).rejects.toThrow("no published package");
   } finally { service.stop(); fetcher.mockRestore(); }
 });
 

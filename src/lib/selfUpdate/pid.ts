@@ -4,7 +4,7 @@
    records, so a PID reused after an exit never matches its record. */
 import { procBackend } from "@/lib/proc";
 import { spawnSync } from "node:child_process";
-import { windowsStartIdentity } from "../../../bin/windows-process-identity.mjs";
+import { windowsStartIdentities, windowsStartIdentity } from "../../../bin/windows-process-identity.mjs";
 import { readFileSync } from "node:fs";
 
 export interface RecordedPid { pid: number; startIdentity: string }
@@ -30,6 +30,39 @@ export function readStartIdentity(pid: number, platform: NodeJS.Platform = proce
   return null;
 }
 
+/* Where reading an identity starts a process (PowerShell on Windows, `ps` on
+   macOS), a snapshot taken every few seconds must not start one per PID per
+   read. An identity that was read is kept for a short while, and the PIDs of
+   one record are read together. Only observation goes through this memory:
+   `signalGroup` reads the kernel again before it signals anything. */
+export const IDENTITY_MEMORY_MS = 15_000;
+const remembered = new Map<number, { identity: string; at: number }>();
+const spawnsToRead = (platform: NodeJS.Platform) => platform === "win32" || platform === "darwin";
+
+/** Reads the identities of these PIDs that are not remembered, in one go. */
+export function primeStartIdentities(pids: Array<number | null | undefined>, platform: NodeJS.Platform = process.platform,
+  run: typeof spawnSync = spawnSync, now = Date.now()): void {
+  if (platform !== "win32") return;
+  const missing = pids.filter((pid): pid is number => typeof pid === "number" && (remembered.get(pid)?.at ?? -Infinity) + IDENTITY_MEMORY_MS <= now);
+  if (!missing.length) return;
+  for (const [pid, identity] of windowsStartIdentities(missing, run)) remembered.set(pid, { identity, at: now });
+}
+
+/** `expected` is the identity a record names: a remembered identity that
+    differs from it is read again, since the PID may have a new owner. */
+export function rememberedStartIdentity(pid: number, platform: NodeJS.Platform = process.platform,
+  run: typeof spawnSync = spawnSync, now = Date.now(), expected?: string): string | null {
+  if (!spawnsToRead(platform)) return readStartIdentity(pid, platform, run);
+  const known = remembered.get(pid);
+  if (known && known.at + IDENTITY_MEMORY_MS > now && (expected === undefined || known.identity === expected || known.at === now)) return known.identity;
+  const identity = readStartIdentity(pid, platform, run);
+  if (identity) remembered.set(pid, { identity, at: now }); else remembered.delete(pid);
+  return identity;
+}
+
+/** Tests only. */
+export function forgetStartIdentities(): void { remembered.clear(); }
+
 /** Alive means present and not a zombie. */
 export function isAlive(pid: number): boolean {
   const state = statFields(pid)?.[0];
@@ -39,13 +72,13 @@ export function isAlive(pid: number): boolean {
 }
 
 export function sameProcess(record: RecordedPid): boolean {
-  return isAlive(record.pid) && readStartIdentity(record.pid) === record.startIdentity;
+  return isAlive(record.pid) && rememberedStartIdentity(record.pid, process.platform, spawnSync, Date.now(), record.startIdentity) === record.startIdentity;
 }
 
 /** Signals the process group a recorded PID leads, after checking once more
     that the PID is still the process that was recorded. */
 export function signalGroup(record: RecordedPid, signal: NodeJS.Signals): boolean {
-  if (!sameProcess(record)) return false;
+  if (!isAlive(record.pid) || readStartIdentity(record.pid) !== record.startIdentity) return false;
   try {
     process.kill(-record.pid, signal);
     return true;

@@ -296,6 +296,16 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       );
     }
     const target = s.available;
+    /* A published package that names no revision cannot be verified, so it is
+       named and installed with its package manager. */
+    if (s.mode === "package" && !target.sha) {
+      return (
+        <section data-section="update" data-update="package-manual" className={CARD}>
+          {heading(t("selfUpdate.update.to", { target: target.version }))}
+          <p className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p>
+        </section>
+      );
+    }
     return (
       <section data-section="update" data-update="available" className={CARD}>
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
@@ -305,6 +315,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
           </div>
         </div>
         <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
+        {s.mode === "package" ? <p data-note="package-manual" className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p> : null}
         {steps(target.short, update.steps.map((step) => ({ ...step, state: "pending", tail: [], durationMs: null, startedAt: null })))}
       </section>
     );
@@ -665,7 +676,7 @@ function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: Vie
   const action = s.action;
   if (!action) return null;
   return <section data-section="install-action" className={CARD}>
-    <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`)}</p>
+    <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
     {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
     {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
       label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}

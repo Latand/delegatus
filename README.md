@@ -80,13 +80,17 @@ runtime host together. If verification fails, the launcher restores the previous
 release. Running sessions reconnect and interrupted work resumes.
 
 A recovery web server re-adopts its installation's launcher. If an older
-launcher needs upgrading, the dialog offers **Restart launcher** for a user
-service, or the exact command for its terminal. Packaged installs download a
-published npm release into the user's cache, so global installation permissions
-are not needed. Docker's runtime-host profile uses its deployment coordinator.
+launcher needs upgrading, the dialog offers **Restart launcher** for the user
+service that runs it, naming that service, or the exact command for its
+terminal. Packaged installs download a published npm release into the user's
+cache, so global installation permissions are not needed. Docker's runtime-host
+profile uses its deployment coordinator.
 
 Packaged releases that predate this updater need one launch of
-`bunx delegatus-cli@latest` to load it. Later updates use the Update dialog.
+`bunx delegatus-cli@latest` to load it. The Update dialog installs a published
+version that names the commit it was packed from; for a version published
+without one (every version up to 1.9.0) it names the version and asks for
+`bunx delegatus-cli@latest`.
 
 **Automatic updates**, off by default, waits for green checks and holds new work
 while the current cohort finishes. The dialog shows the work it awaits and asks

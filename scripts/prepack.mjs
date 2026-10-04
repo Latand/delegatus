@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+import { stampPackageRevision } from "./package-revision.mjs";
 import {
   discardUnsupportedApiCredentials,
   viewerChildProcessOptions,
@@ -156,6 +157,9 @@ async function main() {
   if (!existsSync(join(distStandaloneDir, "server.js")) || !existsSync(runtimeHostBundle)) {
     throw new Error("Prepack did not produce the standalone server and runtime host bundles.");
   }
+  /* Last, so a failed build leaves package.json as it was. A pack outside a
+     git checkout names no revision; the release gate is what requires one. */
+  if (!stampPackageRevision(root)) console.warn("Prepack found no git revision; the packed manifest names none.");
 }
 
 main().catch((error) => {

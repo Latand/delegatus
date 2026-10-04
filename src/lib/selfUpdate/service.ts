@@ -26,7 +26,7 @@ import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts }
 import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { memAvailableMb } from "./steps";
+import { memAvailableMb, releaseBuilt } from "./steps";
 import { isRuntimeHostTransportFailure } from "@/lib/runtime/client";
 
 import type { RuntimeHostHealth } from "@/lib/runtime/client";
@@ -50,9 +50,9 @@ import {
 import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
 import { runGit } from "./git";
 import { comparePackageVersions, manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
-import { installAction, runInstallAction, userUnit, type ServiceRecovery } from "./actions";
+import { installAction, launcherService, runInstallAction, type ServiceRecovery } from "./actions";
 import { ApplyController, writeAtomic } from "./apply";
-import { readStartIdentity } from "./pid";
+import { rememberedStartIdentity } from "./pid";
 import { LAUNCHER_RECORD_ENV, type ModeDecision } from "./mode";
 import { ReleasePointer, type Release } from "./release";
 import type { RunnerConfig } from "./steps";
@@ -92,7 +92,9 @@ export interface ServiceDeps {
   pollMinutes: number;
   bun: string;
   mode(): Promise<ModeDecision>;
-  install?: { action(decision: ModeDecision): InstallAction | null | Promise<InstallAction | null>; run(action: InstallAction, recovery?: ServiceRecovery): void; entry(record: LauncherRecord): string | null };
+  install?: { action(decision: ModeDecision): InstallAction | null | Promise<InstallAction | null>; run(action: InstallAction, recovery?: ServiceRecovery): void; entry(record: LauncherRecord): string | null;
+    /** The user service proven to run this launcher, or null. */
+    unit?(record: LauncherRecord): string | null };
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
   createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
@@ -556,11 +558,14 @@ export class SelfUpdateService {
       // Pending updates fence new work before building too: otherwise busy
       // agents can keep consuming the resources the candidate build needs.
       if (!this.auto.enabled && !this.hasAutoCustody()) return;
-      if (snapshot.busy || this.checking || snapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
+      // A candidate this install already built is published again without a
+      // build, so it waits for no memory.
+      const needsMemory = () => !releaseBuilt(releaseDirFor(record.releasesDir, target.sha), target.sha) && memAvailableMb() < 4_096;
+      if (snapshot.busy || this.checking || snapshot.check.state === "checking" || needsMemory()) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
       if (green.state !== "green" || (!this.auto.enabled && !this.hasAutoCustody()) || this.auto.pending || (!this.draining() && this.slice.available?.sha !== target.sha)
-        || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || memAvailableMb() < 4_096) return;
+        || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || needsMemory()) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
         this.auto = { ...this.auto, rollbackPointer: existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null, rollbackCaptured: true };
@@ -1165,12 +1170,12 @@ export class SelfUpdateService {
       const config = root ? cliRuntimeHostConfig(root, { env: { ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) } }) : null;
       const socket = this.deps.env.LLV_RUNTIME_HOST_SOCKET ?? config?.socketPath;
       const id = socket ? /runtime-host-([a-f0-9]+)\.sock$/.exec(socket)?.[1] ?? config?.installId : null;
-      const identity = readStartIdentity(this.deps.web.pid);
+      const identity = rememberedStartIdentity(this.deps.web.pid);
       if (id && socket && identity) writeAtomic(join(this.deps.dir, `adopt-${id}.json`),
         { pid: this.deps.web.pid, startIdentity: identity, port: this.deps.web.port, socket, ...(root ? { installRoot: root } : {}) });
     }
     if (value.supervision === "adopted" && value.record) {
-      const identity = readStartIdentity(this.deps.web.pid);
+      const identity = rememberedStartIdentity(this.deps.web.pid);
       if (identity) writeAtomic(launcherControlFile(value.record.requestFile, "adopt"),
         { pid: this.deps.web.pid, startIdentity: identity, port: value.record.port, socket: value.record.socket,
           installRoot: value.record.checkout ?? value.record.installRoot });
@@ -1201,8 +1206,11 @@ export class SelfUpdateService {
         if (decision.mode === "package" && decision.record) {
           const root = packageRoot(decision.record);
           const pointer = await new ReleasePointer(decision.record.releasePointer, root).current();
-          const installed = await registryRevision(packageVersion(pointer.dir));
+          // The installed version may predate the published revision, or be
+          // one the registry never had. It is named by its version alone.
+          const version = packageVersion(pointer.dir);
           const available = await registryRevision();
+          const installed = await registryRevision(version).catch((): Revision => ({ version, sha: "", short: "", date: "" }));
           const order = comparePackageVersions(available.version, installed.version);
           this.slice = applyCheck(this.slice, { ok: true, installed, available: order > 0 ? available : null,
             relation: order > 0 ? "behind" : order < 0 ? "ahead" : "equal", ahead: order < 0 ? 1 : 0, behind: order > 0 ? 1 : 0, delta: { commits: [], summary: { commitCount: 0, entryCount: 0, counts: [], groups: [] } } }, new Date(this.deps.now()), this.deps.pollMinutes);
@@ -1338,6 +1346,7 @@ export class SelfUpdateService {
       && this.slice.check.relation === "equal" && !!snapshot.installed.sha;
     if (rebuild) available = snapshot.installed;
     if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
+    if (!/^[a-f0-9]{40}$/.test(available.sha)) return refuse(409, "cannot-update", "The published package names no revision; update it with the package manager it came from");
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
       const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
       if (refusal) return refusal;
@@ -1562,7 +1571,7 @@ export class SelfUpdateService {
           const recovery = { file, entry: join(release.dir, "bin", "launcher-relaunch.mjs"), bun: this.deps.bun };
           try {
             if (this.deps.install) this.deps.install.run(action, recovery);
-            else runInstallAction(action, undefined, recovery);
+            else runInstallAction(action, undefined, recovery, { root, launcherPid: record.launcher.pid });
           } catch {
             rmSync(file, { force: true });
             return refuse(503, "cannot-restart", "The service recovery was not accepted; update custody is retained");
@@ -1600,7 +1609,13 @@ export class SelfUpdateService {
       writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
       this.apply.patch({ state: "switching", externalRestart: true, switchedAt: new Date(this.deps.now()).toISOString() });
     }
-    try { if (this.deps.install) this.deps.install.run(action); else runInstallAction(action); } catch (error) {
+    try {
+      if (this.deps.install) this.deps.install.run(action);
+      else {
+        const root = record?.checkout ?? (record ? packageRoot(record) : decision.installRoot);
+        runInstallAction(action, undefined, undefined, root ? { root, launcherPid: record?.launcher.pid } : undefined);
+      }
+    } catch (error) {
       if (record && action.id === "restart-service") {
         this.apply.restoreUntaken(record);
         const trialFile = launcherControlFile(record.requestFile, "trial");
@@ -1629,7 +1644,7 @@ export class SelfUpdateService {
       const decision = await this.decide();
       const record = decision.record;
       const action = await this.actionFor(decision);
-      if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && userUnit(readFileSync(`/proc/${record.launcher.pid}/cgroup`, "utf8")))))
+      if (!record || (!record.launcher.relaunch && action?.id !== "restart-service" && !(action?.id === "update-first" && (this.deps.install?.unit ? this.deps.install.unit(record) : launcherService(record.launcher.pid, record.checkout ?? packageRoot(record))))))
         return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
       const snapshot = await this.snapshot();
       const active = rows.find(row => !row.terminal);

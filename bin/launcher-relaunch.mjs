@@ -159,7 +159,17 @@ async function recoverService(file) {
   try { await recoverPlannedService(JSON.parse(readFileSync(file, "utf8"))); }
   finally { rmSync(file, { force: true }); }
 }
-async function recoverPlannedService(plan) {
+/* The rule of `unitRunsLauncher` in src/lib/selfUpdate/actions.ts: a unit is
+   restarted only on proof that it runs this install's launcher. A cgroup can
+   name a terminal multiplexer or a terminal emulator just as well. */
+export function unitRunsLauncher(unit, root, launcherPid, home = process.env.HOME ?? "") {
+  let text = "";
+  try { text = readFileSync(join(home, ".config", "systemd", "user", unit), "utf8"); } catch { /* No unit file of the user's own. */ }
+  if (text.split("\n").some(line => line.startsWith("ExecStart=") && line.includes(join(root, "bin", "cli.mjs")))) return true;
+  const shown = spawnSync("systemctl", ["--user", "show", "--property=MainPID", "--value", unit], { encoding: "utf8", timeout: 5_000 });
+  return shown.status === 0 && Number.isInteger(launcherPid) && launcherPid > 0 && Number(shown.stdout.trim()) === launcherPid;
+}
+export async function recoverPlannedService(plan, proven = unitRunsLauncher) {
   const name = basename(plan.requestFile);
   if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(plan.unit) || typeof plan.root !== "string") throw new Error("Invalid recovery plan");
   const directory = dirname(plan.requestFile);
@@ -184,6 +194,7 @@ async function recoverPlannedService(plan) {
     : existsSync(intent.releasePointer) && readFileSync(intent.releasePointer, "utf8") === intent.rollbackPointer;
   const revision = intent.rollbackPointer === null ? intent.rollbackHostRevision : readPointer(intent.rollbackPointer)?.sha?.slice(0, 7);
   if (!restored() || !revision || intent.rollbackWebRevision !== intent.rollbackHostRevision) throw new Error("Prior release is unverifiable; custody is retained");
+  if (!proven(plan.unit, plan.root, intent.launcherPid, environment.HOME)) throw new Error("The service is not proven to run this launcher; custody is retained");
   const restart = spawnSync("systemctl", ["--user", "restart", plan.unit], { timeout: 30_000, stdio: "ignore" });
   if (restart.status !== 0) throw new Error("Service recovery was refused; custody is retained");
   const deadline = Date.now() + 60_000;
@@ -279,7 +290,33 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     // settles the refusal, and neither replays a rollback.
     const refused = receipt?.requestId === apply?.requestId && receipt?.state === "rejected";
     const onTarget = release.sha === apply?.target && entry === join(release.dir, "bin", "cli.mjs");
-    if (apply && ["building", "ready", "switching"].includes(apply.state) && (!refused || onTarget)) {
+    /* The serving state an apply captured need not match its pointer: a
+       checkout whose HEAD moved past the pointer serves that HEAD, and a
+       checkout launcher can supervise a release. Such an apply names no prior
+       launcher this start could verify. A start that is not the candidate
+       itself then serves what the restored pointer selects, by the ordinary
+       rule of every start, and the apply ends failed. Refusing to start would
+       leave the install down with its hold in place. */
+    let unverifiedPrior = false;
+    if (apply && ["building", "ready", "switching"].includes(apply.state) && (!refused || onTarget)
+      && !apply.rollbackPackage && readPointer(apply.rollbackPointer)?.kind !== "package" && release.sha !== apply.target) {
+      const priorPointer = readPointer(apply.rollbackPointer);
+      const prior = apply.rollbackPointer === null ? installRoot : priorPointer?.dir;
+      const previousSha = typeof prior === "string" ? priorPointer?.sha ?? headRevision(prior) : null;
+      unverifiedPrior = typeof prior === "string" && existsSync(join(prior, "bin", "cli.mjs"))
+        && (!previousSha || headRevision(prior) !== previousSha
+          || apply.rollbackWebRevision !== previousSha.slice(0, 7) || apply.rollbackHostRevision !== previousSha.slice(0, 7));
+    }
+    if (unverifiedPrior) {
+      const request = read(paths.request);
+      const pointer = read(paths.releasePointer);
+      if (pointer?.sha === apply.target) restore(apply.rollbackPointer);
+      atomic(applyFile, JSON.stringify({ ...apply, state: "failed", rolledBack: false, ...(apply.trigger === "auto" ? { admissionRefused: true } : {}),
+        detail: "The launcher restarted before the update was applied; the installed release serves" }) + "\n");
+      if (request?.requestId === apply.requestId) rmSync(paths.request, { force: true });
+      const drainFile = join(dirname(paths.request), "auto-drain.json");
+      if (read(drainFile)?.id === apply.requestId) rmSync(drainFile, { force: true });
+    } else if (apply && ["building", "ready", "switching"].includes(apply.state) && (!refused || onTarget)) {
       const request = read(paths.request);
       const owner = read(paths.record)?.launcher;
       const receiptOwner = receipt?.requestId === apply.requestId && receipt.target === apply.target
@@ -301,25 +338,31 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       if (typeof prior !== "string" || !existsSync(join(prior, "bin", "cli.mjs")))
         throw new Error("Cold recovery cannot verify the prior launcher; custody is retained.");
       const previousSha = priorPointer?.sha ?? headRevision(prior);
+      let priorEntry = join(prior, "bin", "cli.mjs");
       if (priorPointer?.kind === "package" || apply.rollbackPackage) {
         const version = read(join(prior, "package.json"))?.version;
         if (version !== (priorPointer?.version ?? apply.rollbackPackage?.version))
           throw new Error("Cold recovery cannot verify the prior package; custody is retained.");
       } else if (!previousSha || headRevision(prior) !== previousSha
-        || apply.rollbackWebRevision !== previousSha.slice(0, 7) || apply.rollbackHostRevision !== previousSha.slice(0, 7))
-        throw new Error("Cold recovery cannot verify the prior serving release; custody is retained.");
+        || apply.rollbackWebRevision !== previousSha.slice(0, 7) || apply.rollbackHostRevision !== previousSha.slice(0, 7)) {
+        // This start is the candidate itself, and the apply names no prior
+        // launcher it could verify. The install's own entry is the one every
+        // start goes through: it serves what the restored pointer selects.
+        priorEntry = join(installRoot, "bin", "cli.mjs");
+        if (!existsSync(priorEntry)) throw new Error("Cold recovery cannot verify the prior serving release; custody is retained.");
+      }
       // The earliest accepted apply is authoritative even before any request
       // exists. Its real request and original owner bind the recovery trial.
       // A verified rollback receipt already completed the image transition.
       // Starting its prior image must not replay failed() and require another
       // exec or service-manager start (neither exists in a Windows terminal).
       const rolledBack = receiptOwner && receipt.state === "rolled-back"
-        && receipt.revision === release.sha && receipt.previousEntry === join(prior, "bin", "cli.mjs")
+        && receipt.revision === release.sha && receipt.previousEntry === priorEntry
         && entry === receipt.previousEntry
         && (apply.rollbackPointer === null ? pointer === null
           : readFileSync(paths.releasePointer, "utf8") === apply.rollbackPointer);
       trial = { requestId: apply.requestId, target: apply.target, rollbackPointer: apply.rollbackPointer,
-        previousEntry: join(prior, "bin", "cli.mjs"), state: rolledBack ? "rolled-back" : "starting", at: apply.startedAt,
+        previousEntry: priorEntry, state: rolledBack ? "rolled-back" : "starting", at: apply.startedAt,
         ...(rolledBack ? { detail: receipt.detail } : {}) };
       atomic(trialFile, JSON.stringify(trial) + "\n");
       const drainFile = join(dirname(paths.request), "auto-drain.json");

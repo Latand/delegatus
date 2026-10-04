@@ -166,3 +166,60 @@ test("an unpublished legacy package rollback settles only the captured install v
   writeFileSync(join(installRoot, "package.json"), JSON.stringify({ version: "1.0.0" })); expect(cold.observe(legacy, false)).toBeNull();
   expect(cold.observe(legacy, true)).toBe("failed"); expect(cold.current).toMatchObject({ state: "failed", rolledBack: true });
 });
+
+
+/* States the product itself creates, in which the launcher, web and the
+   runtime host do not serve what the pointer names. A failed load check and a
+   refused request stop nothing, so each process still serves what it served
+   when the apply began. */
+const POINTER = JSON.stringify({ sha: "b".repeat(40), dir: "/releases/b", checkoutHead: "e".repeat(40) }) + "\n";
+const diverged = {
+  "a checkout whose HEAD moved past its pointer": { launcher: "c".repeat(40), web: "ccccccc", host: "ccccccc" },
+  "a checkout launcher over a release": { launcher: "c".repeat(40), web: "bbbbbbb", host: "bbbbbbb" },
+  "a web that fell back": { launcher: "b".repeat(40), web: "ddddddd", host: "bbbbbbb" },
+} as const;
+for (const [name, serving] of Object.entries(diverged)) for (const outcome of ["failed load check", "refused request"] as const)
+test(`${name}: a ${outcome} settles failed and releases the hold`, () => {
+  const dir = mkdtempSync(join(root, "diverged-")); const r = record(dir);
+  r.launcher.revision = serving.launcher; r.web.revision = serving.web; r.runtimeHost.revision = serving.host;
+  writeFileSync(r.releasePointer, POINTER);
+  const c = new ApplyController(dir); c.begin(r, "a".repeat(40), "operator");
+  expect(c.current).toMatchObject({ rollbackLauncherRevision: serving.launcher, rollbackWebRevision: serving.web, rollbackHostRevision: serving.host, rollbackPointer: POINTER });
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "a".repeat(40), dir: "/releases/a" })); c.patch({ state: "ready" }); c.send(r);
+  const id = c.current!.requestId; const hold = join(dir, "auto-drain.json");
+  expect(activeDrain(hold)).not.toBeNull();
+  if (outcome === "failed load check") {
+    // The launcher puts the pointer back itself and keeps both children.
+    rmSync(r.requestFile); writeFileSync(r.releasePointer, POINTER);
+    const settled = { ...r, launcher: { ...r.launcher, requestId: id, error: { kind: "fell-back" as const, revision: "aaaaaaa", detail: "The replacement launcher failed its load check." } } };
+    // A process that serves something else than it did is not the previous state.
+    expect(c.observe({ ...settled, web: { ...settled.web, revision: "aaaaaaa" } })).toBeNull();
+    expect(c.observe({ ...settled, launcher: { ...settled.launcher, revision: "a".repeat(40) } })).toBeNull();
+    expect(c.observe(settled, false)).toBeNull();
+    expect(activeDrain(hold)).not.toBeNull();
+    expect(c.observe(settled)).toBe("failed");
+    expect(c.current).toMatchObject({ state: "failed", rolledBack: true });
+  } else {
+    writeFileSync(`${r.requestFile}.result.json`, JSON.stringify({ requestId: id, state: "rejected", detail: "Stale launcher dispatch custody" }));
+    expect(c.observe({ ...r, runtimeHost: { ...r.runtimeHost, revision: "aaaaaaa" } })).toBeNull();
+    expect(activeDrain(hold)).not.toBeNull();
+    expect(c.observe(r)).toBe("failed");
+    expect(c.current).toMatchObject({ state: "failed", admissionRefused: true });
+    expect(existsSync(r.requestFile)).toBe(false);
+  }
+  expect(readFileSync(r.releasePointer, "utf8")).toBe(POINTER);
+  expect(activeDrain(hold)).toBeNull();
+  expect(() => new ApplyController(dir).begin(r, "a".repeat(40), "operator")).not.toThrow();
+});
+
+test("processes restarted by a rollback settle on the release the restored pointer selects", () => {
+  const dir = mkdtempSync(join(root, "diverged-restart-")); const r = record(dir);
+  r.launcher.revision = "b".repeat(40); r.web.revision = "ddddddd"; r.runtimeHost.revision = "bbbbbbb";
+  writeFileSync(r.releasePointer, POINTER);
+  const c = new ApplyController(dir); c.begin(r, "a".repeat(40), "operator"); c.send(r); rmSync(r.requestFile);
+  const restarted = { ...r, launcher: { ...r.launcher, requestId: c.current!.requestId, error: { kind: "fell-back" as const, revision: "aaaaaaa", detail: "candidate web failed" } },
+    web: { ...r.web, revision: "bbbbbbb" }, runtimeHost: { ...r.runtimeHost, revision: "bbbbbbb" } };
+  expect(c.observe({ ...restarted, runtimeHost: { ...restarted.runtimeHost, revision: "ddddddd" } })).toBeNull();
+  expect(c.observe(restarted)).toBe("failed");
+  expect(activeDrain(join(dir, "auto-drain.json"))).toBeNull();
+});

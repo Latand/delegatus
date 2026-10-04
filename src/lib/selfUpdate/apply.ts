@@ -7,6 +7,11 @@ import { releaseDrain, writeDrain } from "./drain";
 import { launcherControlFile, publishLauncherRequest, type LauncherRecord } from "./launcher";
 export interface ApplyIntent {
   requestId: string; target: string; releasePointer?: string; rollbackPointer: string | null; launcherPid: number; launcherIdentity: string | null;
+  /** What the launcher, web and the runtime host served when the apply began.
+      The three need not agree with each other or with the pointer: a checkout
+      whose HEAD moved past its pointer, a checkout launcher over a release and
+      a web that fell back are states the product itself creates. */
+  rollbackLauncherRevision?: string | null;
   rollbackWebRevision?: string | null; rollbackHostRevision?: string | null; rollbackPackage?: { root: string; version: string };
   autoGateId?: string; switchedAt?: string; admissionRefused?: boolean; externalRestart?: boolean; trigger: "operator" | "seat" | "auto"; deploymentId?: string; startedAt: string;
   state: "building" | "ready" | "switching" | "done" | "failed"; rolledBack: boolean; detail?: string;
@@ -29,6 +34,7 @@ export class ApplyController {
   begin(record: LauncherRecord, target: string, trigger: ApplyIntent["trigger"], deploymentId?: string, options: { rollbackPointer?: string | null; rollbackRevision?: string | null; state?: "building" | "ready"; autoGateId?: string } = {}): void {
     if (this.current && ["building", "ready", "switching"].includes(this.current.state)) throw new Error("An apply is already active");
     this.current = { requestId: randomUUID(), target, releasePointer: record.releasePointer, trigger, deploymentId, rollbackPointer: options.rollbackPointer !== undefined ? options.rollbackPointer : existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null,
+      rollbackLauncherRevision: record.launcher.revision ?? null,
       rollbackWebRevision: options.rollbackRevision !== undefined ? options.rollbackRevision : record.web.revision,
       rollbackHostRevision: options.rollbackRevision !== undefined ? options.rollbackRevision : record.runtimeHost.revision,
       launcherPid: record.launcher.pid, launcherIdentity: record.launcher.startIdentity, state: options.state ?? "building", autoGateId: options.autoGateId, rolledBack: false, startedAt: new Date().toISOString() };
@@ -82,8 +88,6 @@ export class ApplyController {
         || record.web.state !== "healthy" || record.runtimeHost.state !== "healthy") return false;
       let rollbackRevision: string | null = null;
       try { rollbackRevision = JSON.parse(intent.rollbackPointer ?? "null")?.sha?.slice(0, 7) ?? null; } catch { /* An unpublished release uses captured serving revisions. */ }
-      const webRevision = rollbackRevision ?? intent.rollbackWebRevision;
-      const hostRevision = rollbackRevision ?? intent.rollbackHostRevision;
       const pointerRestored = intent.rollbackPointer === null ? !existsSync(record.releasePointer)
         : existsSync(record.releasePointer) && readFileSync(record.releasePointer, "utf8") === intent.rollbackPointer;
       let packageRestored = false;
@@ -96,8 +100,17 @@ export class ApplyController {
         && intent.rollbackWebRevision === null && intent.rollbackHostRevision === null) {
         try { packageRestored = JSON.parse(readFileSync(join(intent.rollbackPackage.root, "package.json"), "utf8")).version === intent.rollbackPackage.version; } catch { /* Missing or changed package cannot settle. */ }
       }
-      return (!requirePointer || pointerRestored) && (!record.launcher.revision || record.launcher.revision.slice(0, 7) === webRevision) && webRevision === hostRevision && !!(packageRestored || webRevision && hostRevision)
-        && record.web.revision === webRevision && record.runtimeHost.revision === hostRevision;
+      if (requirePointer && !pointerRestored) return false;
+      // Two states are the previous one. Processes that were never stopped
+      // still serve what each served when the apply began. Processes that were
+      // restarted serve the release the restored pointer selects.
+      const web = record.web.revision, host = record.runtimeHost.revision;
+      const captured = web === (intent.rollbackWebRevision ?? null) && host === (intent.rollbackHostRevision ?? null)
+        && (packageRestored || !!web && !!host);
+      const selected = !!rollbackRevision && web === rollbackRevision && host === rollbackRevision;
+      if (!captured && !selected) return false;
+      const launcher = record.launcher.revision;
+      return !launcher || !!intent.rollbackLauncherRevision && launcher === intent.rollbackLauncherRevision || launcher.slice(0, 7) === web;
     };
     // A crash can follow the terminal intent write but precede hold release.
     // Verify the cold serving generation before releasing that same owner;

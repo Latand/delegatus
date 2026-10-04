@@ -21,7 +21,8 @@ import { listPresence, resetPresenceForTest } from "../view/presenceStore";
 import { statePath } from "../configDir";
 import { NextRequest } from "next/server";
 import { spawnSync } from "node:child_process";
-import { UpdateRunner } from "./steps";
+import { realPorts, UpdateRunner } from "./steps";
+import { ReleasePointer, releaseDirFor } from "./release";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
@@ -1602,3 +1603,71 @@ test("ending the drain delivers a held autonomous message once without any other
     expect(writes).toEqual(["held-operation"]);
   } finally { service.stop(); }
 });
+
+
+/* The real pointer, the real runner and the real snapshot: a refused admission
+   puts the previous release back, and the candidate it built is selected
+   again without an install or a build. */
+test("a refused automatic admission is admitted again without building the release twice", async () => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const checkout = join(h.dir, "checkout"); mkdirSync(checkout);
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  const commit = (label: string) => { git(checkout, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", label); return git(checkout, "rev-parse", "HEAD"); };
+  git(checkout, "init", "-q", "-b", "main");
+  const old = commit("serving"); const target = commit("candidate");
+  git(checkout, "checkout", "-q", "--detach", old);
+  h.record.checkout = checkout; h.record.web.revision = h.record.runtimeHost.revision = old.slice(0, 7);
+  // The candidate as the ready step left it: built, recorded and published.
+  const dir = releaseDirFor(h.record.releasesDir, target);
+  git(checkout, "worktree", "add", "-q", "--detach", dir, target);
+  mkdirSync(join(dir, ".next")); writeFileSync(join(dir, ".next", "BUILD_ID"), "fixture");
+  const commands: string[][] = [];
+  const pointer = new ReleasePointer(h.record.releasePointer, checkout);
+  const ports = (publish: Parameters<typeof realPorts>[0]) => ({ ...realPorts(publish),
+    run: async (argv: string[]) => { commands.push(argv); return 0; },
+    revParse: async (ref: string, cwd: string) => ref === "HEAD" ? git(cwd, "rev-parse", "HEAD") : target });
+  ports(() => {}).markBuilt!(dir, target);
+  await pointer.publish({ sha: target, dir });
+  const revision = { sha: target, short: target.slice(0, 7), version: "1", date: "" };
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), green: { [target]: { state: "green" } } });
+  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  h.deps.createRunner = (config, publish, onChange) => new UpdateRunner(config, ports(publish), onChange);
+  const service = new SelfUpdateService(h.deps);
+  const until = async (read: () => boolean) => { const deadline = Date.now() + 5_000; while (!read() && Date.now() < deadline) await Bun.sleep(10); expect(read()).toBe(true); };
+  try {
+    expect((await service.snapshot()).installed.sha).toBe(target);
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target, rollbackPointer: null });
+    expect(commands).toEqual([]);
+    // The launcher refuses: work started that the admission never saw.
+    writeFileSync(`${h.record.requestFile}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "The Viewer did not admit the relaunch after the launcher load check" }));
+    await service.snapshot();
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8"))).toMatchObject({ requestId: request.requestId, state: "failed", admissionRefused: true });
+    expect(existsSync(h.record.releasePointer)).toBe(false); expect(existsSync(h.record.requestFile)).toBe(false);
+    expect((await service.snapshot()).installed.sha).toBe(old);
+    expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, off: null, drain: { target: revision, admitted: false } });
+    // The next tick selects the same candidate again.
+    await service.autoTick();
+    await until(() => existsSync(h.record.releasePointer));
+    expect(JSON.parse(readFileSync(h.record.releasePointer, "utf8"))).toMatchObject({ sha: target, dir });
+    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", `git checkout --detach`]);
+    expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
+    // Every runner step is done; install and build ran no command.
+    const update = (await service.snapshot()).update;
+    expect(update).toMatchObject({ target, trigger: "auto" });
+    expect(update.steps.filter(step => step.name !== "switch").map(step => [step.name, step.state, step.exitCode])).toEqual(
+      [["fetch", "done", 0], ["checkout", "done", 0], ["install", "done", null], ["build", "done", null], ["ready", "done", null]]);
+    // And the cohort is admitted again, with a new request for the same release.
+    // The finished run starts ticks of its own; a tick that finds one running returns at once.
+    for (let attempt = 0; attempt < 50 && !existsSync(h.record.requestFile); attempt++) { await service.autoTick(); h.advance(60_000); await Bun.sleep(10); }
+    const again = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(again).toMatchObject({ role: "relaunch", target });
+    expect(again.requestId).not.toBe(request.requestId);
+    expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
+  } finally { service.stop(); }
+}, 30_000);

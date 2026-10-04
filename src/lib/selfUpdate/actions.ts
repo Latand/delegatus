@@ -16,6 +16,32 @@ export function userUnit(cgroup: string): string | null {
   return match?.[1] ?? null;
 }
 function read(file: string): string { try { return readFileSync(file, "utf8"); } catch { return ""; } }
+function startsLauncher(unitFile: string, root: string): boolean {
+  return read(unitFile).split("\n").some(line => line.startsWith("ExecStart=") && line.includes(join(root, "bin", "cli.mjs")));
+}
+/** A cgroup names the unit a launcher runs inside, and that unit can be a
+    terminal multiplexer, a terminal emulator or a desktop session's autostart
+    scope. Restarting it would end everything else in it and bring no launcher
+    back. A unit is this install's service only on proof: its unit file starts
+    this install's `bin/cli.mjs`, or the service manager names the launcher as
+    the unit's main process. `bin/launcher-relaunch.mjs` applies the same rule
+    before it restarts a unit from a recovery plan. */
+export function unitRunsLauncher(unit: string, root: string, launcherPid?: number,
+  mainPid: (unit: string) => number | null = unit => {
+    const result = spawnSync("systemctl", ["--user", "show", "--property=MainPID", "--value", unit], { encoding: "utf8", timeout: 5_000 });
+    const pid = Number(result.status === 0 ? result.stdout.trim() : "");
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  }, home = homedir()): boolean {
+  if (!/^[A-Za-z0-9_.@\\x-]+\.service$/.test(unit)) return false;
+  if (startsLauncher(join(home, ".config", "systemd", "user", unit), root)) return true;
+  return launcherPid !== undefined && mainPid(unit) === launcherPid;
+}
+/** The user service that runs this launcher, or null without proof. */
+export function launcherService(launcherPid: number, root: string, cgroup: (pid: number) => string = pid => read(`/proc/${pid}/cgroup`),
+  proven: (unit: string, root: string, launcherPid?: number) => boolean = unitRunsLauncher): string | null {
+  const unit = userUnit(cgroup(launcherPid));
+  return unit && proven(unit, root, launcherPid) ? unit : null;
+}
 async function ready(pointer: string, root: string): Promise<boolean> {
   try {
     const value = JSON.parse(read(pointer));
@@ -27,12 +53,13 @@ async function ready(pointer: string, root: string): Promise<boolean> {
 function serviceFor(root: string): string | null {
   const directory = join(homedir(), ".config", "systemd", "user");
   try {
-    const units = readdirSync(directory).filter(name => /^[A-Za-z0-9_.@-]+\.service$/.test(name)
-      && read(join(directory, name)).split("\n").some(line => line.startsWith("ExecStart=") && line.includes(join(root, "bin", "cli.mjs"))));
+    const units = readdirSync(directory).filter(name => /^[A-Za-z0-9_.@-]+\.service$/.test(name) && startsLauncher(join(directory, name), root));
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
-export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: Partial<NodeJS.ProcessEnv>; platform?: NodeJS.Platform } = {
+export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: Partial<NodeJS.ProcessEnv>; platform?: NodeJS.Platform;
+  /** Whether the unit is proven to run this install's launcher. */
+  proven?(unit: string, root: string, launcherPid?: number): boolean } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd(),
@@ -157,7 +184,8 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     // All release/ancestry reads are complete. Refuse a stale command before
     // writing protected credential custody; keep the original records intact.
     if (!currentCustody()) return { id: "secure-handoff", button: false };
-    const unit = userUnit(ports.cgroup(decision.record.launcher.pid));
+    // An unproven unit is never offered: the launcher is restarted from its terminal.
+    const unit = launcherService(decision.record.launcher.pid, root, ports.cgroup, ports.proven);
     if (!unit) {
       try {
         if (prepareLauncherCredentials(root, env)) {
@@ -184,12 +212,17 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   return unit ? { id: "start-service", button: true, unit } : { id: "start-launcher", button: false, command };
 }
 export interface ServiceRecovery { file: string; entry: string; bun: string }
+/** `owner` is the install the action was offered for. The unit is proven
+    again here, at the moment it is handed to the service manager. */
 export function runInstallAction(action: InstallAction, run: (args: string[]) => void = args => {
   const result = spawnSync(args[0]!, args.slice(1), { stdio: "ignore", timeout: 10_000 });
   if (result.status !== 0) throw new Error("The user service manager did not accept the launcher action");
-}, recovery?: ServiceRecovery): void {
+}, recovery?: ServiceRecovery, owner?: { root: string; launcherPid?: number },
+  proven: (unit: string, root: string, launcherPid?: number) => boolean = unitRunsLauncher): void {
   if (!action.button || !action.unit || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(action.unit)
     || !["restart-service", "start-service"].includes(action.id)) throw new Error("The install action cannot run here");
+  if (!owner || !proven(action.unit, owner.root, action.id === "restart-service" ? owner.launcherPid : undefined))
+    throw new Error("The service is not proven to run this launcher");
   run(["systemd-run", "--user", "--collect", "--quiet", `--unit=delegatus-apply-${crypto.randomUUID()}`, "--",
     ...(recovery ? [recovery.bun, "--bun", recovery.entry, "--recover-service", recovery.file]
       : ["systemctl", "--user", action.id === "restart-service" ? "restart" : "start", action.unit])]);

@@ -55,8 +55,10 @@ notice, separate manual restarts, and deferred drain policy are superseded.
   retains every green, authentication and health gate. The bound itself
   never forces an interruption. Work that starts after the request is filed
   was never let go and refuses the admission. A refused admission keeps the
-  cohort, the decision and the cumulative wait, and the next tick admits the
-  same cohort again.
+  cohort, the decision and the cumulative wait. It puts the previous release
+  pointer back while the candidate's directory stays, so the next tick
+  publishes the same build again without an install or a build (and without
+  waiting for build memory) and then admits the same cohort again.
 - Once admitted, the transaction owns custody independently of the automatic
   setting. Turning the switch off stops future admission; accepted work keeps
   its hold through handoff, crashes and rollback until verified settlement.

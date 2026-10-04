@@ -27,13 +27,19 @@ export function packageRoot(record: LauncherRecord): string {
     const parent = dirname(directory); if (parent === directory) throw new Error("The installed package root is unavailable"); directory = parent;
   }
 }
+/** One published version, as the registry describes it. `sha` is the commit
+    the package was packed from: `gitHead`, which scripts/prepack.mjs writes
+    into the packed manifest. Every version up to 1.9.0 was published without
+    it and answers with an empty `sha`: such a version is named, and it is
+    installed with its package manager, never from the dialog. */
 export async function registryRevision(version = "latest", fetcher: typeof fetch = fetch): Promise<Revision> {
   if (!/^(latest|\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)$/.test(version)) throw new Error("Invalid package version");
   const response = await fetcher(`https://registry.npmjs.org/delegatus-cli/${version}`, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`Package registry answered ${response.status}`);
-  const value = await response.json() as { version: string; gitHead: string };
-  if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value.version) || !/^[a-f0-9]{40}$/.test(value.gitHead)) throw new Error("The published package has no verified revision");
-  return { version: value.version, sha: value.gitHead, short: value.gitHead.slice(0, 7), date: "" };
+  const value = await response.json() as { version?: unknown; gitHead?: unknown };
+  if (typeof value.version !== "string" || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value.version)) throw new Error("The package registry named no version");
+  const sha = typeof value.gitHead === "string" && /^[a-f0-9]{40}$/.test(value.gitHead) ? value.gitHead : "";
+  return { version: value.version, sha, short: sha.slice(0, 7), date: "" };
 }
 /** SemVer precedence: numeric core, then prerelease identifiers; build
     metadata never changes precedence. Invalid versions fail the check closed. */
@@ -83,7 +89,7 @@ export class PackageRunner implements RunnerPort {
       try {
         if (index === 0) {
           const revision = await this.registry(version);
-          if (revision.sha !== target) throw new Error("The package revision changed");
+          if (!revision.sha || revision.sha !== target) throw new Error("The package revision changed");
         } else if (index === 1) {
           writeAtomic(join(container, "package.json"), { private: true });
           const code = await this.ports.run([this.bun, "add", "--exact", `delegatus-cli@${version}`], { cwd: container, env: this.env, onLine: line => { steps[index]!.tail.push(line); steps[index]!.tail = steps[index]!.tail.slice(-40); this.changed(); } });

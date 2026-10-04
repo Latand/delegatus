@@ -235,6 +235,9 @@ jobs:
             echo "Packaged CLI version $cli_version does not match $package_version" >&2
             exit 1
           fi
+          # A packaged install's Update dialog identifies a release by the
+          # revision in its published manifest. Prepack writes it.
+          node scripts/package-revision.mjs --verify "$extract_dir/package/package.json" "$(git rev-parse HEAD)"
           cli_help="$(node "$extract_dir/package/bin/cli.mjs" --help)"
           if [[ "$cli_help" != *"Usage: delegatus"* ]]; then
             echo "Packaged CLI help is unavailable" >&2

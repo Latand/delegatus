@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { statePath } from "@/lib/configDir";
 
 import { launcherAlive, readLauncherRecord, type LauncherRecord } from "./launcher";
+import { primeStartIdentities } from "./pid";
 import type { InstallMode, UnsupportedReason } from "./types";
 
 export const LAUNCHER_RECORD_ENV = "LLV_SELF_UPDATE_RECORD";
@@ -82,12 +83,21 @@ export function productionModePorts(client: RuntimeHostClient | null, env: Reado
   return {
     env,
     viewerPid: process.pid,
-    readRecord: readLauncherRecord,
+    /* Every PID the snapshot is about to compare is read with the launcher's. */
+    readRecord: (file) => {
+      const record = readLauncherRecord(file);
+      if (record) primeStartIdentities([record.launcher.pid, record.web.pid, record.runtimeHost.pid, process.pid]);
+      return record;
+    },
     alive: (record) => launcherAlive(record),
     records: () => {
       const directory = statePath("self-update");
-      try { return readdirSync(directory).filter(name => /^launcher-.*\.json$/.test(name))
-        .map(name => readLauncherRecord(join(directory, name))).filter((record): record is LauncherRecord => record !== null); }
+      try {
+        const records = readdirSync(directory).filter(name => /^launcher-.*\.json$/.test(name))
+          .map(name => readLauncherRecord(join(directory, name))).filter((record): record is LauncherRecord => record !== null);
+        primeStartIdentities(records.flatMap(record => [record.launcher.pid, record.web.pid, record.runtimeHost.pid]));
+        return records;
+      }
       catch { return []; }
     },
     deploymentsEnabled: () => deploymentsEnabled(client),

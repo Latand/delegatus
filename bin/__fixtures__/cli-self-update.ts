@@ -179,6 +179,15 @@ export function install(options: { oldSupervisor?: boolean; oldServerRuntime?: b
   };
 }
 
+/** The user's own unit file that starts this install's launcher: the proof a
+    service restart asks for. Answers the install the action is offered for. */
+export function serviceUnit(fixture: ReturnType<typeof install>, unit = "fixture.service"): { root: string } {
+  const units = path.join(fixture.env.HOME!, ".config", "systemd", "user");
+  mkdirSync(units, { recursive: true });
+  writeFileSync(path.join(units, unit), `[Service]\nExecStart=${process.execPath} --bun ${path.join(fixture.checkout, "bin", "cli.mjs")} --no-open\n`);
+  return { root: fixture.checkout };
+}
+
 /** A built release of a new commit, as the Viewer's step runner leaves it. */
 export function release(fixture: ReturnType<typeof install>, name: string, options: { broken?: boolean; brokenHost?: boolean; upgradeSupervisor?: boolean; upgradeServerRuntime?: boolean; launcher?: string } = {}): { dir: string; sha: string } {
   git(fixture.checkout, "checkout", "--quiet", "--detach", fixture.first);

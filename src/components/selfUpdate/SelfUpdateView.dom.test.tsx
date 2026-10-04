@@ -919,6 +919,37 @@ for (const locale of ["en", "uk"] as const) {
   });
 }
 
+for (const locale of ["en", "uk"] as const) for (const id of ["restart-service", "start-service"] as const) test(`the ${id} card names the service it acts on in ${locale}`, () => {
+  setLocale(locale);
+  const el = render(snapshot({ action: { id, button: true, unit: "delegatus-fixture.service" } }));
+  expect(text(section(el, "install-action")!.querySelector("p"))).toContain("delegatus-fixture.service");
+  expect(text(section(el, "install-action"))).not.toContain("{unit}");
+});
+
+/* No published version names a revision yet, so a packaged install is told
+   what main told it: the version, and the package manager. */
+for (const locale of ["en", "uk"] as const) test(`a package update without a revision names the version and the package manager in ${locale}`, () => {
+  setLocale(locale);
+  const available = { version: "1.9.0", sha: "", short: "", date: "" };
+  const el = render(snapshot({ mode: "package", action: null, available, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  const card = section(el, "update")!;
+  expect(card.getAttribute("data-update")).toBe("package-manual");
+  expect(text(card.querySelector("h2"))).toContain("1.9.0");
+  expect(text(card.querySelector("h2"))).not.toContain("(");
+  expect(text(card)).toContain("bunx delegatus-cli@latest");
+  expect(button(el, "update")).toBeNull();
+  flushSync(() => root!.unmount()); root = null; host?.remove();
+  // A version that names its revision keeps the button, and the instruction beside it.
+  const verified = render(snapshot({ mode: "package", action: null, available: { ...available, sha: "a".repeat(40), short: "aaaaaaa" }, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  expect(section(verified, "update")!.getAttribute("data-update")).toBe("available");
+  expect(button(verified, "update")).not.toBeNull();
+  expect(text(verified.querySelector('[data-note="package-manual"]'))).toContain("bunx delegatus-cli@latest");
+  flushSync(() => root!.unmount()); root = null; host?.remove();
+  // A checkout is never told to use a package manager.
+  const checkout = render(snapshot({ available: { ...available, sha: "a".repeat(40), short: "aaaaaaa" }, check: { ...idleCheck(), state: "update-available", relation: "behind", behind: 1 } }));
+  expect(text(checkout)).not.toContain("bunx delegatus-cli@latest");
+});
+
 test.each(["en", "uk"] as const)("every install prerequisite is actionable and localized in %s", (language) => {
   setLocale(language);
   for (const id of ["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments", "secure-handoff"] as const) {

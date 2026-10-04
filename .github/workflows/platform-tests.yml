@@ -157,3 +157,4 @@ jobs:
           bun test
           bin/launcher-relaunch.test.ts
           bin/launcher-credentials.test.ts
+          src/lib/selfUpdate/pid.test.ts
