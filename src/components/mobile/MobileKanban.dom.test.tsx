@@ -226,7 +226,7 @@ test("four tabs in the desktop's order carry each column's count and its working
   const { host } = mount({ files, tasks, attention: [attentionKey.conversation(files[2]!.path)] });
   const tabs = qa(host, "[role=tab]");
   expect(tabs.map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done"]);
-  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "Assigned", "Blocked", "Done"]);
+  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "In progress", "Waiting", "Done"]);
   const count = (status: string, mark: string) => q(host, `[data-phone-kanban-tab="${status}"] [${mark}]`)?.getAttribute(mark) ?? null;
   expect([count("inbox", "data-phone-tab-count"), count("assigned", "data-phone-tab-count"), count("blocked", "data-phone-tab-count"), count("done", "data-phone-tab-count")]).toEqual(["2", "2", "0", "1"]);
   expect(count("assigned", "data-phone-tab-working")).toBe("1");
@@ -235,15 +235,20 @@ test("four tabs in the desktop's order carry each column's count and its working
   expect(count("inbox", "data-phone-tab-needs")).toBe("1");
   expect(count("assigned", "data-phone-tab-needs")).toBeNull();
   expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-selected")).toBe("true");
-  expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-label")).toBe(`Assigned, ${en("mobile2.kanban.tasks", { count: 2 })}, ${en("kanban.columnWorking", { count: 1 })}`);
+  expect(q(host, "[data-phone-kanban-tab=assigned]")!.getAttribute("aria-label")).toBe(`In progress, ${en("mobile2.kanban.tasks", { count: 2 })}, ${en("kanban.columnWorking", { count: 1 })}`);
   /* The needs-you card is first in Inbox, with its badge and its ask. */
   expect(cardsIn(host, "inbox")[0]).toBe("task:i1");
   const first = q(host, '[data-phone-card="task:i1"]')!;
   expect(first.getAttribute("data-edge")).toBe("warning");
   expect(q(first, "[data-phone-card-badge]")!.textContent).toBe(en("mobile2.board.badgeQuestion"));
   expect(q(first, "[data-phone-card-ask]")!.textContent).toContain("Which unit file stays?");
-  /* A card with no pipeline says its agents; a card of one working agent says so. */
-  expect(q(host, '[data-phone-card="task:a1"] [data-phone-card-agents]')!.textContent).toContain(en("mobile2.kanban.working", { count: 1 }));
+  /* Working appears once in the motion line; the footer retains the agent count. */
+  const workingCard = q(host, '[data-phone-card="task:a1"]')!;
+  expect(q(workingCard, '[data-motion="working"]')!.textContent).toContain(en("kanban.motion.workingN", { count: 1 }));
+  const agentsLine = q(workingCard, "[data-phone-card-agents]")!;
+  expect(agentsLine.textContent).toContain(en("mobile2.kanban.agents", { count: 1 }));
+  expect(agentsLine.textContent).not.toContain(en("mobile2.kanban.working", { count: 1 }));
+  expect(q(workingCard, "[data-foot-working]")).toBeNull();
   expect(q(host, '[data-phone-card="task:i2"] [data-phone-card-agents]')!.textContent).toContain(en("mobile2.kanban.noAgents"));
   /* The loose working conversation is under Not on a task. */
   expect(q(host, "[data-phone-kanban-unlinked]")!.textContent).toBe(en("kanban.notOnTask", { count: 1 }));
@@ -306,7 +311,7 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   expect(nav.getState().sheet).toBeNull();
   expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
   expect(cardsIn(host, "assigned")).toEqual(["task:a1"]);
-  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Blocked" }));
+  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
   await sleep(20);
   expect(patches.map((entry) => [entry.id, (entry.body as { status?: string }).status])).toEqual([["a2", "blocked"]]);
 
@@ -625,7 +630,7 @@ test("released over a column, a lifted card moves there with the usual receipt; 
     expect(q(dock()!, '[data-phone-dock-tile="inbox"]')!.hasAttribute("data-over")).toBe(false);
     fireOn(card, finger("pointerup", ...tileCenter("blocked")));
     expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
-    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Blocked" }));
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
     await sleep(20);
     expect(patches).toEqual([{ id: "a2", status: "blocked" }]);
     expect(dock()).toBeNull();

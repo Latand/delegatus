@@ -1,4 +1,4 @@
-import type { TaskStatus } from "@/lib/tasks/types";
+import type { TaskStatus, TaskHold } from "@/lib/tasks/types";
 
 /**
  * The desktop board's undo and redo (#1856): the operator's own status moves,
@@ -22,7 +22,7 @@ interface Settles {
 }
 
 export type HistoryEntry = Settles & (
-  | { kind: "status"; taskId: string; title: string; from: TaskStatus; to: TaskStatus }
+  | { kind: "status"; taskId: string; title: string; from: TaskStatus; to: TaskStatus; fromHold?: TaskHold | null; toHold?: TaskHold | null }
   /* The whole text field, since title and description are stored as one. */
   | { kind: "text"; taskId: string; title: string; before: string; after: string }
   /* One entry for a single hide or a column's bulk hide: one Undo brings the

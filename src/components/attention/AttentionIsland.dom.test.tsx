@@ -59,11 +59,11 @@ const click = (element: Element, init: { shiftKey?: boolean } = {}) =>
     element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, ...init }) as never);
   });
 
-test("the control reads «● Waiting N» in the bar's own outlined style, and opens the panel", async () => {
+test("the control reads «● Needs you N» in the bar's own outlined style, and opens the panel", async () => {
   const toggles: string[] = [];
   const host = await render(island({ count: 6, onTogglePanel: () => toggles.push("panel") }));
   const count = host.querySelector("[data-attention-count]")!;
-  expect(count.textContent).toBe("Waiting6");
+  expect(count.textContent).toBe("Needs you6");
   expect(count.querySelector("[data-attention-dot]")).not.toBeNull();
   expect(count.getAttribute("aria-label")).toBe("6 waiting");
   expect(count.getAttribute("aria-expanded")).toBe("false");
@@ -117,7 +117,7 @@ test("the zero state stays on screen, muted and without the dot, still opening t
   const zero = host.querySelector("[data-attention-island]")!;
   expect(zero.hasAttribute("data-attention-zero")).toBeTrue();
   const count = host.querySelector("[data-attention-count]")!;
-  expect(count.textContent).toBe("Waiting0");
+  expect(count.textContent).toBe("Needs you0");
   expect(count.getAttribute("aria-label")).toBe("0 waiting");
   expect(count.querySelector("[data-attention-dot]")).toBeNull();
   expect(count.className).toContain("text-muted");

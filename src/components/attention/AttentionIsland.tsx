@@ -51,7 +51,7 @@ export function AttentionIsland({ count, panelOpen, filterActive, onTogglePanel,
         onClick={onTogglePanel}
       >
         {count > 0 ? <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-warning" aria-hidden data-attention-dot="" /> : null}
-        <span>{t("attention.chip")}</span>
+        <span data-attention-chip-label="">{t("attention.chip")}</span>
         <span className="tabular-nums">{count}</span>
       </button>
       {onToggleFilter ? (
