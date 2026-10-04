@@ -13,7 +13,9 @@ Each attempt retains up to eight switch records. One open record owns recovery
 until its continuation or rollback has a durable witness. Its sequence generates
 stable interrupt, reconfigure, stop, launch and delivery keys. An identical open
 request replays; a different target conflicts. Account admission uses the existing
-project selector, authentication, quota observations and allowed pool.
+project selector, authentication, quota observations and allowed pool. Dispatch
+rechecks the allowed pool; revocation fences continuation with a clear waiting
+reason. Continuity preference follows the current native account.
 
 Same-engine switching uses the conversation reconfigure executor, preserving the
 Delegatus conversation id. Codex account moves fork and resume a native thread;
@@ -38,11 +40,17 @@ A failed or cancelled move reconciles the original continuation, because migrati
 cancellation rearms held delivery on the source. A terminally failed send permits
 one replacement key. Atomic cancellation losing to a claim parks the stage until
 its outcome is known. Owned handoff stops have deterministic keys so a crash
-cannot confuse them with a newer operator kill. Kill lookup walks every retained
+cannot confuse them with an operator kill admitted at or after the request;
+terminal kill wins ties within the clock's millisecond precision. Kill lookup walks every retained
 journal page. A retained non-owned boundary whose receipt was compacted
 fences continuation with an explicit wait/park reason, because its age cannot
-be proved. Verdict evidence from before the continuation is fenced; a new
-transcript retains output produced before its launch acknowledgement arrived.
+be proved. Continuation evidence starts at the recorded native turn start,
+independently persisted on the attempt so history retention cannot reopen old
+output. A bounded-memory, identity-checked native-record scan recovers that
+witness when tool output pushes it outside the final evidence tail. Completion acceptance checks its previewed runtime boundary again; a
+completion before the cut supersedes the request. A reserved handoff successor
+may report before its launch acknowledgement. A new transcript retains output
+produced before that acknowledgement arrived.
 
 The control reads a fresh stage digest before sending runtime fields, offers both
 application times, and names switching, continuation and rollback. Geometry and

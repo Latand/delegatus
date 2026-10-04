@@ -352,6 +352,7 @@ export type PipelineRuntimeSwitch = {
   rollback?: boolean;
   reconfigureNoop?: boolean;
   continuationKey?: string;
+  continuationDispatch?: { key: string; at: string };
   launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
   handoff?: { prompt: string; digest: string; bytes: number };
 };
@@ -359,6 +360,8 @@ export type PipelineRuntimeSwitch = {
 export type PipelineStageAttempt = {
   n: number;
   runtimeSwitches?: PipelineRuntimeSwitch[];
+  /** Monotonic verdict fence survives bounded switch-history retention. */
+  runtimeEvidenceSince?: string;
   /** Explicit account policy for the live attempt after an apply-now edit. */
   runtimeAccountPin?: string | null;
   /** Answer that created this continuation; forces lease-free activation. */

@@ -163,7 +163,13 @@ function switchHarness() {
   h.ports.runtimeSwitchDelivery = (_id, key) => deliveries.get(key) ?? { state: "pending" };
   h.ports.cancelRuntimeSwitch = async () => { operations.set("cancel", "cancel"); };
   h.ports.conversationGeneration = () => seat;
-  h.ports.resumeSeveredTurn = async (input) => { if (!deliveries.has(input.clientMessageId)) h.continuations.push(input); deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(h.wallClock()+1).toISOString() }); return true; };
+  const readTurn = h.ports.durableTurnEvidence;
+  let continuationStart = h.wallClock() + 1;
+  h.ports.durableTurnEvidence = async (...args) => {
+    const evidence = await readTurn(...args);
+    return evidence && deliveries.size ? { ...evidence, turnStartedAt: evidence.turnStartedAt ?? continuationStart } : evidence;
+  };
+  h.ports.resumeSeveredTurn = async (input) => { if (!deliveries.has(input.clientMessageId)) { h.continuations.push(input); continuationStart = h.wallClock() + 1; } deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(h.wallClock()+1).toISOString() }); return true; };
   return { ...h, operations, deliveries, setOutcome: (value: typeof outcome) => { outcome = value; }, setSeat: (value: typeof seat) => { seat = value; } };
 }
 async function requestSwitch(h: ReturnType<typeof switchHarness>, body = {}) {
@@ -490,6 +496,34 @@ test("apply now observes a native runtime change before the pipeline rebinds", a
   expect(h.operations.size).toBe(0); expect(h.continuations).toHaveLength(0);
 });
 
+for (const handoff of [false, true]) test(`operator kill in the switch millisecond fences ${handoff ? "handoff" : "fork"} dispatch`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+  const h = switchHarness(); const pipeline = await runningStage(h);
+  if (handoff) {
+    h.ports.allowedAccountIds = () => ["default"];
+    h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "default", kind: "default", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: {} } } as never);
+    h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
+  }
+  const requested = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", applyNow: true,
+    ...(handoff ? { engine: "codex", model: "gpt-6.1-sol", effort: "high" } : { model: "opus" }) }, h.ports);
+  expect(requested.error).toBeUndefined();
+  const since = requested.runtimeSwitch!.requestedAt;
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `same-millisecond-${handoff}.sqlite`), { structuredHosts: true, now: () => Date.parse(since) });
+  try {
+    const operationId = "operator-kill";
+    journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: STAGE_CONVERSATION, sessionKey: { engine: "claude", sessionId: "stage-session" } });
+    journal.transitionOperation(operationId, "delivering"); journal.transitionOperation(operationId, "delivered");
+    const client = { effectBatch: async (kinds: string[], cursor: number) => journal.effectBatch(100, kinds, cursor), operationStatus: async (id: string) => journal.operationResult(id) };
+    h.ports.runtimeSwitchKilled = (id, boundary, ignored) => hasRuntimeSwitchKill(client as never, id, boundary, ignored);
+    await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+    expect(h.operations.size).toBe(0); expect(h.continuations).toHaveLength(0); expect(h.spawnCount()).toBe(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", outcome: expect.stringContaining("kill") });
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, since, [operationId])).toBe(false);
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, new Date(Date.parse(since) + 1).toISOString())).toBe(false);
+  } finally { journal.close(); }
+});
+
 test("a retained kill boundary with a compacted receipt fences switch continuation", async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
@@ -511,4 +545,213 @@ test("a retained kill boundary with a compacted receipt fences switch continuati
     h.advance(10 * 60_000); await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.state).toBe("needs_decision"); expect(h.continuations).toHaveLength(1);
   } finally { journal.close(); }
+});
+
+test("an early continuation verdict survives a delayed send acknowledgement", async () => {
+  const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();
+  h.ports.resumeSeveredTurn = async input => {
+    if (!h.deliveries.has(input.clientMessageId)) h.continuations.push(input);
+    h.setTurn({ turn: "terminal", message: { text: '```json\n{"status":"pass","findings":[]}\n```', ts: started + 1000 }, lastRecordAt: started + 1000, turnStartedAt: started + 500 });
+    h.deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(started + 2000).toISOString() }); h.advance(2000); return true;
+  };
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+});
+
+test("a changed account pin conflicts with an open automatic-account switch", async () => {
+  const h = switchHarness(); const first = await requestSwitch(h);
+  const answer = await patchPipeline(first.pipeline!.id, { action: "override-stage", stageId: "plan", model: "opus", account: "default", applyNow: true }, h.ports, { kind: "operator" });
+  expect(answer).toMatchObject({ status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toHaveLength(1);
+});
+
+
+test("the continuation boundary excludes a late predecessor verdict before the new native turn", async () => {
+  const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();
+  h.ports.resumeSeveredTurn = async input => {
+    h.setTurn({ turn: "terminal", message: { text: '```json\n{"status":"pass","findings":[]}\n```', ts: started + 1000 }, lastRecordAt: started + 2000, turnStartedAt: started + 1500 });
+    h.deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(started + 500).toISOString() }); h.advance(2000); return true;
+  };
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict).toBeNull();
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.continuedAt).toBe(new Date(started + 1500).toISOString());
+});
+
+
+test("a delivered continuation waits for its native turn witness without dispatching twice", async () => {
+  const h = switchHarness(); await requestSwitch(h);
+  const predecessorStart = h.wallClock() - 1000;
+  h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: null, turnStartedAt: predecessorStart });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
+  expect(h.continuations).toHaveLength(1);
+  h.advance(10 * 60_000); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("native turn start");
+  expect(h.continuations).toHaveLength(1);
+});
+
+
+test("a kill after reconfigure admission prevents the continuation dispatch", async () => {
+  const h = switchHarness(); await requestSwitch(h); let killed = false;
+  const control = h.ports.runtimeSwitchControl!;
+  h.ports.runtimeSwitchKilled = async () => killed;
+  h.ports.runtimeSwitchControl = async (...args) => { const result = await control(...args); if (args[2] === "reconfigure") killed = true; return result; };
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(0);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test("the verdict evidence boundary survives bounded switch-history eviction", async () => {
+  const h = switchHarness(); const first = await requestSwitch(h); await tickPipelines([], h.ports);
+  const floor = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.continuedAt!;
+  for (let n = 0; n < 8; n++) {
+    h.ports.allowedAccountIds = () => ["default"];
+    const result = await patchPipeline(first.pipeline!.id, { action: "override-stage", stageId: "plan", model: n % 2 ? "sonnet" : "fable", applyNow: true }, h.ports, { kind: "operator" });
+    expect(result.error).toBeUndefined();
+    h.ports.allowedAccountIds = () => [];
+    await tickPipelines([], h.ports);
+  }
+  const { attemptEvidenceFloor } = await import("./runtimeSwitch");
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches).toHaveLength(8);
+  expect(attemptEvidenceFloor(attempt)).toBe(floor);
+});
+
+
+test("a handoff successor may report before its launch acknowledgement", async () => {
+  const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  let report: Awaited<ReturnType<typeof reportStageCompletion>> | undefined;
+  let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
+  h.ports.spawnReceipt = () => receipt;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" });
+    report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed in the successor" }, { kind: "agent", conversationId: "conversation_new", role: "builder" }, h.ports);
+    receipt = { state: "completed", launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null } as never;
+    return receipt as never;
+  };
+  await tickPipelines([], h.ports);
+  expect(report?.error).toBeUndefined();
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict.status).toBe("pass");
+  h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() + 10 });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+});
+
+
+test("a stopped unpublished handoff rolls back through its own switch driver", async () => {
+  const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  h.ports.spawnAgent = async (_input, reserved) => { await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); throw new Error("launch acknowledgement unavailable"); };
+  await tickPipelines([], h.ports);
+  h.ports.spawnReceipt = id => id === "launch-new" ? { launchId: id, conversationId: "conversation_new", sessionId: null, transcript: null, paneId: null, accountId: "default", state: "path-pending", staged: true, error: "structured launch recovery: " + JSON.stringify({ phase: "unpublished", startedAt: h.wallClock(), checks: 3, nextTryAt: h.wallClock(), reason: "first delivery refused", stopped: true }) } : null;
+  h.ports.failStageLaunch = () => true;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(h.continuations).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, completedAt: null });
+  expect(attempt.runtimeSwitches?.[0]?.rollback).toBe(true);
+});
+
+
+test("a predecessor report preflight cannot cross a committed same-engine switch", async () => {
+  const h = switchHarness(); const pipeline = await runningStage(h);
+  let enter!: () => void; let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; }); const held = new Promise<void>(resolve => { release = resolve; });
+  const read = h.ports.durableTurnEvidence; let first = true;
+  h.ports.durableTurnEvidence = async (...args) => { if (first) { first = false; enter(); await held; } return await read(...args); };
+  const stale = reportStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "Predecessor result" }], summary: "Predecessor result" }, { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  await entered;
+  await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true }, h.ports, { kind: "operator" });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
+  release(); const report = await stale;
+  expect(report).toMatchObject({ status: 409, code: "STAGE_REPORT_CHANGED" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+});
+
+test("target account revocation during interrupt fences reconfigure and continuation", async () => {
+  const h = switchHarness(); let allowed = ["default", "target"];
+  h.ports.allowedAccountIds = () => allowed;
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "target" } } as never);
+  await requestSwitch(h, { account: "target" });
+  const control = h.ports.runtimeSwitchControl!;
+  h.ports.runtimeSwitchControl = async (...args) => { const result = await control(...args); if (args[2] === "interrupt") allowed = ["default"]; return result; };
+  await tickPipelines([], h.ports);
+  expect([...h.operations.values()]).not.toContain("reconfigure");
+  expect(h.continuations).toHaveLength(0);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("no longer allowed");
+});
+
+
+test("a successor report relays only prose after the native continuation boundary", async () => {
+  const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();
+  const transcript = path.join(process.env.LLV_STATE_DIR!, "continuation-report-prose.jsonl");
+  fs.writeFileSync(transcript, [
+    { type: "assistant", timestamp: new Date(started + 100).toISOString(), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Predecessor prose" }] } },
+    { type: "user", timestamp: new Date(started + 1000).toISOString(), message: { role: "user", content: "Continue the stage" } },
+    { type: "assistant", timestamp: new Date(started + 2000).toISOString(), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Successor conclusion" }] } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  const { durableStageTurnEvidence } = await import("./durableEvidence");
+  h.ports.durableTurnEvidence = (engine, _path, reportAt, floor) => durableStageTurnEvidence(engine, transcript, reportAt, floor);
+  h.ports.resumeSeveredTurn = async input => { h.deliveries.set(input.clientMessageId, { state: "delivered", at: new Date(started).toISOString() }); h.advance(1500); return true; };
+  await tickPipelines([], h.ports);
+  const result = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Successor report" }, { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(result.error).toBeUndefined();
+  h.advance(1000); await tickPipelines([], h.ports);
+  const output = loadPipelines()[0]!.runs[0]!.attempts[0]!.output;
+  expect(output).toContain("Successor conclusion");
+  expect(output).not.toContain("Predecessor prose");
+});
+
+
+test("a model-only override prefers the actual native account before snapshot rebinding", async () => {
+  const h = switchHarness(); const pipeline = await runningStage(h);
+  h.setSeat({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "native-current", sessionId: "session-native", agentPath: STAGE_TRANSCRIPT });
+  h.ports.allowedAccountIds = () => ["default", "native-current"];
+  h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: { accountId: request.preferredId } } as never);
+  const answer = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true }, h.ports, { kind: "operator" });
+  expect(answer.error).toBeUndefined();
+  expect(answer.runtimeSwitch?.from.accountId).toBe("native-current");
+  expect(answer.runtimeSwitch?.to.accountId).toBe("native-current");
+});
+
+for (const completion of ["report", "transcript"] as const) {
+  test(`a ${completion} before the switch drain supersedes its uncut request`, async () => {
+    const { drainRuntimeSwitches } = await import("./engine");
+    const h = switchHarness(); await requestSwitch(h);
+    if (completion === "report") {
+      const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Finished before cut" }, { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+      expect(report.error).toBeUndefined();
+    } else h.setTurn({ turn: "terminal", message: { text: '```json\n{"status":"pass","findings":[]}\n```', ts: h.wallClock() + 1 } });
+    await drainRuntimeSwitches(h.ports);
+    expect(h.operations.size).toBe(0); expect(h.continuations).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("superseded");
+  });
+}
+
+
+test("restart settles a delivered continuation whose start is beyond the capped final tail", async () => {
+  const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();
+  const { switchOperationKey } = await import("./runtimeSwitch");
+  const records = loadPipelines(); const record = records[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+  const key = switchOperationKey(record, "continue"); record.phase = "continuing"; record.cutAt = h.ports.now(); record.continuationDispatch = { key, at: h.ports.now() }; savePipelines(records);
+  const file = path.join(process.env.LLV_STATE_DIR!, "large-restarted-continuation.jsonl");
+  fs.writeFileSync(file, [
+    { type: "user", timestamp: new Date(started + 1000).toISOString(), message: { role: "user", content: "Continue" } },
+    ...Array.from({ length: 100 }, () => ({ type: "user", timestamp: new Date(started + 1500).toISOString(), message: { role: "user", content: [{ type: "tool_result", content: "t".repeat(100_000) }] } })),
+    { type: "assistant", timestamp: new Date(started + 2000).toISOString(), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: '```json\n{"status":"pass","findings":[]}\n```' }] } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const { durableStageTurnEvidence } = await import("./durableEvidence");
+  h.ports.durableTurnEvidence = (engine, _path, reportAt, floor) => durableStageTurnEvidence(engine, file, reportAt, floor);
+  h.deliveries.set(key, { state: "delivered", at: new Date(started).toISOString() });
+  h.setSeat({ engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: "default", sessionId: "new", agentPath: STAGE_TRANSCRIPT });
+  h.advance(10 * 60_000 + 1000); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(h.continuations).toHaveLength(0);
 });

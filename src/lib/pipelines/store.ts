@@ -209,6 +209,8 @@ function isRuntimeSwitches(value: unknown): boolean {
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
     && (item.rollback === undefined || typeof item.rollback === "boolean")
     && (item.continuationKey === undefined || typeof item.continuationKey === "string")
+    && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
+      && typeof item.continuationDispatch.at === "string" && Number.isFinite(Date.parse(item.continuationDispatch.at)))
     && (item.outcome === undefined || typeof item.outcome === "string")
     && (item.launch === undefined || typeof item.launch.clientAttemptId === "string" && textOrNull(item.launch.launchId) && textOrNull(item.launch.conversationId))
     && (item.handoff === undefined || typeof item.handoff.prompt === "string" && /^[a-f0-9]{64}$/.test(item.handoff.digest)
@@ -286,6 +288,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isRuntimeSwitches(attempt.runtimeSwitches) &&
+    (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&

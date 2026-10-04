@@ -1,4 +1,4 @@
-import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement } from "./runtimeSwitch";
+import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement } from "./runtimeSwitch";
 import type { PipelineRuntimeSwitch } from "./types";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
@@ -1573,7 +1573,7 @@ export function defaultPipelinePorts(
     runtimeSwitchDelivery: async (conversationId, key) => {
       const receipt = registry.deliveryAdmissionForKey(conversationId, key);
       const operation = receipt.outcome === "admitted" ? await runtimeHostClient()?.operationStatus(receipt.operationId) : null;
-      return receipt.outcome === "admitted" ? { state: receipt.state === "delivered" ? "delivered" : receipt.state === "failed" ? "failed" : "pending", at: operation?.receipt.at } : { state: "pending" };
+      return receipt.outcome === "admitted" ? { state: receipt.state === "delivered" ? "delivered" : receipt.state === "failed" ? "failed" : "pending", at: operation?.receipt.admittedAt } : { state: "pending" };
     },
     conversationGeneration: (conversationId) => {
       const conversation = registry.conversation(conversationId as ViewerConversationId);
@@ -1974,7 +1974,7 @@ async function settleOnRecordedReport(
   const pathname = attempt.agentPath ?? (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null)
     ?? receipt?.transcript ?? receipt?.stagedTranscript ?? null;
   const durable = evidence === undefined && pathname && ports.sourcePathAllowed(pathname)
-    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report.at, attempt.startedAt)
+    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report.at, attemptEvidenceFloor(attempt))
     : evidence;
   const active = attempt.paneId ? await ports.paneAgentAlive(attempt.paneId)
     : attempt.conversationId ? await ports.conversationAgentActive(attempt.conversationId) : null;
@@ -4874,15 +4874,56 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           persist([live]); changed = true;
         });
       };
-      const outside: PipelinePorts = { ...ports,
-        exec: async (...args) => { await checkpoint(); return await ports.exec(...args); },
-        stopStageAgent: async (...args) => { await checkpoint(); return await ports.stopStageAgent(...args); },
-        spawnAgent: async (...args) => { await checkpoint(); return await ports.spawnAgent(...args); },
-        ...(ports.recoverStagedLaunch ? { recoverStagedLaunch: async (...args: Parameters<NonNullable<PipelinePorts["recoverStagedLaunch"]>>) => { await checkpoint(); return await ports.recoverStagedLaunch!(...args); } } : {}),
-        ...(ports.runtimeSwitchControl ? { runtimeSwitchControl: async (...args: Parameters<NonNullable<PipelinePorts["runtimeSwitchControl"]>>) => { await checkpoint(); return await ports.runtimeSwitchControl!(...args); } } : {}),
-        ...(ports.resumeSeveredTurn ? { resumeSeveredTurn: async (...args: Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>) => { await checkpoint(); return await ports.resumeSeveredTurn!(...args); } } : {}),
-        ...(ports.cancelRuntimeSwitch ? { cancelRuntimeSwitch: async (...args: Parameters<NonNullable<PipelinePorts["cancelRuntimeSwitch"]>>) => { await checkpoint(); return await ports.cancelRuntimeSwitch!(...args); } } : {}),
+      const dispatchCheckpoint = async () => {
+        const ignored = record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [];
+        for (const conversationId of new Set([record.from.conversationId, attempt.conversationId].filter((id): id is string => !!id))) {
+          if (await ports.runtimeSwitchKilled?.(conversationId, record.requestedAt, ignored)) {
+            record.phase = "failed"; record.settledAt = ports.now(); record.outcome = "stage stopped by kill during runtime switch";
+            pipeline.state = "needs_decision"; attempt.state = "needs_decision"; pipeline.stateDetail = record.outcome;
+            await checkpoint(); throw new RuntimeSwitchSuperseded();
+          }
+        }
+        const pool = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
+        if (!record.rollback && pool && !pool.includes(record.to.accountId!)) {
+          let reason = "runtime switch target account is no longer allowed; stage continuation is fenced";
+          if (record.mode === "fork" && ports.cancelRuntimeSwitch) {
+            try { await ports.cancelRuntimeSwitch(record.from.conversationId, switchOperationKey(record, "reconfigure")); }
+            catch (error) { reason += `; cancellation refused: ${String(error)}`; }
+          }
+          pipeline.state = "needs_decision"; attempt.state = "needs_decision"; pipeline.stateDetail = reason; record.outcome = reason;
+          await checkpoint(); throw new RuntimeSwitchSuperseded();
+        }
+        await checkpoint();
       };
+      const outside: PipelinePorts = { ...ports,
+        exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
+        stopStageAgent: async (...args) => { await dispatchCheckpoint(); return await ports.stopStageAgent(...args); },
+        spawnAgent: async (input, onReserved) => {
+          await dispatchCheckpoint();
+          return await ports.spawnAgent(input, async reservation => { await onReserved?.(reservation); await dispatchCheckpoint(); });
+        },
+        ...(ports.recoverStagedLaunch ? { recoverStagedLaunch: async (launchId: string, eligible: () => boolean) => {
+          await dispatchCheckpoint();
+          return await ports.recoverStagedLaunch!(launchId, () => {
+            const live = findPipelineRecord(pipeline.id);
+            const current = live && runFor(live, stage.id)?.attempts.find(item => item.n === attempt.n);
+            return eligible() && !!live && activationFence(live) === fence && JSON.stringify(current) === expectedAttempt;
+          });
+        } } : {}),
+        ...(ports.runtimeSwitchControl ? { runtimeSwitchControl: async (...args: Parameters<NonNullable<PipelinePorts["runtimeSwitchControl"]>>) => { await dispatchCheckpoint(); return await ports.runtimeSwitchControl!(...args); } } : {}),
+        ...(ports.resumeSeveredTurn ? { resumeSeveredTurn: async (...args: Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>) => { await dispatchCheckpoint(); return await ports.resumeSeveredTurn!(...args); } } : {}),
+        ...(ports.cancelRuntimeSwitch ? { cancelRuntimeSwitch: async (...args: Parameters<NonNullable<PipelinePorts["cancelRuntimeSwitch"]>>) => { await dispatchCheckpoint(); return await ports.cancelRuntimeSwitch!(...args); } } : {}),
+      };
+      if (record.phase === "requested") {
+        const beforeCut = !attempt.report && attempt.agentPath
+          ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, null, attemptEvidenceFloor(attempt)) : null;
+        const completed = beforeCut?.turn === "terminal" && beforeCut.message
+          && beforeCut.message.ts > unixMs(attemptEvidenceFloor(attempt)) && parsePipelineStageVerdict(beforeCut.message.text);
+        if (attempt.report || completed) {
+          record.phase = "superseded"; record.settledAt = ports.now(); record.outcome = "stage reported before the cut";
+          await checkpoint(); continue;
+        }
+      }
       await driveRuntimeSwitch(pipeline, stage, attempt, outside, checkpoint, async role => {
         const bound = attemptStage(stage, attempt);
         const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
@@ -6310,7 +6351,7 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
 /** Terminalize only the retained launch that never acquired a transcript.
  * The registry's failed receipt fences late publication and owns retry claims. */
 function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
-  if (attempt.report) return false;
+  if (attempt.report || openRuntimeSwitch(attempt)) return false;
   if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
     || pipelineSurvivorRefusal(pipeline)) return false;
@@ -6380,7 +6421,7 @@ async function recoverWaitingStageLaunches(ports: PipelinePorts): Promise<Map<st
   for (const pipeline of loadPipelines()) {
     const stage = currentStage(pipeline);
     const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    if (!stage || stage.kind !== "run" || !attempt?.launchId || attempt.activation || attempt.completedAt || attempt.verdict || attempt.report
+    if (!stage || stage.kind !== "run" || !attempt?.launchId || openRuntimeSwitch(attempt) || attempt.activation || attempt.completedAt || attempt.verdict || attempt.report
       || !["running", "needs_decision"].includes(pipeline.state) || pipelineSurvivorRefusal(pipeline)) continue;
     if (pipeline.state === "needs_decision" && !isStructuredSpawnPark(pipeline, attempt)) continue;
     const receipt = ports.spawnReceipt(attempt.launchId);
@@ -7391,7 +7432,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       if (!sourceBranch || sourceBranch === pipeline.branch || sourceBranch === deliveryBranch) return;
       const pathname = (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null) ?? attempt.agentPath;
       const durable = attempt.state !== "committing" && pathname && ports.sourcePathAllowed(pathname)
-        ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report?.at ?? attempt.startedAt, attempt.startedAt) : null;
+        ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname, attempt.report?.at ?? attemptEvidenceFloor(attempt), attemptEvidenceFloor(attempt)) : null;
       const entry = entries.find((item) => item.path === pathname);
       const parsed = entry ? parseStageVerdict(ports.lastMessage(entry)?.text ?? "") : null;
       const durableParsed = durable?.turn === "terminal" ? parseStageVerdict(durable.terminalProviderMessage?.text ?? durable.message?.text ?? "") : null;
@@ -10421,11 +10462,11 @@ export async function patchPipeline(
         if ("refusal" in read) return read.refusal;
         const allowed = (id: string | null) => !!id && (read.pool === null || read.pool.includes(id));
         const nativeGeneration = ports.conversationGeneration?.(live.conversationId) ?? null;
-        const generation = engine === live.effectiveRole.engine ? nativeGeneration ?? currentRuntimeSeat(live) : null;
+        const generation = nativeGeneration?.engine === engine ? nativeGeneration : engine === live.effectiveRole.engine ? currentRuntimeSeat(live) : null;
         const model = target.effectiveRole.model ?? generation?.model;
         const effort = target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
-        const preferredId = engine === live.effectiveRole.engine ? live.accountId ?? null : null;
+        const preferredId = generation?.accountId ?? null;
         const unavailableIds = usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId);
         let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
         if (ports.resolveProjectSpawn) {
@@ -10437,7 +10478,7 @@ export async function patchPipeline(
         const to = { engine, model, effort,
           serviceTier: target.effectiveRole.serviceTier ?? null, accountId, accountPinned: !!target.account };
         const open = openRuntimeSwitch(live);
-        if (open) return runtimeTargetsEqual(open.to, to) ? { pipeline, runtimeSwitch: open, replayed: true }
+        if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
           : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
         if (runtimeTargetsEqual(nativeGeneration ?? currentRuntimeSeat(live), to)) {
           if (nativeGeneration) {
@@ -10734,7 +10775,12 @@ async function resolveStageCompletionTarget(
       slots: slots(held),
     } };
   }
-  if (named.some(({ attempt }) => { const pending = openRuntimeSwitch(attempt); return pending && pending.phase !== "requested"; })) {
+  if (named.some(({ attempt }) => {
+    const pending = openRuntimeSwitch(attempt);
+    const successor = pending?.mode === "handoff" && pending.cutAt && pending.launch?.conversationId === conversationId
+      && pending.launch.launchId === attempt.launchId && conversationId !== pending.from.conversationId;
+    return pending && pending.phase !== "requested" && !successor;
+  })) {
     return { refusal: { error: "runtime switch is in progress; report from the continuation turn", status: 409, code: "STAGE_REPORT_RUNTIME_SWITCH" } };
   }
   /* A completion is a run stage's to report. A review-loop stage's attempt
@@ -10809,6 +10855,16 @@ async function backgroundWorkRefusal(target: StageCompletionTarget, ports: Pipel
   };
 }
 
+/** A handoff reservation and its acknowledgement name the same successor.
+ * Native continuation changes keep the conversation id, so also fence their
+ * immutable switch identity, evidence boundary and runtime generation. */
+function stageCompletionRuntimeFence(attempt: PipelineStageAttempt): string {
+  const latest = attempt.runtimeSwitches?.at(-1);
+  if (latest?.mode === "handoff" && latest.cutAt && latest.launch?.conversationId === attempt.conversationId
+    && attempt.conversationId !== latest.from.conversationId) return JSON.stringify([latest.id, attempt.conversationId, latest.cutAt]);
+  return JSON.stringify([latest?.id ?? null, attemptEvidenceFloor(attempt), currentRuntimeSeat(attempt), attempt.sessionId, attempt.agentPath]);
+}
+
 /**
  * A stage attempt reports its own completion (graph slice 2, #1730).
  *
@@ -10851,6 +10907,7 @@ export async function reportStageCompletion(
   const normalized = normalizeStageCompletion(request);
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
+  const previewRuntimeFence = stageCompletionRuntimeFence(preview.attempt);
   const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
     ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
     : preview, ports);
@@ -10859,7 +10916,8 @@ export async function reportStageCompletion(
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
-    if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n) {
+    if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
+      || stageCompletionRuntimeFence(attempt) !== previewRuntimeFence) {
       return {
         error: `the attempt changed while its provenance was read; it is now ${pipeline.id} stage ${stageId} attempt ${attempt.n}. Report it again`,
         status: 409,

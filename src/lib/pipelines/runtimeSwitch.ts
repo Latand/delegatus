@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
+import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
 import type { PipelinePorts } from "./engine";
 import type { AgentRegistry } from "@/lib/agent/registry";
@@ -34,7 +35,9 @@ export function runtimeTargetsEqual(a: PipelineRuntimeSeat, b: PipelineRuntimeSe
     && tier(a.serviceTier) === tier(b.serviceTier);
 }
 export function attemptEvidenceFloor(attempt: PipelineStageAttempt): string | null {
-  return attempt.runtimeSwitches?.reduce((floor, item) => item.continuedAt && Date.parse(item.continuedAt) > Date.parse(floor ?? "") ? item.continuedAt : floor, attempt.startedAt) ?? attempt.startedAt;
+  let floor = attempt.runtimeEvidenceSince ?? attempt.startedAt;
+  if (attempt.startedAt && (!floor || Date.parse(attempt.startedAt) > Date.parse(floor))) floor = attempt.startedAt;
+  return attempt.runtimeSwitches?.reduce((floor, item) => item.continuedAt && (!floor || Date.parse(item.continuedAt) > Date.parse(floor)) ? item.continuedAt : floor, floor) ?? floor;
 }
 export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAttempt): string | null {
   if (attempt.runtimeAccountPin !== undefined) return attempt.runtimeAccountPin;
@@ -51,7 +54,8 @@ export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effe
       if (effect.payload.conversationId !== conversationId || typeof effect.payload.operationId !== "string" || ignoredOperationIds.includes(effect.payload.operationId)) continue;
       const receipt = (await client.operationStatus(effect.payload.operationId))?.receipt;
       if (!receipt) throw new Error("runtime kill boundary has no retained receipt; continuation is fenced");
-      if (Date.parse(receipt.admittedAt ?? receipt.at) > Date.parse(since)) return true;
+      // Millisecond timestamps cannot order a tie; terminal kill wins it.
+      if (Date.parse(receipt.admittedAt ?? receipt.at) >= Date.parse(since)) return true;
     }
     if (page.length < 100) return false;
     const next = Math.max(...page.map(effect => effect.eventSeq));
@@ -95,6 +99,7 @@ export async function driveRuntimeSwitch(
   const expired = Date.parse(now) - Date.parse(record.requestedAt) >= BUDGET;
   const settle = async (phase: PipelineRuntimeSwitch["phase"], reason: string) => {
     record.phase = phase; record.settledAt = now; record.outcome = reason;
+    if (record.continuedAt) attempt.runtimeEvidenceSince = attemptEvidenceFloor(attempt) ?? record.continuedAt;
     pipeline.stateDetail = reason; await persist();
   };
   const park = async (reason: string) => { pipeline.state = "needs_decision"; pipeline.stateDetail = reason; attempt.state = "needs_decision"; record.outcome = reason; await persist(); };
@@ -102,10 +107,28 @@ export async function driveRuntimeSwitch(
   const continueKey = record.continuationKey ?? switchOperationKey(record, "continue");
   const resume = async (key: string) => {
     if (!ports.resumeSeveredTurn || !attempt.agentPath || !attempt.conversationId) throw new Error("stage continuation unavailable");
+    if (record.continuationDispatch?.key !== key) {
+      const existing = await ports.runtimeSwitchDelivery?.(attempt.conversationId, key);
+      record.continuationDispatch = { key, at: existing?.at ?? ports.now() }; await persist();
+    }
     const admitted = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, policy: "queue", project: pipeline.project, cwd: pipeline.worktreeDir, cohortAt: attempt.startedAt ?? undefined,
       text: "Delegatus stopped your turn for a runtime switch. Continue the same stage on the available runtime in the current worktree, preserving every committed and uncommitted change, branch, attempt number and receipts. Report when complete." });
     if (!admitted) throw new Error("stage continuation was not accepted");
+  };
+  const continuationFloor = async (engine: EffectivePipelineRole["engine"], pathname: string | null, deliveredAt?: string): Promise<string | null> => {
+    const admittedAt = record.continuationDispatch?.at ?? deliveredAt ?? record.requestedAt;
+    if (!pathname) return null;
+    // Equal report/start fences make the durable reader widen its verified
+    // window to this admission, even when a fast turn filled the first tail.
+    const evidence = await ports.durableTurnEvidence(engine, pathname, admittedAt, admittedAt);
+    const nativeStart = evidence?.turnStartedAt;
+    if (nativeStart == null || nativeStart < Date.parse(admittedAt)) {
+      if (expired) await park("continuation delivered; its native turn start is not yet visible");
+      else { pipeline.stateDetail = "continuation delivered; waiting for its native turn start"; await persist(); ports.scheduleTick?.(1000); }
+      return null;
+    }
+    return new Date(nativeStart).toISOString();
   };
   const rollback = async (reason: string) => {
     Object.assign(attempt, { conversationId: record.from.conversationId, launchId: record.from.launchId,
@@ -175,7 +198,9 @@ export async function driveRuntimeSwitch(
       if (outcome.state === "failed") {
         const delivery = await ports.runtimeSwitchDelivery?.(record.from.conversationId, continueKey);
         if (delivery?.state === "delivered") {
-          record.continuedAt = delivery.at ?? now; clearOldWaits(attempt); await settle("rolled-back", outcome.error ?? "runtime switch failed; continued on previous runtime"); return;
+          const floor = await continuationFloor(record.from.engine, record.from.agentPath, delivery.at);
+          if (!floor) return;
+          record.continuedAt = floor; clearOldWaits(attempt); await settle("rolled-back", outcome.error ?? "runtime switch failed; continued on previous runtime"); return;
         }
         await ports.cancelRuntimeSwitch?.(record.from.conversationId, reconfigureKey);
         await rollback(outcome.error ?? "runtime switch failed"); return;
@@ -226,7 +251,7 @@ export async function driveRuntimeSwitch(
         await rollback("runtime switch launch receipt unavailable after budget"); return;
       }
       if (receipt && receipt.state !== "completed") {
-        if (["failed", "conflicted"].includes(receipt.state) || expired) {
+        if (["failed", "conflicted"].includes(receipt.state) || stagedLaunchRecovery(receipt)?.stopped || expired) {
           if (receipt.staged || receipt.state === "path-pending") {
             ports.failStageLaunch?.(receipt.launchId, receipt.conversationId!, "runtime switch launch exceeded its budget");
             const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, conversationId: receipt.conversationId, launchId: receipt.launchId, agentPath: receipt.transcript, paneId: receipt.paneId }, { operationId: switchOperationKey(record, "stop-launch") });
@@ -264,9 +289,11 @@ export async function driveRuntimeSwitch(
       const key = record.continuationKey ?? continueKey;
       const delivered = await ports.runtimeSwitchDelivery?.(attempt.conversationId!, key);
       if (delivered?.state === "delivered") {
-        record.continuedAt = delivered.at ?? now;
         const generation = ports.conversationGeneration?.(attempt.conversationId!);
         if (!generation) { if (expired) await park("continued runtime generation is unavailable"); else ports.scheduleTick?.(1000); return; }
+        const floor = await continuationFloor(generation.engine, generation.agentPath, delivered.at);
+        if (!floor) return;
+        record.continuedAt = floor;
         if (record.reconfigureNoop && !runtimeTargetsEqual(generation, record.to)) record.outcome = "superseded by another runtime selection";
         if (!record.rollback) { delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource; }
         Object.assign(attempt.effectiveRole, { engine: generation.engine, model: generation.model, effort: generation.effort, serviceTier: generation.serviceTier ?? undefined });

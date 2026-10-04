@@ -764,7 +764,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
+  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt; add applyNow:true to move the running attempt now.");
   expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */

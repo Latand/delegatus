@@ -26,6 +26,8 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** Native human prompt or task start witness, excluding tool results and shutdown markers. */
+  turnStartedAt?: number | null;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -207,6 +209,83 @@ function providerTurnRecords(records: RecordLike[], codex: boolean): RecordLike[
   return records;
 }
 
+function nativeTurnStartedAt(records: RecordLike[], codex: boolean): number | null {
+  for (let index = records.length - 1; index >= 0; index--) {
+    const record = records[index]!;
+    if (codex) {
+      const payload = recordValue(record.payload);
+      if (!payload || !(CODEX_TURN_START_TYPES.has(String(payload.type))
+        || payload.type === "message" && payload.role === "user")) continue;
+    } else {
+      if (record.type !== "user" || record.isMeta === true || record.interruptedByShutdown === true || "interruptedMessageId" in record) continue;
+      const content = recordValue(record.message)?.content;
+      if (recordsValue(content).some(part => part.type === "tool_result")) continue;
+      const text = typeof content === "string" ? content : recordsValue(content).filter(part => part.type === "text").map(part => stringValue(part.text) ?? "").join("\n");
+      if (!text.trim() || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text)) continue;
+    }
+    const timestamp = recordTs(record, 0);
+    if (timestamp) return timestamp;
+  }
+  return null;
+}
+
+/** Recover a continuation boundary without retaining intervening tool output.
+ * Backward reads hold one small native record; oversized records are skipped.
+ * The descriptor and pathname must still match the snapshot preceding the tail. */
+async function recoverNativeTurnStart(pathname: string, codex: boolean, after: number, baseline: fs.BigIntStats): Promise<number | null> {
+  let handle: fs.promises.FileHandle | null = null;
+  const same = (a: fs.BigIntStats, b: fs.BigIntStats) => a.dev === b.dev && a.ino === b.ino && a.size === b.size
+    && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+  try {
+    handle = await fs.promises.open(pathname, "r");
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || !same(baseline, before)) return null;
+    let position = Number(before.size);
+    if (!Number.isSafeInteger(position)) return null;
+    const buffer = Buffer.alloc(65_536);
+    let pending: Buffer = Buffer.alloc(0);
+    let oversized = false;
+    let found: number | null = null;
+    let done = false;
+    const prepend = (part: Buffer) => {
+      if (oversized) return;
+      if (part.length + pending.length > 131_072) { pending = Buffer.alloc(0); oversized = true; }
+      else pending = Buffer.concat([part, pending]);
+    };
+    const finish = () => {
+      if (!oversized && pending.length) {
+        try {
+          const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(pending));
+          const record = recordValue(value);
+          const timestamp = record ? nativeTurnStartedAt([record], codex) : null;
+          if (timestamp !== null) { found = timestamp >= after ? timestamp : null; done = true; }
+        } catch { /* A non-native or oversized historical line supplies no witness. */ }
+      }
+      pending = Buffer.alloc(0); oversized = false;
+    };
+    while (position > 0 && !done) {
+      const length = Math.min(buffer.length, position); position -= length;
+      let read = 0;
+      while (read < length) {
+        const chunk = await handle.read(buffer, read, length - read, position + read);
+        if (!chunk.bytesRead) return null;
+        read += chunk.bytesRead;
+      }
+      let end = length;
+      for (let index = length - 1; index >= 0 && !done; index--) {
+        if (buffer[index] !== 0x0a) continue;
+        prepend(buffer.subarray(index + 1, end)); finish(); end = index;
+      }
+      if (!done) prepend(buffer.subarray(0, end));
+    }
+    if (!done) finish();
+    const end = await handle.stat({ bigint: true });
+    const pathEnd = await fs.promises.stat(pathname, { bigint: true });
+    return same(before, end) && same(end, pathEnd) ? found : null;
+  } catch { return null; }
+  finally { await handle?.close().catch(() => undefined); }
+}
+
 /**
  * The notice the provider wrote when it ended the turn, read from the record
  * that CLOSED it — the assistant record Claude flags `isApiErrorMessage`, or
@@ -277,6 +356,7 @@ export async function durableStageTurnEvidence(
   attemptStartedAt?: string | null,
   readTail: typeof readStableTailRecords = readStableTailRecords,
 ): Promise<StageTurnEvidence | null> {
+  const artifactBefore = await fs.promises.stat(transcriptPath, { bigint: true }).catch(() => null);
   const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
   const codex = engine === "codex";
@@ -327,6 +407,11 @@ export async function durableStageTurnEvidence(
     if (expanded.integrity !== "complete") break;
     evidenceRead = expanded;
   }
+  let turnStartedAt = nativeTurnStartedAt(turnRecords, codex);
+  // Equal temporal fences query the continuation admission itself. Its native
+  // start must remain recoverable even when final-output evidence hits its cap.
+  if (turnStartedAt === null && evidenceRead.prefixTruncated && Number.isFinite(startedTime)
+    && reportTime === startedTime && artifactBefore) turnStartedAt = await recoverNativeTurnStart(transcriptPath, codex, startedTime, artifactBefore);
   const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
   const newest = turnRecords.at(-1);
@@ -336,6 +421,7 @@ export async function durableStageTurnEvidence(
     message: nativeCut ? null : message,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
+    turnStartedAt,
     launchOnly: codex
       && !evidenceRead.prefixTruncated
       && evidenceRead.records.length === 1
