@@ -234,6 +234,12 @@ function isAttempt(value: unknown, index: number): boolean {
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
+    (attempt.publicationIntegration === undefined || (
+      attempt.publicationIntegration !== null && typeof attempt.publicationIntegration === "object"
+      && !Array.isArray(attempt.publicationIntegration)
+      && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
+        && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
+    )) &&
     isReviewFlowSync(attempt.reviewFlowSync) &&
     isNullableString(attempt.startedAt) &&
     isNullableString(attempt.completedAt) &&
