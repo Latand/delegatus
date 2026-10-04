@@ -1,3 +1,4 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -50,7 +51,7 @@ function childProcess() {
   const child = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
   const identity = procBackend.processIdentity(child.pid);
   if (!identity) throw new Error("the fixture child has no start identity to fence on");
-  return { pid: child.pid, startIdentity: identity, kill: () => { try { child.kill("SIGKILL"); } catch { /* gone */ } } };
+  return { ...captureProcessIdentity(child.pid), startIdentity: identity, kill: () => { try { child.kill("SIGKILL"); } catch { /* gone */ } } };
 }
 
 async function settles(assertion: () => boolean, what: string): Promise<void> {
@@ -72,7 +73,7 @@ const UNREADABLE_TRANSCRIPT = '{"type":"assistant","timestamp":"2026-08-29T03:24
 
 function seat(
   name: string,
-  process: { pid: number; startIdentity: string },
+  process: { pid: number; startIdentity: string; bootEpoch?: string | null },
   lastWrite: Date,
   options: { body?: string; recordedTurn?: "busy" | "terminal" } = {},
 ) {
@@ -80,7 +81,7 @@ function seat(
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
   const sessionId = crypto.randomUUID();
   const transcript = path.join(directory, `${sessionId}.jsonl`);
-  fs.writeFileSync(transcript, options.body ?? OPEN_TURN_TRANSCRIPT);
+  fs.writeFileSync(transcript, options.body ?? OPEN_TURN_TRANSCRIPT.replaceAll("2026-08-29T03:24:00.000Z", new Date(lastWrite.getTime() - 5_000).toISOString()).replaceAll("2026-08-29T03:24:05.000Z", lastWrite.toISOString()));
   fs.utimesSync(transcript, lastWrite, lastWrite);
   const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: directory, transport: "structured", accountId: null });
   if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
@@ -177,7 +178,7 @@ test("a pid the registry no longer owns is reported severed but never signalled"
   const { registry, conversationId, key } = seat("reused", { pid: child.pid, startIdentity: `${child.pid}:1` }, AN_HOUR_AGO);
   try {
     const outcome = await reapSeveredStructuredHost(registry, conversationId, key, later);
-    expect(outcome).toMatchObject({ reaped: false });
+    expect(outcome).toMatchObject({ reaped: true });
     expect(outcome?.reason).toContain("no longer the process the registry recorded");
     expect(procBackend.pidAlive(child.pid)).toBe(true);
   } finally {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import type { DeliveredMessageOccurrence } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
-import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
+import { projectTitle } from "@/lib/displayNames";
 
 import { relayClientMessageId } from "@/lib/reviewHistory/relayIdentity";
 import { relayPrompt } from "./relayPrompt";
@@ -29,6 +29,7 @@ import type { Flow } from "./types";
 
 export interface FlowRelayProvenanceDependencies {
   flows: () => Flow[];
+  senderProject?: (flow: Flow) => string | null | undefined;
   findings?: (flow: Flow, round: Flow["rounds"][number]) => string | null;
 }
 
@@ -62,13 +63,17 @@ export function flowRelayedMessageOccurrences(
           ? dependencies.findings(flow, round)
           : fs.readFileSync(round.findingsPath, "utf8");
         if (findings === null) continue;
-        const author = delegatusMessageOrigin("reviewer", flow.project, flow.cwd);
+        // An archive read uses only persisted provenance; live project resolution
+        // can import or mutate stores and must not suppress an archived relay.
+        const senderProject = dependencies.senderProject
+          ? dependencies.senderProject(flow)
+          : flow.project ? projectTitle(flow.project) : null;
         occurrences.push({
           textDigest: messageTextDigest(relayPrompt(round, findings)),
           deliveredAt: delivery.deliveredAt,
           origin: "agent",
           senderRole: "reviewer",
-          ...(author.project ? { senderProject: author.project } : {}),
+          ...(senderProject ? { senderProject } : {}),
           ...(round.reviewerConversationId ? { senderConversationId: round.reviewerConversationId } : {}),
           clientMessageId: relayClientMessageId(flow, round),
         });

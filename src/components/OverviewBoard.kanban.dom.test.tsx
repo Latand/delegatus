@@ -132,6 +132,7 @@ function task(id: string, project: string, status: TaskStatus, text: string, pat
       : [],
     createdAt: "2026-09-18T10:00:00.000Z",
     updatedAt: "2026-09-18T10:00:00.000Z",
+    ...(status === "done" ? { doneAt: new Date(NOW * 1_000).toISOString() } : {}),
     revision: REVISION,
   } as BoardTask;
 }

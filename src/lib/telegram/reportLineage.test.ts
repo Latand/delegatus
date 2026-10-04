@@ -54,7 +54,7 @@ test("a report run is still recognisable after a registry reload, with no histor
     transport: "structured",
     clientAttemptId: reportAttemptId(runId),
     explicitProject: TELEGRAM_REPORT_PROJECT,
-    launchProfile: emptyLaunchProfile({ cwd, title: "Daily report", mcpServers: ["viewer", "telegram"] }),
+    launchProfile: emptyLaunchProfile({ cwd, title: "Read the requested report", mcpServers: ["viewer", "telegram"] }),
   });
   if (begun.kind !== "created") throw new Error("expected a report-run reservation");
   const sessionId = ["019f4906", "3f67", "4b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -64,7 +64,7 @@ test("a report run is still recognisable after a registry reload, with no histor
     artifactPath,
     cwd,
     accountId: null,
-    launchProfile: emptyLaunchProfile({ cwd, title: "Daily report", mcpServers: ["viewer", "telegram"] }),
+    launchProfile: emptyLaunchProfile({ cwd, title: "Read the requested report", mcpServers: ["viewer", "telegram"] }),
     status: "idle",
     host: null,
     claimEpoch: 0,

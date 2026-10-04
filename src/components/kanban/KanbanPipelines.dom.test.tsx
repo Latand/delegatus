@@ -535,8 +535,8 @@ test("a fail edge takes no slot in the lane row: silent at rest, and a suffix on
   expect(gone.dataset.arcState).toBe("exhausted");
   expect(gone.textContent).toBe("↺2/2");
   expect(gone.title).toContain("No rounds left");
-  /* Spent but still alive: the sentence is about what a FURTHER failure costs. */
-  expect(gone.title).toContain("another failure");
+  /* An exhausted edge completes its final fix before advancing the lane. */
+  expect(gone.title).toContain("Fix fixes Review's last findings once more, then the lane moves on");
 
   /* The same budget after the lane stopped on it: the sentence says what
      happened, first. */
