@@ -66,8 +66,8 @@ function launched(engine: Engine, declared: string[] | null): NodeJS.ProcessEnv 
   return { NODE_ENV: "test", PATH: source.PATH, HOME: source.HOME, TMPDIR: source.TMPDIR, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig, GIT_TERMINAL_PROMPT: "0", ...set };
 }
 
-const sh = (args: string[], env: NodeJS.ProcessEnv, stdin = "") =>
-  Bun.spawnSync(args, { cwd: repo, env, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" });
+const sh = (args: string[], env: NodeJS.ProcessEnv, stdin = "", cwd = repo) =>
+  Bun.spawnSync(args, { cwd, env, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" });
 const lines = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n") : []);
 const reset = () => { for (const file of [ghLog, operatorHelperLog]) fs.rmSync(file, { force: true }); };
 const pushUrl = (remote: string, env: NodeJS.ProcessEnv) => sh(["git", "remote", "get-url", "--push", remote], env).stdout.toString().trim();
@@ -88,12 +88,38 @@ const GH_COMMANDS = [
 ];
 const UNCOVERED = GH_COMMANDS.slice(4);
 
+/* Places a command is typed from that are not the declared checkout: no
+   checkout at all, and the checkout of another repository. */
+const outside = path.join(root, "outside");
+const otherCheckout = path.join(root, "other-checkout");
+for (const directory of [outside, otherCheckout]) fs.mkdirSync(directory);
+Bun.spawnSync(["git", "init", "-q"], { cwd: otherCheckout, env: source });
+Bun.spawnSync(["git", "remote", "add", "origin", "https://github.com/acme/gadgets.git"], { cwd: otherCheckout, env: source });
+const PULL_REQUEST = "https://github.com/acme/widgets/pull/5";
+/* The covered actions in the other spellings `gh` accepts, each naming
+   acme/widgets: the alias, the pull request as its URL, the API's absolute
+   URL, flags joined to their values, and both placeholders. */
+const SPELLINGS: Array<{ args: string[]; cwd: string; env?: Record<string, string> }> = [
+  { args: ["pr", "new", "--fill"], cwd: repo },
+  { args: ["pr", "merge", PULL_REQUEST, "--squash"], cwd: outside }, { args: ["pr", "merge", PULL_REQUEST, "--squash"], cwd: otherCheckout },
+  { args: ["pr", "edit", PULL_REQUEST, "--title", "t"], cwd: outside }, { args: ["pr", "edit", PULL_REQUEST, "--title", "t"], cwd: otherCheckout },
+  { args: ["api", "https://api.github.com/repos/acme/widgets/pulls/5/merge", "-X", "PUT"], cwd: outside },
+  { args: ["api", "repos/acme/widgets/pulls", "-ftitle=x", "-fhead=y", "-fbase=main"], cwd: outside },
+  { args: ["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], cwd: repo },
+  { args: ["api", "-XPUT", "repos/{owner}/{repo}/pulls/5/merge"], cwd: otherCheckout, env: { GH_REPO: "acme/widgets" } },
+];
+/* Token variables a shell may have inherited: the stand-in gh would log them as set. */
+const INHERITED = { GH_TOKEN: "inherited-fixture", GITHUB_TOKEN: "inherited-fixture" };
+
 /** Everything observable about one environment's GitHub traffic: each `gh`
     start as the stand-in logged it, each remote's push URL, and who answered
     the push credential. */
 function transcript(env: NodeJS.ProcessEnv) {
   reset();
-  const gh = GH_COMMANDS.map((args) => sh(["gh", ...args], env).exitCode);
+  const gh = [
+    ...GH_COMMANDS.map((args) => sh(["gh", ...args], env).exitCode),
+    ...SPELLINGS.map((typed) => sh(["gh", ...typed.args], { ...env, ...typed.env }, "", typed.cwd).exitCode),
+  ];
   const started = lines(ghLog);
   reset();
   const urls = REMOTES.map(([name]) => pushUrl(name, env));
@@ -124,6 +150,18 @@ describe.skipIf(!posix).each([...ENGINES])("a write to a declared repository thr
     }
     /* The stand-in gh logs every start. Nothing started: the operator's
        configuration directory was handed to no process for these writes. */
+    expect(lines(ghLog)).toEqual([]);
+  });
+
+  test("negative control: every other spelling of a covered write is refused the same way, with inherited tokens in the shell", () => {
+    reset();
+    for (const typed of SPELLINGS) {
+      const result = sh(["gh", ...typed.args], { ...env, ...INHERITED, ...typed.env }, "", typed.cwd);
+      expect([typed.args.join(" "), result.exitCode]).toEqual([typed.args.join(" "), 1]);
+      expect(result.stderr.toString()).toContain("Delegatus refused this GitHub write to acme/widgets: no GitHub App credential is available for it.");
+    }
+    /* No gh started: neither the operator's configuration nor an inherited
+       token reached a process that could send anything. */
     expect(lines(ghLog)).toEqual([]);
   });
 
@@ -205,7 +243,7 @@ describe.skipIf(!posix).each([...ENGINES])("an undeclared repository through %s"
     expect(transcript(env)).toEqual(expected);
     /* The comparison is not vacuous: every command started the stand-in gh,
        and the operator's helper answered the push. */
-    expect(expected.started).toEqual(GH_COMMANDS.map((args) => `${args.join(" ")}|config=${filtered ? "" : operatorGh}|token=`));
+    expect(expected.started).toEqual([...GH_COMMANDS, ...SPELLINGS.map((typed) => typed.args)].map((args) => `${args.join(" ")}|config=${filtered ? "" : operatorGh}|token=`));
     expect(expected.urls).toEqual(REMOTES.map(([, url]) => url));
     expect(expected.helper).toEqual(["get"]);
   });
@@ -213,8 +251,91 @@ describe.skipIf(!posix).each([...ENGINES])("an undeclared repository through %s"
   test("with another repository declared, this one's gh calls and pushes are what they were", () => {
     const env = launched(engine, ["acme/declared-elsewhere"]);
     expect(env.LLV_AGENT_FORGE_REPOSITORIES).toBe("acme/declared-elsewhere");
-    expect(transcript(env)).toEqual(transcript(before()));
+    const expected = transcript(before());
+    expect(transcript(env)).toEqual(expected);
+    /* Every spelling that names acme/widgets, which is not declared here, started gh as typed. */
+    expect(expected.started.slice(GH_COMMANDS.length)).toEqual(SPELLINGS.map((typed) => `${typed.args.join(" ")}|config=${filtered ? "" : operatorGh}|token=`));
   });
+});
+
+/* An engine runs what an agent types through a login shell, whose profile may
+   put directories of its own in front of the PATH the launch gave it. */
+describe.skipIf(!posix || !fs.existsSync("/bin/bash"))("the gh an engine's login shell finds", () => {
+  /* A home whose profile prepends ~/.local/bin, as a stock profile does. */
+  const loginHome = (withGh: boolean): NodeJS.ProcessEnv => {
+    const home = fs.mkdtempSync(path.join(root, "login-"));
+    const local = path.join(home, ".local", "bin");
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(path.join(home, ".profile"), 'PATH="$HOME/.local/bin:$PATH"\n');
+    if (withGh) fs.copyFileSync(path.join(bin, "gh"), path.join(local, "gh"));
+    return { ...source, HOME: home };
+  };
+
+  test("negative control: a profile that puts another gh first refuses the launch, and no gh starts", () => {
+    declare(["acme/widgets"]);
+    reset();
+    const from = loginHome(true);
+    const refusal = "finds gh at " + path.join(from.HOME!, ".local", "bin", "gh") + ", ahead of the Delegatus gh";
+    expect(() => agentPublicationIdentityEnv(from)).toThrow(refusal);
+    expect(() => agentCodexPublicationPolicy({}, from)).toThrow(refusal);
+    expect(() => withAgentConfigSandbox({ ...from }, from)).toThrow(refusal);
+    /* The engine starts gh directly, by the PATH it sets, with no shell between. */
+    expect(engineForgeWriteEnv(from).PATH!.split(path.delimiter)[0]).toBe(engineForgeWriteEnv(from).LLV_AGENT_FORGE_DIR!);
+    expect(lines(ghLog)).toEqual([]);
+  });
+
+  test("a profile that prepends a directory holding no gh launches as before, and the login shell's covered write is refused", () => {
+    declare(["acme/widgets"]);
+    reset();
+    const from = loginHome(false);
+    const env = { ...from, ...agentPublicationIdentityEnv(from) };
+    expect(sh(["/bin/bash", "-lc", "command -v gh"], env).stdout.toString().trim()).toBe(path.join(env.LLV_AGENT_FORGE_DIR!, "gh"));
+    const result = sh(["/bin/bash", "-lc", "gh pr merge 5 --squash"], { ...env, ...INHERITED });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("Delegatus refused this GitHub write to acme/widgets");
+    expect(lines(ghLog)).toEqual([]);
+  });
+
+  test("with nothing declared no shell is asked and the launch is what it was", () => {
+    declare(null);
+    const from = loginHome(true);
+    expect(Object.keys(agentPublicationIdentityEnv(from)).filter((name) => name.startsWith("LLV_AGENT_FORGE"))).toEqual([]);
+  });
+});
+
+test.skipIf(!posix)("negative control: a push credential shim that cannot start the App helper tells git to stop, and nothing else is asked", () => {
+  declare(["acme/widgets"]);
+  const launch = agentForgeWriteEnv(source);
+  const directory = launch.LLV_AGENT_FORGE_DIR!;
+  /* The same launch directory with the helper gone. */
+  const broken = path.join(root, "forge-without-helper");
+  fs.cpSync(directory, broken, { recursive: true });
+  fs.rmSync(path.join(broken, "forge-app-token.mjs"));
+  const askpassLog = path.join(root, "askpass.log");
+  script("askpass", `echo "$1" >> ${JSON.stringify(askpassLog)}\necho askpass-fixture`);
+  const env: NodeJS.ProcessEnv = { ...source, ...launch, GIT_ASKPASS: path.join(bin, "askpass") };
+  for (const [name, value] of Object.entries(env)) if (name.startsWith("GIT_CONFIG_VALUE_") && value) env[name] = value.replaceAll(directory, broken);
+  reset();
+  const result = sh(["git", "credential", "fill"], env, `url=${APP_PUSH_URL}\n\n`);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString()).not.toContain(["password", ""].join("="));
+  expect(result.stderr.toString()).toContain("the GitHub App helper is missing");
+  /* Both stand-ins log every call: git asked neither for a password. */
+  expect(lines(askpassLog)).toEqual([]);
+  expect(lines(operatorHelperLog)).toEqual([]);
+
+  /* The intact shim where neither bun nor node can be found: the same answer. */
+  const tools = path.join(root, "only-dirname");
+  fs.mkdirSync(tools);
+  fs.symlinkSync(Bun.which("dirname", { PATH: process.env.PATH! })!, path.join(tools, "dirname"));
+  for (const shim of [path.join(directory, "forge-git-credential"), path.join(broken, "forge-git-credential")]) {
+    const answer = Bun.spawnSync([shim, "get"], { env: { PATH: tools }, stdin: Buffer.from(""), stdout: "pipe", stderr: "pipe" });
+    expect(answer.exitCode).toBe(1);
+    expect(answer.stdout.toString()).toBe("quit=true\n");
+    expect(answer.stderr.toString()).toContain("a person's credentials are never used instead");
+  }
+  /* Storing and erasing answer nothing, as a helper should. */
+  expect(Bun.spawnSync([path.join(broken, "forge-git-credential"), "store"], { env: { PATH: tools }, stdout: "pipe", stderr: "pipe" }).stdout.toString()).toBe("");
 });
 
 describe.skipIf(!posix)("the declaration", () => {

@@ -13,6 +13,7 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const ISSUED = "installation-token-for-tests";
 const OPERATOR_CONFIG = "/operator/gh";
+const PR_URL = `https://github.com/${REPO}/pull/5`;
 /* Address-shaped and credential-shaped fixtures are joined, never written out. */
 const at = (user: string, host: string) => [user, host].join("@");
 
@@ -41,7 +42,7 @@ function fakeGitHub(overrides: Record<string, Answer> = {}) {
    as the launch pins it, and the declaration naming the one App repository. */
 const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
 
-function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; ordinary?: string | null } = {}) {
+function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; remotes?: string[]; ordinary?: string | null } = {}) {
   const github = options.github ?? fakeGitHub();
   const started: Array<{ command: string; args: string[]; env: Record<string, string | undefined> }> = [];
   const out: string[] = [];
@@ -54,6 +55,8 @@ function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeG
     emptyGhConfigDir: () => "/agent/empty",
     now: () => Date.parse("2030-01-01T00:00:00Z"),
     originRepository: async () => (options.origin === undefined ? REPO : options.origin),
+    /* The checkout's GitHub remotes, the one `gh` takes as its base first. */
+    checkoutRepositories: async () => options.remotes ?? (options.origin === undefined ? [REPO] : options.origin ? [options.origin] : []),
     readCredential: async () => (credential == null ? null : JSON.stringify(credential)),
     request: github.request,
     findGh: () => "/usr/bin/gh",
@@ -138,12 +141,14 @@ describe("the declaration an environment carries", () => {
 
 describe("what a gh command is", () => {
   test("the covered kinds are a written list, and it is exactly what the App is permitted to do", () => {
+    /* An owner and a name, each written out or as either placeholder `gh api` fills. */
+    const SEGMENT = "(\\{owner\\}|:owner|[^/{}:]+)\\/(\\{repo\\}|:repo|[^/{}:]+)";
     expect([...FORGE_APP_GH_COMMANDS]).toEqual(["pr create", "pr edit", "pr merge", "pr update-branch"]);
     expect(FORGE_APP_API_WRITES.map((write) => `${write.method} ${write.path.source}`)).toEqual([
-      "POST ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls$",
-      "PATCH ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+$",
-      "PUT ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+\\/merge$",
-      "PUT ^repos\\/(\\{owner\\}\\/\\{repo\\}|[^/{}]+\\/[^/{}]+)\\/pulls\\/\\d+\\/update-branch$",
+      `POST ^repos\\/${SEGMENT}\\/pulls$`,
+      `PATCH ^repos\\/${SEGMENT}\\/pulls\\/\\d+$`,
+      `PUT ^repos\\/${SEGMENT}\\/pulls\\/\\d+\\/merge$`,
+      `PUT ^repos\\/${SEGMENT}\\/pulls\\/\\d+\\/update-branch$`,
     ]);
   });
 
@@ -158,12 +163,39 @@ describe("what a gh command is", () => {
     [["api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/5", "-f", "body=b"], null],
     /* An installation endpoint answers nothing but an installation token. */
     [["api", "installation/repositories?per_page=100", "--paginate"], null],
+    /* The other spellings `gh` accepts for the same actions. */
+    [["pr", "new", "--fill"], null], [["pr", "new", "-R", REPO, "--title", "t"], REPO],
+    [["pr", "merge", PR_URL, "--squash"], REPO], [["pr", "merge", "--squash", `${PR_URL}/files`], REPO],
+    [["pr", "edit", PR_URL, "--title", "t"], REPO], [["pr", "update-branch", PR_URL], REPO],
+    /* The pull request's own URL names the repository, whatever a flag says. */
+    [["pr", "merge", PR_URL, "-R", "acme/gadgets"], REPO],
+    /* A flag's value is not the pull request: this one is number 5 of the flag's repository. */
+    [["pr", "edit", "--body", "https://github.com/acme/gadgets/pull/9", "5", "-R", REPO], REPO],
+    [["pr", "merge", "-sdt", "subject", "5", `-R${REPO}`], REPO], [["pr", "edit", "5", "--body", "--help"], null],
+    [["api", `https://api.github.com/repos/${REPO}/pulls/5/merge`, "-X", "PUT"], REPO],
+    [["api", `repos/${REPO}/pulls`, "-ftitle=x", "-fhead=y", "-fbase=main"], REPO],
+    [["api", `repos/${REPO}/pulls`, "-Ftitle=x"], REPO], [["api", "-if", "title=x", `repos/${REPO}/pulls`], REPO],
+    [["api", `repos/${REPO}/pulls/5`, "-X=patch"], REPO], [["api", "--hostname", "github.com", "-XPUT", `repos/${REPO}/pulls/5/merge`], REPO],
+    [["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], null], [["api", "-XPUT", "/repos/{owner}/{repo}/pulls/5/merge"], null],
+    [["api", "-XPUT", "REPOS/acme/./x/../wid%67ets//pulls/5/merge/?a=b"], REPO],
   ] as const)("%j is a covered kind", (args, repository) => {
     expect(classifyGh([...args])).toEqual({ kind: "app", repository });
   });
 
-  test("a covered write names its repository from GH_REPO when no flag does", () => {
-    expect(classifyGh(["pr", "merge", "5"], { GH_REPO: REPO })).toEqual({ kind: "app", repository: REPO });
+  test.each([
+    [["pr", "merge", "5"]], [["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"]], [["api", "-XPATCH", "repos/{owner}/{repo}/pulls/5"]],
+  ])("%j takes its repository from GH_REPO before the checkout", (args) => {
+    expect(classifyGh(args, { GH_REPO: REPO })).toEqual({ kind: "app", repository: REPO });
+  });
+
+  /* A covered kind whose repository is named but cannot be read is refused,
+     because passing it on would send it as a person. */
+  test.each([
+    [["api", "-XPUT", "repos/acme/{repo}/pulls/5/merge"]], [["api", "-XPUT", "repos/:owner/widgets/pulls/5/merge"]],
+    [["api", "-XPUT", "repositories/123/pulls/5/merge"]], [["api", "repositories/123/pulls", "-ftitle=x"]],
+    [["api", "-XPUT", "repos/acme/wid gets/pulls/5/merge"]],
+  ])("%j is refused", (args) => {
+    expect(classifyGh(args)).toMatchObject({ kind: "refuse" });
   });
 
   /* Reads, and every kind of write the App holds no permission for. */
@@ -180,10 +212,28 @@ describe("what a gh command is", () => {
     [["api", "-X", "POST", `repos/${REPO}/actions/workflows/ci.yml/dispatches`, "-f", "ref=main"]],
     [["api", "graphql", "-f", "query=mutation { mergePullRequest(input: {}) { clientMutationId } }"]],
     [["some-command-gh-adds-later", "do"]],
+    /* The same spellings where they name another host, another method or another kind. */
+    [["pr", "merge", "https://ghe.example.invalid/acme/widgets/pull/5"]], [["pr", "newer"]], [["pr", "merge", "5", "-h"]],
+    [["api", `https://ghe.example.invalid/api/v3/repos/${REPO}/pulls/5/merge`, "-X", "PUT"]],
+    [["api", "--hostname", "ghe.example.invalid", "-XPUT", `repos/${REPO}/pulls/5/merge`]],
+    [["api", `repos/${REPO}/pulls`, "-XGET", "-fstate=open"]], [["api", `repos/${REPO}/pulls`, "-Htitle=x"]],
+    [["api", "repositories/123/pulls"]], [["api", "-XDELETE", `repos/${REPO}/labels/good%20first%20issue`]],
+    [["api", "-XPUT", `repos/${REPO}/pulls/5/merge`, "--help"]],
   ])("%j is not a covered kind", (args) => {
     expect(classifyGh(args)).toEqual({ kind: "pass" });
   });
 });
+
+/* One action in the other spellings `gh` accepts: the alias, the pull request
+   as its URL, the API's absolute URL, flags joined to their values, and either
+   placeholder, which the checkout fills. */
+const OTHER_SPELLINGS = (repository: string) => [
+  ["pr", "new", "--fill", "-R", repository], ["pr", "merge", `https://github.com/${repository}/pull/5`, "--squash"],
+  ["pr", "edit", `https://github.com/${repository}/pull/5`, "--title", "t"],
+  ["api", `https://api.github.com/repos/${repository}/pulls/5/merge`, "-X", "PUT"],
+  ["api", `repos/${repository}/pulls`, "-ftitle=x", "-fhead=y", "-fbase=main"],
+];
+const FROM_THE_CHECKOUT = [["pr", "new", "--fill"], ["api", "repos/:owner/:repo/pulls/5/merge", "-X", "PUT"], ["api", "-XPUT", "repos/{owner}/{repo}/pulls/5/merge"]];
 
 describe("running gh for an agent", () => {
   test("a covered write to a declared repository starts gh with the App token as its whole identity, then revokes it", async () => {
@@ -211,7 +261,7 @@ describe("running gh for an agent", () => {
   test("negative control: a covered write with no App credential starts no gh at all and says why", async () => {
     const p = ports({ credential: null });
     for (const write of [["pr", "merge", "5", "--squash"], ["pr", "create", "--fill"], ["pr", "edit", "5", "-b", "x"], ["pr", "update-branch", "5"],
-      ["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`]]) {
+      ["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`], ...OTHER_SPELLINGS(REPO)]) {
       expect(await runGh(write, p)).toBe(1);
     }
     /* `gh` is the only thing here that could reach a person's token, through
@@ -228,6 +278,53 @@ describe("running gh for an agent", () => {
     expect(await runGh(["api", "-X", "PUT", `repos/${REPO}/pulls/5/update-branch`], p)).toBe(1);
     expect(p.started).toEqual([]);
     expect(p.err.join("")).toContain("HTTP 403");
+  });
+
+  test("negative control: every other spelling of a covered write is refused the same way, wherever it is typed", async () => {
+    /* Outside any checkout, and in the checkout of an undeclared repository:
+       the command itself names the declared one. */
+    for (const origin of [null, "acme/gadgets"]) {
+      const p = ports({ credential: null, origin });
+      for (const write of OTHER_SPELLINGS(REPO)) expect(await runGh(write, p)).toBe(1);
+      expect(p.started).toEqual([]);
+      expect(p.err).toHaveLength(OTHER_SPELLINGS(REPO).length);
+      for (const line of p.err) expect(line).toContain(`Delegatus refused this GitHub write to ${REPO}: no GitHub App credential is available for it.`);
+    }
+    /* In the declared checkout, and with GH_REPO naming it from anywhere. */
+    for (const p of [ports({ credential: null }), ports({ credential: null, origin: null, env: { ...AGENT_ENV, GH_REPO: REPO } })]) {
+      for (const write of FROM_THE_CHECKOUT) expect(await runGh(write, p)).toBe(1);
+      expect(p.started).toEqual([]);
+      for (const line of p.err) expect(line).toContain(`Delegatus refused this GitHub write to ${REPO}`);
+    }
+  });
+
+  test("a covered write whose repository cannot be read, or cannot be settled among the remotes, is refused", async () => {
+    const p = ports({ credential: null });
+    expect(await runGh(["api", "-XPUT", "repositories/123/pulls/5/merge"], p)).toBe(1);
+    expect(await runGh(["api", "-XPUT", "repos/acme/{repo}/pulls/5/merge"], p)).toBe(1);
+    /* `gh` would take the first remote; a declared one further down may be the one it writes to. */
+    const several = ports({ credential: null, remotes: ["acme/gadgets", REPO] });
+    expect(await runGh(["pr", "merge", "5"], several)).toBe(1);
+    expect(several.err.join("")).toContain("name the repository with --repo");
+    expect([...p.started, ...several.started]).toEqual([]);
+    for (const line of [...p.err, ...several.err]) expect(line).toContain("Delegatus refused this GitHub write");
+    /* Named, the same checkout's write to the undeclared remote goes as typed. */
+    expect(await runGh(["pr", "merge", "5", "-R", "acme/gadgets"], several)).toBe(0);
+    expect(several.started).toHaveLength(1);
+  });
+
+  test("the same spellings aimed at an undeclared repository pass through unchanged", async () => {
+    const p = ports({ credential: null, origin: "acme/gadgets" });
+    const typed = [...OTHER_SPELLINGS("acme/gadgets"), ...FROM_THE_CHECKOUT];
+    for (const args of typed) expect(await runGh(args, p)).toBe(0);
+    expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: p.env })));
+    for (const [index, start] of p.started.entries()) expect(start.args).toBe(typed[index]!);
+    expect(p.github.calls).toEqual([]);
+    expect(p.err).toEqual([]);
+    /* With nothing declared, a form that would be refused is not even read. */
+    const none = ports({ credential: null, env: { GH_CONFIG_DIR: OPERATOR_CONFIG } });
+    expect(await runGh(["api", "-XPUT", "repositories/123/pulls/5/merge"], none)).toBe(0);
+    expect(none.started).toHaveLength(1);
   });
 
   /* Each of these reaches gh with the arguments and the environment object the

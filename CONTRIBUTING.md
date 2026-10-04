@@ -98,6 +98,17 @@ App holds no permission for (an issue, a workflow dispatch, a run rerun, a
 release, a comment) is not on the list, is not rerouted, and runs as it always
 did. Adding a kind is a decision about the App's permissions.
 
+One action has one classification in every spelling `gh` accepts: `pr new`
+for `pr create`, a pull request given as its URL (which names the repository
+from any directory, before `--repo`), a REST path or its absolute
+`https://api.github.com/` URL, flags joined to their values (`-ftitle=x`,
+`-XPUT`), and both placeholders, `{owner}/{repo}` and `:owner/:repo`, filled
+from `GH_REPO` or the checkout. A covered kind whose repository is named in a
+form the shim cannot read (a repository number, one placeholder beside a
+written name) is refused, and so is one typed in a checkout whose first GitHub
+remote is undeclared while another is declared, until `--repo` names it. An
+alias the operator defined with `gh alias set` is not expanded.
+
 - **`gh` in an agent's shell** is a shim (`bin/forge-app-token.mjs gh`) once a
   repository is declared. For a covered kind aimed at a declared repository it
   mints a token, starts `gh` with it as `GH_TOKEN` and an empty configuration
@@ -106,6 +117,12 @@ did. Adding a kind is a decision about the App's permissions.
   pull request's classic project cards before `gh pr edit`, which an
   installation token may not; the shim then names the REST form,
   `gh api -X PATCH repos/<owner/name>/pulls/<number>`, which is covered too.
+  The shim is found because its directory is first on `PATH`, and an engine
+  types commands into a login shell whose profile may put directories of its
+  own in front. So each agent launch asks `bash -lc` (and `$SHELL`) which `gh`
+  it finds in the launch environment and is refused, with the path it found,
+  when that is any file but the shim. Keep `gh` in a directory the login
+  profile does not prepend, such as `/usr/bin`.
 - **`git push` to a declared repository** is rewritten, in the agent's
   environment only, to a push URL that one credential helper answers, with
   every other helper cleared for that URL. SSH remotes are rewritten the same
@@ -113,7 +130,9 @@ did. Adding a kind is a decision about the App's permissions.
   credentials they had. The rewrite matches a remote spelled as the declaration
   spells it or in lower case. It matches by prefix, so a sibling whose name
   starts with a declared one is caught too; the helper answers that push from
-  git's ordinary helpers, over HTTPS.
+  git's ordinary helpers, over HTTPS. A refusal answers `quit=true`, also from
+  a shim that finds no helper file or no `bun` or `node`, so git never goes on
+  to askpass or a terminal prompt.
 - **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
   through `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the

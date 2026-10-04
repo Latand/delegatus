@@ -13,7 +13,8 @@
    The rule applies to the repositories this installation declared (see
    FORGE_REPOSITORIES_ENV) and to the kinds of write listed in
    FORGE_APP_GH_COMMANDS and FORGE_APP_API_WRITES. Such a write with no usable
-   App credential is refused with the message below and nothing is sent.
+   App credential, or whose repository is named in a form that cannot be read,
+   is refused with the message below and nothing is sent.
    Everything else reaches `gh` exactly as it was typed, with the environment
    it was typed in. No token is written to a file or to a terminal. */
 
@@ -26,6 +27,8 @@ import { fileURLToPath } from "node:url";
 export const FORGE_APP_SECRET_SERVICE = "delegatus-github-app";
 export const FORGE_APP_PERMISSIONS = Object.freeze({ contents: "write", pull_requests: "write", metadata: "read" });
 export const FORGE_APP_USERNAME = "x-access-token";
+/** This file's name, in `bin/` and in every copy the launch environment makes. */
+export const HELPER_FILE = "forge-app-token.mjs";
 /** Set by the launch environment: the directory holding the `gh` shim. */
 export const FORGE_DIR_ENV = "LLV_AGENT_FORGE_DIR";
 /** Set by the launch environment: the repositories this installation declared
@@ -187,81 +190,143 @@ export async function revokeInstallationToken(token, ports) {
  * about the App's permissions, never an inference from the command's shape.
  */
 export const FORGE_APP_GH_COMMANDS = Object.freeze(["pr create", "pr edit", "pr merge", "pr update-branch"]);
-const REPOSITORY_SEGMENT = "(\\{owner\\}/\\{repo\\}|[^/{}]+/[^/{}]+)";
+/** The other names `gh` itself gives a covered command. */
+const GH_COMMAND_ALIASES = Object.freeze({ "pr new": "pr create" });
+/* `gh api` fills either spelling of a placeholder from the base repository. */
+const REPOSITORY_SEGMENT = "(\\{owner\\}|:owner|[^/{}:]+)/(\\{repo\\}|:repo|[^/{}:]+)";
 /** The same kinds through `gh api`, as method and REST path. */
 export const FORGE_APP_API_WRITES = Object.freeze([
-  Object.freeze({ method: "POST", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls$`) }),
-  Object.freeze({ method: "PATCH", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+$`) }),
-  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/merge$`) }),
-  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/update-branch$`) }),
+  Object.freeze({ method: "POST", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls$`, "i") }),
+  Object.freeze({ method: "PATCH", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+$`, "i") }),
+  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/merge$`, "i") }),
+  Object.freeze({ method: "PUT", path: new RegExp(`^repos/${REPOSITORY_SEGMENT}/pulls/\\d+/update-branch$`, "i") }),
 ]);
 
-const API_VALUE_FLAGS = new Set(["-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
-  "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+/* The flags that take a value, by command, so a flag's value is never read as
+   the command, the pull request or the endpoint. Every other flag is a switch. */
+const REPOSITORY_FLAGS = ["-R", "--repo"];
+const VALUE_FLAGS = Object.freeze({
+  "": new Set(REPOSITORY_FLAGS),
+  api: new Set(["-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
+    "-t", "--template", "--hostname", "--cache", "-p", "--preview"]),
+  "pr create": new Set([...REPOSITORY_FLAGS, "-a", "--assignee", "-B", "--base", "-b", "--body", "-F", "--body-file", "-H", "--head",
+    "-l", "--label", "-m", "--milestone", "-p", "--project", "--recover", "-r", "--reviewer", "-T", "--template", "-t", "--title"]),
+  "pr edit": new Set([...REPOSITORY_FLAGS, "--add-assignee", "--add-label", "--add-project", "--add-reviewer", "-B", "--base", "-b", "--body",
+    "-F", "--body-file", "-m", "--milestone", "--remove-assignee", "--remove-label", "--remove-project", "--remove-reviewer", "-t", "--title"]),
+  "pr merge": new Set([...REPOSITORY_FLAGS, "-A", "--author-email", "-b", "--body", "-F", "--body-file", "--match-head-commit", "-t", "--subject"]),
+  "pr update-branch": new Set(REPOSITORY_FLAGS),
+});
+const API_BODY_FLAGS = ["-f", "--raw-field", "-F", "--field", "--input"];
+const PULL_REQUEST_URL = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:[/?#].*)?$/i;
 const PASS = Object.freeze({ kind: "pass" });
+const refuse = (reason) => ({ kind: "refuse", reason });
 
-function repositoryFlag(args) {
+/** One command line read the way `gh` reads it: `--name=value`, `--name value`,
+    `-n value`, `-nvalue` and switches run together, with `--` ending the flags. */
+function readArgs(args, values) {
+  const positional = [];
+  const flags = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
-    if (arg === "-R" || arg === "--repo") return args[index + 1] ?? "";
-    if (arg.startsWith("--repo=")) return arg.slice("--repo=".length);
-    if (arg.startsWith("-R") && arg.length > 2) return arg.slice(2).replace(/^=/, "");
+    if (arg === "--") { positional.push(...args.slice(index + 1)); break; }
+    if (arg.startsWith("--")) {
+      const cut = arg.indexOf("=");
+      const name = cut < 0 ? arg : arg.slice(0, cut);
+      flags.push([name, cut >= 0 ? arg.slice(cut + 1) : values.has(name) ? args[++index] ?? "" : null]);
+    } else if (arg.startsWith("-") && arg.length > 1) {
+      for (let at = 1; at < arg.length; at++) {
+        const name = `-${arg[at]}`;
+        if (!values.has(name)) { flags.push([name, null]); continue; }
+        const joined = arg.slice(at + 1);
+        flags.push([name, joined ? joined.replace(/^=/, "") : args[++index] ?? ""]);
+        break;
+      }
+    } else positional.push(arg);
   }
-  return null;
+  const last = (...names) => flags.findLast(([name]) => names.includes(name))?.[1] ?? null;
+  return { positional, last, help: flags.some(([name]) => name === "--help" || name === "-h") };
 }
 
-function classifyApi(args) {
-  let method = null;
-  let body = false;
-  let endpoint = null;
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    const [flag, inline] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, null];
-    if (API_VALUE_FLAGS.has(flag)) {
-      const value = inline ?? args[++index] ?? "";
-      if (flag === "-X" || flag === "--method") method = value.toUpperCase();
-      if (["-f", "--raw-field", "-F", "--field", "--input"].includes(flag)) body = true;
-      continue;
-    }
-    if (/^-X.+/.test(arg)) { method = arg.slice(2).toUpperCase(); continue; }
-    if (arg.startsWith("-")) continue;
-    endpoint ??= arg;
+const isGitHubHost = (host) => /^(?:www\.)?github\.com$/i.test(host);
+
+/** A REST path as GitHub routes it: no query, each segment decoded, and dot
+    segments and doubled slashes resolved. */
+function restRoute(target) {
+  const route = [];
+  for (const raw of target.replace(/[?#].*$/, "").split("/")) {
+    let segment = raw;
+    try { segment = decodeURIComponent(raw); } catch { /* as written */ }
+    if (segment === "..") route.pop();
+    else if (segment && segment !== ".") route.push(segment);
   }
-  const target = (endpoint ?? "").replace(/^\/+/, "");
+  return route.join("/");
+}
+
+function classifyApi(args, env) {
+  const { positional, last, help } = readArgs(args, VALUE_FLAGS.api);
+  if (help) return PASS;
+  const hostname = last("--hostname");
+  if (hostname != null && !isGitHubHost(hostname)) return PASS;
+  let target = positional[1] ?? "";
+  const absolute = /^https?:\/\/([^/]+)\/(.*)$/i.exec(target);
+  if (absolute) {
+    /* An absolute URL is sent where it points; only GitHub's own API host is ours. */
+    if (absolute[1].toLowerCase() !== "api.github.com") return PASS;
+    target = absolute[2];
+  }
+  target = target.replace(/^\/+/, "");
   /* The installation endpoints answer only an installation token: the batch
      lander's principal check reads one of them. */
   if (/^installation(?:\/|$|\?)/.test(target)) return { kind: "app", repository: null };
-  const effective = method ?? (body ? "POST" : "GET");
-  const route = target.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const body = API_BODY_FLAGS.some((name) => last(name) != null);
+  const effective = (last("-X", "--method") ?? (body ? "POST" : "GET")).toUpperCase();
+  const route = restRoute(target);
+  /* GitHub answers the same routes under a repository's number, which names a
+     repository nothing here can read. */
+  const numbered = /^repositories\/\d+(\/.*)$/i.exec(route);
   for (const write of FORGE_APP_API_WRITES) {
-    const match = write.method === effective ? write.path.exec(route) : null;
-    if (match) return { kind: "app", repository: match[1].startsWith("{") ? null : match[1] };
+    if (write.method !== effective) continue;
+    if (numbered && write.path.test(`repos/owner/name${numbered[1]}`)) {
+      return refuse("it names its repository by number; name it as owner/name");
+    }
+    const match = write.path.exec(route);
+    if (!match) continue;
+    const [owner, name] = [match[1], match[2]];
+    const placeholders = [owner, name].filter((part) => /^[{:]/.test(part)).length;
+    /* Both placeholders are filled from the base repository, as `gh` fills them. */
+    if (placeholders === 2) return { kind: "app", repository: env.GH_REPO ?? null };
+    if (placeholders === 1 || /[^A-Za-z0-9._-]/.test(owner + name)) {
+      return refuse("its repository is named in a form Delegatus does not read; name it as owner/name");
+    }
+    return { kind: "app", repository: `${owner}/${name}` };
   }
   return PASS;
 }
 
 /**
  * What one `gh` invocation is: one of the covered kinds of write, which goes
- * out as the App when its repository is declared, or anything else, which
- * passes through untouched. `repository` is null when the command names none
- * and `gh` would take it from the checkout.
+ * out as the App when its repository is declared; a covered kind whose
+ * repository is named in a way that cannot be read, which is refused; or
+ * anything else, which passes through untouched. `repository` is null when the
+ * command names none and `gh` would take it from the checkout.
+ *
+ * One action has one classification in every spelling `gh` accepts: the
+ * command or its alias, a pull request given as its URL, a REST path or the
+ * absolute URL of one, flags joined to their values, and either placeholder.
  */
-function ghCommand(args) {
-  const positional = [];
-  for (let index = 0; index < args.length && positional.length < 2; index++) {
-    const arg = args[index];
-    if (arg === "-R" || arg === "--repo") { index++; continue; }
-    if (!arg.startsWith("-")) positional.push(arg);
-  }
-  return positional;
-}
-
 export function classifyGh(args, env = {}) {
-  const [command, sub] = ghCommand(args);
-  if (!command || args.includes("--help") || args.includes("-h")) return PASS;
-  if (command === "api") return classifyApi(args.slice(args.indexOf("api") + 1));
-  if (!FORGE_APP_GH_COMMANDS.includes(`${command} ${sub ?? ""}`)) return PASS;
-  return { kind: "app", repository: repositoryFlag(args) ?? env.GH_REPO ?? null };
+  const [command, sub] = readArgs(args, VALUE_FLAGS[""]).positional;
+  if (!command) return PASS;
+  if (command === "api") return classifyApi(args, env);
+  const typed = `${command} ${sub ?? ""}`;
+  const covered = GH_COMMAND_ALIASES[typed] ?? typed;
+  if (!FORGE_APP_GH_COMMANDS.includes(covered)) return PASS;
+  const { positional, last, help } = readArgs(args, VALUE_FLAGS[covered]);
+  if (help) return PASS;
+  /* A pull request given as its URL names its repository, before any flag. */
+  const url = covered === "pr create" ? null : PULL_REQUEST_URL.exec(positional[2] ?? "");
+  if (url) return isGitHubHost(url[1]) ? { kind: "app", repository: `${url[2]}/${url[3]}` } : PASS;
+  return { kind: "app", repository: last(...REPOSITORY_FLAGS) ?? env.GH_REPO ?? null };
 }
 
 /** Runs `gh` for an agent. Returns the exit status. */
@@ -271,9 +336,26 @@ export async function runGh(args, ports) {
     ports.stderr("Delegatus: the gh command line tool was not found on PATH.\n");
     return 127;
   }
+  /* Nothing declared: the command as typed, in the environment it was typed in. */
+  if (declaredRepositories(ports.env).length === 0) return ports.exec(gh, args, ports.env);
   const decision = classifyGh(args, ports.env);
-  const named = decision.kind !== "app" ? null
-    : decision.repository == null ? await ports.originRepository() : parseRepository(decision.repository);
+  if (decision.kind === "refuse") {
+    ports.stderr(`${refusalMessage(null, decision.reason)}\n`);
+    return 1;
+  }
+  let named = null;
+  if (decision.kind === "app" && decision.repository != null) named = parseRepository(decision.repository);
+  else if (decision.kind === "app") {
+    /* `gh` picks the base repository among the checkout's remotes. When the
+       first is not declared and another is, which one it would write to is
+       not settled here, so the command has to say. */
+    const remotes = await ports.checkoutRepositories();
+    named = remotes[0] ?? null;
+    if (named && !isDeclaredRepository(named, ports.env) && remotes.some((remote) => isDeclaredRepository(remote, ports.env))) {
+      ports.stderr(`${refusalMessage(null, "this checkout has several GitHub remotes and one of them is an App repository; name the repository with --repo")}\n`);
+      return 1;
+    }
+  }
   /* Not a covered kind, or not a declared repository: the command as typed,
      in the environment it was typed in. */
   if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
@@ -294,7 +376,7 @@ export async function runGh(args, ports) {
     /* Older `gh` reads a pull request's classic project cards before every
        edit, which an installation token may not, and fails there. The REST
        form edits the same pull request and is a covered kind too. */
-    if (status !== 0 && ghCommand(args).join(" ") === "pr edit") {
+    if (status !== 0 && readArgs(args, VALUE_FLAGS[""]).positional.slice(0, 2).join(" ") === "pr edit") {
       ports.stderr(`Delegatus: if \`gh pr edit\` failed on a Projects query, this version of gh cannot edit a pull request with an App token; \`gh api -X PATCH repos/${named}/pulls/<number> -f title=… -F body=@file\` makes the same edit as the App.\n`);
     }
     return status;
@@ -359,10 +441,30 @@ function sessionBusEnv(env) {
 
 export function productionPorts(env = process.env, cwd = process.cwd()) {
   const originRepository = async () => parseRepository((await run("git", ["remote", "get-url", "origin"], { cwd, env }))?.trim() ?? "");
+  /* The checkout's GitHub repositories in the order `gh` prefers them as the
+     base: one marked by `gh repo set-default`, then upstream, github, origin. */
+  const checkoutRepositories = async () => {
+    const remotes = [];
+    for (const line of ((await run("git", ["remote", "-v"], { cwd, env })) ?? "").split("\n")) {
+      const match = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line);
+      const slug = match ? parseRepository(match[2]) : null;
+      if (slug) remotes.push([match[1], slug]);
+    }
+    const rank = (name) => ["origin", "github", "upstream"].indexOf(name);
+    remotes.sort((left, right) => rank(right[0]) - rank(left[0]));
+    const chosen = [];
+    for (const line of ((await run("git", ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd, env })) ?? "").split("\n")) {
+      const match = /^remote\.(.+)\.gh-resolved\s+(\S+)$/.exec(line);
+      const slug = !match ? null : match[2] === "base" ? remotes.find(([name]) => name === match[1])?.[1] : parseRepository(match[2]);
+      if (slug) chosen.push(slug);
+    }
+    return [...new Set([...chosen, ...remotes.map(([, slug]) => slug)])];
+  };
   return {
     env,
     now: Date.now,
     originRepository,
+    checkoutRepositories,
     /* The item is keyed by the repository as the origin spells it, which a
        caller's own spelling may differ from by case only. */
     readCredential: async (repository) => {
@@ -453,11 +555,17 @@ async function main(argv) {
       return 1;
     }
   }
-  ports.stderr("usage: forge-app-token.mjs token|gh|git-credential\n");
+  ports.stderr(`usage: ${HELPER_FILE} token|gh|git-credential\n`);
   return 2;
 }
 
+/* The command line entry runs only when this file itself was started: the
+   launch code imports it for its constants, and a bundle that contains it is
+   started under its own name. */
 let invoked = false;
-try { invoked = !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { invoked = false; }
-/* No top-level await: the launch code imports this file for its constants. */
+try {
+  invoked = !!process.argv[1] && path.basename(process.argv[1]) === HELPER_FILE
+    && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+} catch { invoked = false; }
+/* No top-level await: the launch code imports this file. */
 if (invoked) main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, () => { process.exitCode = 1; });

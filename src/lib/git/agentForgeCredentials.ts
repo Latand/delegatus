@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,9 +9,8 @@ import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import type { AgentEnvironment } from "./agentHistoryGuard";
 
-import { FORGE_APP_USERNAME, FORGE_DIR_ENV, FORGE_REPOSITORIES_ENV, parseRepository } from "../../../bin/forge-app-token.mjs";
+import { FORGE_APP_USERNAME, FORGE_DIR_ENV, FORGE_REPOSITORIES_ENV, HELPER_FILE as HELPER, parseRepository } from "../../../bin/forge-app-token.mjs";
 
-const HELPER = "forge-app-token.mjs";
 /* Joined here so the sources hold no address-shaped literal for the publication gate. */
 const at = (user: string, host: string) => [user, host].join("@");
 const PUSH_BASE = `https://${at(FORGE_APP_USERNAME, "github.com")}`;
@@ -54,19 +54,25 @@ export function isForgeAppRepository(repository: string, declared: readonly stri
 }
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-const runner = (mode: string) => `#!/bin/sh
+/* As git's credential helper a shim that cannot start the App helper still has
+   to answer `quit`: a helper that fails in silence sends git on to askpass and
+   the terminal, which is a person's credential. */
+const runner = (mode: string) => {
+  const stop = mode === "git-credential" ? `\n  if [ "$1" = get ]; then echo quit=true; fi` : "";
+  return `#!/bin/sh
 # Delegatus: a GitHub write from an agent goes out as the GitHub App or not at all.
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || { ${mode === "git-credential" ? "echo quit=true; " : ""}exit 1; }
 helper="$here/${HELPER}"
 if [ ! -f "$helper" ]; then
-  echo "Delegatus: the GitHub App helper is missing, so GitHub is unavailable to this agent; a person's credentials are never used instead." >&2
+  echo "Delegatus: the GitHub App helper is missing, so GitHub is unavailable to this agent; a person's credentials are never used instead." >&2${stop}
   exit 1
 fi
 if command -v bun >/dev/null 2>&1; then exec bun "$helper" ${mode} "$@"; fi
 if command -v node >/dev/null 2>&1; then exec node "$helper" ${mode} "$@"; fi
 echo "Delegatus: neither bun nor node is on PATH, so GitHub is unavailable to this agent; a person's credentials are never used instead." >&2
-exit 1
+${mode === "git-credential" ? 'if [ "$1" = get ]; then echo quit=true; fi\n' : ""}exit 1
 `;
+};
 
 let helperSource: string | null | undefined;
 
@@ -106,6 +112,51 @@ export function agentForgeDir(source: AgentEnvironment): string {
   return directory;
 }
 
+const SHELL_PROBE_MS = 15_000;
+const SHELL_PROBE_KEPT_MS = 30_000;
+const SHELL_PROBE_MARK = "delegatus-gh=";
+const shellProbes = new Map<string, { at: number; found: string | null }>();
+
+/** The `gh` a login shell resolves in `env`: its path, "" when it finds none,
+    null when the shell gave no answer. */
+function ghInLoginShell(shell: string, env: Record<string, string>): string | null {
+  const key = [shell, env.PATH, env.HOME].join("\0");
+  const kept = shellProbes.get(key);
+  if (kept && Date.now() - kept.at < SHELL_PROBE_KEPT_MS) return kept.found;
+  const result = spawnSync(shell, ["-lc", `printf '\\n${SHELL_PROBE_MARK}%s\\n' "$(command -v gh)"`], {
+    env: env as NodeJS.ProcessEnv, encoding: "utf8", timeout: SHELL_PROBE_MS, stdio: ["ignore", "pipe", "ignore"],
+  });
+  const line = (result.stdout ?? "").split("\n").findLast((entry) => entry.startsWith(SHELL_PROBE_MARK));
+  const found = line === undefined ? null : line.slice(SHELL_PROBE_MARK.length);
+  shellProbes.set(key, { at: Date.now(), found });
+  return found;
+}
+
+/**
+ * An engine runs each command an agent types through a login shell, and a
+ * login profile may put its own directories in front of the PATH it was given.
+ * A `gh` in one of those would be found before the shim and send a covered
+ * write with a person's configuration. So the launch asks the shells an engine
+ * uses which `gh` they find in the launch environment, and refuses when it is
+ * any file but the shim.
+ */
+function assertShimIsTheShellsGh(directory: string, launch: Record<string, string | undefined>): void {
+  const env = Object.fromEntries(Object.entries(launch).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  const real = (file: string) => { try { return fs.realpathSync(file); } catch { return file; } };
+  const shim = real(path.join(directory, "gh"));
+  const shells = [...new Set([env.SHELL ?? "", "/bin/bash"])]
+    .filter((shell) => path.isAbsolute(shell) && ["bash", "zsh", "sh", "dash", "ksh"].includes(path.basename(shell)) && fs.existsSync(shell));
+  for (const shell of shells) {
+    const found = ghInLoginShell(shell, env);
+    if (found === null) {
+      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell gave no answer about which gh it finds, so a GitHub write could not be kept from a person's credentials. Check that the login profile runs to its end, then start the agent again.`);
+    }
+    if (found && real(found) !== shim) {
+      throw new Error(`Delegatus did not start this agent: ${shell} run as a login shell finds gh at ${found}, ahead of the Delegatus gh, so a pull request write to an App repository would go out with a person's credentials. The login profile puts that directory in front of PATH; keep gh in a directory it does not add, such as /usr/bin, then start the agent again.`);
+    }
+  }
+}
+
 function gitConfigEntries(source: AgentEnvironment): Array<[string, string]> {
   const count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
@@ -132,13 +183,17 @@ function gitConfigEntries(source: AgentEnvironment): Array<[string, string]> {
  * repository, keep the remote and the helpers they had. Nothing here touches
  * git or gh configuration on disk, so the operator's own terminal is as it was.
  *
+ * `throughShell` says the commands are typed into an engine's shell, which is
+ * every agent launch; the launch is then refused when that shell would find
+ * another `gh` first.
+ *
  * The rewrite matches a remote spelled as the declaration spells it or in
  * lower case, which is how GitHub and `gh` write clone URLs.
  *
  * Returns the variables to set, the whole `GIT_CONFIG_*` list among them. The
  * history guard appends its own entry after these and expects to stay last.
  */
-export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly string[] = forgeAppRepositories()): Record<string, string | undefined> {
+export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly string[] = forgeAppRepositories(), throughShell = true): Record<string, string | undefined> {
   /* The shims are POSIX shell. Windows keeps the environment it had. */
   if (process.platform === "win32" || declared.length === 0) return {};
   const directory = agentForgeDir(source);
@@ -173,6 +228,7 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
     env[`GIT_CONFIG_KEY_${index}`] = key;
     env[`GIT_CONFIG_VALUE_${index}`] = value;
   });
+  if (throughShell) assertShimIsTheShellsGh(directory, { ...source, ...env });
   return env;
 }
 
@@ -180,13 +236,16 @@ export function agentForgeWriteEnv(source: AgentEnvironment, declared: readonly 
  * The same arrangement for a command the engine itself starts: the push that
  * publishes a lane's branch, and the push and `gh pr create` that finish a
  * workflow. Merged over the Viewer's environment for that one child. Empty
- * when no repository is declared, so that child starts as it always did.
+ * when no repository is declared, so that child starts as it always did. The
+ * engine starts `git` and `gh` directly, with no shell between, so the PATH
+ * given here is the one that resolves them.
  */
 export function engineForgeWriteEnv(source: AgentEnvironment = process.env, declared: readonly string[] = forgeAppRepositories()): Record<string, string | undefined> {
-  return agentForgeWriteEnv(source, declared);
+  return agentForgeWriteEnv(source, declared, false);
 }
 
 /** For tests: forget the helper text read from `bin/`. */
 export function resetAgentForgeForTests(): void {
   helperSource = undefined;
+  shellProbes.clear();
 }
