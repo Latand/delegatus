@@ -1271,7 +1271,9 @@ function relevanceSearch(
       for (const conversation of group) visited.add(fileIds.get(conversation.path)!);
     }
     return Buffer.from(JSON.stringify({ version: 6, scope, throughId, seen: encodeSeenFiles(visited),
-      now, units, weights, ignored, retrieve } satisfies RelevanceCursor)).toString("base64url");
+      // A continuation never widens, so the quotation mark is not carried.
+      now, units: units.map((u) => u.quoted ? { ...u, quoted: undefined } : u), weights, ignored, retrieve,
+    } satisfies RelevanceCursor)).toString("base64url");
   };
   page.nextCursor = nextCursor();
   // Reserve 610 bytes per item for the route's title (100 UTF-16 units, each
