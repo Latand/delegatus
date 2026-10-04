@@ -99,8 +99,9 @@ Fixed and removed/skipped tests remain listed separately. Under this policy,
 assertions that consistently fail on both sides also appear under `FLAKY`,
 because an observed base failure suffices to permit the push.
 When several assertions share the same file, suite and test name, retry
-evidence clears only the matching number of occurrences; any stable residual
-failure remains `NEW`.
+evidence and the initial base/head comparison preserve their occurrence numbers;
+a recovered occurrence is `FIXED` while a separately failing head occurrence
+remains `NEW`.
 
 Clean head samples incur no reruns. The three rounds share a five-minute
 budget across all candidate files and both sides, including baseline checkout

@@ -12,6 +12,7 @@ const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
 const key = (site: TestSite) => JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
+const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const MAX_CACHE_ENTRIES = 32;
 const RESULT_NAME = /^[a-f0-9]{64}\.json$/;
@@ -72,22 +73,22 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
 /** Match occurrences, so a duplicate test name cannot hide an additional failure. */
 export function compareTests(base: TestRun, head: TestRun) {
   const remaining = new Map<string, number>();
-  for (const site of base.failures) remaining.set(key(site), (remaining.get(key(site)) ?? 0) + 1);
+  for (const site of base.failures) remaining.set(comparisonKey(site), (remaining.get(comparisonKey(site)) ?? 0) + 1);
   const introduced: TestSite[] = [], preexisting: TestSite[] = [];
   for (const site of head.failures) {
-    const count = remaining.get(key(site)) ?? 0;
-    if (count) { preexisting.push(site); remaining.set(key(site), count - 1); }
+    const identity = comparisonKey(site), count = remaining.get(identity) ?? 0;
+    if (count) { preexisting.push(site); remaining.set(identity, count - 1); }
     else introduced.push(site);
   }
   const passes = new Map<string, number>();
-  for (const site of head.passed) passes.set(key(site), (passes.get(key(site)) ?? 0) + 1);
+  for (const site of head.passed) passes.set(comparisonKey(site), (passes.get(comparisonKey(site)) ?? 0) + 1);
   const fixed: TestSite[] = [], absent: TestSite[] = [];
   for (const site of base.failures) {
-    const count = remaining.get(key(site)) ?? 0;
+    const identity = comparisonKey(site), count = remaining.get(identity) ?? 0;
     if (!count) continue;
-    remaining.set(key(site), count - 1);
-    const passed = passes.get(key(site)) ?? 0;
-    if (passed || (site.kind === "error" && head.completed.includes(site.file))) { fixed.push(site); passes.set(key(site), passed - 1); }
+    remaining.set(identity, count - 1);
+    const passed = passes.get(identity) ?? 0;
+    if (passed || (site.kind === "error" && head.completed.includes(site.file))) { fixed.push(site); passes.set(identity, passed - 1); }
     else absent.push(site);
   }
   return { introduced, preexisting, fixed, absent };

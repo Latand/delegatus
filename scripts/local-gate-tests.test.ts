@@ -99,6 +99,21 @@ test("duplicate names match occurrences and keep suite ancestry", () => {
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
 });
+test("swapped duplicate outcomes report the stable head occurrence NEW and the recovered occurrence FIXED", () => {
+  const f = fixture(source(true));
+  const duplicateSource = (firstFails: boolean, secondFails: boolean) => `import { test, expect } from "bun:test";
+test("same name", () => expect(${!firstFails}).toBe(true));
+test("same name", () => expect(${!secondFails}).toBe(true));`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), duplicateSource(true, false));
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "duplicate outcome baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), duplicateSource(false, true));
+  const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  expect(cli.status).toBe(1);
+  expect(cli.stdout).toContain("NEW example.test.ts: same name");
+  expect(cli.stdout).toContain("FIXED example.test.ts: same name");
+  expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 1 fixed, 0 removed/skipped, 0 flaky");
+});
 test("report errors are retained; incomplete reports and unidentifiable errors are refused", () => {
   const xml = '<testsuites tests="1" failures="0"><testsuite><testcase file="f.test.ts" name="Ω &amp; &quot;quoted&quot;&#10;next" classname="outer &gt; inner" /></testsuite></testsuites>';
   const output = '# Unhandled error between tests\n----------------\nerror: failure in /checkout/file.ts\n----------------\n 1 error\n';
