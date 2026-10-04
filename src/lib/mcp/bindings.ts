@@ -501,9 +501,10 @@ async function postViewerControl(
        with nothing to ask about and no warning against sending it again. */
     if (pathname === "/api/runtime/deployments" && result.code === "self-update-action-required" && objectRecord(result.action)) {
       const action = result.action;
-      if (["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments"].includes(String(action.id)) && typeof action.button === "boolean") {
+      if (["restart-service", "restart-terminal", "update-first", "start-service", "start-launcher", "docker-deployments", "secure-handoff"].includes(String(action.id)) && typeof action.button === "boolean") {
         throw new McpToolRefusal(message, { code: result.code, status: response.status, action: {
           id: action.id, button: action.button, ...(typeof action.unit === "string" ? { unit: action.unit } : {}), ...(typeof action.command === "string" ? { command: action.command } : {}),
+          ...(typeof action.terminalEveryUpdate === "boolean" ? { terminalEveryUpdate: action.terminalEveryUpdate } : {}),
         } });
       }
     }
