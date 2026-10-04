@@ -11,7 +11,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -48,6 +48,72 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("shared memory settings", () => {
+  browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/shared-memory"); fs.mkdirSync(out, { recursive: true });
+    let enabled = true;
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+      },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const browser = await launchChromium();
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        enabled = true;
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const offers = page.locator("[data-memory-offer]"); await offers.nth(1).waitFor();
+          const offer = offers.first(), shortOffer = offers.nth(1);
+          expect(await shortOffer.evaluate(el => el.tagName)).toBe("P");
+          expect(await shortOffer.locator("summary").count()).toBe(0);
+          /* The folded line keeps the bubble's trailing edge and measure, and on the phone its target is 44 px
+             and clear of the copy control above it. */
+          const edges = await page.evaluate(() => {
+            const box = (el: Element | null) => el?.getBoundingClientRect();
+            const bubble = box(document.querySelector("[data-user-bubble]")), summary = box(document.querySelector("[data-memory-offer] summary"));
+            const actions = box(document.querySelector("[data-mobile-message-actions] button"));
+            return { bubbleRight: bubble!.right, summaryLeft: summary!.left, summaryRight: summary!.right, summaryTop: summary!.top, summaryHeight: summary!.height, actionsBottom: actions?.bottom ?? 0, row: document.querySelector("[data-memory-offer]")!.parentElement!.getBoundingClientRect().width };
+          });
+          expect(Math.abs(edges.summaryRight - edges.bubbleRight)).toBeLessThanOrEqual(1);
+          expect(edges.summaryLeft).toBeGreaterThanOrEqual(edges.summaryRight - edges.row * (width === 390 ? .86 : .75) - 1);
+          if (width === 390) {
+            expect(edges.summaryHeight).toBeGreaterThanOrEqual(44);
+            expect(edges.summaryTop).toBeGreaterThanOrEqual(edges.actionsBottom - 1);
+            const top = await page.evaluate(() => { const r = document.querySelector("[data-memory-offer] summary")!.getBoundingClientRect(); return document.elementFromPoint(r.right - 4, r.top + .5)?.closest("summary") !== null; });
+            expect(top).toBe(true);
+          } else {
+            const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
+            expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
+          await offer.locator("summary").click();
+          /* Opened, the same line carries every title once: nothing is repeated under it. */
+          expect(await offer.locator("p").count()).toBe(0);
+          const opened = await offer.innerText();
+          for (let i = 1; i <= 15; i++) expect(opened.match(new RegExp(`constraint ${i}(?!\\d)`, "g"))).toHaveLength(1);
+          await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
+          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
+          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
 
 describe("runtime idle performance", () => {
   browserTest("limits keep the phone stream joined without snapshot refetches", async () => {

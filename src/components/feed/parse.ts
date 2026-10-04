@@ -10,6 +10,7 @@ import {
 import { isClaudeProtocolUser, isClaudeSdkDeliveredUser } from "@/lib/claudeProtocolUser";
 import { getLocale, translate } from "@/lib/i18n";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES, rasterImagePath } from "@/lib/imagePolicy";
+import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import type { MandateDelivery, MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -327,6 +328,9 @@ export function assistantEchoText(item: Item): string | null {
   return null;
 }
 
+const nativeUserRefs = new WeakMap<Item, string>();
+/** Exact journal record identity survives Codex echo reconciliation. */
+export function nativeUserRefFor(item: Item): string | undefined { return nativeUserRefs.get(item); }
 export function rawUserTextFor(item: Item): string | undefined {
   return rawUserTexts.get(item);
 }
@@ -1679,6 +1683,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   let hiddenServiceCount = 0;
   let pushSeq = 0;
   let curSrc = 0;
+  let nativeRecordKey: string | undefined;
   /** Absolute index just past the last consumed line; null before first feed. */
   let consumedEnd: number | null = null;
   /** Window start of the previous feed — a start that moved backwards means
@@ -1765,6 +1770,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   }, (id) => calls.has(id));
 
   const push = (item: Item, submissionDedup?: string): number => {
+    if (nativeRecordKey && (item.kind === "user" || item.kind === "tmsg")) nativeUserRefs.set(item, nativeRecordKey);
     entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
       ...(submissionDedup ? { submissionDedup } : {}) });
     snapshot = null;
@@ -2917,6 +2923,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const echoItem: Item = internal
         ? internalRelayItem(ts, cleaned, decoded.origin ?? { kind: "agent", ...(previous?.kind === "tmsg" ? { role: previous.peer } : {}) })
         : { kind: "user", ts, text: cleaned };
+      const nativeRef = previous ? nativeUserRefs.get(previous) : nativeRecordKey;
+      if (nativeRef) nativeUserRefs.set(echoItem, nativeRef);
       const rawText = decoded.rawText !== echoItem.text ? decoded.rawText : previous ? rawUserTextFor(previous) : undefined;
       if (rawText) rawUserTexts.set(echoItem, rawText);
       const metadataRef = decoded.metadataRef ?? previous?.structuredUserRef;
@@ -3578,6 +3586,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     push({ kind: "raw", text: redactSecrets(line), err: /error|failed|traceback|exception/i.test(line) });
   };
   const consume = (line: string) => {
+    nativeRecordKey = cfg.fmt === "claude" || cfg.fmt === "codex" ? `native:${messageTextDigest(line)}` : undefined;
     if (lineFilter && !line.toLowerCase().includes(lineFilter)) {
       reasoningBoundary += 1;
       return;
