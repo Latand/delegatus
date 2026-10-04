@@ -204,7 +204,9 @@ test("operator activity retries network and server failures with one stable even
   expect(published[0]!.operatorEventId).toBe(published[1]!.operatorEventId);
   expect(published[2]!.operatorEventId).toBe(published[3]!.operatorEventId);
   expect(published[0]!.operatorEventId).not.toBe(published[2]!.operatorEventId);
-  expect(dom.localStorage.length).toBe(0);
+  /* The event identities live in memory. The one key a call leaves on the
+     device is that the microphone was allowed here. */
+  expect(Array.from({ length: dom.localStorage.length }, (_, index) => dom.localStorage.key(index))).toEqual(["llv_mic_granted"]);
 });
 
 test("a live call reports operator activity without browser storage", async () => {
