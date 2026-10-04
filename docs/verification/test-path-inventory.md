@@ -1964,6 +1964,16 @@ Uninjected success still requires `complete`; descendant absence and released
 handles are mandatory in either case. Denial is a retained secondary cause;
 it does not establish which separate ownership check refused verification.
 
+A later committed-head series was also 19/1, with every reported PID absent:
+redirected success returned the exact namespace-member identity-change cleanup
+diagnostic. Production reads a member identity, then its namespace and identity
+again; a member exiting between those probes conservatively fails ownership
+verification even when containment subsequently proves absence. Success
+fixtures now also accept only that exact two-cause `worker-cleanup` diagnostic.
+`EPERM` still requires the denied-success fixture and actual injected denial.
+Any other cleanup cause fails. Immediate escaped-PID absence and released
+handles are asserted before either diagnostic branch.
+
 A flaky main test read once on each side can be reported as **NEW** when the
 baseline passes and head fails. The hook's cached baseline can retain that
 single passing sample. This is a false-refusal risk worth a gate follow-up;
