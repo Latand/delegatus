@@ -25,7 +25,7 @@ import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, p
 import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
-import { idleUpdate, type Snapshot } from "./types";
+import { idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import { initialCheck } from "./checkState";
 import type { LauncherRecord } from "./launcher";
 
@@ -1049,6 +1049,41 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
   });
 });
 
+
+test.each([
+  ["1.9.1", "1.10.0", "behind"],
+  ["1.10.0", "1.10.0", "equal"],
+  ["1.10.0", "1.9.1", "ahead"],
+  ["1.10.0-rc.2", "1.10.0-rc.10", "behind"],
+  ["1.10.0-rc.10", "1.10.0-rc.2", "ahead"],
+  ["1.10.0-rc.1", "1.10.0", "behind"],
+  ["1.10.0", "1.10.0-rc.1", "ahead"],
+  ["1.10.0-alpha", "1.10.0-alpha.1", "behind"],
+  ["1.10.0-beta", "1.10.0-alpha", "ahead"],
+] as const)("production package check orders installed %s against latest %s", async (installed, latest, relation) => {
+  const dir = mkdtempSync(join(root, "package-order-"));
+  const installRoot = join(dir, "package"); mkdirSync(installRoot);
+  writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "delegatus-cli", version: installed }));
+  const record = {
+    version: 1, launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid), revision: null },
+    web: stoppedProcess(), runtimeHost: stoppedProcess(), checkout: null, installRoot,
+    releasePointer: join(dir, "release.json"), releasesDir: join(dir, "releases"), requestFile: join(dir, "request.json"),
+    port: 3000, socket: join(dir, "runtime.sock"), updatedAt: new Date().toISOString(),
+  } as LauncherRecord;
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation(async input => {
+    const version = String(input).endsWith("/latest") ? latest : installed;
+    return Response.json({ version, gitHead: version === installed ? "a".repeat(40) : tipSha });
+  });
+  const service = new SelfUpdateService(baseDeps(dir, { mode: async () => ({ mode: "package", reason: null, record }) }));
+  try {
+    await service.check();
+    const result = await service.snapshot();
+    expect(result.installed?.version).toBe(installed);
+    expect(result.check).toMatchObject({ relation, state: relation === "behind" ? "update-available" : "up-to-date",
+      behind: relation === "behind" ? 1 : 0, ahead: relation === "ahead" ? 1 : 0 });
+    expect(result.available?.version ?? null).toBe(relation === "behind" ? latest : null);
+  } finally { service.stop(); fetcher.mockRestore(); }
+});
 
 test.each(["manual-upgrade", "missing-artifact", "valid"] as const)("package snapshots validate the installed pointer: %s", async shape => {
   const dir = mkdtempSync(join(root, "package-pointer-"));

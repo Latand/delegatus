@@ -48,7 +48,7 @@ import {
 } from "./managed";
 import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
 import { runGit } from "./git";
-import { manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
+import { comparePackageVersions, manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
 import { installAction, runInstallAction, userUnit } from "./actions";
 import { ApplyController, writeAtomic } from "./apply";
 import { readStartIdentity } from "./pid";
@@ -1136,8 +1136,9 @@ export class SelfUpdateService {
           const pointer = await new ReleasePointer(decision.record.releasePointer, root).current();
           const installed = await registryRevision(packageVersion(pointer.dir));
           const available = await registryRevision();
-          this.slice = applyCheck(this.slice, { ok: true, installed, available: available.version === installed.version ? null : available,
-            relation: available.version === installed.version ? "equal" : "behind", ahead: 0, behind: available.version === installed.version ? 0 : 1, delta: { commits: [], summary: { commitCount: 0, entryCount: 0, counts: [], groups: [] } } }, new Date(this.deps.now()), this.deps.pollMinutes);
+          const order = comparePackageVersions(available.version, installed.version);
+          this.slice = applyCheck(this.slice, { ok: true, installed, available: order > 0 ? available : null,
+            relation: order > 0 ? "behind" : order < 0 ? "ahead" : "equal", ahead: order < 0 ? 1 : 0, behind: order > 0 ? 1 : 0, delta: { commits: [], summary: { commitCount: 0, entryCount: 0, counts: [], groups: [] } } }, new Date(this.deps.now()), this.deps.pollMinutes);
           return;
         }
         const input = await this.checkInput(decision);

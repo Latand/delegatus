@@ -35,6 +35,31 @@ export async function registryRevision(version = "latest", fetcher: typeof fetch
   if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value.version) || !/^[a-f0-9]{40}$/.test(value.gitHead)) throw new Error("The published package has no verified revision");
   return { version: value.version, sha: value.gitHead, short: value.gitHead.slice(0, 7), date: "" };
 }
+/** SemVer precedence: numeric core, then prerelease identifiers; build
+    metadata never changes precedence. Invalid versions fail the check closed. */
+export function comparePackageVersions(left: string, right: string): number {
+  const parse = (version: string) => {
+    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+    if (!match) throw new Error("The package version is not valid SemVer");
+    const pre = match[4]?.split(".") ?? [];
+    if (pre.some(id => /^0\d+$/.test(id))) throw new Error("The package prerelease version is not valid SemVer");
+    return { core: match.slice(1, 4).map(BigInt), pre };
+  };
+  const a = parse(left); const b = parse(right);
+  for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i]! > b.core[i]! ? 1 : -1;
+  if (!a.pre.length || !b.pre.length) return a.pre.length === b.pre.length ? 0 : a.pre.length ? -1 : 1;
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    const x = a.pre[i]; const y = b.pre[i];
+    if (x === y) continue;
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    const xn = /^\d+$/.test(x); const yn = /^\d+$/.test(y);
+    if (xn && yn) return BigInt(x) > BigInt(y) ? 1 : -1;
+    if (xn !== yn) return xn ? -1 : 1;
+    return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
 export function packageVersion(root: string): string { return JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version; }
 
 export class PackageRunner implements RunnerPort {
