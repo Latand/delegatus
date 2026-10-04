@@ -52,6 +52,12 @@ function privateEntry(file, directory = false) {
   else if (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0 || (stat.mode & (directory ? 0o700 : 0o600)) !== (directory ? 0o700 : 0o600)) fail();
   return stat;
 }
+function syncDirectory(directory) {
+  // fsync files flushes NTFS metadata too; POSIX also needs the directory entry.
+  if (process.platform === "win32") return;
+  const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
 function sameEntry(before, after) {
   if (before.dev !== after.dev || before.ino !== after.ino || before.uid !== after.uid) fail();
 }
@@ -112,7 +118,7 @@ export function prepareLauncherCredentials(root, environment) {
     else {
       mkdirSync(id.directory, { mode: 0o700 });
       if (process.platform === "win32") windowsAcl(id.directory, true);
-      privateEntry(id.directory, true);
+      privateEntry(id.directory, true); syncDirectory(id.stateRoot);
     }
     if (!present(id.identityFile)) {
       // A preexisting credential with missing identity is never adopted.
@@ -124,6 +130,7 @@ export function prepareLauncherCredentials(root, environment) {
         writeFileSync(fd, JSON.stringify(metadata(id)) + "\n"); fsyncSync(fd);
       } finally { closeSync(fd); }
     }
+    syncDirectory(id.directory);
     verifyIdentity(id);
     const selected = Object.fromEntries(SETTINGS.filter(name => env[name] !== undefined).map(name => [name, env[name]]));
     if (present(id.file)) {
@@ -140,6 +147,7 @@ export function prepareLauncherCredentials(root, environment) {
       writeFileSync(fd, JSON.stringify({ ...metadata(id), environment: selected }) + "\n"); fsyncSync(fd);
       sameEntry(dir, privateEntry(id.directory, true)); sameEntry(fstatSync(fd), privateEntry(id.file));
     } finally { closeSync(fd); }
+    syncDirectory(id.directory);
     // Verify durable bytes before admitting a terminal replacement.
     const held = readVerified(id);
     if (JSON.stringify(held) !== JSON.stringify(selected)) fail();
