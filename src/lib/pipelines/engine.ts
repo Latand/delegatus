@@ -3842,6 +3842,19 @@ export function interruptedTurnRecoveryParkDetail(step: "termination" | "reserva
 
 /** The turn evidence a replacement was decided on. */
 type InterruptedTurnEvidence = { kind: "idle" | "dead" | "stalled"; restarted: boolean };
+
+/** What the lane says when the automatic replacement is interrupted in the
+    boot that created it. The words describe the replacement's own
+    interruption; "again" and "too" are added only when the attempt it replaced
+    is recorded with the same cause. */
+function secondInterruptionParkDetail(replacedCause: PipelineStageInterruptionCause | undefined, own: InterruptedTurnEvidence): string {
+  const ownCause: PipelineStageInterruptionCause = own.restarted ? "restart" : own.kind === "dead" ? "host-lost" : "engine-stop";
+  const same = replacedCause === ownCause;
+  const what = ownCause === "restart"
+    ? same ? "the automatic restart attempt was interrupted again during this boot" : "the automatic replacement attempt was interrupted by a Delegatus restart"
+    : `the automatic replacement attempt ${ownCause === "host-lost" ? "lost its host" : "went silent"}${same ? " too" : ""}`;
+  return `${what}; retry-stage to start another attempt`;
+}
 const recoveryHost = globalThis as typeof globalThis & {
   __llvPipelineRecoveryBootId?: string;
   __llvPipelineRecoveryBootStartedAt?: number;
@@ -3887,11 +3900,7 @@ async function replaceInterruptedStageAttempt(
   const previous = attempt.restartRecovery;
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined) {
-      park(pipeline, interruption.restarted
-        ? "the automatic restart attempt was interrupted again during this boot; retry-stage to start another attempt"
-        : interruption.kind === "dead"
-          ? "the automatic replacement attempt lost its host too; retry-stage to start another attempt"
-          : "the automatic replacement attempt went silent too; retry-stage to start another attempt", attempt);
+      park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
       persist();
       return true;
     }
@@ -3905,13 +3914,33 @@ async function replaceInterruptedStageAttempt(
     }
   }
   const requestedAt = previous?.bootId === bootId ? previous.requestedAt : ports.now();
-  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt };
+  /* A stop of ours that already ended this host still names the cause while
+     nothing has been written since the host was gone. */
+  const endedEarlier = previous?.stopped && previous.stopped.lastRecordAt === lastRecordAt ? previous.stopped : undefined;
+  attempt.restartRecovery = { bootId, requestedAt, lastRecordAt, ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
+  /* A withdrawn stop did nothing, so it leaves no reservation behind either;
+     whatever the transcript holds by now is read by the ordinary paths. */
+  if (stopped === null) {
+    if (previous) attempt.restartRecovery = previous;
+    else delete attempt.restartRecovery;
+    persist();
+    return false;
+  }
   // Termination can take long enough for the old turn to finish or make new
   // progress. Preserve that evidence and let the normal settlement path read
   // it before changing the original attempt or reserving a replacement.
   const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt);
+  /* The stop ended a live host. A CLI appends undated bookkeeping as it exits,
+     and an undated newest record is dated by the file, so the transcript's
+     newest record moves under a turn that stays open. What was decided before
+     the stop is recorded now, with the record the dead host left behind. */
+  if (stopped.outcome === "stopped") {
+    attempt.restartRecovery.stopped = { ...interruption, lastRecordAt: latest?.lastRecordAt ?? null };
+    persist();
+  }
+  const ended = attempt.restartRecovery.stopped;
   if (latest?.turn === "terminal" && latest.message && latest.message.ts > unixMs(attempt.startedAt)) {
     const fenced = parsePipelineStageVerdict(latest.message.text);
     const parsed = reportedStageVerdict(attempt, fenced, latest.message.text, latest.backgroundReportedAt, latest.reportProse) ?? fenced;
@@ -3921,32 +3950,30 @@ async function replaceInterruptedStageAttempt(
       return true;
     }
   }
+  /* A newer record under a live host is progress. Under a host this recovery
+     ended it is what the exit wrote, and the replacement goes ahead. */
   if (attempt.report || providerRecoveryOwnsTurn(attempt, latest) || attempt.state !== "running" || latest?.turn !== "busy" || latest.launchOnly
-    || (latest.lastRecordAt ?? null) !== lastRecordAt) {
+    || (!ended && (latest.lastRecordAt ?? null) !== lastRecordAt)) {
     return false;
   }
-  if (stopped === null) {
-    if (previous) attempt.restartRecovery = previous;
-    else delete attempt.restartRecovery;
-    persist();
-    return false;
-  }
+  const restarted = (ended ?? interruption).restarted;
   if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-    park(pipeline, interruptedTurnRecoveryParkDetail("termination", interruption.restarted), attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("termination", restarted), attempt);
     persist();
     return true;
   }
 
-  /* A host observed dead, or gone by the time the stop looked, was lost; only
-     a live host this stop ended was stopped by the engine. */
-  const cause: PipelineStageInterruptionCause = interruption.restarted ? "restart"
-    : interruption.kind !== "dead" && stopped.outcome === "stopped" ? "engine-stop" : "host-lost";
+  /* Named from what the recovery decided and did. Only a live host a stop of
+     this recovery ended was stopped by the engine; a host observed dead, or
+     gone by the time the stop looked, was lost. */
+  const cause: PipelineStageInterruptionCause = restarted ? "restart"
+    : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
   attempt.state = "failed";
   attempt.completedAt = ports.now();
   attempt.error = `${INTERRUPTION_WORDS[cause].error}; replaced by a fresh stage attempt`;
   const replacement = newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
-    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", interruption.restarted), attempt);
+    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", restarted), attempt);
     persist();
     return true;
   }
