@@ -1842,6 +1842,15 @@ async function protectedInstall(shape: "checkout" | "package", alias: "LLV_TOKEN
   }
   git(f.checkout, "add", "-f", "."); git(f.checkout, "commit", "-m", "production perimeter fixture");
   f.first = git(f.checkout, "rev-parse", "HEAD");
+  // The security fixture publishes the real kernel identity before listen.
+  // It never invents a fence identity for an owned host process.
+  const host = STUB_HOST.replace('import path from "node:path";', 'import path from "node:path";\nimport { runtimeHostStartIdentity } from "../bin/self-update-supervisor.mjs";')
+    .replace('process.pid + ":fixture"', 'runtimeHostStartIdentity(process.pid)')
+    .replace('server.listen(socketPath, () => writeFileSync(fencePath, JSON.stringify({', 'writeFileSync(fencePath, JSON.stringify({')
+    .replace('})));', '}));\nserver.listen(socketPath);');
+  writeFileSync(path.join(f.checkout, "dist/runtime-host.mjs"), host);
+  git(f.checkout, "add", "-f", "."); git(f.checkout, "commit", "-m", "kernel fence identity fixture");
+  f.first = git(f.checkout, "rev-parse", "HEAD");
   const candidate = release(f, "private-terminal-candidate");
   if (shape === "package") {
     renameSync(path.join(f.checkout, ".git"), path.join(f.root, "saved-git"));
