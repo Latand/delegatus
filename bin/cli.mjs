@@ -1191,7 +1191,7 @@ async function main() {
 
   try {
     await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess);
-    if (relaunch.hasTrial()) {
+    if (relaunch.isReplacementStart()) {
       const page = await probePageAndChunk(options.port, undefined, probeHeaders());
       if (page) throw new Error(page);
     }

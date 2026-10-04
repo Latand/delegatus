@@ -278,8 +278,17 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         throw new Error("Cold recovery cannot verify the prior serving release; custody is retained.");
       // The earliest accepted apply is authoritative even before any request
       // exists. Its real request and original owner bind the recovery trial.
+      // A verified rollback receipt already completed the image transition.
+      // Starting its prior image must not replay failed() and require another
+      // exec or service-manager start (neither exists in a Windows terminal).
+      const rolledBack = receiptOwner && receipt.state === "rolled-back"
+        && receipt.revision === release.sha && receipt.previousEntry === join(prior, "bin", "cli.mjs")
+        && entry === receipt.previousEntry
+        && (apply.rollbackPointer === null ? pointer === null
+          : readFileSync(paths.releasePointer, "utf8") === apply.rollbackPointer);
       trial = { requestId: apply.requestId, target: apply.target, rollbackPointer: apply.rollbackPointer,
-        previousEntry: join(prior, "bin", "cli.mjs"), state: "starting", at: apply.startedAt };
+        previousEntry: join(prior, "bin", "cli.mjs"), state: rolledBack ? "rolled-back" : "starting", at: apply.startedAt,
+        ...(rolledBack ? { detail: receipt.detail } : {}) };
       atomic(trialFile, JSON.stringify(trial) + "\n");
       const drainFile = join(dirname(paths.request), "auto-drain.json");
       const drain = read(drainFile);
@@ -292,7 +301,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         && receiptOwner && receipt.revision === apply.target && release.sha === apply.target;
       const externalReady = apply.externalRestart && apply.state === "ready" && release.sha === apply.target
         && entry === join(release.dir, "bin", "cli.mjs");
-      directTrial = true; pendingRecovery = !completed && !externalReady;
+      directTrial = true; pendingRecovery = !completed && !externalReady && !rolledBack;
     }
   }
   return {

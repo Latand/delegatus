@@ -245,6 +245,17 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     const recovery = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base },
       { cgroup: () => "", ready: () => false, env: { ...f.env, PORT: String(port) } });
     expect(recovery?.id).toBe("start-launcher");
+    const applyFile = path.join(path.dirname(before.requestFile), "apply.json");
+    const receiptFile = `${before.requestFile}.result.json`;
+    const accepted = readFileSync(applyFile, "utf8");
+    const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+    expect(receipt.state).toBe("rolled-back");
+    // Exercise the actual cold command without execve on POSIX too. Native
+    // Windows CI runs the same seam under its own interpreter and kernel.
+    if (process.platform !== "win32") {
+      const entry = path.join(f.base, "bin/cli.mjs");
+      writeFileSync(entry, `process.execve = undefined;\n${readFileSync(entry, "utf8")}`);
+    }
     const recovered = process.platform === "win32"
       ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", recovery!.command!], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] })
       : spawn("sh", ["-c", `exec ${recovery!.command!}`], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] }); track(recovered);
@@ -252,6 +263,15 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     const priorPid = after.launcher.pid;
     after = await until(() => { const r = f.readRecord(); return r?.launcher.pid !== priorPid && r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
     await gateIntact(port, f.key);
+    await until(() => JSON.parse(readFileSync(receiptFile, "utf8")).launcherPid === after.launcher.pid ? true : null);
+    const recoveredReceipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+    expect(readFileSync(applyFile, "utf8")).toBe(accepted);
+    expect(recoveredReceipt).toMatchObject({ requestId: receipt.requestId, target: receipt.target,
+      issuerPid: receipt.issuerPid, issuerIdentity: receipt.issuerIdentity, state: "rolled-back",
+      detail: receipt.detail, launcherPid: after.launcher.pid, launcherIdentity: after.launcher.startIdentity });
+    expect(JSON.parse(readFileSync(path.join(path.dirname(before.requestFile), "auto-drain.json"), "utf8"))).toMatchObject({
+      id: receipt.requestId, target: receipt.target, persistent: true,
+    });
   }
   expect(after.socket).toBe(before.socket); expect(after.releasePointer).toBe(before.releasePointer);
   expect(after.web.revision).toBe(rollback ? null : target.slice(0, 7)); expect(after.runtimeHost.revision).toBe(after.web.revision);
