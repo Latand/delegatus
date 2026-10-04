@@ -2051,3 +2051,35 @@ and post-rebind release/cleanup. The retained #2489 isolation contribution is
 `try/finally`: open the parked gate, await registration, and close the fixture
 even when an assertion fails. The temporary HOME, state, config and TMPDIR setup
 and main's five controller-generation retirement scenarios remain intact.
+
+### Exact-path validation after the merge
+
+Every #2484-added/changed test file was run alone by exact path with a fresh
+OS-temp `HOME`, `LLV_STATE_DIR`, config and `TMPDIR`, under the shared heavy
+gate. The comparison uses a clean `git archive` export of the pinned main
+with its own frozen-lockfile dependency install. Bun 1.4.0.
+
+| Test path | Merged pass / fail / skip | Clean main pass / fail / skip |
+| --- | --- | --- |
+| `bin/mcp-server.test.ts` | 17 / 0 / 1 | 17 / 0 / 1 |
+| `src/lib/mcp/stdio.integration.test.ts` | 32 / 0 / 0 | 32 / 0 / 0 |
+| `src/lib/pipelines/store.test.ts` | 40 / 0 / 0 | 40 / 0 / 0 |
+| `src/lib/pipelines/terminalReap.test.ts` | 51 / 0 / 0 | 51 / 0 / 0 |
+| `src/lib/runtime/commands.test.ts` | 6 / 0 / 0 | 6 / 0 / 0 |
+| `src/lib/runtime/structuredDeliveryQueue.test.ts` | 89 / 0 / 0 | 89 / 0 / 0 |
+| `src/lib/runtime/structuredDeliveryRebind.test.ts` | 18 / 0 / 0 | 18 / 0 / 0 |
+| `src/lib/runtime/structuredMessageDelivery.keyed.test.ts` | 0 / 1 / 0 | 0 / 1 / 0 |
+| `src/runtime-host/journal.sessionRead.test.ts` | 3 / 0 / 0 | 3 / 0 / 0 |
+| `src/runtime-host/journal.test.ts` | 106 / 0 / 0 | 106 / 0 / 0 |
+
+The only failing file is the known keyed-admission row-limit regression:
+`HTTP admission stays keyed as thousands of unrelated sessions and reservations accumulate`.
+Both revisions observe **242380** rows against the unchanged `<12000` assertion.
+Its source is identical to main and is retained unchanged. Totals on both
+revisions: **362 pass, 1 fail, 1 skip** across the ten files. The initial
+checkout had no installed dependencies; import-resolution failures from that
+pre-install attempt are excluded from these behavioral results.
+
+`bunx tsc --noEmit`, `git diff --check` and the fingerprint-aware privacy
+gate with `--check-commits` pass. The normal merge pre-commit hook reported
+privacy PASS and zero introduced or baseline ESLint errors.
