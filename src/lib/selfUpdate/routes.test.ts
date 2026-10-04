@@ -1013,18 +1013,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
 
   /** The launcher's side, played by its own request watcher: each request
       moves the recorded process onto the published release. */
-  function launcher(h: Harness) {
-    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
-    return watchRestartRequests(record.requestFile, async ({ requestId, role }) => {
-      const key = role === "web" ? "web" : "runtimeHost";
-      const current = JSON.parse(readFileSync(h.recordFile, "utf8"));
-      const pointer = JSON.parse(readFileSync(current.releasePointer, "utf8"));
-      current[key] = { ...current[key], requestId, state: "healthy", revision: pointer.sha.slice(0, 7), startedAt: new Date().toISOString() };
-      writeFileSync(h.recordFile, JSON.stringify(current));
-    }, { intervalMs: 60_000 });
-  }
-
-  test("check, build in a release directory, then restart each process onto it", async () => {
+  test("a legacy staged build retains full apply custody until its launcher prerequisite", async () => {
     const h = harness();
     setSelfUpdateServiceForTests(h.service);
     await postCheck(post("/check"));
@@ -1053,29 +1042,16 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(s.serving.web?.short).toBe(firstSha.slice(0, 7));
     expect(s.check.state).not.toBe("update-available");
 
-    const watcher = launcher(h);
-    try {
-      expect((await postRestart(post("/restart", { role: "runtime-host" }))).status).toBe(400);
-      expect((await postRestart(post("/restart", { role: "web" }))).status).toBe(202);
-      expect((await snapshot()).busy).toBe("restart-web");
-      /* One restart at a time. */
-      expect((await postRestart(post("/restart", { role: "runtime-host", confirm: true }))).status).toBe(409);
-      setSelfUpdateServiceForTests(new SelfUpdateService(h.deps));
-      await watcher.poll();
-      s = await until((next) => next.busy === null);
-      expect(s.serving.web?.short).toBe(tipSha.slice(0, 7));
-      expect(s.serving.runtimeHost?.short).toBe(firstSha.slice(0, 7));
-
-      expect((await postRestart(post("/restart", { role: "runtime-host", confirm: true }))).status).toBe(202);
-      await watcher.poll();
-      s = await until((next) => next.busy === null && next.serving.runtimeHost?.short === tipSha.slice(0, 7));
-      expect(s.processes.runtimeHost.state).toBe("healthy");
-      expect(s.history?.map((entry) => [entry.kind, entry.by, entry.outcome])).toEqual([
-        ["restart-host", "operator", "done"], ["restart-web", "operator", "done"], ["build", "operator", "done"],
-      ]);
-    } finally {
-      watcher.stop();
+    const intent = readFileSync(join(h.deps.dir, "apply.json"), "utf8");
+    expect(JSON.parse(intent).state).toBe("ready");
+    expect((await postRestart(post("/restart", { role: "runtime-host" }))).status).toBe(400);
+    for (const role of ["web", "runtime-host"]) {
+      const refusal = await postRestart(post("/restart", { role, confirm: true }));
+      expect(refusal.status).toBe(409);
+      expect(await refusal.json()).toMatchObject({ code: "busy-update" });
     }
+    expect(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).toBe(intent);
+    expect(existsSync(readLauncherRecord(h.recordFile)!.requestFile)).toBe(false);
 
     const log = await getStepLog("build").text();
     expect(log).toContain("run build ok");

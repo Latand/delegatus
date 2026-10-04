@@ -1253,7 +1253,6 @@ export class SelfUpdateService {
       try { role = JSON.parse(readFileSync(record.requestFile, "utf8")).role; } catch { /* Unreadable custody remains occupied. */ }
       return busy(role === "web" ? "restart-web" : role === "runtime-host" ? "restart-runtime-host" : "update");
     }
-    if (this.checking) return busy("update");
     try { write(); }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST" && existsSync(record.requestFile))
