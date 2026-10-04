@@ -1,0 +1,1913 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "browser": "151.0.7922.34",
+  "cpuAffinity": "0-23",
+  "consecutiveRuns": 5,
+  "sourceSha256": {
+    "src/components/kanban/columnLayoutAnimation.ts": "782b158cd549b31bf729e1bd368a954c7cf98d3897447d7065fa1a4970ef269c",
+    "src/components/kanban/kanbanBoard.css": "ef7377bf2313b0f6a13d592622d5d8aca5981a398ffc682234719a29d8288a84",
+    "src/components/kanban/useColumnDwell.ts": "2b76240fa458f50aa9b005470924df2811a5efd73e7deb40112b5a06c72f5c5e",
+    "src/components/kanban/KanbanBoard.tsx": "28e51c6a4808352f23cc3690a61041d5a4799f56c8528723a0fc376cef9222da",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "b5179524e1d1c01ddfae85677102d2a5d17384f6bdc3006428a688bd112f9df7",
+    "src/components/kanban/columnLayoutAnimation.dom.test.ts": "6e1ea82984a8603631f4523ee67e3500f60f56efa2efb0f872248a106d0158d4"
+  },
+  "earlierFinalSourceRuns": [
+    {
+      "attempt": 1,
+      "run": 1,
+      "passed": false,
+      "timingFailures": [],
+      "completedCaseMaxRAFMs": [
+        50
+      ],
+      "load": {
+        "beforeLoadAverage": [
+          4.13,
+          4.0,
+          4.65
+        ],
+        "afterLoadAverage": [
+          5.75,
+          4.4,
+          4.77
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 27.457,
+          "maximum": 33.476
+        }
+      },
+      "failureReason": {
+        "gate": "hover-to-first-visible-motion",
+        "observedMs": 1116.39697265625,
+        "limitMs": 1100
+      }
+    },
+    {
+      "attempt": 2,
+      "run": 1,
+      "passed": false,
+      "timingFailures": [
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "phase": "activation-through-cleanup",
+          "milliseconds": 50.09999999999991
+        }
+      ],
+      "completedCaseMaxRAFMs": [
+        33.29999999999973,
+        50.09999999999991,
+        0,
+        0
+      ],
+      "load": {
+        "beforeLoadAverage": [
+          4.68,
+          4.24,
+          4.71
+        ],
+        "afterLoadAverage": [
+          4.73,
+          4.32,
+          4.71
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 17.105,
+          "maximum": 19.027
+        }
+      }
+    }
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "passed": true,
+      "timingFailures": [],
+      "load": {
+        "beforeLoadAverage": [
+          4.24,
+          4.24,
+          4.68
+        ],
+        "beforeTotalCPUPercent": {
+          "mean": 10.663,
+          "maximum": 15.047
+        },
+        "afterLoadAverage": [
+          3.99,
+          4.18,
+          4.64
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 21.532,
+          "maximum": 26.964
+        },
+        "perCoreUsePercentThroughoutPass": {
+          "cpu0": {
+            "mean": 22.199,
+            "maximum": 100.0
+          },
+          "cpu1": {
+            "mean": 28.198,
+            "maximum": 100.0
+          },
+          "cpu2": {
+            "mean": 26.324,
+            "maximum": 100.0
+          },
+          "cpu3": {
+            "mean": 18.389,
+            "maximum": 100.0
+          },
+          "cpu4": {
+            "mean": 32.692,
+            "maximum": 100.0
+          },
+          "cpu5": {
+            "mean": 11.056,
+            "maximum": 100.0
+          },
+          "cpu6": {
+            "mean": 34.163,
+            "maximum": 100.0
+          },
+          "cpu7": {
+            "mean": 6.146,
+            "maximum": 100.0
+          },
+          "cpu8": {
+            "mean": 48.394,
+            "maximum": 100.0
+          },
+          "cpu9": {
+            "mean": 27.148,
+            "maximum": 100.0
+          },
+          "cpu10": {
+            "mean": 34.302,
+            "maximum": 100.0
+          },
+          "cpu11": {
+            "mean": 57.137,
+            "maximum": 100.0
+          },
+          "cpu12": {
+            "mean": 34.032,
+            "maximum": 100.0
+          },
+          "cpu13": {
+            "mean": 22.075,
+            "maximum": 100.0
+          },
+          "cpu14": {
+            "mean": 40.624,
+            "maximum": 100.0
+          },
+          "cpu15": {
+            "mean": 6.85,
+            "maximum": 73.684
+          },
+          "cpu16": {
+            "mean": 17.396,
+            "maximum": 63.158
+          },
+          "cpu17": {
+            "mean": 14.164,
+            "maximum": 55.0
+          },
+          "cpu18": {
+            "mean": 10.636,
+            "maximum": 55.0
+          },
+          "cpu19": {
+            "mean": 9.988,
+            "maximum": 81.818
+          },
+          "cpu20": {
+            "mean": 6.677,
+            "maximum": 57.895
+          },
+          "cpu21": {
+            "mean": 7.335,
+            "maximum": 52.632
+          },
+          "cpu22": {
+            "mean": 6.374,
+            "maximum": 52.632
+          },
+          "cpu23": {
+            "mean": 5.63,
+            "maximum": 55.556
+          }
+        },
+        "quietDuringActivation": true
+      },
+      "cases": [
+        {
+          "locale": "en",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 33.40000000000009,
+          "animationFrames": 67,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 21.238037109375
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 24.795166015625
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 1.0388451443569553,
+              "firstMotionDelayMs": 15.02197265625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 1,
+              "firstMotionDelayMs": 15.02197265625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.9323136427566807,
+              "firstMotionDelayMs": 3.14599609375,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.8068181818181818,
+              "firstMotionDelayMs": 3.14599609375,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 33.30000000000018,
+          "animationFrames": 66,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 24.738037109375
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 21.739013671875
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 1.011864406779661,
+              "firstMotionDelayMs": 22.821044921875,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.9897156684815487,
+              "firstMotionDelayMs": 22.821044921875,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.6895497026338148,
+              "firstMotionDelayMs": 28.4228515625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.734271022383545,
+              "firstMotionDelayMs": 28.4228515625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            }
+          ]
+        },
+        {
+          "locale": "en",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        },
+        {
+          "locale": "uk",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "passed": true,
+      "timingFailures": [],
+      "load": {
+        "beforeLoadAverage": [
+          4.08,
+          4.2,
+          4.64
+        ],
+        "beforeTotalCPUPercent": {
+          "mean": 12.757,
+          "maximum": 23.828
+        },
+        "afterLoadAverage": [
+          7.05,
+          4.89,
+          4.85
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 23.003,
+          "maximum": 28.085
+        },
+        "perCoreUsePercentThroughoutPass": {
+          "cpu0": {
+            "mean": 44.683,
+            "maximum": 100.0
+          },
+          "cpu1": {
+            "mean": 19.041,
+            "maximum": 94.737
+          },
+          "cpu2": {
+            "mean": 53.697,
+            "maximum": 100.0
+          },
+          "cpu3": {
+            "mean": 9.82,
+            "maximum": 100.0
+          },
+          "cpu4": {
+            "mean": 55.501,
+            "maximum": 100.0
+          },
+          "cpu5": {
+            "mean": 11.059,
+            "maximum": 100.0
+          },
+          "cpu6": {
+            "mean": 51.153,
+            "maximum": 100.0
+          },
+          "cpu7": {
+            "mean": 9.419,
+            "maximum": 85.0
+          },
+          "cpu8": {
+            "mean": 23.775,
+            "maximum": 100.0
+          },
+          "cpu9": {
+            "mean": 49.658,
+            "maximum": 100.0
+          },
+          "cpu10": {
+            "mean": 20.389,
+            "maximum": 100.0
+          },
+          "cpu11": {
+            "mean": 74.332,
+            "maximum": 100.0
+          },
+          "cpu12": {
+            "mean": 20.45,
+            "maximum": 100.0
+          },
+          "cpu13": {
+            "mean": 48.126,
+            "maximum": 100.0
+          },
+          "cpu14": {
+            "mean": 31.585,
+            "maximum": 100.0
+          },
+          "cpu15": {
+            "mean": 28.75,
+            "maximum": 100.0
+          },
+          "cpu16": {
+            "mean": 18.614,
+            "maximum": 80.0
+          },
+          "cpu17": {
+            "mean": 13.504,
+            "maximum": 78.947
+          },
+          "cpu18": {
+            "mean": 9.337,
+            "maximum": 77.778
+          },
+          "cpu19": {
+            "mean": 8.698,
+            "maximum": 78.947
+          },
+          "cpu20": {
+            "mean": 5.983,
+            "maximum": 68.421
+          },
+          "cpu21": {
+            "mean": 6.135,
+            "maximum": 75.0
+          },
+          "cpu22": {
+            "mean": 4.875,
+            "maximum": 72.222
+          },
+          "cpu23": {
+            "mean": 5.299,
+            "maximum": 72.222
+          }
+        },
+        "quietDuringActivation": true
+      },
+      "cases": [
+        {
+          "locale": "en",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 50,
+          "animationFrames": 64,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 13,
+              "maxRAFFrameMs": 50,
+              "maxCaptureFrameMs": 24.85205078125
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 19.904296875
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9956255468066492,
+              "firstMotionDelayMs": 26.092041015625,
+              "maximumFrameTravelFraction": 0.12598425196850394
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.9834254143646409,
+              "firstMotionDelayMs": 26.092041015625,
+              "maximumFrameTravelFraction": 0.12598425196850394
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.7250351617440225,
+              "firstMotionDelayMs": 28.140869140625,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.7443181818181818,
+              "firstMotionDelayMs": 28.140869140625,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 50,
+          "animationFrames": 65,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 50,
+              "maxCaptureFrameMs": 21.655029296875
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 19.995849609375
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.998135593220339,
+              "firstMotionDelayMs": 7.86279296875,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.9877495462794919,
+              "firstMotionDelayMs": 7.86279296875,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.6895497026338148,
+              "firstMotionDelayMs": 30.03369140625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.734271022383545,
+              "firstMotionDelayMs": 30.03369140625,
+              "maximumFrameTravelFraction": 0.08661417322834646
+            }
+          ]
+        },
+        {
+          "locale": "en",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        },
+        {
+          "locale": "uk",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "passed": true,
+      "timingFailures": [],
+      "load": {
+        "beforeLoadAverage": [
+          6.27,
+          4.8,
+          4.82
+        ],
+        "beforeTotalCPUPercent": {
+          "mean": 8.806,
+          "maximum": 12.014
+        },
+        "afterLoadAverage": [
+          6.11,
+          4.96,
+          4.88
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 18.699,
+          "maximum": 24.034
+        },
+        "perCoreUsePercentThroughoutPass": {
+          "cpu0": {
+            "mean": 32.148,
+            "maximum": 100.0
+          },
+          "cpu1": {
+            "mean": 12.201,
+            "maximum": 95.238
+          },
+          "cpu2": {
+            "mean": 34.422,
+            "maximum": 100.0
+          },
+          "cpu3": {
+            "mean": 9.025,
+            "maximum": 78.571
+          },
+          "cpu4": {
+            "mean": 39.711,
+            "maximum": 100.0
+          },
+          "cpu5": {
+            "mean": 13.193,
+            "maximum": 100.0
+          },
+          "cpu6": {
+            "mean": 36.745,
+            "maximum": 100.0
+          },
+          "cpu7": {
+            "mean": 9.335,
+            "maximum": 85.0
+          },
+          "cpu8": {
+            "mean": 36.433,
+            "maximum": 100.0
+          },
+          "cpu9": {
+            "mean": 30.734,
+            "maximum": 100.0
+          },
+          "cpu10": {
+            "mean": 46.275,
+            "maximum": 100.0
+          },
+          "cpu11": {
+            "mean": 48.973,
+            "maximum": 100.0
+          },
+          "cpu12": {
+            "mean": 22.473,
+            "maximum": 100.0
+          },
+          "cpu13": {
+            "mean": 38.721,
+            "maximum": 100.0
+          },
+          "cpu14": {
+            "mean": 34.576,
+            "maximum": 100.0
+          },
+          "cpu15": {
+            "mean": 27.021,
+            "maximum": 100.0
+          },
+          "cpu16": {
+            "mean": 19.823,
+            "maximum": 60.0
+          },
+          "cpu17": {
+            "mean": 15.602,
+            "maximum": 73.684
+          },
+          "cpu18": {
+            "mean": 16.163,
+            "maximum": 70.0
+          },
+          "cpu19": {
+            "mean": 11.868,
+            "maximum": 90.0
+          },
+          "cpu20": {
+            "mean": 8.907,
+            "maximum": 60.0
+          },
+          "cpu21": {
+            "mean": 6.282,
+            "maximum": 52.381
+          },
+          "cpu22": {
+            "mean": 5.984,
+            "maximum": 52.632
+          },
+          "cpu23": {
+            "mean": 5.18,
+            "maximum": 57.895
+          }
+        },
+        "quietDuringActivation": true
+      },
+      "cases": [
+        {
+          "locale": "en",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 33.40000000000009,
+          "animationFrames": 67,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.29999999999973,
+              "maxCaptureFrameMs": 22.342041015625
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 30.93701171875
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9912449658553668,
+              "firstMotionDelayMs": 10.55517578125,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 1,
+              "firstMotionDelayMs": 10.55517578125,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.9519704433497537,
+              "firstMotionDelayMs": 4.126220703125,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.8229166666666666,
+              "firstMotionDelayMs": 4.126220703125,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 50,
+          "animationFrames": 65,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 13,
+              "maxRAFFrameMs": 50,
+              "maxCaptureFrameMs": 21.963134765625
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 30.912841796875
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9957627118644068,
+              "firstMotionDelayMs": 24.64990234375,
+              "maximumFrameTravelFraction": 0.1220472440944882
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.970508166969147,
+              "firstMotionDelayMs": 24.64990234375,
+              "maximumFrameTravelFraction": 0.1220472440944882
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.9396771452846219,
+              "firstMotionDelayMs": 2.758056640625,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.8146075911084228,
+              "firstMotionDelayMs": 2.758056640625,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "en",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        },
+        {
+          "locale": "uk",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        }
+      ]
+    },
+    {
+      "run": 4,
+      "passed": true,
+      "timingFailures": [],
+      "load": {
+        "beforeLoadAverage": [
+          5.48,
+          4.87,
+          4.85
+        ],
+        "beforeTotalCPUPercent": {
+          "mean": 10.3,
+          "maximum": 19.751
+        },
+        "afterLoadAverage": [
+          5.41,
+          4.93,
+          4.87
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 19.996,
+          "maximum": 27.234
+        },
+        "perCoreUsePercentThroughoutPass": {
+          "cpu0": {
+            "mean": 32.314,
+            "maximum": 100.0
+          },
+          "cpu1": {
+            "mean": 17.775,
+            "maximum": 100.0
+          },
+          "cpu2": {
+            "mean": 34.042,
+            "maximum": 100.0
+          },
+          "cpu3": {
+            "mean": 6.305,
+            "maximum": 100.0
+          },
+          "cpu4": {
+            "mean": 29.029,
+            "maximum": 100.0
+          },
+          "cpu5": {
+            "mean": 13.849,
+            "maximum": 100.0
+          },
+          "cpu6": {
+            "mean": 24.679,
+            "maximum": 100.0
+          },
+          "cpu7": {
+            "mean": 16.156,
+            "maximum": 100.0
+          },
+          "cpu8": {
+            "mean": 50.554,
+            "maximum": 100.0
+          },
+          "cpu9": {
+            "mean": 31.89,
+            "maximum": 100.0
+          },
+          "cpu10": {
+            "mean": 36.701,
+            "maximum": 100.0
+          },
+          "cpu11": {
+            "mean": 45.544,
+            "maximum": 100.0
+          },
+          "cpu12": {
+            "mean": 25.451,
+            "maximum": 100.0
+          },
+          "cpu13": {
+            "mean": 27.343,
+            "maximum": 100.0
+          },
+          "cpu14": {
+            "mean": 41.822,
+            "maximum": 100.0
+          },
+          "cpu15": {
+            "mean": 8.167,
+            "maximum": 93.333
+          },
+          "cpu16": {
+            "mean": 12.648,
+            "maximum": 89.474
+          },
+          "cpu17": {
+            "mean": 9.488,
+            "maximum": 52.381
+          },
+          "cpu18": {
+            "mean": 7.613,
+            "maximum": 63.158
+          },
+          "cpu19": {
+            "mean": 6.37,
+            "maximum": 40.0
+          },
+          "cpu20": {
+            "mean": 5.258,
+            "maximum": 40.0
+          },
+          "cpu21": {
+            "mean": 4.015,
+            "maximum": 38.095
+          },
+          "cpu22": {
+            "mean": 5.636,
+            "maximum": 47.619
+          },
+          "cpu23": {
+            "mean": 4.083,
+            "maximum": 60.0
+          }
+        },
+        "quietDuringActivation": true
+      },
+      "cases": [
+        {
+          "locale": "en",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 33.40000000000009,
+          "animationFrames": 67,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 21.760009765625
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.29999999999973,
+              "maxCaptureFrameMs": 21.402099609375
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9877429521975136,
+              "firstMotionDelayMs": 2.8876953125,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 1,
+              "firstMotionDelayMs": 2.8876953125,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.9378958479943702,
+              "firstMotionDelayMs": 14.30810546875,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.7935280189423836,
+              "firstMotionDelayMs": 14.30810546875,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 33.40000000000009,
+          "animationFrames": 66,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 33.40000000000009,
+              "maxCaptureFrameMs": 20.987060546875
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 20.241943359375
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9813559322033898,
+              "firstMotionDelayMs": 9.155029296875,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.957205504309693,
+              "firstMotionDelayMs": 9.155029296875,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.9376380628717077,
+              "firstMotionDelayMs": 16.627685546875,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.7952827335954037,
+              "firstMotionDelayMs": 16.627685546875,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "en",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        },
+        {
+          "locale": "uk",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        }
+      ]
+    },
+    {
+      "run": 5,
+      "passed": true,
+      "timingFailures": [],
+      "load": {
+        "beforeLoadAverage": [
+          5.36,
+          4.93,
+          4.87
+        ],
+        "beforeTotalCPUPercent": {
+          "mean": 8.411,
+          "maximum": 12.319
+        },
+        "afterLoadAverage": [
+          5.48,
+          5.02,
+          4.9
+        ],
+        "activeTotalCPUPercent": {
+          "mean": 21.416,
+          "maximum": 28.817
+        },
+        "perCoreUsePercentThroughoutPass": {
+          "cpu0": {
+            "mean": 23.136,
+            "maximum": 90.476
+          },
+          "cpu1": {
+            "mean": 28.323,
+            "maximum": 100.0
+          },
+          "cpu2": {
+            "mean": 25.193,
+            "maximum": 100.0
+          },
+          "cpu3": {
+            "mean": 28.83,
+            "maximum": 100.0
+          },
+          "cpu4": {
+            "mean": 32.138,
+            "maximum": 95.0
+          },
+          "cpu5": {
+            "mean": 13.703,
+            "maximum": 100.0
+          },
+          "cpu6": {
+            "mean": 29.427,
+            "maximum": 90.0
+          },
+          "cpu7": {
+            "mean": 17.127,
+            "maximum": 100.0
+          },
+          "cpu8": {
+            "mean": 32.844,
+            "maximum": 100.0
+          },
+          "cpu9": {
+            "mean": 58.101,
+            "maximum": 100.0
+          },
+          "cpu10": {
+            "mean": 44.625,
+            "maximum": 100.0
+          },
+          "cpu11": {
+            "mean": 29.216,
+            "maximum": 100.0
+          },
+          "cpu12": {
+            "mean": 37.437,
+            "maximum": 100.0
+          },
+          "cpu13": {
+            "mean": 29.403,
+            "maximum": 100.0
+          },
+          "cpu14": {
+            "mean": 34.825,
+            "maximum": 100.0
+          },
+          "cpu15": {
+            "mean": 20.889,
+            "maximum": 100.0
+          },
+          "cpu16": {
+            "mean": 22.996,
+            "maximum": 78.947
+          },
+          "cpu17": {
+            "mean": 20.54,
+            "maximum": 80.952
+          },
+          "cpu18": {
+            "mean": 18.67,
+            "maximum": 85.0
+          },
+          "cpu19": {
+            "mean": 17.917,
+            "maximum": 90.0
+          },
+          "cpu20": {
+            "mean": 9.299,
+            "maximum": 68.421
+          },
+          "cpu21": {
+            "mean": 8.082,
+            "maximum": 60.0
+          },
+          "cpu22": {
+            "mean": 8.19,
+            "maximum": 75.0
+          },
+          "cpu23": {
+            "mean": 8.253,
+            "maximum": 70.0
+          }
+        },
+        "quietDuringActivation": true
+      },
+      "cases": [
+        {
+          "locale": "en",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 50,
+          "animationFrames": 65,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 50,
+              "maxCaptureFrameMs": 21.7001953125
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 14,
+              "maxRAFFrameMs": 33.30000000000018,
+              "maxCaptureFrameMs": 19.002197265625
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 1.050954298721765,
+              "firstMotionDelayMs": 20.135986328125,
+              "maximumFrameTravelFraction": 0.0984251968503937
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 1,
+              "firstMotionDelayMs": 20.135986328125,
+              "maximumFrameTravelFraction": 0.0984251968503937
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.7255453905700211,
+              "firstMotionDelayMs": 28.3798828125,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.7443181818181818,
+              "firstMotionDelayMs": 28.3798828125,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "uk",
+          "motion": "no-preference",
+          "cpu": 4,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 50,
+          "animationFrames": 67,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [
+            {
+              "name": "hover-widen",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 50,
+              "maxCaptureFrameMs": 22.683837890625
+            },
+            {
+              "name": "button-narrow",
+              "motionFrames": 15,
+              "maxRAFFrameMs": 33.399999999999636,
+              "maxCaptureFrameMs": 22.419189453125
+            }
+          ],
+          "pixelMotion": [
+            {
+              "transition": "hover-widen",
+              "column": "inbox",
+              "minimum": 0.9738983050847457,
+              "firstMotionDelayMs": 23.31396484375,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "hover-widen",
+              "column": "assigned",
+              "minimum": 0.9795825771324864,
+              "firstMotionDelayMs": 23.31396484375,
+              "maximumFrameTravelFraction": 0.07480314960629922
+            },
+            {
+              "transition": "button-narrow",
+              "column": "inbox",
+              "minimum": 0.6895497026338148,
+              "firstMotionDelayMs": 31.49609375,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            },
+            {
+              "transition": "button-narrow",
+              "column": "assigned",
+              "minimum": 0.734271022383545,
+              "firstMotionDelayMs": 31.49609375,
+              "maximumFrameTravelFraction": 0.07874015748031496
+            }
+          ]
+        },
+        {
+          "locale": "en",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              245,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        },
+        {
+          "locale": "uk",
+          "motion": "reduce",
+          "cpu": 1,
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "fixture": {
+            "cards": 18,
+            "heights": [
+              161,
+              110,
+              152,
+              169,
+              204,
+              177,
+              249,
+              237,
+              240,
+              108,
+              116,
+              229,
+              393,
+              205,
+              265
+            ]
+          },
+          "maxAnimationFrameMs": 0,
+          "animationFrames": 0,
+          "scrollValues": [
+            60
+          ],
+          "copiesLeft": 0,
+          "heldTextLeft": 0,
+          "textLayersLeft": 0,
+          "transitions": [],
+          "pixelMotion": []
+        }
+      ]
+    }
+  ]
+}
