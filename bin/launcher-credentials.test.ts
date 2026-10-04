@@ -123,13 +123,22 @@ function Snapshot {
     .replace("else { $acl =", "else { $stage = 'new-file-security'; $acl =")
     .replace("exit 0", "Snapshot; exit 0")
     .replace("} catch { exit 1 }", "} catch { @{ stage=$stage; error=$_.Exception.Message; errorType=$_.Exception.GetType().Name } | ConvertTo-Json -Compress; Snapshot; exit 1 }");
-  const replay = path.join(f.root, "acl-replay"); mkdirSync(replay);
-  for (const [kind, file, script, create] of [
-    ["failed-directory", f.directory, snapshot + "\nSnapshot", "0"],
-    ["exact-create-replay", replay, snapshot + traced, "1"],
+  const replay = path.join(f.root, "acl-replay"), isolated = path.join(f.root, "acl-isolated-replay"); mkdirSync(replay); mkdirSync(isolated);
+  const moduleProbe = String.raw`
+$ErrorActionPreference = 'Stop'
+@{ shellMajor=$PSVersionTable.PSVersion.Major; inheritedModulePath=[bool]$env:PSModulePath } | ConvertTo-Json -Compress
+try { Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; 'security-module-loaded' }
+catch { @{ operation='import-security-module'; error=$_.Exception.Message; errorType=$_.Exception.GetType().Name } | ConvertTo-Json -Compress }
+`;
+  for (const [kind, file, script, create, cleanModulePath] of [
+    ["failed-directory", f.directory, snapshot + "\nSnapshot", "0", false],
+    ["exact-create-replay", replay, moduleProbe + snapshot + traced, "1", false],
+    ["isolated-module-create-replay", isolated, moduleProbe + snapshot + traced, "1", true],
   ] as const) {
+    const childEnv = { ...process.env, DELEGATUS_CUSTODY_PATH: file, DELEGATUS_CUSTODY_CREATE: create };
+    if (cleanModulePath) for (const name of Object.keys(childEnv)) if (name.toLowerCase() === "psmodulepath") delete childEnv[name as keyof typeof childEnv];
     const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script!, "utf16le").toString("base64")], {
-      env: { ...process.env, DELEGATUS_CUSTODY_PATH: file, DELEGATUS_CUSTODY_CREATE: create }, encoding: "utf8", timeout: 10000,
+      env: childEnv, encoding: "utf8", timeout: 10000,
     });
     console.error("[custody-diagnostic]", JSON.stringify({ kind, spawned: !observed.error, exit: observed.status, spawnError: (observed.error as NodeJS.ErrnoException | undefined)?.code ?? null, stdout: safe(observed.stdout ?? ""), stderr: safe(observed.stderr ?? "") }));
   }
