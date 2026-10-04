@@ -901,3 +901,12 @@ for (const locale of ["en", "uk"] as const) test(`a backend maintenance refusal 
   const el = render(s);
   expect(button(el, "restart-web")).toBeNull(); expect(button(el, "arm-host")).toBeNull();
 });
+
+
+for (const locale of ["en", "uk"] as const) test(`current package without a checkout SHA keeps maintenance in ${locale}`, () => {
+  setLocale(locale);
+  const s = snapshot({ mode: "package", action: null });
+  s.meta = { ...s.meta, launcherRevision: null, maintenanceRestart: true };
+  const el = render(s);
+  expect(button(el, "restart-web")).not.toBeNull(); expect(button(el, "arm-host")).not.toBeNull();
+});

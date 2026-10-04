@@ -56,8 +56,8 @@ export function wholeInstallationPending(s: Snapshot): boolean {
   const switching = s.update.steps.some(step => step.name === "switch" && ["pending", "running"].includes(step.state));
   const prerequisite = s.action && !s.action.terminalEveryUpdate
     && ["restart-service", "restart-terminal", "start-service", "start-launcher", "secure-handoff"].includes(s.action.id);
-  const launcherBehind = !!s.installed.sha && (s.meta.launcherRevision !== undefined || s.action?.terminalEveryUpdate)
-    && s.meta.launcherRevision !== s.installed.sha;
+  const launcherBehind = !!s.installed.sha && (typeof s.meta.launcherRevision === "string"
+    ? s.meta.launcherRevision !== s.installed.sha : !!s.action?.terminalEveryUpdate);
   return (s.mode === "checkout" || s.mode === "package") && (!!prerequisite || launcherBehind || stale.web || stale.host || switching);
 }
 
