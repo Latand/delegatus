@@ -1250,6 +1250,8 @@ export class SelfUpdateService {
       if (refusal) return refusal;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
+      // Snapshot observation awaits; reserve only against current custody.
+      if (this.runner?.state.state === "running" || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
       this.startCheckout(decision.record, available);
       return { ok: true };
     }
@@ -1268,6 +1270,8 @@ export class SelfUpdateService {
       if (refusal) return refusal;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
+      // Snapshot observation awaits; reserve only against current custody.
+      if (this.runner?.state.state === "running" || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
       this.apply.begin(decision.record, runner.state.target!, "operator");
       const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
       void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());

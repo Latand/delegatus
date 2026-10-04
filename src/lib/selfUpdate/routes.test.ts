@@ -1,3 +1,4 @@
+import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
@@ -494,7 +495,7 @@ describe("managed install: an update is one Viewer deployment", () => {
 describe("checkout install: a staged build and restarts by the launcher", () => {
   interface Harness { service: SelfUpdateService; deps: ServiceDeps; recordFile: string; spawned: string[][]; releaseBuild: (() => void) | null }
 
-  function harness(options: { holdBuild?: boolean; remote?: string } = {}): Harness {
+  function harness(options: { holdBuild?: boolean; failBuildOnce?: boolean; remote?: string } = {}): Harness {
     const dir = mkdtempSync(join(root, "checkout-"));
     const state = join(dir, "state");
     mkdirSync(state, { recursive: true });
@@ -519,6 +520,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const h: Harness = { service: null as unknown as SelfUpdateService, deps: null as unknown as ServiceDeps, recordFile, spawned, releaseBuild: null };
     /* The stubbed spawn: git runs for real against the fixture; install and
        build only say so, and the build leaves the BUILD_ID a real one would. */
+    let failBuild = options.failBuildOnce ?? false;
     const run: StepPorts["run"] = async (command, { cwd, onLine }) => {
       spawned.push(command);
       if (command[0] === "git") {
@@ -527,6 +529,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         return result.code;
       }
       if (command.includes("build")) {
+        if (failBuild) { failBuild = false; return 1; }
         if (options.holdBuild) await new Promise<void>((resolve) => { h.releaseBuild = resolve; });
         mkdirSync(join(cwd, ".next"), { recursive: true });
         writeFileSync(join(cwd, ".next", "BUILD_ID"), "fixture\n");
@@ -553,6 +556,75 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service = new SelfUpdateService(h.deps);
     return h;
   }
+
+  for (const retry of [false, true]) test(`concurrent operator ${retry ? "Retry" : "Update"} reserves one apply after the final quiet observation`, async () => {
+    const h = harness({ holdBuild: true, failBuildOnce: retry });
+    setSelfUpdateServiceForTests(h.service);
+    let releaseObservation = () => {};
+    const observation = new Promise<void>(resolve => { releaseObservation = resolve; });
+    let bothObserved = () => {};
+    const observed = new Promise<void>(resolve => { bothObserved = resolve; });
+    let reads = 0;
+    let starts = 0;
+    const createRunner = h.deps.createRunner;
+    h.deps.createRunner = (...args) => {
+      const runner = createRunner(...args);
+      for (const method of ["start", "retry"] as const) {
+        const original = runner[method].bind(runner);
+        spyOn(runner, method).mockImplementation((...input: Parameters<typeof runner.start>) => {
+          starts++;
+          return original(...input);
+        });
+      }
+      return runner;
+    };
+    try {
+      await postCheck(post("/check"));
+      await until(next => next.check.state === "update-available");
+      if (retry) {
+        expect((await updatePost(post("/update", { key: "initial-failure" }))).status).toBe(202);
+        await until(next => next.update.state === "failed");
+        expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).state).toBe("failed");
+      }
+      starts = 0;
+      const previousIntent = retry ? JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")) : null;
+      h.deps.quiet = {
+        pipelines: () => [], presence: () => [], registryHealth: () => [],
+        runtimeSnapshot: async () => {
+          // Each route reads an initial snapshot, then its final admission
+          // snapshot. Hold the latter inside the real production observer,
+          // after checkoutPart has already computed busy:null for both.
+          reads++;
+          if (reads === 3 || reads === 4) {
+            if (reads === 4) bothObserved();
+            await observation;
+          }
+          return { sessions: [] };
+        },
+      };
+      const routes = Promise.allSettled(["tab-a", "tab-b"].map(key => updatePost(post("/update", { key, retry }))));
+      await Promise.race([observed, Bun.sleep(3000).then(() => { throw new Error("Final observations did not reach the barrier"); })]);
+      expect(starts).toBe(0);
+      releaseObservation();
+      const results = await routes;
+      expect(results.every(result => result.status === "fulfilled")).toBe(true);
+      const responses = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+      expect(responses.map(response => response.status).sort()).toEqual([202, 409]);
+      expect(await responses.find(response => response.status === 409)!.json()).toMatchObject({ code: "busy-update", snapshot: { busy: "update" } });
+      expect(starts).toBe(1);
+      const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+      expect(intent).toMatchObject({ target: tipSha, state: "building", trigger: "operator", launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid) });
+      expect(intent.requestId).not.toBe(previousIntent?.requestId);
+      // The accepted request keeps the same durable intent through the build.
+      await until(() => h.releaseBuild !== null);
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).requestId).toBe(intent.requestId);
+      h.releaseBuild!(); h.releaseBuild = null;
+      await until(next => next.update.state === "done");
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8")).requestId).toBe(intent.requestId);
+    } finally {
+      releaseObservation(); h.releaseBuild?.(); h.service.stop();
+    }
+  });
 
   test("real launcher and runtime-host identity readers settle a healthy apply", async () => {
     const { procBackend } = await import("@/lib/proc");
