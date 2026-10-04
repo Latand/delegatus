@@ -147,6 +147,7 @@ function serviceDeps(dir: string): ServiceDeps {
     createRunner: () => { throw new Error("no runner in managed mode"); },
     requestRestart: () => { throw new Error("no restart in this fixture"); },
     processAlive: () => true,
+    processIdentity: () => null,
     hostHealth: async () => {
       if (heldSnapshotHealth && heldSnapshotHealth.skip > 0) {
         heldSnapshotHealth.skip -= 1;

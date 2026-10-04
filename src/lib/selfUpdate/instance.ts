@@ -25,6 +25,7 @@ import { CANONICAL_REMOTE, checkForUpdate, readRevision, runGit } from "./git";
 import { requestRestart } from "./launcher";
 import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
+import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { currentHostTurnIdle } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
@@ -91,6 +92,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     createRunner: (config, publish, onChange) => new UpdateRunner(config, realPorts(publish), onChange),
     requestRestart,
     processAlive: (pid, startIdentity) => sameProcess({ pid, startIdentity }),
+    processIdentity: (pid) => procBackend.processIdentity(pid),
     hostHealth: async () => {
       const client = runtimeHostClient();
       if (!client?.runtimeHostHealth) return null;

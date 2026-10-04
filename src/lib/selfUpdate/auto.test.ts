@@ -8,7 +8,9 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
 import type { LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
-import { watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { sameProcess } from "./pid";
+import { procBackend } from "../proc";
 import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 import { startCurrentReleaseControllers } from "../viewerInstrumentation";
@@ -532,7 +534,8 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
   // A check already in flight delays the build while the original cohort runs.
   writeFileSync(join(h.dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: revision(old), available: revision(target), check: { ...idleCheck(), state: "checking" } }, update: null }));
   h.deps.describe = async (_repo, sha) => revision(git(["rev-parse", sha], checkout));
-  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  const hostAnswer = launcherStartedHost(h);
+  h.deps.hostHealth = hostAnswer;
   let runner!: UpdateRunner;
   const holds: string[] = [];
   h.deps.createRunner = (config, publish, changed) => runner = new UpdateRunner(config, {
@@ -616,12 +619,47 @@ test("real checkout runner deploys a frozen green ancestor after main advances d
     await tick();
     expect(held()?.id).toBe(drain.id);
     expect(ticks).toBe(0);
-    h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+    h.deps.hostHealth = hostAnswer;
     await tick();
     expect(held()).toBeNull();
     expect(ticks).toBe(1);
   } finally { service.stop(); }
 });
+
+test("a host the launcher started is healthy when it answers in the process backend's identity format", async () => {
+  const h = scenario();
+  const launcher = createLauncherRecord(join(h.dir, "launcher.json"), { checkout: h.record.checkout, releasesDir: h.record.releasesDir, releasePointer: h.record.releasePointer, requestFile: h.record.requestFile, port: 0, socket: h.record.socket });
+  launcher.started("runtimeHost", { pid: process.pid }, { sha: OLD });
+  launcher.set("runtimeHost", { state: "healthy" });
+  const written = (JSON.parse(readFileSync(launcher.file, "utf8")) as LauncherRecord).runtimeHost;
+  const answer = procBackend.processIdentity(process.pid)!;
+  // The two real formats differ, so equal strings can never be the test.
+  expect(written.startIdentity).not.toBe(answer);
+  h.record.runtimeHost = written;
+  h.deps.hostHealth = launcherStartedHost(h);
+  const runtimeHost = async () => (await new SelfUpdateService(h.deps).snapshot()).processes.runtimeHost;
+  expect(await runtimeHost()).toMatchObject({ state: "healthy", pid: process.pid, lastHealthOk: true, error: null });
+
+  // Another process answering under the recorded PID stays failed.
+  for (const startIdentity of [`${process.pid}:1`, written.startIdentity!, procBackend.processIdentity(process.ppid)!]) {
+    h.deps.hostHealth = async () => ({ pid: process.pid, startIdentity, hostEpoch: 1 });
+    expect(await runtimeHost()).toMatchObject({ state: "failed", lastHealthOk: false, error: { kind: "message", text: "Runtime host health identity does not match the launcher" } });
+  }
+  // A recorded PID the launcher did not start is gone, whatever answers.
+  h.deps.hostHealth = launcherStartedHost(h);
+  h.record.runtimeHost = { ...written, startIdentity: "1" };
+  expect(await runtimeHost()).toMatchObject({ state: "failed", pid: null, lastHealthOk: false, error: { kind: "gone", pid: process.pid } });
+});
+
+/** Puts the record and the health answer in the formats the two real processes
+    write: the launcher's bare start ticks and the host's process backend
+    identity. This test process stands in for the host. */
+function launcherStartedHost(h: ReturnType<typeof scenario>) {
+  h.record.runtimeHost = { ...h.record.runtimeHost, pid: process.pid, startIdentity: launcherStartIdentity(process.pid) };
+  h.deps.processAlive = (pid, startIdentity) => pid !== process.pid || sameProcess({ pid, startIdentity });
+  h.deps.processIdentity = (pid) => procBackend.processIdentity(pid);
+  return async () => ({ pid: process.pid, startIdentity: procBackend.processIdentity(process.pid)!, hostEpoch: 1 });
+}
 
 function scenario() {
   const dir = mkdtempSync(join(root, "run-"));
@@ -655,7 +693,7 @@ function scenario() {
     targetOnBranch: async () => true,
     prune: async () => { prunes += 1; },
     findDeploymentByIdempotencyKey: async () => null,
-    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, processIdentity: (pid: number) => pid === 102 ? "host" : null,
     hostHealth: async () => ({ pid: 102 }), describe: async (_repo: string, sha: string) => revision(sha),
     buildEnv: () => ({}),
     createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),

@@ -85,6 +85,11 @@ export interface ServiceDeps {
   createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
   requestRestart(record: LauncherRecord, role: LauncherRole): string;
   processAlive(pid: number, startIdentity: string): boolean;
+  /** The identity the runtime host reports for itself in its health answer,
+      read for another PID. The launcher records bare start ticks and the host
+      answers in the process backend's format, so the two are never compared
+      as strings. */
+  processIdentity(pid: number): string | null;
   hostHealth(): Promise<RuntimeHostHealth | null>;
   requestDeployment(body: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   readDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
@@ -1375,7 +1380,11 @@ export class SelfUpdateService {
     });
     let host = fromRecord(record.runtimeHost, { socket: record.socket });
     if (host.state === "healthy") {
-      if (health && health.pid === host.pid && health.startIdentity === record.runtimeHost.startIdentity) host = { ...host, lastHealthAt: at, lastHealthOk: true };
+      /* `fromRecord` already proved the recorded PID is still the process the
+         launcher started. The answer has to come from that same process: the
+         host's own identity is checked against the one this side reads for the
+         recorded PID, so a PID reused by another host never passes. */
+      if (health && health.pid === host.pid && health.startIdentity === this.deps.processIdentity(health.pid)) host = { ...host, lastHealthAt: at, lastHealthOk: true };
       else host = { ...host, state: "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: healthError ?? (health ? "Runtime host health identity does not match the launcher" : "Runtime host health is unavailable") } };
     }
 
