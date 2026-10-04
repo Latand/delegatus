@@ -405,6 +405,44 @@ test("confirmed emissions survive contention and reload with exactly one origina
   } finally { index.close(); }
 });
 
+test("a confirmed backlog drains in bounded batches after contention and reload", async () => {
+  const index = new MemoryIndex(), conversation = "backlog-conversation";
+  await index.refresh([{ path: fixture("backlog.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
+  expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(1);
+  const writer = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  const pending = path.join(process.env.LLV_STATE_DIR!, "memory-injection-pending");
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < 257; i++) {
+      const hook = `backlog-hook-${i}`;
+      index.recordPreparedInjection([{ id: `synthetic-${i}`, title: "Synthetic emitted memory", score: .8 }], `backlog-turn-${i}`, conversation, hook, Date.now() + 1500);
+      index.confirmPreparedInjection(conversation, hook, Date.now());
+    }
+    expect(fs.readdirSync(pending)).toHaveLength(257);
+  } finally { writer.exec("ROLLBACK"); writer.close(); index.close(); }
+  try {
+    // Retrieval drains one batch and abstains until every confirmation is
+    // accounted for, so an unprocessed offer cannot be injected again.
+    expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(0);
+    expect(fs.readdirSync(pending).length).toBeGreaterThan(0);
+    expect(fs.readdirSync(pending).length).toBeLessThan(257);
+    for (let i = 0; fs.readdirSync(pending).length && i < 257; i++) {
+      const started = performance.now();
+      expect(() => index.turnOffers(conversation)).not.toThrow();
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+    expect(fs.readdirSync(pending)).toHaveLength(0);
+    const offers = index.turnOffers(conversation);
+    expect(offers).toHaveLength(257);
+    expect(new Set(offers.map(offer => offer.requestId)).size).toBe(257);
+    index.recordConfirmedInjection([{ id: "synthetic-0", title: "Later title", score: .9 }], "backlog-turn-0", conversation);
+    index.close();
+    expect(index.turnOffers(conversation)).toHaveLength(257);
+    expect(index.turnOffers(conversation).find(offer => offer.requestId === "backlog-turn-0")).toMatchObject({ title: "Synthetic emitted memory", score: .8 });
+    expect(index.injectionCandidates("widget", "project-a", "claude", conversation)).toHaveLength(1);
+  } finally { index.close(); }
+}, 30000);
+
 test("cold hook bookkeeping fails open on contention and retries initialization after unlock", () => {
   const index = new MemoryIndex();
   index.search({ query: "widget" });

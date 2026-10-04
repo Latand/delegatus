@@ -257,7 +257,9 @@ export class MemoryIndex {
     // has its own short CPU budget and abandons incomplete filtering entirely.
     const deadline = Math.min(requestDeadline, performance.now() + 100);
     const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
-    this.replayConfirmedInjections();
+    // A pending confirmation may exclude an otherwise eligible candidate.
+    // Drain bounded batches and abstain until that ledger is complete.
+    if (!this.replayConfirmedInjections()) return [];
     const query = queryFor(prompt, "recall");
     if (!query) return [];
     const db = this.database();
@@ -574,12 +576,15 @@ export class MemoryIndex {
     const directory = statePath("memory-injection-pending");
     let names: string[];
     try { names = fsSync.readdirSync(directory); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
-    if (names.length > 256) throw Error("memory confirmation replay budget");
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
     const deadline = performance.now() + 100;
+    let replayed = 0;
     for (const name of names) {
       if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
-      if (performance.now() >= deadline) throw Error("memory confirmation replay budget");
+      // A burst during contention must keep making progress after unlock.
+      // Leave the tail durable for the next ledger read instead of rejecting
+      // the same oversized directory forever.
+      if (replayed >= 256 || performance.now() >= deadline) return false;
       const filename = path.join(directory, name), stat = fsSync.lstatSync(filename);
       if (!stat.isFile() || stat.size > 128000) throw Error("invalid memory confirmation evidence");
       const row = JSON.parse(fsSync.readFileSync(filename, "utf8"));
@@ -592,7 +597,9 @@ export class MemoryIndex {
       // Removal follows the committed idempotent inserts. A retry after reload
       // or a duplicate confirmation keeps precisely one row and its first name.
       fsSync.rmSync(filename, { force: true });
+      replayed++;
     }
+    return true;
   }
 
   turnOffers(conversation: string) {
