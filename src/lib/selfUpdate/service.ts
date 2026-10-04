@@ -1278,6 +1278,11 @@ export class SelfUpdateService {
       try { role = JSON.parse(readFileSync(record.requestFile, "utf8")).role; } catch { /* Unreadable custody remains occupied. */ }
       return busy(role === "web" ? "restart-web" : role === "runtime-host" ? "restart-runtime-host" : "update");
     }
+    const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
+    const owner = readLauncherRecord(file) ?? (existsSync(file) ? null : record);
+    if (!owner || owner.launcher.pid !== record.launcher.pid || owner.launcher.startIdentity !== record.launcher.startIdentity
+      || !owner.launcher.startIdentity || !this.deps.processAlive(owner.launcher.pid, owner.launcher.startIdentity))
+      return refuse(409, "cannot-restart", "The launcher identity changed; dispatch was refused");
     try { write(); }
     catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST" && existsSync(record.requestFile))

@@ -1,7 +1,7 @@
 /* A trial spans process images. Its durable intent lets the next launcher
    restore the exact previous pointer before replacing itself on failure. */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -246,7 +246,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     const read = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch (error) { if (error.code === "ENOENT") return null; throw error; } };
     const applyFile = join(dirname(paths.request), "apply.json");
     const apply = read(applyFile);
-    if (apply && ["building", "ready", "switching"].includes(apply.state) && !apply.externalRestart) {
+    if (apply && ["building", "ready", "switching"].includes(apply.state) ) {
       const request = read(paths.request);
       const owner = read(paths.record)?.launcher;
       if (typeof apply.requestId !== "string" || !/^[0-9a-f]{40}$/.test(apply.target)
@@ -308,7 +308,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     async recoverPending() {
       if (pendingRecovery) await this.failed("The launcher stopped before taking the durable update request.");
     },
-    async begin(request, next) {
+    async begin(request, next, dispatchFence = () => true) {
       if (stopping) return;
       if (!canExec) throw new Error("This interpreter needs a launcher restart to apply an update.");
       if (next.sha !== request.target || next.dir === release.dir) throw new Error("Relaunch target is not the installed release.");
@@ -323,7 +323,14 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const applyFile = join(dirname(paths.request), "apply.json");
       const gateFile = join(dirname(paths.request), "auto-admission.json");
       const applyBinding = read(applyFile), gateBinding = request.autoGateId ? read(gateFile) : null;
-      const ownerBinding = JSON.stringify(JSON.parse(read(paths.record))?.launcher);
+      const owner = JSON.parse(read(paths.record))?.launcher;
+      const acceptedApply = readPointer(applyBinding);
+      if (owner?.pid !== process.pid || owner.startIdentity !== readStartIdentity(process.pid)
+        || acceptedApply && ["building", "ready", "switching"].includes(acceptedApply.state)
+          && (acceptedApply.requestId !== request.requestId || acceptedApply.target !== request.target
+            || acceptedApply.launcherPid !== process.pid || acceptedApply.launcherIdentity !== owner.startIdentity)
+        || !dispatchFence()) return false;
+      const ownerBinding = JSON.stringify(owner);
       const activity = dispatchActivityVersion(dirname(dirname(paths.request)));
       let intent = { requestId: request.requestId, target: next.sha, rollbackPointer, previousEntry: entry, state: "preflight", at: new Date().toISOString() };
       try { atomic(trialFile, `${JSON.stringify(intent)}\n`); }
@@ -370,8 +377,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         || activity !== dispatchActivityVersion(dirname(dirname(paths.request)))
         || read(trialFile) !== `${JSON.stringify(intent)}\n`
         || pending !== null && JSON.parse(pending)?.requestId !== request.requestId
-        || request.autoGateId && (read(gateFile) !== gateBinding || currentGate?.id !== request.autoGateId || currentGate.until <= Date.now())) {
-        if (pending === null) atomic(paths.request, `${JSON.stringify(request)}\n`);
+        || request.autoGateId && (read(gateFile) !== gateBinding || currentGate?.id !== request.autoGateId || currentGate.until <= Date.now()) || !dispatchFence(true)) {
+        if (pending === null) {
+          const temporary = `${paths.request}.${randomUUID()}.tmp`;
+          try { writeFileSync(temporary, `${JSON.stringify(request)}\n`, { mode: 0o600, flag: "wx" }); linkSync(temporary, paths.request); }
+          catch (error) { if (error.code !== "EEXIST") throw error; }
+          finally { rmSync(temporary, { force: true }); }
+        }
         atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "Stale launcher dispatch custody or work evidence" }) + "\n");
         return false;
       }
@@ -395,7 +407,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
         : null;
       record.set("launcher", { state: "healthy", requestId: trial?.requestId ?? null, error });
       if (trial) atomic(`${paths.request}.result.json`, JSON.stringify({ requestId: trial.requestId,
-        target: trial.target, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
+        target: trial.target, previousEntry: trial.previousEntry, launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), revision: release.sha,
         state: error ? "rolled-back" : "done", detail: trial.detail }) + "\n");
       if (trial) rmSync(trialFile, { force: true });
       trial = null;

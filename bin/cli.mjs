@@ -1339,7 +1339,7 @@ async function main() {
         record.set("runtimeHost", { state: "failed", error: { kind: "message", text: error instanceof Error ? error.message : String(error) } });
       }
     };
-    restartRequests = watchRestartRequests(selfUpdate.request, async (request) => {
+    restartRequests = watchRestartRequests(selfUpdate.request, async (request, dispatchFence) => {
       const { requestId, role } = request;
       if (role !== "runtime-host") {
         pauseWebRecovery();
@@ -1347,7 +1347,7 @@ async function main() {
         pauseWebRecovery();
       }
       if (role === "relaunch") {
-        try { return await relaunch.begin(request, releaseNow()); }
+        try { return await relaunch.begin(request, releaseNow(), dispatchFence); }
         catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           if (relaunch.hasTrial()) await relaunch.failed(detail);

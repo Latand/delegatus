@@ -57,7 +57,7 @@ export class ApplyController {
     if (existsSync(record.requestFile)) throw new Error("A launcher request is already pending");
     if (!autoGateId) writeDrain(join(this.directory, "auto-drain.json"), { id: intent.requestId, target: intent.target, since: intent.startedAt, until: Date.now() + 10 * 60_000, persistent: true });
     rmSync(`${record.requestFile}.result.json`, { force: true });
-    this.patch({ state: "switching", switchedAt: new Date().toISOString() });
+    this.patch({ state: "switching", externalRestart: false, switchedAt: new Date().toISOString() });
     try {
       publishLauncherRequest(record.requestFile, { requestId: intent.requestId, role: "relaunch", target: intent.target,
         rollbackPointer: intent.rollbackPointer, requestedAt: intent.startedAt, ...(autoGateId ? { autoGateId } : {}) });
@@ -71,7 +71,7 @@ export class ApplyController {
   observe(record: LauncherRecord, hostHealthy = true, now = Date.now()): "done" | "failed" | null {
     const intent = this.current;
     if (!intent || !["ready", "switching", "done", "failed"].includes(intent.state)) return null;
-    let result: { requestId?: string; state?: string; detail?: string } | null = null;
+    let result: { requestId?: string; target?: string; state?: string; detail?: string; previousEntry?: string } | null = null;
     try { result = JSON.parse(readFileSync(`${record.requestFile}.result.json`, "utf8")); } catch { /* no terminal admission result */ }
     const sameLauncher = record.launcher.pid === intent.launcherPid && record.launcher.startIdentity === intent.launcherIdentity;
     const trialFile = launcherControlFile(record.requestFile, "trial");
@@ -89,7 +89,9 @@ export class ApplyController {
       let packageRestored = false;
       if (!record.checkout && intent.rollbackPointer === null && intent.rollbackPackage
         && (sameLauncher && record.installRoot === intent.rollbackPackage.root
-          || trial?.previousEntry === join(intent.rollbackPackage.root, "bin", "cli.mjs"))
+          || trial?.previousEntry === join(intent.rollbackPackage.root, "bin", "cli.mjs")
+          || result?.requestId === intent.requestId && result.target === intent.target && result.state === "rolled-back"
+            && result.previousEntry === join(intent.rollbackPackage.root, "bin", "cli.mjs"))
         && (!record.installRoot || record.installRoot === intent.rollbackPackage.root)
         && intent.rollbackWebRevision === null && intent.rollbackHostRevision === null) {
         try { packageRestored = JSON.parse(readFileSync(join(intent.rollbackPackage.root, "package.json"), "utf8")).version === intent.rollbackPackage.version; } catch { /* Missing or changed package cannot settle. */ }

@@ -229,7 +229,7 @@ export function createLauncherRecord(file, base, clock = () => Date.now()) {
  * its controller has persisted the trial that owns crash recovery.
  *
  * @param {string} requestFile
- * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }) => Promise<void>} handle
+ * @param {(request: { requestId: string, role: "web" | "runtime-host" | "relaunch", target?: string, rollbackPointer?: string | null }, dispatchFence: (consumed?: boolean) => boolean) => Promise<void | false>} handle
  * @param {{ intervalMs?: number, admitAuto?: (request: { requestId: string, role: "web" | "runtime-host" | "relaunch", autoGateId: string }) => Promise<boolean>, isStopping?: () => boolean }} options
  */
 export function watchRestartRequests(requestFile, handle, { intervalMs = 500, admitAuto = async () => false, isStopping = () => false } = {}) {
@@ -256,6 +256,24 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
     const originalOwner = owner();
     const activity = dispatchActivityVersion(dirname(dirname(requestFile)));
     const originalGate = request.autoGateId ? (() => { try { return readFileSync(gateFile, "utf8"); } catch { return null; } })() : null;
+    const dispatchFence = (consumed = false) => {
+      try {
+        let pending = null;
+        try { pending = readFileSync(requestFile, "utf8"); } catch (error) { if (error.code !== "ENOENT") return false; }
+        if (pending !== original) {
+          if (!consumed || pending !== null) return false;
+          const trial = JSON.parse(readFileSync(join(dirname(requestFile), basename(requestFile).replace(/^request/, "trial")), "utf8"));
+          if (trial.requestId !== request.requestId || trial.target !== request.target) return false;
+        }
+        if (owner() !== originalOwner || activity !== dispatchActivityVersion(dirname(dirname(requestFile)))) return false;
+        if (request.autoGateId) {
+          const bytes = readFileSync(gateFile, "utf8"), gate = JSON.parse(bytes);
+          if (bytes !== originalGate || gate.id !== request.autoGateId || gate.until <= Date.now()) return false;
+          if (gate.issuerPid !== undefined && (!gate.issuerIdentity || readStartIdentity(gate.issuerPid) !== gate.issuerIdentity)) return false;
+        }
+        return true;
+      } catch { return false; }
+    };
     const rejected = (detail) => {
       const file = `${requestFile}.result.json`;
       const temporary = `${file}.${process.pid}.tmp`;
@@ -286,8 +304,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
           rejected("Final automatic dispatch has stale gate or issuer custody"); return;
         }
       }
-      if (readFileSync(requestFile, "utf8") !== original || owner() !== originalOwner
-        || activity !== dispatchActivityVersion(dirname(dirname(requestFile)))) {
+      if (!dispatchFence()) {
         retain = true; rejected("Final dispatch has stale launcher or work custody"); return;
       }
       admitted = true;
@@ -296,7 +313,7 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
         if (JSON.parse(readFileSync(requestFile, "utf8")).requestId !== request.requestId) return;
       } catch { return; }
       if (request.role !== "relaunch") rmSync(requestFile, { force: true });
-      if (await handle(request) === false) retain = true;
+      if (await handle(request, dispatchFence) === false) retain = true;
     } catch (error) {
       if (!isStopping() && !admitted) rejected("Final automatic admission could not be verified");
       console.error(`[self-update] restart of ${request.role} failed: ${error instanceof Error ? error.message : String(error)}`);

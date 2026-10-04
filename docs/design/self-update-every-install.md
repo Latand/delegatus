@@ -413,3 +413,61 @@ Windows continues to apply each built update from its terminal because it has
 no launcher exec capability. Both localized instructions and the shared capture
 case describe that repeated prerequisite. Rendered evidence for the changed copy
 is pending an independent build of the published head.
+
+
+## Dispatch fences and cold publication recovery
+
+A dispatch rechecks ownership synchronously after its last awaited read.
+The request, apply, launcher, gate issuer and durable work evidence must still
+match the accepted decision. Expired or stale custody refuses dispatch and
+retains the accepted records. Admission release follows verified serving
+settlement. Per-role restart controls remain maintenance actions when the
+installed release already serves coherently.
+
+| Path | Awaited reads after admission | Final fence |
+| --- | --- | --- |
+| Operator checkout/package build | runner completion; `applyBuilt.decide` | durable apply binding, launcher identity/liveness, request vacancy, synchronous work evidence before `apply.send` |
+| Legacy operator apply | `applyBuilt.decide`; `actionFor` credential/release reads | same binding and work checks after `actionFor`, immediately before the trial write |
+| Service prerequisite | selected release, green source, serving snapshot and rollback ancestry before reservation; replacement CLI load after reservation | `reserve` checks current owner before begin; post-load binding, owner, request and work checks precede ready/trial publication and the service request |
+| Automatic publication | green reads, mode, ancestry, snapshot, quiet probe and rollback ancestry; final mode, snapshot and quiet probe | owned unexpired gate, copied launcher identity, request vacancy and synchronous work evidence before begin/send |
+| Automatic launcher admission | mode, refreshed green, current branch ancestry, snapshot and quiet probe (including runtime snapshot, per-turn liveness and controller reads) | ancestry precedes quiet; durable apply/request, current launcher, issuer identity and unexpired gate plus synchronous work evidence are checked after the last await |
+| Watcher | authenticated admission response and JSON body | current request, launcher, work evidence and unchanged unexpired gate immediately before handler dispatch |
+| Resident launcher | replacement CLI load preflight | unchanged apply, trial, request, launcher, work evidence and unexpired gate immediately before starting intent and child shutdown; shutdown completion is an action, followed by the existing stop/exec fence |
+| Credential restoration prerequisite | readiness, `ReleasePointer.current` checkout/candidate ancestry, prior checkout and release-cache ancestry | final request/apply/gate/drain/launcher/work binding and gate expiry before protected credential preparation or command return; restoration itself performs synchronous protected descriptor reads |
+
+Cold startup binds recovery to the earliest accepted `apply.json`, including
+when no request was published. It verifies the original launcher owner and the
+prior checkout/package identity. A partial publication returns to the verified
+source. A durable starting trial or verified target receipt may complete the
+accepted target. Health proves launcher, Viewer and host together before the
+Viewer settles the original apply and releases its hold. A terminal write that
+outlived the process retains its receipt and releases only its own remaining
+hold after cold serving verification.
+
+`A` is the verified source, `B` the built target, `I` the original accepted
+apply identity, `H` its admission hold, `Q` the launcher request, `T` its trial,
+and `R` the terminal launcher receipt. Existing automatic cohort holds keep
+their original owner; recovery does not replace them with a new cohort.
+
+| Persisted boundary | Durable records | Cold outcome |
+| --- | --- | --- |
+| Begin | I building; pointer A or absent | verified A; original I fails with rollback receipt |
+| Ready before pointer | I ready; pointer A or absent | verified A; original I fails with rollback receipt |
+| Pointer before ready | I building; pointer B | restore and verify launcher/web/host A; original I fails |
+| Ready after pointer | I ready; pointer B | restore and verify A before settlement |
+| Switching before publication | I switching; hold present; pointer B; request and trial absent | reconstruct recovery from I; restore and verify A; original I fails |
+| Request before trial | I switching + H + Q; pointer B | matching Q belongs to I; restore and verify A |
+| Preflight trial before consume | I switching + H + Q + T preflight | original trial owns rollback; verify A |
+| Consume / awaited load | I switching + H + T preflight; Q absent | verify A; preserve original I and hold until settlement |
+| Starting intent / child shutdown | I switching + H + T starting | an unmarked crash may complete verified B; handled stop marks roll back to verified A |
+| Healthy target before apply settlement | I switching; hold present; terminal receipt present; trial and request absent | receipt bound to original owner permits verified B; settle original I once |
+| Terminal apply before custody/hold release | I terminal + H + R; T/Q absent | verify terminal serving identity; retain R and terminal I; release owned H once |
+| Fully settled | I terminal + R; H/T/Q absent | serve verified terminal release; retain I/R; repeated observations leave subsequent owners untouched |
+
+The real CLI tests kill only recorded fixture PIDs and cold boot the same
+installation. The publication matrix covers SIGKILL, SIGTERM and SIGINT.
+Protected custody carries the original access key through target completion
+and source rollback; HTTP and MCP accept that key and refuse wrong or absent
+credentials. Changed Update copy and prerequisite frames require an independent
+build of the published head before rendered evidence can be refreshed through
+the shared capture driver.
