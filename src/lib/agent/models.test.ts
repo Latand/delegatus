@@ -17,7 +17,7 @@ import {
   normalizeClaudeLaunchModel,
   validateLaunchModel, claudeSpawnTier, claudeTierDisplayName } from "./models";
 
-test("the model catalog exposes Opus 5.5 as the Claude default and GPT-6-Astra as the Codex one", () => {
+test("the model catalog exposes Opus 5.5 and GPT-6.1-Sol as launch defaults while retaining the catalogue", () => {
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
   expect(ENGINE_MODELS.codex).toEqual([
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
@@ -28,7 +28,7 @@ test("the model catalog exposes Opus 5.5 as the Claude default and GPT-6-Astra a
     { id: CODEX_TERRA_MODEL, label: "GPT-5.6-Terra", shortLabel: "5.6-Terra", use: "implement" },
     { id: CODEX_LUNA_MODEL, label: "GPT-5.6-Luna", shortLabel: "5.6-Luna", use: "general" },
   ]);
-  expect(defaultModelFor("codex")).toBe(CODEX_ASTRA_MODEL);
+  expect(defaultModelFor("codex")).toBe(CODEX_GPT61_SOL_MODEL);
   expect(defaultModelFor("claude")).toBe("opus");
 });
 
@@ -54,8 +54,8 @@ test("GPT-6.1-Sol is launchable, takes image input and sits right after Astra", 
   expect(validateLaunchModel("codex", CODEX_GPT61_SOL_MODEL)).toEqual({ model: CODEX_GPT61_SOL_MODEL });
   expect(codexModelSupportsImages(CODEX_GPT61_SOL_MODEL)).toBeTrue();
   expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 3)).toEqual([CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT6_SOL_MODEL]);
-  // The default stays Astra: adding a model changes no default.
-  expect(defaultModelFor("codex")).toBe(CODEX_ASTRA_MODEL);
+  // Catalogue order does not determine the shipped launch fallback.
+  expect(defaultModelFor("codex")).toBe(CODEX_GPT61_SOL_MODEL);
 });
 
 test("spawn model validation accepts CLI ids and rejects control characters", () => {
@@ -104,6 +104,13 @@ test("a card names a Claude model by its CLI display name and leaves other ids a
   expect(modelDisplayName("claude", "3-7-sonnet")).toBe("3-7-sonnet");
   expect(modelDisplayName("claude", "opus-next-9")).toBe("opus-next-9");
   expect(modelDisplayName("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
+});
+
+test("a live conversation's launch alias reads like the resolved id its transcript records later", () => {
+  expect(modelDisplayName("claude", "haiku")).toBe(modelDisplayName("claude", "haiku-4-5"));
+  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 4.5");
+  expect(modelDisplayName("claude", "opus")).toBe("Opus 5.5");
+  expect(modelDisplayName("codex", "haiku")).toBe("haiku");
 });
 
 test("unknown or unsafe Claude transcript model ids omit the launch override", () => {

@@ -91,6 +91,41 @@ function answerAccounts(body: unknown): void {
 
 afterAll(() => { void dom.happyDOM.close(); });
 
+test("shipped xhigh rows keep cost hints without a downgrade nudge, while custom heavier rows can reset", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ROLE_VARIANT_DEFAULTS } = await import("@/lib/roles/paramConfig");
+  const roles = mergeRoleDefinitions({}).map((role) => ({
+    ...role, promptPreview: role.promptScaffold,
+    shipped: { config: role.config, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS] },
+  }));
+  rolesBody = { roles };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row='reviewer']")));
+    flushSync(() => (host.querySelector("[data-mapping-group=rare] > button") as HTMLElement).click());
+    expect(host.querySelectorAll("[data-mapping-nudge]")).toHaveLength(0);
+    for (const id of ["reviewer", "architect", "prod-auditor"]) {
+      const row = host.querySelector(`[data-mapping-row='${id}']`)!;
+      expect(row.querySelectorAll("select")[1]!.value).toBe("xhigh");
+      expect(row.querySelector("[data-cost-class]")?.getAttribute("data-cost-class")).toBe("very-heavy");
+    }
+    const effort = host.querySelectorAll("[data-mapping-row='reviewer'] select")[1] as HTMLSelectElement;
+    flushSync(() => { effort.value = "max"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(host.querySelector("[data-mapping-nudge='reviewer']")).not.toBeNull();
+    flushSync(() => (host.querySelector("[data-mapping-reset='reviewer']") as HTMLElement).click());
+    expect(requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).at(-1)?.body).toEqual({ overrides: { reviewer: { config: null } } });
+    expect(host.querySelector("[data-mapping-nudge='reviewer']")).toBeNull();
+    expect((host.querySelectorAll("[data-mapping-row='reviewer'] select")[1] as HTMLSelectElement).value).toBe("xhigh");
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { roles: [] };
+  }
+});
+
 function key(target: EventTarget, name: string, shiftKey = false): void {
   target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, shiftKey }) as unknown as Event);
 }
@@ -193,7 +228,7 @@ test("the relay service step is optional: it offers the engine that answers, and
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("relay");
   expect(host.textContent).toContain("Answer for a relay service");
   expect(host.querySelector("[data-onboarding-relay-engine=claude]")?.getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector("[data-external-relay-connect]")).not.toBeNull();
+  expect(host.querySelector("[data-external-relay-connect-known=celestia]")).not.toBeNull();
   flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
   expect(requests.find((request) => request.url.includes("/api/onboarding") && request.method === "PUT")?.body).toEqual({ steps: { relay: "skipped" } });
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");

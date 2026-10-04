@@ -1,5 +1,5 @@
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
@@ -289,14 +289,12 @@ function reviewedHead(pipeline: Pipeline): string | null {
 /** A behind diagnostic requires Git to prove the PR head is an ancestor of
  * the exact head a successful review judged. SHA mentions in reports do not
  * prove ancestry: rejected attempts can be divergent retries. */
-function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): string | null {
+async function prHeadBehindReviewedHead(pipeline: Pipeline, prHead: string): Promise<string | null> {
   const head = reviewedHead(pipeline);
   if (!head || prHead === head) return null;
   if (pipeline.repoDir && /^[0-9a-f]{40}$/i.test(prHead) && /^[0-9a-f]{40}$/i.test(head)) {
-    const ancestor = spawnSync("git", ["merge-base", "--is-ancestor", prHead, head], {
-      cwd: pipeline.repoDir, timeout: 5_000, stdio: "ignore",
-    });
-    return ancestor.status === 0 ? head : null;
+    const ancestor = await realExec("git", ["merge-base", "--is-ancestor", prHead, head], pipeline.repoDir, undefined, { timeoutMs: 5_000 });
+    return ancestor.code === 0 ? head : null;
   }
   return null;
 }
@@ -414,7 +412,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       merge.chain = [view.headRefOid];
     }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
-      ? prHeadBehindReviewedHead(read, view.headRefOid)
+      ? (await prHeadBehindReviewedHead(read, view.headRefOid))
       : null;
     if (behindReviewedHead) {
       await commit(ports, read, (live) => block(live, `PR head is behind the reviewed head ${behindReviewedHead}`, now));

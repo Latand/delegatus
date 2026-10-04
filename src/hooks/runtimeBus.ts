@@ -310,12 +310,18 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     try {
       const snapshot = await fetchSnapshot();
       if (myGen !== generation) return; // superseded while awaiting
+      const previousFiles = state.store.filesRevision;
       hasSnapshot = true;
       setState({
-        store: installSnapshot(snapshot),
+        store: installSnapshot(snapshot, state.store),
         lastEventAt: deps.now(),
         structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
       });
+      // The resumed stream starts AFTER this snapshot. Its files revisions
+      // will not replay, so deliver their invalidation to the open board now.
+      if (snapshot.filesRevision > previousFiles) {
+        for (const listener of filesListeners) listener(snapshot.filesRevision);
+      }
       if (afterCursorReset) noteResynced();
       openStream(snapshot.snapshotSeq);
     } catch (error) {
@@ -490,7 +496,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
         || (snapshot.snapshotSeq === state.store.cursor && state.store === before)) {
         const previousFiles = state.store.filesRevision;
         setState({
-          store: installSnapshot(snapshot),
+          store: installSnapshot(snapshot, state.store),
           lastEventAt: deps.now(),
           structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
         });
@@ -536,7 +542,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
       fallbackAppliedSerial = Math.max(fallbackAppliedSerial, myPollSerial);
       const prevFiles = state.store.filesRevision;
       setState({
-        store: installSnapshot(snapshot),
+        store: installSnapshot(snapshot, state.store),
         lastEventAt: deps.now(),
         connection: "degraded",
         structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
@@ -592,16 +598,20 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
         // never regress the cursor. The refresh itself succeeded — fresher
         // state than the response is already live — so still report success.
         if (snapshot.snapshotSeq < state.store.cursor) return true;
+        const previousFiles = state.store.filesRevision;
         hasSnapshot = true;
         // Refresh the structured-hosts rollback gate alongside the store — every
         // other snapshot-install path (join/resume/fallback) does, so a manual
         // dead-host Re-check must too, or a tab keeps a stale gate after a
         // rollback flip (issue #241 finding 1).
         setState({
-          store: installSnapshot(snapshot),
+          store: installSnapshot(snapshot, state.store),
           lastEventAt: deps.now(),
           structuredHostsEnabled: snapshot.structuredHostsEnabled === true,
         });
+        if (snapshot.filesRevision > previousFiles) {
+          for (const listener of filesListeners) listener(snapshot.filesRevision);
+        }
         return true;
       } catch (error) {
         if (error instanceof RuntimePlaneAbsentError) markPlaneAbsent();

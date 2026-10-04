@@ -1,3 +1,4 @@
+import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
 
@@ -61,6 +62,14 @@ export function renderStagePrompt(
   const baseLine = pipeline.baseRef
     ? [`This pipeline's worktree started from commit ${pipeline.baseRef}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
     : [];
+  const branchContract = [
+    `Pipeline branch: ${pipeline.branch}. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.`,
+    ...(pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}`
+      ? [`If the worktree is already checked out on its owned delivery branch ${pipeline.delivery.target.branch}, keep that branch checked out and use it for the commits below.`] : []),
+    ...(role.access === "read-write"
+      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
+      : []),
+  ];
   const roleContext = role.roleId
     ? [
         `Role preset: ${role.roleId} (${role.engine}${role.model ? `/${role.model}` : ""}${role.effort ? `, ${role.effort}` : ""}).`,
@@ -81,6 +90,7 @@ export function renderStagePrompt(
     access,
     hostAccess,
     ...baseLine,
+    ...branchContract,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
     "",
@@ -90,7 +100,8 @@ export function renderStagePrompt(
        engine still reads the block exactly as before when no report arrived.
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
-    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason (at most 2000 characters) in stage_report or the fallback JSON. Set blocked only when you cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Otherwise omit blocked or set it false; the fixer returns pass unless blocked.",
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
     "Verdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.",
@@ -101,4 +112,13 @@ export function renderStagePrompt(
     "```",
     "Its status uses the same three words. In the block each finding is a string that starts with its severity, such as \"P1 — what is wrong and where\"; the block has no summary key, so write the summary as prose above it.",
   ].join("\n");
+}
+
+export function renderOutOfMemoryRetryInput(previousInput: string | null, attempt: number, kill: Pick<AgentMemoryKill, "limitBytes" | "limit">): string {
+  return [previousInput ?? "", `The previous attempt of this stage (attempt ${attempt}) was ${memoryKillText(kill)}. Its changes are still in this worktree; continue from them. Keep memory-heavy commands (benchmarks, browsers, large test runs) within the limit: smaller inputs, or one at a time.`].filter(Boolean).join("\n\n");
+}
+
+/** A cut attempt keeps its worktree and receives a durable recovery note. */
+export function renderCutRetryInput(previousInput: string | null, n: number, reason: string): string {
+  return `${previousInput ?? ""}\n\nAttempt ${n} was cut by ${reason}. Its changes remain in this worktree. Continue from them, keeping uncommitted work, and report when the stage is complete.`;
 }

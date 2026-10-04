@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { requireOperatorAuthority, rotationActor, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -23,13 +23,18 @@ import { viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
+let testRegistry: AgentRegistry;
 
 beforeEach(() => {
   previousStateDir = process.env.LLV_STATE_DIR;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-orch-tools-"));
   process.env.LLV_STATE_DIR = sandbox;
+  testRegistry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(testRegistry);
 });
 afterEach(() => {
+  testRegistry.close();
+  setAgentRegistryForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -90,7 +95,10 @@ function gatedControlStub() {
 }
 
 function bindingsWith(control: ViewerControlDependencies) {
-  return viewerMcpBindings(undefined, control, { registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }) } as never);
+  return viewerMcpBindings(undefined, control, {
+    registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
+    callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }),
+  } as never);
 }
 
 test("get_orchestrator with nothing designated says so and names the current default prompt version", async () => {
@@ -300,10 +308,11 @@ test("send_message_to_orchestrator resolves the seat server-side and delivers wi
   const result = await bindingsWith(control).send_message_to_orchestrator({ clientRequestId: "send-1", project: "proj-a", text: "status?" });
 
   expect(posts).toHaveLength(1);
-  expect(posts[0]!.pathname).toBe("/api/tmux");
+  expect(posts[0]!.pathname).toBe("/api/orchestrator/message");
   /* The delivery seam resumes a dead selected conversation on this same call —
      no duplicate is ever spawned for a session that merely died. */
   expect(posts[0]!.body).toMatchObject({
+    project: "proj-a",
     conversationId: SEATED_ID,
     path: "/tmp/o.jsonl",
     clientMessageId: expect.stringMatching(/^mcp_orchestrator_/),
@@ -322,7 +331,7 @@ test("send_message_to_orchestrator with nothing designated creates one first, th
   });
   const result = await bindingsWith(control).send_message_to_orchestrator({ clientRequestId: "send-2", project: "proj-a", text: "kick off" });
 
-  expect(posts.map((post) => post.pathname)).toEqual(["/api/orchestrator/seat", "/api/tmux"]);
+  expect(posts.map((post) => post.pathname)).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
   /* The creation key derives from the caller's, so a retried call replays both
      side effects instead of creating a second orchestrator. */
   expect(posts[0]!.body.clientRequestId).not.toBe("send-2");

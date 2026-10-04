@@ -143,6 +143,8 @@ export function ProcessStatusControls({
   };
   /* What the destructive action will stop, by name (issue #700). */
   const killTargetName = cleanTitle(file.title, 48) || t("task.confirmKillUntitled");
+  /* A background shell task is stopped, not hosted: only a conversation has a host to stop. */
+  const stopLabel = file.engine === "shell" ? t("task.stopTask") : t("task.kill");
   return (
     <span className={`inline-flex min-w-0 flex-wrap items-center gap-1.5 ${compact ? "text-[10.5px]" : "text-xs"}`}>
       {hideChip ? null : chip}
@@ -154,12 +156,12 @@ export function ProcessStatusControls({
             type="button"
             aria-disabled
             disabled
-            aria-label={`${t("task.kill")} — ${kill.reason}`}
+            aria-label={`${stopLabel} — ${kill.reason}`}
             className={`inline-flex items-center whitespace-nowrap rounded-full border border-border bg-card text-[11px] font-semibold text-muted opacity-50 ${
               isMobile ? "min-h-11 px-3" : "px-2 py-0.5"
             }`}
           >
-            {t("task.kill")}
+            {stopLabel}
           </button>
         </Hint>
       ) : kill.state === "enabled" ? (
@@ -197,11 +199,11 @@ export function ProcessStatusControls({
             className={`inline-flex items-center whitespace-nowrap rounded-full border border-border bg-card text-[11px] font-semibold text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
               isMobile ? "min-h-11 px-3" : "px-2 py-0.5"
             }`}
-            aria-label={file.engine === "shell" ? t("task.stopAria", { pid: file.pid ?? "" }) : t("task.kill")}
+            aria-label={file.engine === "shell" ? t("task.stopAria", { pid: file.pid ?? "" }) : stopLabel}
             disabled={isMobile && kill.busy}
             onClick={isMobile ? act : () => setConfirming(true)}
           >
-            {t("task.kill")}
+            {stopLabel}
           </button>
         )
       ) : null}

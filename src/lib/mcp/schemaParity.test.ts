@@ -429,7 +429,7 @@ test("search_transcripts publishes its body-query, project, cursor, and bounded 
     expect(tool?.description).toContain("has this been solved before?");
     expect(tool?.description).toContain("conversation_messages");
     expect(tool?.description).toContain("byteOffset");
-    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["clientRequestId", "query"]));
+    expect(tool?.inputSchema.required).toEqual(expect.arrayContaining(["query"]));
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(expect.arrayContaining([
       "clientRequestId",
       "query",
@@ -697,11 +697,13 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    expect(onFail?.properties?.onExhausted?.description).toContain("without asking this stage again");
-    /* #2187: the default completes after the last fix; stopping there is asked for. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("the fix stage takes the last findings and the lane continues or completes");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after that fix the lane waits for the operator in needs_review");
-    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the fix");
+    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
+    /* Terminal stages re-check the last fix; other stages follow the pass edge. */
+    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
+    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed");
+    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
+    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
     expect(tool?.description).toContain("onExhausted");
     expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
     expect(stage?.kind?.description).toContain("convertedStages");
@@ -728,6 +730,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(tool?.description).toContain("`next` defaults to null");
     expect(tool?.description).toContain("must also pass `baseRef`");
     expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
+    expect(tool?.description).toContain("fixes every handed finding and every in-spec discovery immediately");
+    expect(tool?.description).toContain("It returns fail only when blocked");
+    expect(tool?.description).toContain("It never returns fail for its own discovery");
+    expect(tool?.description).toContain("every in-spec discovery immediately");
+    expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
     expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
     expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
     expect(stage?.access?.description).toContain("does not select the sandbox");
@@ -968,11 +975,10 @@ test("the launch tools publish the task binding fields agents must pass", async 
     const taskId = spawn?.inputSchema.properties?.taskId as { type?: string; description?: string } | undefined;
     expect(taskId?.type).toBe("string");
     expect(taskId?.description).toContain("an id naming no task refuses the launch before any agent starts");
-    /* The published contract must not promise the cross-project refusal that
-       only create_pipeline performs: a spawn's explicit target carries its own
-       project, so a single foreign id is admitted (membership.test.ts). */
-    expect(taskId?.description).toContain("taken as given and binds the agent to that project's card");
-    expect(taskId?.description).not.toContain("or a task in another project, refuses the launch");
+    expect(taskId?.description).toContain("a task from another project is refused before any request is claimed or dispatched");
+    expect(taskId?.description).toContain("after project aliases are resolved");
+    expect(taskId?.description).toContain("omit taskId");
+    expect(taskId?.description).not.toContain("taken as given");
     expect(taskIds?.description).toContain("existing task in the pipeline's project");
     /* The omission case depends on the parent the CALL names: this tool never
        infers the caller as parent (spawnRecovery.integration.test.ts), so a
@@ -1047,6 +1053,8 @@ test("stage_report's field descriptions match the stage contract", async () => {
     const listed = await client.listTools();
     const tool = listed.tools.find((candidate) => candidate.name === "stage_report");
     const properties = tool?.inputSchema.properties as Record<string, { description?: string; items?: { properties?: Record<string, { description?: string }> } }> | undefined;
+    expect(properties?.blocked?.description).toContain("fixer cannot proceed");
+    expect(properties?.blockedReason?.description).toContain("independently of prose and output truncation");
     const verdict = properties?.verdict?.description ?? "";
     expect(verdict).not.toContain("retryable stage failure");
     expect(verdict).toContain("for a review, the findings that stand");
@@ -1112,4 +1120,27 @@ test("MCP pipeline tools describe default 3 and accept an explicit higher budget
     }
   });
   expect(TOOL_INPUT_SCHEMAS.pipeline_action.safeParse({ clientRequestId: "higher-budget", pipelineId: "p", action: "set-edge", stageId: "review", edge: "fail", to: "fix", maxRounds: 7 }).success).toBe(true);
+});
+
+test("the published update_task schema advertises replaceable notes without author inputs", async () => {
+  await withProtocolClient(inertBindings(), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
+    const properties = tool.inputSchema.properties!;
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.author).toBeUndefined();
+    expect(properties.noteAuthor).toBeUndefined();
+    expect(tool.description).toContain("Orchestrators and stage agents: set note whenever the situation changes");
+    expect(tool.description).toContain("operator's language");
+  });
+});
+
+test("search order is optional and advertised with relevance and newest choices", async () => {
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion" }).success).toBe(true);
+  expect(TOOL_INPUT_SCHEMAS.search_transcripts.safeParse({ clientRequestId: "fixture", query: "orion", order: "other" }).success).toBe(false);
+  await withProtocolClient(inertBindings(), async (client) => {
+    const listed = await client.listTools();
+    const schema = listed.tools.find((tool) => tool.name === "search_transcripts")!.inputSchema;
+    expect((schema.properties!.order as { enum: string[] }).enum).toEqual(["relevance", "newest"]);
+    expect(schema.required).not.toContain("order");
+  });
 });

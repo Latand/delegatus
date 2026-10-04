@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { seatTickWakeMessage } from "./report";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 
@@ -300,7 +301,7 @@ test("a task assigned before the wake that first reported a stall is not deferre
   /* W2: the stalls have not moved, and the task, older than W1, now leads. */
   const second = seatTickDecision(input({ pipelines: stalls, tasks: [assigned], changeFingerprint: "fp-w2", state: landed }));
   expect(reasonsOf(second.verdict)).toContain("unstarted-task");
-  expect(idsOf(second.verdict)).toEqual(["task_early", "pipeline_s1", "pipeline_s2", "pipeline_s3", "pipeline_s4"]);
+  expect(idsOf(second.verdict)).toEqual(["task_early"]);
 });
 
 test("a stall no landed wake named keeps its place ahead of five or more unstarted tasks", () => {
@@ -322,14 +323,14 @@ test("a stall no landed wake named keeps its place ahead of five or more unstart
      is older than W1 too, and it still leads, because no wake named it. */
   const second = seatTickDecision(input({ pipelines: [told, untold], tasks, changeFingerprint: "fp-w2",
     state: { ...landed, stalledSeen: [told.id, untold.id] } }));
-  expect(idsOf(second.verdict)).toEqual([untold.id, "task_1", "task_2", "task_3", "task_4"]);
-  expect(second.verdict.kind === "wake" ? second.verdict.deferred : null).toBe(3);
+  expect(idsOf(second.verdict)).toEqual([untold.id, "task_5", "task_6"]);
+  expect(second.verdict.kind === "wake" ? second.verdict.deferred : null).toBe(0);
 
-  /* W3: named once, it yields to the tasks as the first one did. */
+  /* W3: every item was delivered; unrelated movement repeats none. */
   const third = seatTickWakeCommit(second.state, plan(second.verdict, "fp-w2", 0), NOW);
   expect(third.reportedStalls).toEqual([`${told.id}@${told.updatedAt}`, `${untold.id}@${untold.updatedAt}`]);
   const after = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [told, untold], tasks, changeFingerprint: "fp-w3", state: third }));
-  expect(idsOf(after.verdict)).toEqual(["task_1", "task_2", "task_3", "task_4", "task_5"]);
+  expect(after.verdict.kind).toBe("quiet");
 });
 
 test("a stage or child held on a permission request is listed as a permission item, never as a stall (#2215)", () => {
@@ -532,7 +533,7 @@ test("a finished lane whose pull request is still open is a wake reason of its o
   expect(reasonsOf(decision.verdict)).toEqual(["unmerged-pr"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
     .toBe("pull request #1289 left open by a lane that finished");
-  expect(decision.verdict.kind === "wake" && decision.verdict.items[0]).toEqual({
+  expect(decision.verdict.kind === "wake" && decision.verdict.items[0]).toMatchObject({
     kind: "pull-request",
     id: "#1289",
     label: "wake on a merge that is waiting — open pull request from ship the exporter, unmerged since that lane finished",
@@ -561,9 +562,9 @@ test("an unmerged pull request waits out the wake interval like every other reas
   expect(decision.verdict.kind).toBe("quiet");
 });
 
-/* And the retry guard applies to it too, so a pull request nobody merges stops
-   costing an hourly wake and becomes one card instead. */
-test("an unmerged pull request that has stopped producing change is held by the retry guard", () => {
+/* A pull request still owed to the seat remains offerable when the old row
+   has no showing history, even after its retry guard was exhausted. */
+test("an unmerged pull request with unknown showing history passes an exhausted retry guard", () => {
   const decision = seatTickDecision(input({
     pullRequests: [pullRequest()],
     state: stateWith({
@@ -572,8 +573,8 @@ test("an unmerged pull request that has stopped producing change is held by the 
       wakesWithoutChange: { "unmerged-pr": 2 },
     }),
   }));
-  expect(decision.verdict).toEqual({ kind: "quiet", detail: "every wake reason is held by the retry guard" });
-  expect(decision.cards.map((card) => card.ref)).toContain("seat-tick-stuck-unmerged-pr");
+  expect(reasonsOf(decision.verdict)).toEqual(["unmerged-pr"]);
+  expect(decision.cards).toEqual([]);
 });
 
 /* Several at once name the first and count the rest, and every one of them is
@@ -733,22 +734,22 @@ test("an unreadable source raises no wake before the interval has elapsed", () =
   expect(decision.verdict.kind).toBe("error");
 });
 
-/* And the retry guard bounds it too: a reason the guard has stopped is not
-   revived by a gap beside it, and the check that has nothing left to carry
-   still refuses to call itself quiet. */
-test("a reason the retry guard holds is not revived by an unreadable source", () => {
+/* A non-versioned owed outcome remains bounded by the guard even while a
+   separate source gap keeps the overall check from claiming quiet. */
+test("a guarded child outcome is not revived by an unreadable source", () => {
+  const finished = child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() });
   const decision = seatTickDecision(input({
-    pipelines: [lane()],
+    children: [finished],
     pullRequestsUnavailable: "timed-out",
     changeFingerprint: "fp-1",
     state: stateWith({
       lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(),
       lastWakeFingerprint: "fp-1",
-      wakesWithoutChange: { interval: 2 },
+      wakesWithoutChange: { "child-terminal": 2 },
     }),
   }));
   expect(decision.verdict.kind).toBe("error");
-  expect(decision.cards.map((entry) => entry.ref)).toContain("seat-tick-stuck-interval");
+  expect(decision.cards.map((entry) => entry.ref)).toContain("seat-tick-stuck-child-terminal");
   expect(decision.state.quietSince).toBeNull();
 });
 
@@ -944,7 +945,7 @@ test("the wake names the backlog it held back, and carries only the live cards a
   ];
   const decision = seatTickDecision(input({ tasks, state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("1 assigned board task(s) nothing has started, and 2 older than the backlog bound the wake no longer names");
+    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
   expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
 });
 
@@ -1022,19 +1023,19 @@ test("a proposal card still open on the board holds the next proposal off", () =
   expect(decision.verdict).toEqual({ kind: "quiet", detail: "nothing owed" });
 });
 
-test("a fruitless reason is re-sent at most twice, then becomes a card and drops out of wakes", () => {
+test("a fruitless child outcome is re-sent at most twice, then becomes a card", () => {
   const base = {
-    pipelines: [lane()],
+    children: [child({ status: "terminal", outcome: "finished", terminalAt: new Date(NOW - 20 * MINUTE).toISOString() })],
     state: stateWith({
       lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString(),
       lastWakeFingerprint: "fp-1",
-      wakesWithoutChange: { interval: 2 },
+      wakesWithoutChange: { "child-terminal": 2 },
     }),
   };
   const decision = seatTickDecision(input(base));
   expect(decision.verdict).toEqual({ kind: "quiet", detail: "every wake reason is held by the retry guard" });
   expect(decision.cards).toHaveLength(1);
-  expect(decision.cards[0]).toMatchObject({ kind: "retry-guard", ref: "seat-tick-stuck-interval" });
+  expect(decision.cards[0]).toMatchObject({ kind: "retry-guard", ref: "seat-tick-stuck-child-terminal" });
 });
 
 test("board movement clears the retry guard, so a reason that starts working again is sent again", () => {
@@ -1207,7 +1208,7 @@ test("settings back at their default resolve the card instead of leaving it stan
     ref: "seat-tick-settings",
     kind: "tick-settings",
     state: "resolved",
-    settings: { enabled: true, wakeIntervalMs: 60 * MINUTE, reason: null, until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
+    settings: { enabled: true, wakeIntervalMs: 60 * MINUTE, reason: "the draft is gone, ticking as normal again", until: null, setBy: null, updatedAt: "2026-08-28T11:30:00.000Z" },
     detail: "this project is on the default tick settings",
   }]);
 });
@@ -1480,7 +1481,7 @@ test("a stalled child wakes only once it has persisted across two consecutive ch
   expect(first.state.stalledSeen).toEqual([`child:${stalled.conversationId}`]);
   const second = seatTickDecision(input({ children: [stalled], state: stateWith({ ...OVERDUE_STATE, stalledSeen: [`child:${stalled.conversationId}`] }) }));
   expect(second.verdict).toMatchObject({
-    reasons: [{ kind: "stalled", detail: `child ${stalled.conversationId} runs a turn the registry reports stalled (host_alive_transcript_silent)` }],
+    reasons: [{ kind: "stalled", detail: `build the exporter — child ${stalled.conversationId} runs a turn the registry reports stalled (host_alive_transcript_silent)` }],
     items: [{ kind: "child", id: stalled.conversationId, label: `build the exporter — child ${stalled.conversationId} runs a turn the registry reports stalled (host_alive_transcript_silent)` }],
   });
 });
@@ -1592,7 +1593,7 @@ test("a provisioned lane reaches its creator as one more item kind under the own
   const decision = seatTickDecision(input({ ownLanes: [ownLane()], state: stateWith(OVERDUE_STATE) }));
   expect(reasonsOf(decision.verdict)).toEqual(["own-lane-settled"]);
   const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
-  expect(verdict.items).toEqual([{
+  expect(verdict.items).toMatchObject([{
     kind: "provisioning",
     id: "pipeline_a1",
     label: "ship the exporter — lane you launched: provisioned, first stage running",
@@ -1609,7 +1610,7 @@ test("a lane whose provisioning failed names what stopped it (#1799)", () => {
   const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
   /* A park is an obligation, so it stays an ordinary lane line — what changes
      is that the seat is told its lane never ran a stage, and why. */
-  expect(verdict.items[0]).toEqual({
+  expect(verdict.items[0]).toMatchObject({
     kind: "pipeline",
     id: "pipeline_a1",
     label: "ship the exporter — lane you launched: provisioning failed, it never ran a stage: fetching origin/main: origin unavailable",
@@ -1627,7 +1628,7 @@ test("a needs_review lane's wake line says the last review failed and the head i
   }));
   expect(reasonsOf(decision.verdict)).toEqual(["own-lane-settled"]);
   const verdict = decision.verdict as Extract<SeatTickVerdict, { kind: "wake" }>;
-  expect(verdict.items[0]).toEqual({
+  expect(verdict.items[0]).toMatchObject({
     kind: "pipeline",
     id: "pipeline_a1",
     label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. pipeline_action continue-review with addRounds resumes it`,
@@ -1721,4 +1722,171 @@ test("a settled deploy of the seat's own wakes it inside the hour, and one past 
 
   const stale = seatTickDecision(input({ settledDeploys: [deploy(4 * 24 * 60)], state: stateWith({ lastWakeAt: new Date(NOW - 2 * 60 * MINUTE).toISOString() }) }));
   expect(stale.verdict.kind).not.toBe("wake");
+});
+
+
+describe("delivered agenda versions", () => {
+  test("names assigned tasks and each settled lane in reasons", () => {
+    const decision = seatTickDecision(input({ tasks: [card()], ownLanes: [
+      { id: "lane-one", title: "Export settings", settled: "completed", updatedAt: new Date(NOW).toISOString() },
+      { id: "lane-two", title: "Repair import", settled: "failed", updatedAt: new Date(NOW).toISOString() },
+    ] }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.reasons.find(r => r.kind === "unstarted-task")?.detail).toContain("wire the chip");
+    const lanes = decision.verdict.reasons.find(r => r.kind === "own-lane-settled")!.detail;
+    expect(lanes).toContain("Export settings");
+    expect(lanes).toContain("Repair import");
+  });
+
+  test("drains held-back PRs despite unrelated board changes and across the retry guard", () => {
+    const prs = Array.from({ length: 22 }, (_, i) => pullRequest({ number: i + 1, pipelineId: `lane-${i}` }));
+    let state = emptySeatTickState();
+    const seen: string[] = [];
+    for (let page = 0; page < 5; page++) {
+      const now = NOW + page * 90 * MINUTE;
+      const decision = seatTickDecision(input({ now, state, pullRequests: prs }));
+      expect(decision.verdict.kind).toBe("wake");
+      if (decision.verdict.kind !== "wake") return;
+      seen.push(...decision.verdict.items.map(item => item.id));
+      state = seatTickWakeCommit(decision.state, plan(decision.verdict, "fp-1", 0), now);
+    }
+    expect(new Set(seen).size).toBe(22);
+    expect(seen.length).toBe(22);
+    const quiet = seatTickDecision(input({ now: NOW + 500 * MINUTE, state, pullRequests: prs, changeFingerprint: "unrelated-change" }));
+    expect(quiet.verdict.kind).toBe("quiet");
+    const changed = seatTickDecision(input({ now: NOW + 500 * MINUTE, state, pullRequests: prs.map((pr, i) => i === 0 ? { ...pr, mergeBlocked: "checks pending" } : pr), changeFingerprint: "unrelated-change" }));
+    expect(changed.verdict.kind === "wake" && changed.verdict.items.map(item => item.id)).toEqual(["#1"]);
+  });
+
+  test("only a landed wake suppresses its task, and a task revision is offered again", () => {
+    const first = seatTickDecision(input({ tasks: [card()] }));
+    const pending = seatTickDecision(input({ state: first.state, tasks: [card()] }));
+    expect(pending.verdict.kind).toBe("wake");
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const next = { now: NOW + 90 * MINUTE, state: landed, changeFingerprint: "board-moved" };
+    expect(seatTickDecision(input({ ...next, tasks: [card()] })).verdict.kind).toBe("quiet");
+    expect(seatTickDecision(input({ ...next, tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] })).verdict.kind).toBe("wake");
+  });
+});
+
+
+test("a shown PR stays silent after its lane announcement is discharged", () => {
+  const first = seatTickDecision(input({ pullRequests: [pullRequest()], ownLanes: [ownLane({ settled: "completed" })] }));
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, state: landed, pullRequests: [pullRequest()], changeFingerprint: "moved" }));
+  expect(next.verdict.kind).toBe("quiet");
+  const debt = seatTickDecision(input({ now: NOW + 90 * MINUTE, state: landed, pullRequests: [pullRequest()], ownLanes: [ownLane({ settled: "needs_review" })], changeFingerprint: "moved" }));
+  expect(debt.verdict.kind).toBe("wake");
+  expect(plan(debt.verdict, "moved", 0).announcedLanes).toEqual(["pipeline_a1:needs_review"]);
+});
+
+test("permission requests stay actionable without a durable per-request identity", () => {
+  const held = lane({ stageActivity: { lifecycle: "waiting", reason: "permission_request", turnState: "busy", permission: { tool: "Bash", command: "publish", reason: null } } });
+  const first = seatTickDecision(input({ pipelines: [held] }));
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  expect(seatTickDecision(input({ now: NOW + 90 * MINUTE, state: landed, pipelines: [{ ...held, stageAttempt: "next-attempt" }], changeFingerprint: "changed" })).verdict.kind).toBe("wake");
+});
+
+
+test("an unchanged PR reason cannot hide movement in an open lane", () => {
+  const first = seatTickDecision(input({ pullRequests: [pullRequest()], pipelines: [lane()] }));
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const decision = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, pullRequests: [pullRequest()],
+    pipelines: [lane({ stageId: "review", updatedAt: new Date(NOW + MINUTE).toISOString() })], changeFingerprint: "moved" }));
+  expect(decision.verdict.kind).toBe("wake");
+  expect(decision.verdict.kind === "wake" && decision.verdict.items.map(item => item.id)).toEqual(["pipeline_a1"]);
+});
+
+
+test("cropped item lines stay owed after the frozen message lands", () => {
+  const prs = Array.from({ length: 5 }, (_, i) => pullRequest({ number: i + 1, title: `Change ${i}: ${"x".repeat(400)}` }));
+  let state = emptySeatTickState();
+  const received = new Set<string>();
+  for (let page = 0; page < 5; page++) {
+    const now = NOW + page * 90 * MINUTE;
+    const decision = seatTickDecision(input({ now, state, pullRequests: prs, changeFingerprint: `page-${page}` }));
+    if (decision.verdict.kind !== "wake") break;
+    const text = seatTickWakeMessage({ project: PROJECT, ...decision.verdict, signals: [], monitorPrompt: "n".repeat(7622) });
+    for (const item of decision.verdict.items) if (text.includes(`- [${item.kind}] ${item.id} — ${item.label}\n`)) received.add(item.id);
+    const commit = plan(decision.verdict, `page-${page}`, 0);
+    const wake = { clientMessageId: `page-${page}`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null, text, commit };
+    state = seatTickWakeCommit({ ...decision.state, outstandingWake: wake }, commit, now);
+    expect(state.itemsShown?.length).toBe(received.size);
+  }
+  expect(received.size).toBe(5);
+});
+
+
+test("a later deploy settlement re-offers unchanged seat-paused lanes", () => {
+  const paused = lane({ pausedBy: "seat", state: "inert" });
+  const first = seatTickDecision(input({ pipelines: [paused] }));
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const decision = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, pipelines: [paused],
+    settledDeploys: [{ deploymentId: "deploy-next", phase: "succeeded", sha: "b".repeat(40), error: null, settledAt: new Date(NOW + MINUTE).toISOString() }] }));
+  expect(decision.verdict.kind).toBe("wake");
+  expect(decision.verdict.kind === "wake" && decision.verdict.items.map(item => item.id)).toEqual(["deploy-next", paused.id]);
+});
+
+test("a later task revision cannot render a previously delivered signal again", () => {
+  const signals = [{ id: "capacity", label: "capacity needs attention" }];
+  const first = seatTickDecision(input({ tasks: [card()], signals }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  const text = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals });
+  expect(text).toContain(signals[0]!.label);
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, signals,
+    tasks: [card({ updatedAt: new Date(NOW + MINUTE).toISOString() })] }));
+  expect(next.verdict.kind).toBe("wake");
+  if (next.verdict.kind !== "wake") return;
+  expect(next.verdict.items.map(item => item.kind)).toEqual(["task"]);
+  expect(seatTickWakeMessage({ project: PROJECT, ...next.verdict, signals })).not.toContain(signals[0]!.label);
+});
+
+test("later deploy resume instructions drain every previously shown paused lane", () => {
+  const pipelines = Array.from({ length: 5 }, (_, i) => lane({ id: `paused-${i}`, pausedBy: "seat", state: "inert" }));
+  const first = seatTickDecision(input({ pipelines }));
+  expect(first.verdict.kind).toBe("wake");
+  const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const settlement = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, pipelines,
+    settledDeploys: [{ deploymentId: "deploy-next", phase: "succeeded", sha: "b".repeat(40), error: null, settledAt: new Date(NOW + MINUTE).toISOString() }] }));
+  expect(settlement.verdict.kind).toBe("wake");
+  if (settlement.verdict.kind !== "wake") return;
+  expect(settlement.verdict.items.map(item => item.id)).toEqual(["deploy-next", ...pipelines.slice(0, 4).map(row => row.id)]);
+  expect(settlement.verdict.deferred).toBe(1);
+  const landed = seatTickWakeCommit(settlement.state, plan(settlement.verdict, "fp-1", 0), NOW + 90 * MINUTE);
+  // Production removes the deploy from its source once this landing announces it.
+  const next = seatTickDecision(input({ now: NOW + 180 * MINUTE, state: landed, pipelines, settledDeploys: [] }));
+  expect(next.verdict.kind).toBe("wake");
+  if (next.verdict.kind !== "wake") return;
+  expect(next.verdict.items.map(item => item.id)).toEqual([pipelines[4]!.id]);
+  const finished = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 0), NOW + 180 * MINUTE);
+  expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines })).verdict.kind).toBe("quiet");
+});
+
+test("cropped outcome bullets leave child, deployment and maintenance obligations unacknowledged", () => {
+  const verdict: Extract<SeatTickVerdict, { kind: "wake" }> = {
+    kind: "wake", reasons: [{ kind: "own-lane-settled", detail: "settled outcomes" }], deferred: 0,
+    skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [],
+    items: [
+      { kind: "pipeline", id: "visible-lane", label: "completed", laneAnnouncement: "visible-lane:completed", itemVersion: "lane@one" },
+      { kind: "child", id: "cropped-child", label: "long child result ".repeat(500), outcomeIds: ["child-outcome"], stateTokens: ["cropped-child@one"], stallToken: "child-stall" },
+      { kind: "deploy", id: "cropped-deploy", label: "deploy settled", deploy: { deploymentId: "cropped-deploy", phase: "succeeded", sha: "a".repeat(40), error: null } },
+      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance" } },
+    ],
+  };
+  const text = seatTickWakeMessage({ project: "fixture-project", reasons: verdict.reasons, items: verdict.items, deferred: 0, signals: [] });
+  expect(text).toContain("…");
+  const plan = seatTickWakeCommitPlan(verdict, { fingerprint: "unchanged", eventsThrough: 0, bridgeReports: true,
+    terminalChildren: ["child-outcome"], frozenText: text,
+  })!;
+  const landed = seatTickWakeCommit(emptySeatTickState(), plan, Date.parse("2026-10-03T12:00:00Z"));
+  expect(landed.announcedLanes).toEqual(["visible-lane:completed"]);
+  expect(landed.harvestedChildren).toEqual([]);
+  expect(landed.childrenShown).toEqual([]);
+  expect(landed.announcedDeploys).toEqual([]);
+  expect(landed.announcedMaintenance).toEqual([]);
+  expect(landed.reportedStalls ?? []).toEqual([]);
+  expect(landed.reportsOwed!.map(outcome => outcome.key)).toEqual(["lane:visible-lane:completed"]);
 });

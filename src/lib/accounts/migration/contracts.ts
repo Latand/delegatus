@@ -177,6 +177,9 @@ export interface NativeGeneration {
 
 export interface ConversationMigration {
   intentId: string;
+  /** This conversation's migration start, preserved through phase transitions.
+      Older records fall back to the intent's creation time. */
+  startedAt?: string;
   phase: MigrationPhase;
   targetId: string;
   revision: number;
@@ -323,9 +326,9 @@ export interface HeldDeliveryCommand {
   turnId?: string | null;
   /** Message authorship stamped at admission (#1117), persisted on the held
       record so a migration-held delivery replays with the same attribution.
-      Excluded from the request digest: a replay that gains or loses the stamp
-      is the same logical message, never a conflict, and records written before
-      the field existed stay compatible. */
+      Ordinary sends retain stamp-upgrade compatibility outside the request
+      digest. Orchestrator relay receipts additionally compare this durable
+      origin: a different sender must never inherit their operation. */
   origin?: MessageOrigin;
 }
 

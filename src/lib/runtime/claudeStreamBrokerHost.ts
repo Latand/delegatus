@@ -1,3 +1,5 @@
+import { memoryKillText } from "./agentMemoryState";
+import type { AgentMemoryCell } from "./agentMemory";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import crypto from "node:crypto";
@@ -9,6 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
@@ -90,17 +93,20 @@ export interface ClaudeDeliveryState {
   delivered: boolean;
   queuedAt?: string;
   engineMessageId?: string | null;
+  confirmation?: "operation-bound" | "inferred" | "unverified";
 }
+
+export type ClaudeDeliveryConfirmation = "accepted" | "already-confirmed" | "refused";
 
 export interface ClaudeDeliveryLedger {
   load(sessionId: string): ClaudeDeliveryState[];
   recordQueued(sessionId: string, entry: QueueEntry, disposition: ClaudeDeliveryState["disposition"]): void;
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void;
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation?: "operation-bound" | "inferred"): ClaudeDeliveryConfirmation;
 }
 
 type ClaudeDeliveryRecord =
   | { kind: "queued"; entry: NormalizedQueueEntry; disposition: ClaudeDeliveryState["disposition"]; queuedAt: string }
-  | { kind: "delivered"; entryId: string; engineMessageId: string | null; deliveredAt: string };
+  | { kind: "delivered"; entryId: string; engineMessageId: string | null; deliveredAt: string; confirmation?: "operation-bound" | "inferred" | "unverified" };
 
 export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
   constructor(private readonly directory = statePath("claude-delivery-ledger")) {}
@@ -120,8 +126,23 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
       } else {
         const state = states.find((candidate) => candidate.entry.id === record.entryId);
         if (state) {
+          // Separate MCP/Viewer writers can both pass the allocation read
+          // before either appends. Replay gives the first durable UUID owner
+          // authority, including after adoption or a process restart.
+          if (state.delivered && state.engineMessageId !== record.engineMessageId) continue;
+          if (record.engineMessageId && states.some((candidate) => candidate.delivered
+            && candidate.entry.id !== record.entryId && candidate.engineMessageId === record.engineMessageId)) continue;
           state.delivered = true;
           state.engineMessageId = record.engineMessageId;
+          /* Before the source was persisted, direct and transcript-inferred
+             confirmations shared one shape. Revalidate legacy rows before
+             granting them operation authority or allowing a replay. */
+          const confirmation = record.confirmation ?? "unverified";
+          // Repeated legacy rows cannot weaken a verified binding.
+          if (state.confirmation !== "operation-bound"
+            && (state.confirmation !== "inferred" || confirmation === "operation-bound")) {
+            state.confirmation = confirmation;
+          }
         }
       }
     }
@@ -140,10 +161,20 @@ export class FileClaudeDeliveryLedger implements ClaudeDeliveryLedger {
     this.append(sessionId, { kind: "queued", entry: normalized, disposition, queuedAt: new Date().toISOString() });
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): ClaudeDeliveryConfirmation {
     const state = this.load(sessionId).find((candidate) => candidate.entry.id === entryId);
-    if (!state || state.delivered) return;
-    this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString() });
+    if (!state) return "refused";
+    if (state.delivered && state.confirmation !== "unverified") {
+      return state.engineMessageId === engineMessageId ? "already-confirmed" : "refused";
+    }
+    if (state.delivered && state.engineMessageId !== engineMessageId) return "refused";
+    if (engineMessageId && this.load(sessionId).some((candidate) => candidate.delivered
+      && candidate.engineMessageId === engineMessageId && candidate.entry.id !== entryId)) return "refused";
+    this.append(sessionId, { kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(), confirmation });
+    const allocation = this.load(sessionId).find((candidate) => candidate.entry.id === entryId);
+    if (!allocation?.delivered || allocation.engineMessageId !== engineMessageId
+      || allocation.confirmation === "unverified") return "refused";
+    return "accepted";
   }
 
   private readRecords(sessionId: string): ClaudeDeliveryRecord[] {
@@ -231,6 +262,7 @@ export interface ClaudeStreamBrokerHostOptions {
   shutdownGraceMs?: number;
   initialEventCursor?: number;
   onEventCursorRecovery?: RuntimeEventCursorRecoveryReporter;
+  memoryCell?: AgentMemoryCell | null;
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
@@ -355,7 +387,8 @@ function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
   if (candidate?.kind === "delivered"
     && typeof candidate.entryId === "string"
     && (typeof candidate.engineMessageId === "string" || candidate.engineMessageId === null)
-    && typeof candidate.deliveredAt === "string") return candidate as unknown as ClaudeDeliveryRecord;
+    && typeof candidate.deliveredAt === "string"
+    && (candidate.confirmation === undefined || candidate.confirmation === "operation-bound" || candidate.confirmation === "inferred" || candidate.confirmation === "unverified")) return candidate as unknown as ClaudeDeliveryRecord;
   return null;
 }
 
@@ -549,7 +582,11 @@ function sanitizedUserReplay(
 }
 
 function defaultTranscriptUsers(cwd: string, sessionId: string, projectsRoot?: string): ClaudeTranscriptUser[] {
-  const filename = claudeTranscriptPath(cwd, sessionId, projectsRoot);
+  return readClaudeTranscriptUsers(claudeTranscriptPath(cwd, sessionId, projectsRoot));
+}
+
+/** Canonical user records shared by adoption and delivery settlement. */
+export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUser[] {
   let contents: string;
   try { contents = fs.readFileSync(filename, "utf8"); }
   catch (error) {
@@ -618,6 +655,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private activeTurnId: string | null = null;
   private protocolVersion: string | null;
   private account: HostState["account"];
+  private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
   private released = false;
   private dead = false;
@@ -640,6 +678,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options: ClaudeStreamBrokerHostOptions,
   ) {
     this.child = child;
+    this.memoryCell = options.memoryCell ?? null;
+    this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
     this.eventStore = options.eventStore ?? new FileRuntimeEventStore();
     this.deliveryLedger = options.deliveryLedger ?? new FileClaudeDeliveryLedger();
@@ -679,7 +719,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!this.releasing && !this.released) this.fail(new Error(`Claude stream stdin failed: ${safeError(error)}`));
     });
     child.on("error", (error) => this.fail(new Error(`Claude child failed: ${safeError(error)}`)));
+    // Exit arrives before inherited pipes close; reap OOM survivors immediately.
+    child.on("exit", () => {
+      const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
+      if (kill?.fatal && !this.releasing && !this.released) this.fail(new Error(memoryKillText(kill)));
+    });
     child.on("close", () => {
+      this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.reaped = true;
       if (this.terminationTimer) {
         clearTimeout(this.terminationTimer);
@@ -688,7 +734,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.resolveReaped();
       if (this.releasing) this.finishRelease();
       else if (this.dead) this.notifyStateListeners();
-      else if (!this.releasing && !this.released) this.fail(new Error("Claude child exited"));
+      else if (!this.releasing && !this.released) this.fail(new Error(this.memoryCell?.launchFailure() ?? "Claude child exited"));
     });
   }
 
@@ -707,14 +753,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     options: ClaudeStreamBrokerHostOptions,
   ): Promise<ClaudeStreamBrokerHost> {
     const binary = options.binary ?? process.env.LLV_CLAUDE_BINARY ?? "claude";
-    const env = subscriptionEnv(
-      options.env ?? process.env,
-      options.claudeConfigDir,
-      options.forwardGitHubConfig === true,
-      options.providerAccount === true,
-    );
+    let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
     try {
+      env = subscriptionEnv(
+        options.env ?? process.env,
+        options.claudeConfigDir,
+        options.forwardGitHubConfig === true,
+        options.providerAccount === true,
+      );
       auth = options.providerAccount
         ? { loggedIn: true, authMethod: "provider", subscriptionType: null }
         : await (options.readAuthStatus?.() ?? claudeCliAuthStatus(binary, env, options.cwd));
@@ -771,6 +818,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           allowSubagents: options.allowSubagents,
           baseSettingsPath: options.spawnPolicyBaseSettingsPath,
           providerAccount: options.providerAccount,
+          publicationEnv: options.env ?? process.env,
           profileId,
           cwd: options.cwd,
           mcpServers: options.mcpServers,
@@ -782,7 +830,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         "--settings", settings.settingsPath,
         "--strict-mcp-config", "--mcp-config", settings.mcpConfigPath,
       );
-    } else args.push("--strict-mcp-config");
+    } else args.push("--settings", JSON.stringify({ env: agentPublicationIdentityEnv(options.env ?? process.env) }), "--strict-mcp-config");
     if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
@@ -790,7 +838,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.effort) args.push("--effort", options.effort);
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
     if (options.tools) args.push("--tools", options.tools.join(","));
-    const spawnProcess = options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
+    const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
       spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -870,6 +918,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return { outcome: "rejected", reason: "stale-turn" };
     }
     if (duplicate?.delivered) {
+      if (duplicate.confirmation === "unverified") {
+        throw new Error("Claude delivery outcome is uncertain; recipient evidence is ambiguous");
+      }
       return { outcome: duplicate.disposition, turnId: duplicate.entry.id };
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
@@ -1140,6 +1191,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
+      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
@@ -1187,11 +1239,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private reconcileTranscript(users: ClaudeTranscriptUser[]): void {
-    const unmatched = [...users];
-    for (const delivery of this.deliveries) {
-      if (delivery.delivered) continue;
-      const queuedAt = delivery.queuedAt ? Date.parse(delivery.queuedAt) : Number.NEGATIVE_INFINITY;
-      const index = unmatched.findIndex((user) => {
+    const alreadyClaimed = new Set(this.deliveries.filter((delivery) => delivery.delivered
+      && delivery.confirmation !== "unverified" && delivery.engineMessageId)
+      .map((delivery) => delivery.engineMessageId));
+    const unmatched = users.filter((user) => user.uuid && !alreadyClaimed.has(user.uuid));
+    const candidatesFor = (delivery: typeof this.deliveries[number]) => unmatched.filter((user) => {
+        const queuedAt = delivery.queuedAt ? Date.parse(delivery.queuedAt) : Number.NEGATIVE_INFINITY;
         const timestamp = user.timestamp ? Date.parse(user.timestamp) : Number.POSITIVE_INFINITY;
         /* A real Claude transcript ends a tool-using turn with a `user` role
            message that carries only a `tool_result` block — no text, no image,
@@ -1207,11 +1260,21 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           imageCount: user.imageCount ?? 0,
         }) && timestamp >= queuedAt;
       });
-      if (index < 0) continue;
-      const [user] = unmatched.splice(index, 1);
-      this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null);
+    for (const delivery of this.deliveries) {
+      if (delivery.delivered) continue;
+      const candidates = candidatesFor(delivery);
+      if (candidates.length !== 1) continue;
+      const [user] = candidates;
+      const competingDeliveries = this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified")
+        && candidatesFor(candidate).some((match) => match.uuid === user?.uuid));
+      if (competingDeliveries.length !== 1) continue;
+      const confirmation = this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, user?.uuid ?? null, "inferred");
+      if (confirmation === "refused") continue;
       delivery.delivered = true;
       delivery.engineMessageId = user?.uuid ?? null;
+      delivery.confirmation = "inferred";
+      const index = unmatched.findIndex((candidate) => candidate.uuid === user?.uuid);
+      if (index >= 0) unmatched.splice(index, 1);
     }
   }
 
@@ -1297,18 +1360,24 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (type === "user") {
       const content = messageContent(message);
       const directUserEcho = stringField(message.message, "role") === "user" && content !== null;
-      const delivery = directUserEcho
-        ? this.deliveries.find((candidate) => !candidate.delivered && matchesClaudeUserContent(candidate.entry, {
+      const directMatches = directUserEcho
+        ? this.deliveries.filter((candidate) => (!candidate.delivered || candidate.confirmation === "unverified") && matchesClaudeUserContent(candidate.entry, {
             contentDigest: content.contentDigest,
             text: content.content.text,
             imageCount: content.content.images.length,
           }))
-        : undefined;
+        : [];
+      const delivery = directMatches.length === 1 ? directMatches[0] : undefined;
       if (delivery) {
         try {
-          this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"));
+          const confirmation = this.deliveryLedger.confirmDelivered(this.identity.sessionId, delivery.entry.id, stringField(message, "uuid"), "inferred");
+          if (confirmation === "refused") {
+            this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed" });
+            return;
+          }
           delivery.delivered = true;
           delivery.engineMessageId = stringField(message, "uuid");
+          delivery.confirmation = "inferred";
           const pending = this.pendingDeliveries.get(delivery.entry.id);
           if (pending) {
             this.pendingDeliveries.delete(delivery.entry.id);
@@ -1489,6 +1558,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.emit({ kind: "session-status", status: "unhosted" });
     if (this.ledgerFailed) this.notifyStateListeners();
     this.closeSubscribers();
+    this.memoryCell?.close();
     const cleanup = this.releaseCleanup;
     this.releaseCleanup = null;
     cleanup?.();
@@ -1539,6 +1609,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private signalReleaseGroup(signal: NodeJS.Signals): boolean {
+    // The memory cell owns fatal OOM cleanup through its unit or verified tree.
+    if (this.memoryCell?.fatalMemoryExit) return true;
     const expected = this.releaseFence;
     if (expected) {
       const pid = this.child.pid;
@@ -1551,6 +1623,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private startTermination(): boolean {
+    if (this.memoryCell?.fatalMemoryExit) {
+      if (this.terminationTimer) clearTimeout(this.terminationTimer);
+      this.terminationTimer = null;
+      for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) stream.destroy();
+      this.reaped = true;
+      this.resolveReaped();
+      this.terminationStarted = true;
+      return true;
+    }
     if (this.terminationStarted || this.reaped) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;

@@ -1,0 +1,19 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 390,
+      "right": 390,
+      "overflow": false,
+      "errors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "right": 390,
+      "overflow": false,
+      "errors": []
+    }
+  ]
+}

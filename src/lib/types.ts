@@ -294,6 +294,7 @@ export interface FileEntry {
   waitingInput: WaitingInput | null;
   /** The oldest tool permission request the conversation's structured host
       holds open (#2215): a Needs-you item with Allow once and Deny. */
+  memoryKill?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit" | "fatal">;
   pendingPermission?: PendingPermissionRequest | null;
   /** Live pane wall or fresh structured account exhaustion. */
   rateLimit?: RateLimitState | null;
@@ -476,7 +477,7 @@ export interface FilesResponse {
       "mirrorAgeMs" | "writerRatePerSecond"
     >;
     /** State database fallbacks and refused backups of the last week (#1870). */
-    storage?: { incidents: import("@/lib/state/durability").StorageIncident[] };
+    storage?: { incidents: import("@/lib/state/durability").StorageIncident[]; writes?: import("@/lib/state/diskFull").StateWriteHealth };
   };
   /** Durable conversation-id aliases (old id → canonical id), so a deep link
       copied before provisional-id adoption still resolves its card. */

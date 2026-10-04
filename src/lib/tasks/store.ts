@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { isTaskNote } from "./note";
+
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
@@ -206,6 +208,7 @@ function coerceTask(value: unknown): BoardTask | null {
     createdAt: raw.createdAt!,
     updatedAt: raw.updatedAt!,
   };
+  if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
@@ -680,6 +683,15 @@ export function taskFeedSource(filePath = TASKS_FILE) {
   return {
     database: legacyDatabasePath(filePath),
     revision: () => collection.revision(),
+    get: (id: string) => coerceTask(collection.get(`t:${id}`)),
+    /** Eligibility can change in scanner/pipeline state without a task edit.
+        Requeue the current persisted row without changing its data or stamps. */
+    requeue: (ids: readonly string[]) => collection.boundedPatch(ids.length * 2, (tx) => {
+      for (const id of ids) {
+        const row = tx.get(`t:${id}`);
+        if (row) tx.put(row);
+      }
+    }),
     changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
     /** Task rows with keys in `(after, through]`, in key order. */
     keyRange: (after: string, through: string, limit: number) => collection.keyRange(after, through, limit).map((row) => {

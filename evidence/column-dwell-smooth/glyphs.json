@@ -1,0 +1,43 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "readings": [
+    {
+      "phase": 0,
+      "target": "inbox",
+      "visibleGlyphs": 52,
+      "maxLayerDelta": 0,
+      "maxGlyphDelta": 0.000030517578125
+    },
+    {
+      "phase": 10,
+      "target": "done",
+      "visibleGlyphs": 52,
+      "maxLayerDelta": 0.00006103515625,
+      "maxGlyphDelta": 0.020965576171875
+    },
+    {
+      "phase": 20,
+      "target": "done",
+      "visibleGlyphs": 52,
+      "maxLayerDelta": 0.000030517578125,
+      "maxGlyphDelta": 0.0381317138671875
+    },
+    {
+      "phase": 40,
+      "target": "assigned",
+      "visibleGlyphs": 52,
+      "maxLayerDelta": 0,
+      "maxGlyphDelta": 0.02276611328125
+    },
+    {
+      "phase": "after-wrap",
+      "target": "inbox",
+      "visibleGlyphs": 47,
+      "maxLayerDelta": 0,
+      "maxGlyphDelta": 0.0641326904296875
+    }
+  ]
+}

@@ -6,8 +6,102 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { procBackend } from "@/lib/proc";
 
+import { rememberRecordBytes } from "./registryRecords";
 import { openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
+import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
+
+export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
+export class StateLeaseLostError extends FileTransactionBusyError {
+  constructor(message: string) {
+    super(`${message}: this writer's lease expired or was taken over; nothing was written`);
+    this.name = "StateLeaseLostError";
+  }
+}
+function classifyStateError(error: unknown, detail: string): unknown {
+  if (!isDiskFullError(error)) return error;
+  noteStateDiskFull(detail);
+  return error instanceof StateDiskFullError ? error : new StateDiskFullError(detail, error);
+}
+
+type WriteFault = { site: "release" | "commit"; collection?: string; times?: number; error: Error };
+const writeFaults = new Map<WriteFault["site"], WriteFault>();
+export function injectStateWriteFaultForTests(fault: WriteFault | null): void {
+  if (fault === null) writeFaults.clear();
+  else writeFaults.set(fault.site, { ...fault });
+}
+function injectWriteFault(site: WriteFault["site"], collection?: string): void {
+  const fault = writeFaults.get(site);
+  if (!fault || (fault.collection !== undefined && fault.collection !== collection)) return;
+  if (fault.times !== undefined) {
+    if (fault.times <= 0) return;
+    fault.times -= 1;
+  }
+  throw fault.error;
+}
+
+type AbandonedLease = { filename: string; collection: string; token: string; abandonedAt: number };
+type AbandonedLeases = { entries: Map<string, Map<string, Map<string, AbandonedLease>>>; timer: ReturnType<typeof setTimeout> | null; deadline?: number; delay: number };
+const leaseGlobal = globalThis as typeof globalThis & { __llvAbandonedStateLeases?: AbandonedLeases };
+const abandoned: AbandonedLeases = leaseGlobal.__llvAbandonedStateLeases ??= { entries: new Map(), timer: null, delay: 250 };
+function abandonedTokens(filename: string, collection: string) {
+  return abandoned.entries.get(path.resolve(filename))?.get(collection);
+}
+function forgetAbandoned(lease: AbandonedLease): void {
+  const filename = path.resolve(lease.filename);
+  const collections = abandoned.entries.get(filename);
+  const tokens = collections?.get(lease.collection);
+  if (!tokens?.delete(lease.token)) return;
+  if (!tokens.size) collections!.delete(lease.collection);
+  if (!collections!.size) abandoned.entries.delete(filename);
+  console.info(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms`);
+}
+function deleteLease(lease: AbandonedLease): void {
+  // If a sandbox or retired database has disappeared, do not recreate it.
+  if (!fs.existsSync(lease.filename)) return;
+  const db = connectDatabase(lease.filename);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    injectWriteFault("release", lease.collection);
+    db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
+    db.exec("COMMIT");
+  } catch (error) { rollbackQuietly(db); throw error; }
+  finally { db.close(); }
+}
+function scheduleAbandonedRetry(): void {
+  if (!abandoned.entries.size) return;
+  const deadline = Date.now() + abandoned.delay;
+  // New abandoned tokens may shorten a pending retry, never postpone it.
+  if (abandoned.timer) {
+    if (abandoned.deadline === undefined || abandoned.deadline <= deadline) return;
+    clearTimeout(abandoned.timer);
+  }
+  abandoned.deadline = deadline;
+  abandoned.timer = setTimeout(() => {
+    abandoned.timer = null;
+    abandoned.deadline = undefined;
+    for (const collections of abandoned.entries.values()) for (const tokens of collections.values()) for (const lease of tokens.values()) {
+      try { deleteLease(lease); forgetAbandoned(lease); }
+      catch (error) { classifyStateError(error, `${lease.collection} release`); }
+    }
+    abandoned.delay = Math.min(5_000, abandoned.delay * 2);
+    scheduleAbandonedRetry();
+  }, abandoned.delay);
+  abandoned.timer.unref();
+}
+function abandonLease(lease: AbandonedLease, error: unknown): void {
+  const filename = path.resolve(lease.filename);
+  let collections = abandoned.entries.get(filename);
+  if (!collections) abandoned.entries.set(filename, collections = new Map());
+  let tokens = collections.get(lease.collection);
+  if (!tokens) collections.set(lease.collection, tokens = new Map());
+  if (!tokens.has(lease.token)) {
+    tokens.set(lease.token, lease);
+    console.warn(`[state lease] abandoned ${lease.collection}: ${String(classifyStateError(error, `${lease.collection} release`))}`);
+  }
+  abandoned.delay = 250;
+  scheduleAbandonedRetry();
+}
 import {
   hotStatePreparingWriterReady,
   hotStateSqliteWriterReady,
@@ -31,6 +125,7 @@ export interface StateCollectionSeed<T> {
   schemaVersion: number;
   migrationId: string;
   loadRecords(): readonly T[];
+  recordJson?(records: readonly T[], index: number): string | undefined;
   key(record: T): string;
   controllerActive?(record: T): boolean;
 }
@@ -45,6 +140,9 @@ export interface SqliteStateCollectionOptions<T> {
   controllerActive?(record: T): boolean;
   validate?(record: T): void;
   strictDecode?: boolean;
+  /** A parsed record this release cannot interpret stays in its original row.
+      JSON/decoder exceptions still indicate corruption and abort the read. */
+  preserveRejectedRecords?: boolean;
   decodeError?(error: unknown): Error;
   onDecodeError?(error: unknown): void;
   onIncrementalReadSnapshot?(revision: number): void;
@@ -68,6 +166,7 @@ type LeaseRow = {
   owner_token: string;
   owner_pid: number;
   owner_start_identity: string | null;
+  acquired_at: number;
 };
 
 type CachedRecord<T> = {
@@ -192,7 +291,8 @@ function assertSqliteInitializationAuthority(filename: string, allowFencedExisti
    activation fallback replaced is reopened, never written through the moved
    handle (currentDatabase.ts). */
 function connectDatabase(filename: string): Database {
-  return openCurrentDatabase(filename, () => connectRawDatabase(filename));
+  try { return openCurrentDatabase(filename, () => connectRawDatabase(filename)); }
+  catch (error) { throw classifyStateError(error, "state database connection"); }
 }
 
 function connectRawDatabase(filename: string): Database {
@@ -205,7 +305,7 @@ function connectRawDatabase(filename: string): Database {
         db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -229,7 +329,8 @@ function connectRawReadonlyDatabase(filename: string): Database {
 }
 
 function openDatabase(filename: string): Database {
-  return openCurrentDatabase(filename, () => openRawDatabase(filename));
+  try { return openCurrentDatabase(filename, () => openRawDatabase(filename)); }
+  catch (error) { throw classifyStateError(error, "state database initialization"); }
 }
 
 function openRawDatabase(filename: string): Database {
@@ -317,7 +418,7 @@ function openRawDatabase(filename: string): Database {
         return db;
       } catch (error) {
         rollbackQuietly(db);
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -346,16 +447,20 @@ function isBusyError(error: unknown): boolean {
   return /database is (?:locked|busy)|SQLITE_BUSY/i.test(message);
 }
 
-function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T): T {
+function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
     try {
       db.exec("BEGIN IMMEDIATE");
+      const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
       const result = operation();
+      const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
+      injectWriteFault("commit", collection);
       db.exec("COMMIT");
+      if (after > before) noteStateCommit();
       return result;
     } catch (error) {
       rollbackQuietly(db);
-      if (!isBusyError(error)) throw error;
+      if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
       Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
     }
   }
@@ -373,8 +478,10 @@ export function stateLeaseOwnerAlive(owner: { pid: number; startIdentity: string
   return Number.isInteger(owner.pid) && owner.pid > 0 && processAlive(owner.pid, owner.startIdentity);
 }
 
-function leaseIsStale(lease: LeaseRow): boolean {
-  return !stateLeaseOwnerAlive({ pid: lease.owner_pid, startIdentity: lease.owner_start_identity });
+function leaseIsStale(lease: LeaseRow, filename: string, collection: string, now: number): boolean {
+  return abandonedTokens(filename, collection)?.has(lease.owner_token) === true
+    || now - lease.acquired_at > STATE_LEASE_MAX_AGE_MS
+    || !stateLeaseOwnerAlive({ pid: lease.owner_pid, startIdentity: lease.owner_start_identity });
 }
 
 function insertSeed<T>(db: Database, seed: StateCollectionSeed<T>): void {
@@ -393,7 +500,7 @@ function insertSeed<T>(db: Database, seed: StateCollectionSeed<T>): void {
     const key = seed.key(record);
     if (!key || seen.has(key)) throw new Error(`duplicate or empty ${seed.collection} migration key: ${key}`);
     seen.add(key);
-    insert.run(seed.collection, key, JSON.stringify(record), index, revision, seed.controllerActive?.(record) === false ? 0 : 1);
+    insert.run(seed.collection, key, seed.recordJson?.(records, index) ?? JSON.stringify(record), index, revision, seed.controllerActive?.(record) === false ? 0 : 1);
   });
 }
 
@@ -444,7 +551,7 @@ export function initializeStateCollections(
         return;
       } catch (error) {
         rollbackQuietly(db);
-        if (!isBusyError(error)) throw error;
+        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -888,10 +995,10 @@ export class SqliteStateCollection<T> {
     return this.readDb.query<Pick<CollectionRow, "value_json">, [string, string, string, number]>(`
       SELECT value_json FROM state_rows
       WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
-    `).all(this.options.collection, after, through, limit).map((row) => {
+    `).all(this.options.collection, after, through, limit).flatMap((row) => {
       const decoded = this.decodeRow(row.value_json);
-      if (decoded === null) throw new Error("invalid bounded state row");
-      return this.options.clone(decoded);
+      if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+      return decoded === null ? [] : [this.options.clone(decoded)];
     });
   }
 
@@ -923,13 +1030,17 @@ export class SqliteStateCollection<T> {
               ).get(this.options.collection, key);
               if (!row) return null;
               const value = this.decodeRow(row.value_json);
-              if (value === null) throw new Error("invalid bounded state row");
+              if (value === null) {
+                if (!this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+                return null;
+              }
               return this.options.clone(value);
             },
             put: (record) => {
               consume();
               this.validate(record);
               const key = this.options.key(record);
+              this.assertRowWritable(db, key);
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
                 VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
@@ -938,6 +1049,7 @@ export class SqliteStateCollection<T> {
             },
             delete: (key) => {
               consume();
+              this.assertRowWritable(db, key);
               db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?").run(this.options.collection, key);
               changed.set(key, "delete");
             },
@@ -953,7 +1065,7 @@ export class SqliteStateCollection<T> {
             this.pruneChanges(db, revision);
           }
           return result;
-        });
+        }, this.options.collection);
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
         return result;
@@ -1006,14 +1118,26 @@ export class SqliteStateCollection<T> {
 
   unclaimedPipelinePublications(): T[] {
     if (this.options.collection !== "pipelines") throw new Error("pipeline admission requires the pipeline collection");
-    return this.readDb.query<{ value_json: string }, []>(`SELECT value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
-      WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
-      AND json_extract(value_json, '$.publication') = 'remote-branch'
-      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed') ORDER BY row_key LIMIT 16`).all().map((row) => {
-      const decoded = this.decodeRow(row.value_json);
-      if (!decoded) throw new Error("invalid legacy pipeline row");
-      return this.options.clone(decoded);
-    });
+    const accepted: T[] = [];
+    let after = "";
+    // Advance by raw keys even when an entire page is opaque. Otherwise sixteen
+    // future records at the front starve every healthy publication behind them.
+    while (accepted.length < 16) {
+      const limit = 16 - accepted.length;
+      const rows = this.readDb.query<{ row_key: string; value_json: string }, [string, number]>(`SELECT row_key, value_json FROM state_rows INDEXED BY pipeline_delivery_unclaimed
+        WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery') IS NULL
+        AND json_extract(value_json, '$.publication') = 'remote-branch'
+        AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')
+        AND row_key > ? ORDER BY row_key LIMIT ?`).all(after, limit);
+      for (const row of rows) {
+        after = row.row_key;
+        const decoded = this.decodeRow(row.value_json);
+        if (!decoded && !this.options.preserveRejectedRecords) throw new Error("invalid legacy pipeline row");
+        if (decoded) accepted.push(this.options.clone(decoded));
+      }
+      if (rows.length < limit) break;
+    }
+    return accepted;
   }
 
   loadReadonly(): readonly T[] {
@@ -1134,6 +1258,7 @@ export class SqliteStateCollection<T> {
             const key = target.options.key(record);
             const valueJson = JSON.stringify(record);
             const controllerActive = target.options.controllerActive?.(record) === false ? 0 : 1;
+            target.assertRowWritable(db, key);
             const held = targetRows.get(key);
             return { key, valueJson, controllerActive, held, order: held?.row_order ?? targetOrder++ };
           });
@@ -1173,7 +1298,7 @@ export class SqliteStateCollection<T> {
           if (targetChanged.length > 0) target.pruneChanges(db, targetRevision);
           options.beforeCommit?.();
           return selected.length;
-        });
+        }, this.options.collection);
         if (moved > 0) {
           secureDatabaseFiles(this.filename);
           this.invalidateAfterCommit();
@@ -1285,7 +1410,7 @@ export class SqliteStateCollection<T> {
   checkpointMirror(write: (records: readonly T[], revision: number) => void): void {
     const lease = this.acquireLeaseSync();
     try {
-      const records = this.snapshot();
+      const records = this.mirrorSnapshot();
       write(records, this.revision());
     } finally {
       this.releaseLeaseSync(lease);
@@ -1309,7 +1434,7 @@ export class SqliteStateCollection<T> {
       const lease = await this.acquireLease();
       let revision: number;
       try {
-        const records = this.snapshot();
+        const records = this.mirrorSnapshot();
         revision = this.revision();
         write(records, revision);
       } finally {
@@ -1318,6 +1443,19 @@ export class SqliteStateCollection<T> {
       if (this.revision() === revision) return revision;
     }
     throw new Error(`${this.options.collection} rollback checkpoint did not converge`);
+  }
+
+  /** Rollback mirrors include opaque records; controller snapshots exclude them. */
+  private mirrorSnapshot(): readonly T[] {
+    if (!this.options.preserveRejectedRecords) return this.snapshot();
+    const rows = this.readDb.query<{ value_json: string }, [string]>(
+      "SELECT value_json FROM state_rows WHERE collection = ? ORDER BY row_order, row_key",
+    ).all(this.options.collection);
+    const records = rows.map((row) => {
+      this.decodeRow(row.value_json); // strict parse before publication
+      return JSON.parse(row.value_json) as T;
+    });
+    return rememberRecordBytes(records, rows.map((row) => row.value_json), (record) => this.options.decode(record) !== null);
   }
 
   private collectionMeta(db = this.readDb): CollectionMeta | null {
@@ -1329,12 +1467,12 @@ export class SqliteStateCollection<T> {
   private decodeRow(valueJson: string): T | null {
     try {
       const decoded = this.options.decode(JSON.parse(valueJson) as unknown);
-      if (decoded === null && this.options.strictDecode) {
+      if (decoded === null && this.options.strictDecode && !this.options.preserveRejectedRecords) {
         throw new Error(`${this.options.collection} SQLite row is malformed`);
       }
       return decoded;
     } catch (error) {
-      if (this.options.strictDecode) {
+      if (this.options.strictDecode || this.options.preserveRejectedRecords) {
         throw this.options.decodeError?.(error) ?? error;
       }
       this.options.onDecodeError?.(error);
@@ -1502,6 +1640,18 @@ export class SqliteStateCollection<T> {
     this.options.validate?.(record);
   }
 
+  private protectedRow(row: { value_json: string } | null | undefined): boolean {
+    return Boolean(row && this.options.preserveRejectedRecords && this.decodeRow(row.value_json) === null);
+  }
+
+  private assertRowWritable(db: Database, key: string): void {
+    if (!this.options.preserveRejectedRecords) return;
+    const row = db.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
+    ).get(this.options.collection, key);
+    if (this.protectedRow(row)) throw new Error(`refusing to overwrite preserved ${this.options.collection} record: ${key}`);
+  }
+
   private persistChangedRows(ownerToken: string, records: readonly T[]): void {
     for (const record of records) this.validate(record);
     const db = connectDatabase(this.filename);
@@ -1518,6 +1668,7 @@ export class SqliteStateCollection<T> {
           const key = this.options.key(record);
           const valueJson = JSON.stringify(record);
           const controllerActive = this.options.controllerActive?.(record) === false ? 0 : 1;
+          this.assertRowWritable(db, key);
           return { key, valueJson, controllerActive, row: current.get(this.options.collection, key) };
         });
         const actual = prepared.filter((entry) => (
@@ -1551,7 +1702,7 @@ export class SqliteStateCollection<T> {
           .run(nextRevision, this.options.collection);
         this.pruneChanges(db, nextRevision);
         return nextRevision;
-      });
+      }, this.options.collection);
       if (revision !== null) {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
@@ -1591,6 +1742,8 @@ export class SqliteStateCollection<T> {
           SELECT row_key, value_json, row_order, row_revision, controller_active
           FROM state_rows WHERE collection = ?
         `).all(this.options.collection).map((row) => [row.row_key, row] as const));
+        for (const key of [...seen, ...requestedDeletes]) this.assertRowWritable(db, key);
+        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row)).map(([key]) => key));
         const encoded = records.map((record, index) => ({
           key: this.options.key(record),
           valueJson: JSON.stringify(record),
@@ -1606,7 +1759,7 @@ export class SqliteStateCollection<T> {
         });
         const deleted = mergeOmitted
           ? [...requestedDeletes].filter((key) => current.has(key))
-          : [...current.keys()].filter((key) => !seen.has(key));
+          : [...current.keys()].filter((key) => !seen.has(key) && !protectedKeys.has(key));
         const companionChanged = companion ? companion.collection.mergeRows(db, companion.lease, companion.records, companion.deleteKeys ?? []) : false;
         if (changed.length === 0 && deleted.length === 0) return companionChanged ? meta.revision : null;
         const nextRevision = meta.revision + 1;
@@ -1642,7 +1795,7 @@ export class SqliteStateCollection<T> {
           .run(nextRevision, this.options.collection);
         this.pruneChanges(db, nextRevision);
         return nextRevision;
-      });
+      }, this.options.collection);
       if (revision !== null) {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
@@ -1665,9 +1818,11 @@ export class SqliteStateCollection<T> {
     const upserts = records.flatMap((record) => {
       const key = this.options.key(record);
       const valueJson = JSON.stringify(record);
+      this.assertRowWritable(db, key);
       const held = current.get(this.options.collection, key);
       return held?.value_json === valueJson ? [] : [{ key, valueJson, held, controllerActive: this.options.controllerActive?.(record) === false ? 0 : 1 }];
     });
+    for (const key of deleteKeys) this.assertRowWritable(db, key);
     const deletes = deleteKeys.filter((key) => current.get(this.options.collection, key));
     if (!upserts.length && !deletes.length) return false;
     const revision = this.collectionMeta(db)!.revision + 1;
@@ -1695,7 +1850,7 @@ export class SqliteStateCollection<T> {
     const lease = db.query<Pick<LeaseRow, "owner_token">, [string]>(
       "SELECT owner_token FROM state_leases WHERE collection = ?",
     ).get(this.options.collection);
-    if (lease?.owner_token !== ownerToken) throw new FileTransactionBusyError(this.options.busyMessage);
+    if (lease?.owner_token !== ownerToken) throw new StateLeaseLostError(this.options.busyMessage);
   }
 
   private pruneChanges(db: Database, revision: number): void {
@@ -1718,10 +1873,11 @@ export class SqliteStateCollection<T> {
     try {
       db.exec("BEGIN IMMEDIATE");
       const held = db.query<LeaseRow, [string]>(`
-        SELECT owner_token, owner_pid, owner_start_identity
+        SELECT owner_token, owner_pid, owner_start_identity, acquired_at
         FROM state_leases WHERE collection = ?
       `).get(this.options.collection);
-      if (held && !leaseIsStale(held)) {
+      const now = Date.now();
+      if (held && !leaseIsStale(held, this.filename, this.options.collection, now)) {
         db.exec("ROLLBACK");
         return false;
       }
@@ -1731,11 +1887,16 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       db.exec("COMMIT");
+      if (held) {
+        if (now - held.acquired_at > STATE_LEASE_MAX_AGE_MS) console.warn(`[state lease] taking over ${this.options.collection} from pid ${held.owner_pid}, age ${now - held.acquired_at} ms`);
+        const old = abandonedTokens(this.filename, this.options.collection)?.get(held.owner_token);
+        if (old) forgetAbandoned(old);
+      }
       return true;
     } catch (error) {
       rollbackQuietly(db);
       if (isBusyError(error)) return false;
-      throw error;
+      throw classifyStateError(error, `${this.options.collection} acquisition`);
     }
   }
 
@@ -1745,8 +1906,10 @@ export class SqliteStateCollection<T> {
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
+      this.assertDiskHasSpace();
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
@@ -1764,56 +1927,33 @@ export class SqliteStateCollection<T> {
     try {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         if (deadline !== null && Date.now() >= deadline) break;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
       }
+      this.assertDiskHasSpace();
       throw new FileTransactionBusyError(this.options.busyMessage);
     } finally {
       db.close();
+    }
+  }
+
+  private assertDiskHasSpace(): void {
+    const free = stateFreeBytes(path.dirname(this.filename));
+    if (free !== null && free < STATE_DISK_FULL_FLOOR_BYTES) {
+      const detail = `${this.options.collection} is held by a writer that cannot release it`;
+      noteStateDiskFull(detail);
+      throw new StateDiskFullError(detail);
     }
   }
 
   private releaseLeaseSync(ownerToken: string): void {
-    const db = connectDatabase(this.filename);
-    try {
-      for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?")
-            .run(this.options.collection, ownerToken);
-          db.exec("COMMIT");
-          return;
-        } catch (error) {
-          rollbackQuietly(db);
-          if (!isBusyError(error)) throw error;
-          Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
-        }
-      }
-      throw new FileTransactionBusyError(this.options.busyMessage);
-    } finally {
-      db.close();
-    }
+    const lease = { filename: this.filename, collection: this.options.collection, token: ownerToken, abandonedAt: Date.now() };
+    try { deleteLease(lease); }
+    catch (error) { abandonLease(lease, error); }
   }
 
   private async releaseLease(ownerToken: string): Promise<void> {
-    const db = connectDatabase(this.filename);
-    try {
-      for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?")
-            .run(this.options.collection, ownerToken);
-          db.exec("COMMIT");
-          return;
-        } catch (error) {
-          rollbackQuietly(db);
-          if (!isBusyError(error)) throw error;
-          await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
-        }
-      }
-      throw new FileTransactionBusyError(this.options.busyMessage);
-    } finally {
-      db.close();
-    }
+    this.releaseLeaseSync(ownerToken);
   }
 }

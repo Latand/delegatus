@@ -307,7 +307,7 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
   const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
   /* With the role on its own mark, the line is the wait alone. */
   const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  const headline = (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
+  const headline = item.reason.kind === "memory" || (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
   const row = (
     <button
       type="button"
@@ -329,7 +329,7 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
             and the meta line keeps the age in view: the request is denied
             at ten minutes (#2215). An agent's own sentence that asks the
             operator gets the same line. */}
-        {headline ? <span data-attention-decision className="min-w-0 truncate text-label font-medium text-muted">{decision}</span> : null}
+        {headline ? <span data-attention-decision className={item.reason.kind === "memory" ? "min-w-0 whitespace-normal text-label font-medium text-muted [overflow-wrap:anywhere]" : "min-w-0 truncate text-label font-medium text-muted"}>{decision}</span> : null}
         <span className={META}>
           {headline ? null : (
             <>

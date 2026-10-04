@@ -12,12 +12,13 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
+import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
@@ -26,7 +27,7 @@ import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
-import { TmuxComposer } from "@/components/TmuxComposer";
+import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
@@ -73,7 +74,9 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "delivery-settlement"
   | "lifecycle"
+  | "long-history"
   | "queued"
   | "receipt-delivered"
   | "retired-on-transcript"
@@ -1052,8 +1055,31 @@ function AgentImagesFixture() {
   );
 }
 
+function DeliverySettlementFixture() {
+  const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
+  const [sends, setSends] = useState(0);
+  const receipt: RuntimeReceipt = {
+    operationId: "settlement-operation", idempotencyKey: "settlement-key",
+    conversationId: "conversation_settlement", kind: "send", status: status === "checking" ? "failed" : status,
+    text: "Please check the release.", at: new Date().toISOString(), revision: 1,
+    reason: status === "checking" ? "delivery was started by an earlier executor" : null,
+    resend: status === "failed" ? "safe" : status === "delivered" ? "not-needed" : "verify-first",
+  };
+  return <div data-evidence-case="delivery-settlement" className="min-h-dvh bg-canvas p-4 text-primary">
+    <div className="mb-3 rounded-surface border border-border p-3">Please check the release.</div>
+    <RuntimeComposerReceipts receipts={[receipt]} onRetry={() => setSends(count => count + 1)}
+      onRecheck={() => {}} onEdit={() => {}} />
+    <div className="mt-8 flex gap-4">
+      <button data-confirm-delivery onClick={() => setStatus("delivered")}>Confirm</button>
+      <button data-refuse-delivery onClick={() => setStatus("failed")}>Refuse</button>
+      <span data-fixture-sends>{sends}</span>
+    </div>
+  </div>;
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
+  if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
@@ -1078,6 +1104,84 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   );
 }
 
+
+/* Older history of a long conversation: the production feed over a Claude
+   transcript of `?turns=` turns (four lines each), whose window starts at the
+   last `?window=` lines and whose `loadOlder` serves `?page=` lines from
+   memory after `?latency=` ms, the way the history route would. The driver
+   walks it to the start and reads what survived each page. */
+const HISTORY_FILE = {
+  path: "/claude-long-history.jsonl", root: "claude-projects", name: "claude-long-history.jsonl", project: "viewer",
+  engine: "claude", kind: "session", fmt: "claude", parent: null, proc: null, pid: null, activity: "recent", mtime: 1, size: 1,
+} as unknown as FileEntry;
+
+const USAGE = { input_tokens: 120, cache_read_input_tokens: 30000, cache_creation_input_tokens: 0, output_tokens: 90 };
+
+function historyTranscript(turns: number): string[] {
+  const lines: string[] = [];
+  const at = (n: number) => new Date(Date.parse("2026-09-20T09:00:00.000Z") + n * 4000).toISOString();
+  for (let turn = 0; turn < turns; turn += 1) {
+    const id = `toolu_history_${turn}`;
+    lines.push(JSON.stringify({ type: "user", timestamp: at(turn * 4), message: { role: "user", content: `Request ${turn}: heliotrope-${turn} please check the build output.` } }));
+    lines.push(JSON.stringify({ type: "assistant", timestamp: at(turn * 4 + 1), requestId: `req_history_${turn}`, message: { id: `msg_history_${turn}`, role: "assistant", stop_reason: "tool_use", usage: USAGE, content: [
+      { type: "text", text: `Checking item ${turn}.\n\n- first point of ${turn}\n- second point of ${turn}\n\nThe fix for ${turn} is small.` },
+      { type: "tool_use", id, name: "Bash", input: { command: `bun test src/area${turn % 9}/` } },
+    ] } }));
+    lines.push(JSON.stringify({ type: "user", timestamp: at(turn * 4 + 2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: "12 pass\n0 fail" }] }] } }));
+    lines.push(JSON.stringify({ type: "assistant", timestamp: at(turn * 4 + 3), requestId: `req_history_${turn}_end`, message: { id: `msg_history_${turn}_end`, role: "assistant", stop_reason: "end_turn", usage: USAGE, content: [{ type: "text", text: `Done with ${turn}. Every check passed.` }] } }));
+  }
+  return lines;
+}
+
+interface HistoryControls {
+  loads: () => number;
+  start: () => number;
+  total: () => number;
+}
+
+function mountLongHistory(root: HTMLElement): void {
+  const all = historyTranscript(Number(params.get("turns") ?? 700));
+  const page = Number(params.get("page") ?? 250);
+  const latency = Number(params.get("latency") ?? 40);
+  let start = Math.max(0, all.length - Number(params.get("window") ?? 400));
+  let loads = 0;
+  let prependGen = 0;
+  let loadingOlder = false;
+  const listeners = new Set<() => void>();
+  const announce = () => { snapshot = null; for (const listener of listeners) listener(); };
+  let snapshot: LogTailState | null = null;
+  const loadOlder = async (): Promise<number> => {
+    if (loadingOlder || start <= 0) return 0;
+    loadingOlder = true;
+    announce();
+    await new Promise((resolve) => setTimeout(resolve, latency));
+    const take = Math.min(page, start);
+    start -= take;
+    loads += 1;
+    prependGen += 1;
+    loadingOlder = false;
+    announce();
+    return take;
+  };
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: start > 0, loadingOlder, loadOlder, prependGen,
+  };
+  setLogFeedDependenciesForTests({ useLogTail: () => useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    read,
+    read,
+  ) });
+  (window as unknown as { llvHistory: HistoryControls }).llvHistory = { loads: () => loads, start: () => start, total: () => all.length };
+  createRoot(root).render(
+    <div data-evidence-case="long-history" className="flex h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={HISTORY_FILE} showSvc={false} lineFilter="" onStatus={() => undefined} paused={false} follow setFollow={() => undefined} />
+      </div>
+    </div>,
+  );
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1085,4 +1189,5 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
+else if (root && requested === "long-history") mountLongHistory(root);
 else if (root) createRoot(root).render(<Fixture id={requested} />);

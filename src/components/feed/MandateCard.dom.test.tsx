@@ -9,6 +9,7 @@ import type { DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 
 import { FeedItem } from "./FeedItem";
+import { MandateCard, MandateConversationContext } from "./cards/MandateCard";
 import { MessageProvenanceProvider, provenanceLookupFor } from "./messageProvenance";
 import type { Item } from "./parse";
 
@@ -109,7 +110,23 @@ test("the card holds the mandate back until it is expanded", () => {
 
   expect(container.textContent).not.toContain(MANDATE_BODY);
   expand(container, 0);
-  expect(container.textContent).toContain(MANDATE_BODY);
+  expect(container.textContent).toContain(MANDATE_BODY.replaceAll("`", ""));
+});
+
+test("changing conversations resets a mandate section to that conversation's own text", () => {
+  const card = (identity: string, text: string) => (
+    <MandateConversationContext.Provider value={identity}>
+      <MandateCard item={{ kind: "mandate", text, ts: ROW_TS, mandate: { kind: "custom" } }} />
+    </MandateConversationContext.Provider>
+  );
+  const container = render(card("conversation_switch_a", "The first conversation's mandate."));
+  expand(container, 0);
+  expect(container.textContent).toContain("The first conversation's mandate.");
+  flushSync(() => root!.render(card("conversation_switch_b", "The next conversation's mandate.")));
+  expect(container.querySelector("details")!.open).toBe(false);
+  expand(container, 0);
+  expect(container.textContent).toContain("The next conversation's mandate.");
+  expect(container.textContent).not.toContain("The first conversation's mandate.");
 });
 
 test("a rotation handoff opens as a second section of the same card", () => {

@@ -60,7 +60,7 @@ test("dialog scopes and the MCP search binding preserve newest-first pages durin
   };
   const bindings = viewerMcpBindings(undefined, { get: http, post: async () => ({}) });
   const read = async (mode: "user" | "everything" | "tool", cursor?: string | null): Promise<Page> => {
-    if (mode === "tool") return await bindings.search_transcripts({ query: "quartz", limit: 1, cursor }) as unknown as Page;
+    if (mode === "tool") return await bindings.search_transcripts({ query: "quartz", order: "newest", limit: 1, cursor }) as unknown as Page;
     const params = new URLSearchParams({ q: "quartz", limit: "1" });
     if (mode === "user") params.set("speaker", "user");
     if (cursor) params.set("cursor", cursor);
@@ -81,6 +81,59 @@ test("dialog scopes and the MCP search binding preserve newest-first pages durin
     }
     expect(items.map((item) => item.timestamp)).toEqual(mode === "user" ? [30, 10] : [40, 30, 10]);
     expect(items.find((item) => item.duplicateCount === 2)).toMatchObject({ timestamp: 30, transcriptPath: codex });
+  }
+});
+
+test("the first v4 search request stays responsive while migration runs in the background", async () => {
+  const transcript = path.join(sandbox, "v4-http.jsonl");
+  fs.writeFileSync(transcript, Array.from({ length: 10_000 }, (_, i) => JSON.stringify({
+    type: "user", timestamp: new Date((1_700_000_000 + i) * 1_000).toISOString(),
+    message: { content: `cobalt http migration ${i}` },
+  })).join("\n") + "\n");
+  const stat = fs.statSync(transcript);
+  await indexTranscriptSources([{
+    path: transcript, project: "v4-http", engine: "claude", size: stat.size, mtimeMs: stat.mtimeMs,
+  }], { complete: true });
+  const filename = path.join(process.env.LLV_STATE_DIR!, "transcript-search.sqlite");
+  const db = new (await import("bun:sqlite")).Database(filename);
+  db.exec(`
+    DROP TABLE transcript_messages_vocab;
+    DROP INDEX IF EXISTS transcript_messages_search_hit;
+    DROP INDEX IF EXISTS transcript_messages_time;
+    DROP INDEX IF EXISTS transcript_messages_body_hash;
+    DROP TABLE transcript_search_sequence;
+    ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+    PRAGMA user_version = 4;
+  `);
+  db.close();
+
+  const server = Bun.serve({ port: 0, fetch: GET });
+  try {
+    let timerFiredAt = 0;
+    const started = performance.now();
+    const timer = setTimeout(() => { timerFiredAt = performance.now(); }, 0);
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/search/transcripts?q=cobalt&order=relevance`);
+    const elapsed = performance.now() - started;
+    expect(response.status).toBe(200);
+    expect((await response.json() as Page).total).toBe(1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    clearTimeout(timer);
+    expect(timerFiredAt).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(350);
+    const { Database } = await import("bun:sqlite");
+    const ready = new Database(filename, { readonly: true });
+    ready.exec("PRAGMA busy_timeout = 5000");
+    const deadline = performance.now() + 5_000;
+    let indexesReady = false;
+    while (!indexesReady && performance.now() < deadline) {
+      indexesReady = Boolean(ready.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit'").get())
+        && Boolean(ready.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab'").get());
+      if (!indexesReady) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+    ready.close();
+    expect(indexesReady).toBe(true);
+  } finally {
+    server.stop(true);
   }
 });
 
@@ -248,4 +301,84 @@ test("a transcript the catalog has no title for still returns a row", async () =
   const page = await (await GET(new Request("http://127.0.0.1/api/search/transcripts?q=amaranth"))).json() as Page;
 
   expect(page.items).toEqual([expect.objectContaining({ transcriptPath: transcript, title: null })]);
+});
+
+
+test("route stays newest by default and passes ranked conversation fields for an explicit order", async () => {
+  const transcript = path.join(sandbox, "ranked-route.jsonl");
+  fs.writeFileSync(transcript, ["cobalt lead", "quartz complement", ...Array(100).fill("mundane filler")].map((content, i) => JSON.stringify({ type: "user", timestamp: new Date((100 + i) * 1000).toISOString(), message: { content } })).join("\n") + "\n");
+  await indexTranscriptSources([{ path: transcript, project: "orion", engine: "claude", size: fs.statSync(transcript).size, mtimeMs: 1000 }]);
+  const url = "http://localhost/api/search/transcripts?q=cobalt+quartz";
+  const newest = await (await GET(new Request(url))).json();
+  expect(newest.order).toBe("newest");
+  expect(newest.items).toHaveLength(0);
+  const relevance = await (await GET(new Request(url + "&order=relevance&project=unknown"))).json();
+  expect(relevance.order).toBe("relevance");
+  expect(relevance.items[0].matched).toHaveLength(2);
+  expect(relevance.items[0].fragments).toHaveLength(1);
+  expect(relevance.items[0]).toHaveProperty("title");
+  expect(relevance.projectScope.resolved).toBeNull();
+  expect((await GET(new Request(url + "&order=other"))).status).toBe(400);
+});
+
+
+test("HTTP and MCP relevance pages bound long tokens and multibyte fragments", async () => {
+  const transcript = path.join(sandbox, "long-token.jsonl");
+  fs.writeFileSync(transcript, ["cobalt " + "z".repeat(120000), "quartz " + "界😀".repeat(30000), ...Array.from({ length: 100 }, (_, i) => `filler record ${i}`)].map((content) =>
+    JSON.stringify({ type: "user", message: { content } })).join("\n") + "\n");
+  const stat = fs.statSync(transcript);
+  await indexTranscriptSources([{ path: transcript, engine: "claude", project: "long-token", size: stat.size, mtimeMs: stat.mtimeMs }]);
+  const get = async (pathname: string) => {
+    const response = await GET(new Request(`http://127.0.0.1${pathname}`));
+    expect(response.status).toBe(200);
+    const serialized = await response.text();
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(16 * 1024);
+    return JSON.parse(serialized);
+  };
+  const page = await get("/api/search/transcripts?q=cobalt+quartz&order=relevance");
+  const bindings = viewerMcpBindings(undefined, { get, post: async () => ({}) });
+  const mcp = await bindings.search_transcripts({ query: "cobalt quartz" });
+  expect(Buffer.byteLength(JSON.stringify(mcp))).toBeLessThanOrEqual(16 * 1024);
+  for (const result of [page, mcp]) {
+    expect(result.items[0].transcriptPath).toBe(transcript);
+    const fragments = [result.items[0], ...result.items[0].fragments];
+    expect(fragments.map((f) => f.lineNumber).sort()).toEqual([1, 2]);
+    for (const fragment of fragments) {
+      const record = JSON.parse(fs.readFileSync(transcript).subarray(fragment.byteOffset).toString().split("\n")[0]);
+      expect(record.message.content).toMatch(/^(cobalt|quartz) /u);
+      expect(fragment.snippet).toEndWith("…");
+    }
+  }
+});
+
+
+test("an unreadable transcript index returns one bounded MCP failure and remains retryable after repair", async () => {
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  const filename = path.join(process.env.LLV_STATE_DIR!, "transcript-search.sqlite");
+  fs.writeFileSync(filename, "invalid database fixture");
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
+  const previousUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests++;
+    try { return await GET(request); }
+    catch { return new Response("<html>Internal server error</html>", { status: 500 }); }
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const result = await service.callTool("search_transcripts", { query: "widget" }, { deadlineAt: Date.now() + 30_000 });
+    expect(result).toMatchObject({ ok: false, error: "Transcript search is unavailable; retry later or check index diagnostics." });
+    expect(requests).toBe(1);
+    const response = await GET(new Request("http://localhost/api/search/transcripts?q=widget"));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "TRANSCRIPT_SEARCH_UNAVAILABLE", error: "Transcript search is unavailable; retry later or check index diagnostics." });
+    fs.unlinkSync(filename);
+    expect(await service.callTool("search_transcripts", { query: "widget" }, { deadlineAt: Date.now() + 30_000 })).toMatchObject({ ok: true, items: [] });
+    expect(requests).toBe(2);
+  } finally {
+    server.stop(true);
+    if (previousUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousUrl;
+  }
 });

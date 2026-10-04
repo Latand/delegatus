@@ -91,6 +91,7 @@ export interface VoiceComposerCardProps {
   deadHost: boolean;
   sendBlockedReason: string | null;
   placeholder?: string;
+  taskChipsFor?: string;
 }
 
 /**

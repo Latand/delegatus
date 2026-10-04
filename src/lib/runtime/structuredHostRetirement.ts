@@ -1147,6 +1147,12 @@ export async function runStructuredHostRetirementSweep(
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => terminateStructuredHostTree(ref, {
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
+    persistCapturedTree: identities => ref.sessionId !== null
+      && agentRegistry().recordStructuredTerminationSurvivors(
+        { engine: ref.engine, sessionId: ref.sessionId },
+        { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+        identities,
+      ),
   }));
   const record = dependencies.record ?? recordRetirementReport;
   const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;

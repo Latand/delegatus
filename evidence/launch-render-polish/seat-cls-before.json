@@ -1,0 +1,120 @@
+{
+  "label": "before",
+  "limit": 0.1,
+  "readings": [
+    {
+      "viewport": "desktop-1440",
+      "cls": 0.2998,
+      "shifts": 7,
+      "largest": [
+        {
+          "at": 787,
+          "value": 0.1194,
+          "sources": [
+            "DIV.board-frame",
+            "SECTION.column[assigned]",
+            "SECTION.column.strip[blocked]"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 816,
+          "value": 0.1194,
+          "sources": [
+            "DIV.board-frame",
+            "DIV.seat-grip",
+            "::before."
+          ],
+          "mandate": false
+        },
+        {
+          "at": 9090,
+          "value": 0.0232,
+          "sources": [
+            "DIV.flex.min-h-0",
+            "DIV.px-3.pb-3",
+            "SPAN.ml-auto.flex"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 9140,
+          "value": 0.0167,
+          "sources": [
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": true
+        },
+        {
+          "at": 9161,
+          "value": 0.0103,
+          "sources": [
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": true
+        },
+        {
+          "at": 857,
+          "value": 0.0071,
+          "sources": [
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": false
+        },
+        {
+          "at": 580,
+          "value": 0.0037,
+          "sources": [
+            "DIV.shrink-0"
+          ],
+          "mandate": false
+        }
+      ],
+      "clsWithoutMandate": 0.2728,
+      "chosen": "high",
+      "pills": [
+        "Opus 5.5 · High"
+      ],
+      "pageErrors": []
+    },
+    {
+      "viewport": "phone-390",
+      "cls": 0.1017,
+      "shifts": 3,
+      "largest": [
+        {
+          "at": 9145,
+          "value": 0.0578,
+          "sources": [
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": true
+        },
+        {
+          "at": 9170,
+          "value": 0.0383,
+          "sources": [
+            "DIV.px-3.pb-3"
+          ],
+          "mandate": true
+        },
+        {
+          "at": 747,
+          "value": 0.0056,
+          "sources": [
+            "SPAN.max-w-[300px].text-body",
+            "BUTTON.mt-2.inline-flex",
+            "SPAN.flex.min-w-0"
+          ],
+          "mandate": false
+        }
+      ],
+      "clsWithoutMandate": 0.0056,
+      "chosen": "high",
+      "pills": [
+        "Opus 5.5 · high"
+      ],
+      "pageErrors": []
+    }
+  ]
+}

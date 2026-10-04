@@ -61,7 +61,7 @@ export function isLightRuntime(runtime: LaunchRuntime): boolean {
 
 /** A runtime that may brief a trivial lane: Claude Opus or Fable (a null model
     is the engine default, Opus), or a large Codex model (Astra, both Sols; a
-    null model is the account default, Astra). Copilot never is. */
+    null model uses the shipped launch fallback, Sol). Copilot never is. */
 export function isOpusClass(runtime: LaunchRuntime | null): boolean {
   if (!runtime) return false;
   if (runtime.engine === "claude") {

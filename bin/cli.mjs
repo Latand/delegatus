@@ -27,10 +27,10 @@ let detectTailscale, getToken, OPERATOR_HINT, OPERATOR_PATTERN, phoneAccessFlagP
   readPhoneAccessFlag, readStatus, serveTailscale, serveBackground, TailscaleError;
 let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-  viewerServerBunRuntime;
+  viewerServerBunRuntime, viewerExitStatus;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
   probePageAndChunk, selfUpdatePaths, watchRestartRequests;
-let probeHeadersFrom, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
+let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 
 /* The launcher is one of the process kinds that may resolve the operator's own
    config and state directories (#1905); everything it starts inherits the
@@ -119,6 +119,7 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     webRestartFailed: (detail) => `[web] restart failed, the runtime host keeps running: ${detail}`,
+    webProbeRefused: (detail) => `the readiness probe could not authenticate (${detail}), so the release serving before the restart was kept`,
     runtimeHostRestartFail: (detail) => `[runtime host] restart failed: ${detail}`,
     phoneAccessSkipped: (detail) => `Phone access is turned on in the setup guide, and Tailscale is not ready, so this start is local only:\n${detail}`,
     phoneAccessUngated: (detail) => `Warning: the access key could not be read, so this start asks no key: ${detail}`,
@@ -169,6 +170,7 @@ Options:
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     webRestartFailed: (detail) => `[web] перезапуск не вдався, runtime host працює далі: ${detail}`,
+    webProbeRefused: (detail) => `перевірка готовності не пройшла автентифікацію (${detail}), тому лишився реліз, що працював до перезапуску`,
     runtimeHostRestartFail: (detail) => `[runtime host] помилка повторного запуску: ${detail}`,
     phoneAccessSkipped: (detail) => `Доступ із телефона увімкнено в посібнику з налаштування, але Tailscale не готовий, тому цей запуск лише локальний:\n${detail}`,
     phoneAccessUngated: (detail) => `Увага: не вдалося прочитати ключ доступу, тому цей запуск не питає ключа: ${detail}`,
@@ -512,11 +514,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
       process.exit(1);
     }
 
-    if (signal) {
-      process.exit(0);
-    }
-
-    process.exit(code ?? 1);
+    process.exit(viewerExitStatus(code, signal));
   });
 
   return { child, state };
@@ -1017,6 +1015,9 @@ async function main() {
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
   if (legacyNotice) console.error(`${legacyNotice}\n`);
+  const { detectOomPolicyNotice } = await import("./oomPolicy.mjs");
+  const oomNotice = detectOomPolicyNotice(LANG);
+  if (oomNotice) console.error(`${oomNotice}\n`);
 
   let runtime;
   try {
@@ -1178,43 +1179,71 @@ async function main() {
   /* Restart requests are taken only once startup has finished, and only from
      a checkout: a packaged install is updated by its package manager. */
   if (checkout) {
+    const probeHeaders = () => {
+      /* The key the serving Viewer asks for, by the rule its own boot follows:
+         the one this launcher hands it, else the key file while the
+         phone-access flag or a links gate is present. The files are read on
+         every probe, because the Viewer can turn its gate on while this
+         launcher keeps running. A key no header can carry never reaches
+         fetch: its header error would include the rejected value. */
+      const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+      const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
+      const value = typeof key === "string" ? key.trim() : "";
+      const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
+      if (value && !/[^\t\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
+      return headers;
+    };
     const restartWeb = async () => {
       const previous = serverRef.current;
       const previousRelease = serverRef.release;
       record.set("web", { state: "stopping" });
       await stopChild(previous);
-      const attempt = async (release) => {
+      /* Resolves with null for a release that serves, or with why it does not
+         after stopping it. A page probe refused for auth (401, 403) comes from
+         a process that is up and gating, which this launcher cannot read: with
+         `keepWhenRefused` that process is left serving and the refusal comes
+         back as `refused`. */
+      const attempt = async (release, keepWhenRefused) => {
         const handle = launchWeb(release, true);
         try {
           await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
-          const page = await probePageAndChunk(options.port, undefined, probeHeadersFrom(runtimeHostConfig.stateDirectory));
-          if (page) throw new Error(page);
+          const page = await probePageAndChunk(options.port, undefined, probeHeaders());
+          const refused = page !== null && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page);
+          if (page && !refused) throw new Error(page);
           handle.state.restarting = false;
           if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
-          return null;
+          return refused ? { refused: page } : null;
         } catch (error) {
           await stopChild(handle);
-          return error instanceof Error ? error.message : String(error);
+          return { failure: error instanceof Error ? error.message : String(error) };
         }
       };
       const next = releaseNow();
-      const failure = await attempt(next);
-      if (failure === null) {
+      /* A release this probe cannot read is never taken as verified, so an
+         auth refusal keeps only the release that was serving before. */
+      const sameRelease = next.dir === previousRelease.dir;
+      const first = await attempt(next, sameRelease);
+      if (first === null) {
         record.set("web", { state: "healthy", error: null });
+        return;
+      }
+      if (first.refused) {
+        record.set("web", { state: "healthy", error: { kind: "message", text: m.webProbeRefused(first.refused) } });
         return;
       }
       /* The web process is the page the operator restarts from: a release
          that does not come up gives way to the one it replaced. */
-      const fallbackFailure = await attempt(previousRelease);
-      if (fallbackFailure === null) {
-        record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail: failure } });
+      const fallback = await attempt(previousRelease, true);
+      if (fallback === null || fallback.refused) {
+        const detail = fallback?.refused ? `${first.failure}; ${m.webProbeRefused(fallback.refused)}` : first.failure;
+        record.set("web", { state: "healthy", error: { kind: "fell-back", revision: next.sha ? next.sha.slice(0, 7) : null, detail } });
         return;
       }
       /* Neither release came up. The web is down and says so; the runtime
          host, the agents it carries and the restart watcher stay up, so the
          next web restart request is still taken. */
-      record.set("web", { state: "failed", error: { kind: "message", text: fallbackFailure } });
-      console.error(m.webRestartFailed(fallbackFailure));
+      record.set("web", { state: "failed", error: { kind: "message", text: fallback.failure } });
+      console.error(m.webRestartFailed(fallback.failure));
     };
     const restartHost = async () => {
       try {
@@ -1236,10 +1265,7 @@ async function main() {
         const url = new URL(`http://127.0.0.1:${options.port}/api/self-update/launcher-admission`);
         url.searchParams.set("requestId", requestId);
         url.searchParams.set("gateId", autoGateId);
-        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: {
-          ...probeHeadersFrom(runtimeHostConfig.stateDirectory),
-          ...(runtime.llvToken ? { authorization: `Bearer ${runtime.llvToken}` } : {}),
-        } });
+        const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: "manual", headers: probeHeaders() });
         if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
           await response.body?.cancel();
           return false;
@@ -1389,11 +1415,14 @@ async function checkoutLauncher() {
   const runtime = await import("./server-runtime.mjs");
   ({ browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
     newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-    viewerServerBunRuntime } = runtime);
+    viewerServerBunRuntime, viewerExitStatus } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
     probePageAndChunk, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
+  /* A checkout older than this file has no such sibling: its probes then
+     carry only the key this launcher hands the Viewer. */
+  ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));
   ({ linkSkills } = await import("./skillLinks.mjs"));
   delete process.env.LLV_LAUNCHER_REEXEC;

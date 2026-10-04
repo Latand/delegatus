@@ -47,6 +47,7 @@ import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/l
 import { seatDeploymentsFor, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import {
   journalVerdict,
+  lookupOriginalSend,
   resolveOriginalSend,
   resolveSendReceipt,
   sendReceiptFor,
@@ -159,7 +160,7 @@ const OWN_LANE_LIMIT = 20;
  * `absent` (#1465) is the record AFFIRMING it holds nothing under the key, for
  * a send that was never given an operation to ask about: the layer refused
  * before reserving anything. It is not proof of loss, so it settles nothing —
- * but it is what licenses the controller to re-dispatch the frozen payload
+ * but it is what licenses the controller to re-dispatch
  * under the same key, which the layer's per-key reservation keeps from ever
  * producing a second copy. Absence beside an operation id is `unknown`.
  */
@@ -223,6 +224,8 @@ export interface SeatTickWakeEvidence {
       alone. The wake raised in a released attempt's place is a new message
       to both layers either way (#1672). Absent when nothing was written. */
   recorded?: "delivered" | "lost" | "refused";
+  /** A late canonical Claude echo, bound to the original operation and payload. */
+  confirmation?: "claude-ledger";
 }
 
 /** A holder's answer with the evidence it rests on. A bare
@@ -291,8 +294,12 @@ export interface WakeRecordPorts {
   /** The runtime journal's receipt under an operation id, or null when it
       holds none. May throw when the host cannot be asked. */
   journal: (operationId: string) => Promise<SeatTickJournalReceipt | null>;
-  /** Writes the journal's own terminal verdict onto a record the settlement
-      ended without one, and answers with the record as it then reads — or
+  /** Reads canonical engine confirmation when the journal cannot settle the send.
+      Missing or unreadable evidence never proves non-delivery. */
+  confirmed?: (wake: SeatTickOutstandingWake, operationId: string) => Promise<boolean>;
+  /** Writes an authoritative terminal verdict (journal or confirmed engine
+      arrival) onto a record the settlement ended without one, and answers
+      with the record as it then reads — or
       null when nothing could be written. Absent, the read is inert and the
       journal's verdict is reported as what it proves. */
   settleFromJournal?: (target: WakeRecordTarget, receipt: SeatTickJournalReceipt) => Promise<SendReceipt | null>;
@@ -321,7 +328,9 @@ export interface WakeRecordPorts {
  * ({@link journalWakeState}): `delivered` credits the wake, `rejected` and a
  * genuine `failed` release it, and everything else — `uncertain`, an open
  * status, no record, an unreachable host — leaves the record's answer
- * standing. Absence and silence are never read as non-execution.
+ * standing. A late canonical Claude confirmation can also prove arrival when
+ * the journal no longer has an answer. Absence and silence are never read as
+ * non-execution.
  *
  * Absence under the key is not a loss either. A wake the record never held
  * but the runtime queued (a legacy row, a mirror that was compacted) is asked
@@ -336,7 +345,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
       return "unreachable";
     }
   };
-  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
+  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
   if (evidence.kind === "absent") {
     if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
     const journal = await asked(wake.operationId);
@@ -358,13 +367,43 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
     current = settled;
   }
-  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  if (current.state === "delivered") {
+    // A caller may supply the generic resolver's late-confirmation projection.
+    // Preserve the provenance even when it has already projected arrival.
+    if (evidence.receipt.state !== "delivered" && ports.confirmed) {
+      let confirmed = false;
+      try { confirmed = await ports.confirmed(wake, evidence.operationId); } catch { /* The delivered receipt still stands. */ }
+      if (confirmed) {
+        const journal = await asked(evidence.operationId);
+        const written = await ports.settleFromJournal?.(
+          { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+          { status: "delivered", reason: null },
+        );
+        return { state: "landed", evidence: { ...withRecord(written ?? evidence.receipt, journal), confirmation: "claude-ledger",
+          ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+      }
+    }
+    return { state: "landed", evidence: withRecord(current, "unasked") };
+  }
   /* `safe` is the fenced, proven non-delivery and the only failure the record
      alone can license raising the wake again on. */
   if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
   const journal = await asked(evidence.operationId);
+  const proven = typeof journal === "string" ? "unknown" : journalWakeState(journal);
+  if (proven !== "landed" && proven !== "dropped" && ports.confirmed) {
+    let confirmed = false;
+    try { confirmed = await ports.confirmed(wake, evidence.operationId); }
+    catch { /* A failed confirmation read leaves the original uncertainty standing. */ }
+    if (confirmed) {
+      const written = await ports.settleFromJournal?.(
+        { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+        { status: "delivered", reason: null },
+      );
+      return { state: "landed", evidence: { ...withRecord(written ?? current, journal), confirmation: "claude-ledger",
+        ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+    }
+  }
   if (typeof journal === "string") return { state: "uncertain", evidence: withRecord(current, journal) };
-  const proven = journalWakeState(journal);
   if (proven !== "landed" && proven !== "dropped") {
     return { state: proven === "unknown" ? "uncertain" : proven, evidence: withRecord(current, journal) };
   }
@@ -511,6 +550,7 @@ export interface SeatTickSources {
 export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
   return {
     lookup: (binding) => resolveOriginalSend(binding),
+    confirmed: confirmedClaudeWakeDelivery,
     ...(options.end ? { settle: (operationId: string) => resolveSendReceipt(operationId), settleFromJournal: (target, receipt) => settleRecordFromJournal(agentRegistry(), target, receipt) } : {}),
     journal: async (operationId) => {
       const client = runtimeHostClient();
@@ -518,6 +558,36 @@ export function wakeRecordPorts(options: { end: boolean }): WakeRecordPorts {
       return journalReceipt(operationId, client);
     },
   };
+}
+
+/**
+ * Claude keeps a late replay echo after its send promise has timed out. The
+ * runtime journal may already have forgotten that operation, so consult the
+ * broker's durable confirmation under the operation the ORIGINAL key owns.
+ * Text equality alone grants nothing: key, recipient, operation, generation
+ * and content digest must all bind the confirmation to this wake. The read
+ * never dispatches and a queued entry never proves that the input arrived.
+ */
+export async function confirmedClaudeWakeDelivery(wake: SeatTickOutstandingWake, operationId: string): Promise<boolean> {
+  const file = agentRegistry().readOnlySnapshot();
+  const found = lookupOriginalSend(file, { conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
+  if (found.kind !== "found" || found.operationId !== operationId) return false;
+  const conversation = readOnlyConversationLookupFromSnapshot(file).conversation(wake.conversationId as ViewerConversationId);
+  if (!conversation || conversation.engine !== "claude") return false;
+  const delivery = found.deliveryId ? file.heldDeliveries[found.deliveryId] : null;
+  const owner = file.deliveryOperationOwners[operationId];
+  const digest = delivery?.contentDigest ?? owner?.contentDigest;
+  if (!digest || (delivery?.command ?? owner?.command)?.kind !== "send") return false;
+  const generations = delivery?.generationId
+    ? conversation.generations.filter(generation => generation.id === delivery.generationId)
+    : conversation.generations;
+  const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+  const ledger = new FileClaudeDeliveryLedger();
+  for (const generation of generations) {
+    const entry = ledger.load(generation.id).find(candidate => candidate.entry.id === operationId);
+    if (entry?.delivered && entry.entry.contentDigest === digest) return true;
+  }
+  return false;
 }
 
 /**
@@ -1003,7 +1073,10 @@ function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity |
  * "dead", and a lane with no row is a lane the tick has no stall evidence
  * about — which the decision reads as "still in flight", never as "stuck".
  */
-async function laneActivity(project: string, policy: SeatTickPolicy, sources: SeatTickSources): Promise<Map<string, SeatTickActivity>> {
+async function laneActivity(
+  project: string, policy: SeatTickPolicy, sources: SeatTickSources,
+  stages: ReadonlyMap<string, { stageId: string | null; number: number | null; conversationId: string | null }>,
+): Promise<Map<string, SeatTickActivity>> {
   const byPipeline = new Map<string, SeatTickActivity>();
   let rows: AgentLivenessRecord[];
   try {
@@ -1012,8 +1085,12 @@ async function laneActivity(project: string, policy: SeatTickPolicy, sources: Se
     return byPipeline;
   }
   for (const row of rows) {
-    const pipelineId = row.pipeline?.pipelineId;
-    if (!pipelineId || byPipeline.has(pipelineId)) continue;
+    const reference = row.pipeline;
+    if (!reference || byPipeline.has(reference.pipelineId)) continue;
+    const stage = stages.get(reference.pipelineId);
+    if (!stage || reference.stageId !== stage.stageId || reference.attempt !== stage.number
+      || row.conversationId !== stage.conversationId) continue;
+    const pipelineId = reference.pipelineId;
     const activity = activityOf(row);
     if (activity) byPipeline.set(pipelineId, activity);
   }
@@ -2097,6 +2174,97 @@ async function childWork(
   return { children, unavailable: worstChildrenGap(gaps) };
 }
 
+function stageAttempt(lane: Pipeline) {
+  const stageId = lane.cursor?.stageId;
+  return stageId ? lane.runs.find((run) => run.stageId === stageId)?.attempts.at(-1) ?? null : null;
+}
+
+function stageAttemptIdentity(lane: Pipeline): string | null {
+  const attempt = stageAttempt(lane);
+  return attempt ? JSON.stringify([attempt.n, attempt.conversationId ?? null, attempt.startedAt ?? null]) : null;
+}
+
+/** Refresh the cheap durable alarm sources after asynchronous evidence reads.
+ * Liveness belongs to the stage that was observed; a new stage inherits none.
+ */
+export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTickSources): SeatTickCheckInput {
+  const now = sources.now();
+  const hotLanes = sources.pipelines();
+  const openLanes = hotLanes.filter((lane) => isOpen(lane) && canonicalOrchestratorProject(lane.project) === input.project);
+  const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
+  const previous = new Map(input.pipelines.map((lane) => [lane.id, lane]));
+  const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
+    id: lane.id, title: evidence[index]!.title, state: evidence[index]!.state, updatedAt: evidence[index]!.updatedAt,
+    stageId: lane.cursor?.stageId ?? null,
+    stageAttempt: stageAttemptIdentity(lane),
+    stageActivity: previous.get(lane.id)?.stageId === (lane.cursor?.stageId ?? null)
+      && previous.get(lane.id)?.stageAttempt === stageAttemptIdentity(lane)
+      && previous.get(lane.id)?.updatedAt === evidence[index]!.updatedAt
+      ? previous.get(lane.id)?.stageActivity ?? null : null,
+    ...(lane.state === "paused" ? { pausedBy: pausedBy(lane, input.seat) } : {}),
+  }));
+  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
+    .filter((task) => canonicalOrchestratorProject(task.project) === input.project);
+  const taskEvidence = evidenceFromTasks(board.map(taskSummary));
+  const linked = board.some((task) => task.machine) ? linkedContext() : null;
+  const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
+    id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: taskEvidence[index]!.owner !== null,
+    updatedAt: task.updatedAt ?? null,
+    ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
+  }));
+  const ownLanes = ownSettledLanes(input.project, input.seat, input.state.announcedLanes ?? [], hotLanes);
+  const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
+  return {
+    ...input, now, pipelines, tasks, ownLanes,
+    events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
+    settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
+    changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
+  };
+}
+
+/** The source read completed, but its evidence key moved again before the
+ * alarm could use it. Keep the refreshed gap available to the controller so
+ * canceling an unsent alarm does not erase a real source failure. */
+export class SeatTickEvidenceRefreshCanceledError extends Error {
+  constructor(readonly pullRequestGap: SeatTickSourceGap | null) {
+    super("Seat alarm sources changed while refreshing pull-request evidence; retry on the next tick");
+    this.name = "SeatTickEvidenceRefreshCanceledError";
+  }
+}
+
+/** The local gates and lane associations under which PR evidence was read.
+ * A note edit needs no subprocess; eligibility or lane changes do.
+ */
+function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): string {
+  return crypto.createHash("sha256").update(JSON.stringify([
+    input.settings.enabled,
+    seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
+    input.settings.wakeIntervalMs,
+    input.seat ? seatTurnProgressing(input.seat) : null,
+    sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === input.project),
+  ])).digest("hex");
+}
+
+/** Revalidate gated evidence too when fresh state changes its question. A
+ * second concurrent change leaves this check unsent for the next tick.
+ */
+export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
+  let fresh = refreshSeatTickInput(input, sources);
+  const key = pullRequestEvidenceKey(fresh, sources);
+  if (key === input.pullRequestEvidenceKey) return fresh;
+  const evidence = await unmergedPullRequests({
+    project: fresh.project, seat: fresh.seat,
+    wakeDue: seatTickWakeDue(fresh.state.lastWakeAt, fresh.now, fresh.settings.wakeIntervalMs),
+    enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
+    gap: fresh.state.pullRequestGap, sources,
+  });
+  fresh = refreshSeatTickInput({ ...fresh, pullRequests: evidence.pullRequests,
+    pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
+    state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
+  if (pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
+  return fresh;
+}
+
 export async function gatherSeatTickInput(
   project: string,
   state: SeatTickProjectState,
@@ -2111,14 +2279,20 @@ export async function gatherSeatTickInput(
   const hotLanes = sources.pipelines();
   const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
-  const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources) : new Map<string, SeatTickActivity>();
+  const observedStages = new Map(openLanes.map((lane) => {
+    const attempt = stageAttempt(lane);
+    return [lane.id, { stageId: lane.cursor?.stageId ?? null, attempt: stageAttemptIdentity(lane),
+      number: attempt?.n ?? null, conversationId: attempt?.conversationId ?? null }] as const;
+  }));
+  const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources, observedStages) : new Map<string, SeatTickActivity>();
   const pipelines: SeatTickPipelineInput[] = openLanes.map((pipeline, index) => ({
     id: pipeline.id,
     title: evidence[index]!.title,
     state: evidence[index]!.state,
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
-    stageId: pipeline.cursor?.stageId ?? null,
+    stageId: observedStages.get(pipeline.id)!.stageId,
+    stageAttempt: observedStages.get(pipeline.id)!.attempt,
     ...(pipeline.state === "paused" ? { pausedBy: pausedBy(pipeline, seat) } : {}),
   }));
 
@@ -2168,6 +2342,7 @@ export async function gatherSeatTickInput(
   const childrenGap = !seat ? state.childrenGap
     : childrenUnavailable ? seatTickSourceGapAfterFailure(state.childrenGap, childrenUnavailable, new Date(now).toISOString()) : null;
   const harvestedChildren = state.harvestedChildren;
+  const pullRequestEvidenceKeyAtRead = pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
   const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
@@ -2193,6 +2368,7 @@ export async function gatherSeatTickInput(
     events,
     pullRequests,
     pullRequestsUnavailable,
+    pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
     signals: signals(canonical, seat, sources),
     ownLanes,
     settledDeploys,

@@ -415,10 +415,21 @@ export class RuntimeJournal {
     this.migrateLegacyEvents();
     this.migrateEntityUpdatedAt();
     this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
-    for (const row of this.db.query<EventRow, []>("SELECT * FROM events WHERE producer_key IS NOT NULL").all()) {
-      this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING")
-        .run(row.producer_kind, row.producer_key, stableJson(toEvent(row)));
-    }
+    // Missing receipts share one durable commit; per-row FULL sync delays the
+    // runtime socket and stable Viewer port for large retained journals.
+    this.db.transaction(() => {
+      const insert = this.db.query("INSERT INTO producer_receipts(producer_kind, producer_key, event_json) VALUES (?, ?, ?) ON CONFLICT(producer_kind, producer_key) DO NOTHING");
+      for (const row of this.db.query<EventRow, []>(`
+        SELECT events.* FROM events
+        WHERE producer_key IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM producer_receipts
+          WHERE producer_receipts.producer_kind = events.producer_kind
+            AND producer_receipts.producer_key = events.producer_key
+        )
+      `).iterate()) {
+        insert.run(row.producer_kind, row.producer_key, stableJson(toEvent(row)));
+      }
+    }).immediate();
     this.db.exec("DROP INDEX IF EXISTS events_producer_key; CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
     this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
     this.metaSetDefault("seq", "0");
@@ -2594,6 +2605,13 @@ export class RuntimeJournal {
     if (event.kind === "deployment.state") {
       const status = payload as unknown as ViewerDeploymentStatus;
       this.upsertEntity("deployment", scope.id, event.revision, status, event.seq);
+      return;
+    }
+    if (scope.type === "session") {
+      // Informational events (including limits) still consume a session revision.
+      // Keep snapshot heads aligned with snapshotSeq so the next event is contiguous.
+      const previous = this.entity<RuntimeSession>("session", scope.id) ?? baseSession(scope.id, {}, 0);
+      this.upsertEntity("session", scope.id, event.revision, { ...previous, revision: event.revision }, event.seq);
     }
   }
 

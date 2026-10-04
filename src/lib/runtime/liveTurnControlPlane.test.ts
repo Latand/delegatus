@@ -32,12 +32,14 @@ class MemoryDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): "accepted" | "refused" {
     const state = this.states.get(sessionId)?.find((candidate) => candidate.entry.id === entryId);
     if (state) {
       state.delivered = true;
       state.engineMessageId = engineMessageId;
+      return "accepted";
     }
+    return "refused";
   }
 }
 
@@ -57,7 +59,7 @@ class FakeClaude extends EventEmitter {
   }
 }
 
-const SESSION_ID = "0f367367-0000-4000-8000-000000000367";
+const SESSION_ID = "00000000-0000-0000-0000-000000000001";
 const SEEDED_EVENTS = 80_000;
 const BURST_FRAMES = 200;
 const SEEDED_DELTA_TEXT = "structured reviewer reasoning ".repeat(8);
@@ -123,8 +125,8 @@ test("snapshot and second-account admission stay bounded during a live Fable-lik
         conversationId: "conversation_second-account",
         engine: "claude",
         cwd: directory,
-        prompt: "independent-account pipeline launch",
-        accountId: "opensource",
+        "prompt": "synthetic launch prompt",
+        accountId: "synthetic-second-account",
       }),
     ]);
     const frames: string[] = [];

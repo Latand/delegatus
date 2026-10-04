@@ -43,7 +43,7 @@ import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { buildSchemeLayout } from "./scheme/layout";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
 import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
-import { conversationIdentity, formatConversationHash } from "@/lib/accounts/identity";
+import { conversationIdentity, currentConversationFile, formatConversationHash, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
 import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, pipelineCursorStagePaths, protectedReviewerNodes } from "./scheme/workerCollapse";
 import { launchHistoryClaimPaths, launchHistoryFor, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
@@ -82,6 +82,7 @@ import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
+import { onTaskChipOpen } from "./orchestrator/taskChips";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
@@ -122,6 +123,7 @@ const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "
 const EMPTY_MANUAL: FileEntry[] = [];
 const EMPTY_DRAFTS: string[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
+const EMPTY_LAUNCHED: ReadonlyMap<string, string> = new Map();
 
 interface Props {
   files: FileEntry[];
@@ -568,6 +570,10 @@ function ProjectDashboardView({
     if (file) markConversationSeen(file);
   };
   const [drafts, setDrafts] = useState<string[]>([]);
+  /* Launch windows this phone handed a draft over to (`spawn:<launchId>` →
+     conversation id): what lets the conversation screen keep following the
+     agent when the scan replaces the window with its transcript. */
+  const [launchedConversations, setLaunchedConversations] = useState<ReadonlyMap<string, string>>(EMPTY_LAUNCHED);
   const [pendingRestoredHandoffs, setPendingRestoredHandoffs] = useState<Set<string>>(() => new Set());
   /* The phone's task sheet, opened from the board menu: «New task» in its
      create view, «Tasks» as the list (mobile v2 lane 1). */
@@ -1160,6 +1166,15 @@ function ProjectDashboardView({
     setTransientView(null);
   }, [project]);
 
+  /* A task chip in the orchestrator's composer or on a sent message was
+     clicked: open or frame that task on this board, the way a task-panel row
+     does. A task of another project is not this board's to open. */
+  const openChipTask = useRef(openTaskOnBoard);
+  useEffect(() => { openChipTask.current = openTaskOnBoard; });
+  useEffect(() => onTaskChipOpen((request) => {
+    if (request.project === project) openChipTask.current(request.id);
+  }), [project]);
+
   /* An attention jump rides the same channel as switchboard opens: the ref is
      set here and the every-render effect below flashes it, whether the node is
      already in the layout or enters it on this render.
@@ -1453,6 +1468,18 @@ function ProjectDashboardView({
      the draft's place (openSwitchboardFile also covers a cwd from another
      project by switching there). */
   const draftSpawned = (id: string, file: FileEntry) => {
+    /* On the phone the draft IS the screen on top of the stack: the launched
+       conversation takes that entry over, so the stale `draft::` screen never
+       outlives its draft (the focus view fell back to the previous
+       conversation for that frame) and one Back leaves the conversation. */
+    if (isMobile && projectKey(file) === project) {
+      const top = topScreen(mobileNav.getState());
+      if (top.kind === "chat" && top.id === "draft::" + id) mobileNav.replace({ kind: "chat", id: file.path });
+      if (isLaunchPlaceholder(file) && file.conversationId) {
+        const conversationId = file.conversationId;
+        setLaunchedConversations((prev) => new Map(prev).set(file.path, conversationId));
+      }
+    }
     removeDraft(id);
     openSwitchboardFile(file);
   };
@@ -1790,6 +1817,24 @@ function ProjectDashboardView({
      list that task again among its linked tasks (§3.13). */
   const mobileBelow = mobileNavState.stack.length > 1 ? mobileNavState.stack[mobileNavState.stack.length - 2] ?? null : null;
   const mobileConversationKey = mobileTop.kind === "chat" ? mobileTop.id : null;
+  /* The launch window the screen stands on is that conversation in an earlier
+     state: once the scan swaps it for the transcript, the screen is the
+     transcript — never the fallback pick of the focus view, which is the
+     previous conversation whenever it outranks the new agent. */
+  const mobileLaunchSuccessor = useMemo(() => {
+    if (mobileConversationKey === null || !isLaunchPlaceholder({ path: mobileConversationKey })) return null;
+    if (files.some((file) => file.path === mobileConversationKey)) return null;
+    const conversationId = launchedConversations.get(mobileConversationKey);
+    const successor = conversationId ? currentConversationFile(files, conversationId) : null;
+    return successor && !isLaunchPlaceholder(successor) ? successor : null;
+  }, [mobileConversationKey, launchedConversations, files]);
+  useEffect(() => {
+    if (!mobileLaunchSuccessor) return;
+    mobileNav.replace({ kind: "chat", id: mobileLaunchSuccessor.path });
+    /* The same open any card gets: it places the transcript's node. */
+    openSwitchboardFile(mobileLaunchSuccessor);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps -- one hand-over per successor */
+  }, [mobileLaunchSuccessor]);
   const crownedPaths = useMemo<ReadonlySet<string>>(() => new Set(favoriteRows.map((row) => row.file.path)), [favoriteRows]);
   /* A lane whose close is on its way is gone from the board already (#1671);
      the Viewer's badge reads the same closes. */
@@ -2457,7 +2502,7 @@ function ProjectDashboardView({
                      which still names the previously focused card for the
                      frame in which the new screen mounts, and painted that
                      other conversation's pane before replacing it. */
-                  focus={mobileConversationKey ?? highlight}
+                  focus={mobileLaunchSuccessor?.path ?? mobileConversationKey ?? highlight}
                   onSelect={openSwitchboardFile}
                   onClose={closeNode}
                   onDraftClose={removeDraft}

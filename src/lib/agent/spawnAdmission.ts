@@ -1,17 +1,39 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { FENCES_SOURCE, mutateAccountSource, readAccountSource } from "@/lib/accounts/accountsStore";
 import { statePath } from "@/lib/configDir";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { pipelineTaskLinkError } from "@/lib/pipelines/store";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { projectForCwd } from "@/lib/scanner/describe";
+import { loadTasks } from "@/lib/tasks/store";
 
 import type { RegistryFile, SpawnReceipt } from "./registry";
+
+/** Check explicit spawn targets before claiming a request. Missing tasks keep
+    the existing membership refusal; project mismatches must not burn a key. */
+export function spawnTaskProjectError(taskId: unknown, cwd: string, readTasks: typeof loadTasks = loadTasks): string | null {
+  if (typeof taskId !== "string" || !taskId.trim()) return null;
+  const id = taskId.trim();
+  const task = readTasks().find(candidate => candidate.id === id);
+  if (!task) return null;
+  const taskProject = canonicalProject(task.project);
+  const rawCwd = cwd.trim();
+  const launchCwd = rawCwd ? path.resolve(rawCwd === "~" || rawCwd.startsWith("~/") ? path.join(os.homedir(), rawCwd.slice(1)) : rawCwd) : "";
+  const targetProject = canonicalProject(projectForCwd(launchCwd) ?? "");
+  const error = pipelineTaskLinkError({ project: targetProject }, [id], [{ ...task, project: taskProject }]);
+  return error
+    ? `task project does not match spawn project: ${id} belongs to ${taskProject}, but cwd resolves to ${targetProject || "an unresolved project"}; use a task on the target project's board, or omit taskId`
+    : null;
+}
 
 /** Roles with zero child-spawn capability (#393). A hardcoded contract
     constant: role overrides only carry config/promptScaffold, so no
     persisted preset can widen this set. */
-export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer"]);
+export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer", "merger"]);
 
 export function isSpawnDeniedRole(role: string | null | undefined): boolean {
   return typeof role === "string" && SPAWN_DENIED_ROLE_IDS.includes(role);
