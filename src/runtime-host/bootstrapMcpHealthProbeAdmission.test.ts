@@ -49,7 +49,9 @@ test("bootstrap cleanup preserves a successor canonical socket", async () => {
   const installSuccessor = () => {
     if (replaced) return;
     replaced = true;
-    fs.unlinkSync(socketPath);
+    // net.Server.close may already have removed the old pathname.
+    try { fs.unlinkSync(socketPath); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     successor.server = Bun.listen({
       unix: socketPath,
       socket: {

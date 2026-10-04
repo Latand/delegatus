@@ -174,7 +174,7 @@ test("the API is narrow: unknown actions and malformed bodies are rejected", asy
   expect((await POST(postRequest({ action: "start" }))).status).toBe(409);
 });
 
-const CREDS_FILE = path.join(SANDBOX, "config", "agent-log-viewer", "telegram.json");
+const CREDS_FILE = path.join(SANDBOX, "config", "delegatus", "telegram.json");
 /* Placeholder shapes only — a real api_hash never appears in this repo. */
 const PLACEHOLDER_API_ID = "1234567";
 const PLACEHOLDER_API_HASH = "0123456789abcdef0123456789abcdef";

@@ -29,7 +29,7 @@ test("push checks commits, types and all sibling test variants, excluding browse
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
   expect(steps.find(step => step.name === "privacy")!.command).toContain("--check-commits");
   const tests = steps.find(step => step.name === "touched tests")!;
-  expect(tests.command).toEqual(["bun", "test", "./src/example.test.ts", "./src/example.integration.test.ts"]);
+  expect(tests.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/example.test.ts", "./src/example.integration.test.ts"]);
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
 });
@@ -53,6 +53,17 @@ test("Viewer route and layout inputs select build and served-runtime verificatio
   }
   const doc = ["CONTRIBUTING.md"] as const;
   expect(plan("pre-push", doc, discover(root, "HEAD", doc)).some(step => step.pinned)).toBeFalse();
+});
+test("deleting the built root route or layout still selects runtime verification", () => {
+  const deletedRoot = mkdtempSync(path.join(tmpdir(), "deleted-viewer-input-")); roots.push(deletedRoot);
+  symlinkSync(path.join(root, ".github"), path.join(deletedRoot, ".github"), "dir");
+  symlinkSync(path.join(root, "scripts"), path.join(deletedRoot, "scripts"), "dir");
+  for (const file of ["src/app/page.tsx", "src/app/layout.tsx"]) {
+    const discovered = discover(deletedRoot, "HEAD", [file]);
+    expect(discovered.existing.has(file)).toBeFalse();
+    expect(discovered.runtime).toBeTrue();
+    expect(plan("pre-push", [file], discovered).some(step => step.name === "Viewer runtime")).toBeTrue();
+  }
 });
 test("dependency candidate installs the frozen graph before later verification", () => {
   const steps = plan("pre-push", ["package.json"], context());
@@ -104,7 +115,7 @@ function hookFixture(realLint = false) {
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
-  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync } from "node:fs"; appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
+  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
@@ -156,7 +167,8 @@ test("real pre-commit hook checks staged source, stops failures, and supports th
 });
 test("linked-worktree pre-commit clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
-  const worktree = path.join(path.dirname(f.dir), "linked commit");
+  const linkedRoot = mkdtempSync(path.join(tmpdir(), "linked-commit-")); roots.push(linkedRoot);
+  const worktree = path.join(linkedRoot, "checkout");
   f.git("config", "core.bare", "false"); f.git("config", "core.worktree", f.dir); f.git("config", "core.hooksPath", ".githooks");
   f.git("worktree", "add", "-b", "linked-commit", worktree);
   const configPath = path.join(f.dir, ".git", "config");
@@ -176,13 +188,13 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   const f = hookFixture(); writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n"); f.git("add", "example.ts"); f.git("commit", "-m", "change");
   expect(changedSinceBase(f.dir, "origin/main")).toEqual(["example.ts"]);
   const remote = mkdtempSync(path.join(tmpdir(), "hook-remote-")); roots.push(remote);
-  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe" });
-  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "origin/main:main"], { stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
+  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "origin/main:main"], { stdio: "pipe", env: f.env });
   f.git("remote", "add", "origin", remote);
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
-  const tests = f.calls().find(call => call.args[0] === "test")!;
-  expect(tests.args).toEqual(["test", "./example.test.ts"]);
+  const tests = f.calls().find(call => call.args[0] === "scripts/local-gate-tests.ts")!;
+  expect(tests.args).toEqual(["scripts/local-gate-tests.ts", "--base", f.git("rev-parse", "HEAD^").toString().trim(), "./example.test.ts"]);
   expect(tests.gitDir).toBeUndefined(); expect(tests.index).toBeUndefined(); expect(tests.workTree).toBeUndefined(); expect(tests.commonDir).toBeUndefined();
   for (const key of ["state", "home", "config", "tmp"] as const) expect(tests[key]).toContain("delegatus-local-gate-");
   expect(existsSync(tests.state!)).toBeFalse();
@@ -192,12 +204,13 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
 });
 test("linked-worktree pre-push clears Git selectors and preserves the complete shared config", () => {
   const f = hookFixture();
-  const worktree = path.join(path.dirname(f.dir), "linked push");
+  const linkedRoot = mkdtempSync(path.join(tmpdir(), "linked-push-")); roots.push(linkedRoot);
+  const worktree = path.join(linkedRoot, "checkout");
   f.git("config", "core.bare", "false"); f.git("config", "core.worktree", f.dir); f.git("config", "core.hooksPath", ".githooks");
   f.git("worktree", "add", "-b", "linked-push", worktree);
   const remote = mkdtempSync(path.join(tmpdir(), "linked-hook-remote-")); roots.push(remote);
-  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe" });
-  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "refs/heads/main:refs/heads/main"], { stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
+  execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "refs/heads/main:refs/heads/main"], { stdio: "pipe", env: f.env });
   f.git("remote", "add", "origin", remote);
   const configPath = path.join(f.dir, ".git", "config");
   const before = readFileSync(configPath);
@@ -231,4 +244,59 @@ test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", (
   } finally {
     if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
   }
+});
+test("a push that changes nothing checks every pushed commit for privacy and runs no types or tests", () => {
+  // Lane branch N commits behind main, stage changed nothing: the diff against
+  // the merge base is empty whatever main has become since.
+  const steps = plan("pre-push", [], context({ linux: true, runtime: true, native: true }));
+  expect(steps.map(step => step.name)).toEqual(["privacy"]);
+  expect(steps[0]!.command).toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", "base", "--require-known-values", "--check-commits"]);
+  expect(discover(root, "HEAD", []).linux).toBeFalse();
+});
+test("a push that changes one document keeps privacy and leaves main's types and tests alone", () => {
+  const existing = new Set(["docs/design/note.md"]);
+  const steps = plan("pre-push", ["docs/design/note.md"], context({ existing }));
+  expect(steps.map(step => step.name)).toEqual(["privacy"]);
+  expect(steps[0]!.command).toContain("--check-commits");
+  expect(discover(root, "HEAD", ["docs/design/note.md"]).linux).toBeFalse();
+});
+test("no changed code file skips types or its tests, alone or beside a document", () => {
+  for (const files of [["src/example.ts"], ["docs/design/note.md", "src/example.ts"], ["src/example.test.ts"], ["package.json"], ["src/deleted.ts"]]) {
+    const names = plan("pre-push", files, context({ existing: new Set([...context().existing, "docs/design/note.md"]) })).map(step => step.name);
+    expect(names.slice(0, 2)).toEqual(files.includes("package.json") ? ["frozen install", "privacy"] : ["privacy", "types"]);
+    expect(names).toContain("types");
+    if (files.some(file => file.startsWith("src/example"))) expect(names).toContain("touched tests");
+  }
+});
+test("platform tests are judged against the merge base, so a test main already fails never blocks", () => {
+  const linux = plan("pre-push", ["src/example.ts"], context({ linux: true })).find(step => step.name === "Linux tests")!;
+  expect(linux.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/platform.test.ts"]);
+  expect(linux.isolated).toBeTrue();
+});
+test("gate checks never inherit the pushing Viewer's language, launcher handoff or token", () => {
+  const sandbox = mkdtempSync(path.join(tmpdir(), "gate-viewer-env-")); roots.push(sandbox);
+  const env = isolatedEnvironment(sandbox, { NODE_ENV: "production", PATH: "/usr/bin", LLV_LANG: "uk", LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: "/checkout", LLV_TOKEN: "t", LLV_GATE_SLOTS: "2" });
+  for (const key of ["LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN"]) expect(env[key]).toBeUndefined();
+  expect(env.LLV_GATE_SLOTS).toBe("2");
+});
+test("pre-push hook on a branch behind main that changed nothing runs privacy on the pushed commits and nothing else", () => {
+  const f = hookFixture();
+  const remote = mkdtempSync(path.join(tmpdir(), "hook-remote-")); roots.push(remote);
+  execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
+  f.git("remote", "add", "origin", remote);
+  f.git("checkout", "-q", "-b", "lane");
+  f.git("checkout", "-q", "main");
+  for (const value of [2, 3]) { writeFileSync(path.join(f.dir, "example.ts"), `export const value = ${value};\n`); f.git("add", "example.ts"); f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", `main ${value}`); }
+  f.git("-c", "core.hooksPath=/dev/null", "push", "-q", "origin", "main"); f.git("fetch", "-q", "origin", "main");
+  f.git("checkout", "-q", "lane");
+  expect(f.git("rev-list", "--count", "HEAD..origin/main").toString().trim()).toBe("2");
+  // A types or test step would fail here: the recorder refuses tsc.
+  const result = spawnSync("git", ["push", "origin", "HEAD:refs/heads/lane"], { cwd: f.dir, env: { ...f.env, HOOK_FAIL: "tsc" }, encoding: "utf8" });
+  expect(result.stderr).toContain("pre-push: branch is 2 commit(s) behind origin/main");
+  expect(result.stderr).toContain("pre-push: nothing changed since");
+  expect(result.status).toBe(0);
+  const calls = f.calls();
+  expect(calls.map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
+  expect(calls[0]!.args).toContain("--check-commits");
+  expect(execFileSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/lane"], { encoding: "utf8", env: f.env }).trim()).toBe(f.git("rev-parse", "HEAD").toString().trim());
 });

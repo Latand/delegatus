@@ -407,6 +407,13 @@ export type PipelineStageAttempt = {
   expectedReviewHeadSha?: string | null;
   /** Exact clean SHA captured by the first launched reviewer round. */
   reviewHeadSha?: string | null;
+  /** Publication accepted only clean main integrations after this passed SHA.
+      The review's exact-head fields continue to name what was reviewed. */
+  publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
+  /** Automatic retries of a publication the stage cannot have caused to fail:
+      a refusal of an unchanged head, or a push interrupted before it landed.
+      Each failed operation is counted once; `exhausted` waits for retry-stage. */
+  publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */
@@ -460,9 +467,16 @@ export type PipelineStageAttempt = {
     lastRecordAt: number | null;
     replacementAttempt?: number;
     replacedAttempt?: number;
+    /** Set once a stop this recovery issued ended a live host: the evidence
+        that stop was decided on, and the newest transcript record read after
+        the host was gone. The cause is named from this while that record is
+        still the newest, because the host's exit moves the evidence a later
+        tick would read. */
+    stopped?: { kind: "idle" | "dead" | "stalled"; restarted: boolean; lastRecordAt: number | null };
   };
-  /** Prompt context for a fresh attempt created after this attempt was interrupted. */
-  restartContext?: { previousAttempt: number; transcriptPath: string };
+  /** Prompt context for a fresh attempt created after this attempt was interrupted.
+      `cause` is absent on records written before causes were told apart. */
+  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
@@ -588,9 +602,11 @@ export type PipelineCursorState = "pending" | "spawning" | "running" | "reviewin
     was never reviewed. Not terminal: `continue-review` grants more rounds. */
 export type PipelineState = "draft" | "provisioning" | "running" | "needs_decision" | "needs_review" | "paused" | "completed" | "closed";
 
-/** Why a pipeline stopped in `needs_review` (#1938): the review whose budget
-    ran out, the fix that followed it, and the two heads they left behind. */
+/** Why review budget stopped this lane: an unreviewed fix in needs_review
+    (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
+  /** A terminal budget re-check judged the current head and failed: fix first. */
+  terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;
   attempt: number;
@@ -600,7 +616,7 @@ export type PipelineReviewPending = {
   /** The head the last review judged; null on a handoff recorded before
       reviewed heads were captured. */
   reviewedHead: string | null;
-  /** The head the fix wrote, which nobody has reviewed. */
+  /** The head the fix wrote; terminalRecheck marks a failed review of it. */
   currentHead: string;
   /** The last review's verdict and how many findings it carried. */
   verdict: StageVerdictStatus;
@@ -614,6 +630,8 @@ export type PipelineReviewGrant = {
   clientRequestId: string;
   expectedRevision: string;
   stageId: string;
+  /** Failed terminal attempt whose granted fixes must return to this reviewer. */
+  terminalAttempt?: number;
   rounds: number;
   reviewedHead: string | null;
   currentHead: string;
@@ -716,6 +734,25 @@ export type PipelineDeliveryTarget = {
   rejectedHead?: string;
 };
 
+export type PipelinePublicationFailure = {
+  step: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  outputTail: string;
+  /** Tracked files the accepted head changes against its base branch; absent
+      when that could not be read. Zero means the stage cannot have caused it. */
+  changedFiles?: number;
+  /** The command budget the step ran past, when that is what ended it. */
+  timedOutMs?: number;
+};
+
+export type PipelinePublicationResult = (
+  | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
+  | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
+  | { ok: false; error: string }
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
   disposition: "owner" | "comparison";
@@ -731,11 +768,14 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
+    /** This reservation continues the committing pass, rather than an unrelated park. */
+    passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
     state: "pending" | "running" | "settled";
-    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean };
-    result?: { ok: true; sha: string; remote: "published" | "unavailable" | "unreachable"; detail?: string; uncertain?: boolean } | { ok: false; error: string };
+    executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      result?: PipelinePublicationResult };
+    result?: PipelinePublicationResult;
   };
   journal: Array<{ at: string; kind: "claim" | "comparison" | "release" | "takeover" | "denied" | "recovery"; ownerId: string; epoch: number; conversationId: string | null; reason: string }>;
 };
@@ -1183,3 +1223,7 @@ export type PatchPipelineRequest = {
 export type PipelinesResponse = {
   pipelines: Pipeline[];
 };
+
+/** Why a running stage attempt was replaced: the service restarted under it,
+    its host was found gone, or Delegatus stopped a host whose turn went silent. */
+export type PipelineStageInterruptionCause = "restart" | "host-lost" | "engine-stop";

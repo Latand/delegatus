@@ -12,6 +12,13 @@ import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { activeDrain, DRAIN_LEASE_MS } from "@/lib/selfUpdate/drain";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
+import { initialCheck } from "@/lib/selfUpdate/checkState";
+import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
+import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/selfUpdate/types";
+import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
+import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
@@ -23,6 +30,7 @@ import { realExec } from "@/lib/workflows/provision";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
+const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
@@ -37,13 +45,14 @@ const { loadPipelines, savePipelines, pipelineIdentity, pipelineRevision } = awa
 const { durableStageTurnEvidence } = await import("./durableEvidence");
 const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
 const { edgeRoundsUsed, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeMaxRounds, failEdgeRoundsUsed } = await import("./failEdgeBudget");
-const { saveTasks } = await import("@/lib/tasks/store");
+const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
 const { asStoredLegacyReviewLane } = await import("./fixtures/legacyReviewLane");
 const { interruptionObligationDirectory, interruptionObligationStore } = await import("@/lib/runtime/interruptionObligations");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
 type PipelineStageStopResult = import("./engine").PipelineStageStopResult;
 type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
+type HostState = import("@/lib/runtime/engineHost").HostState;
 
 /* tickPipelines self-schedules a follow-up tick when a pass leaves a pending
    cursor; keep that wake-up away from the real default ports in this suite. */
@@ -2213,6 +2222,372 @@ async function create(ports: PipelinePorts, stages = RUN_STAGES as never, reques
   savePipelines([lane]);
   return lane;
 }
+
+test("held pending cursors let the real controller idle and release one successor", async () => {
+  const { FlowPipelineController } = await import("./controller");
+  const h = harness();
+  let held = true;
+  let cycles = 0;
+  const heartbeats: import("./controller").FlowPipelineControllerHeartbeat[] = [];
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  const controller = new FlowPipelineController({
+    tickPipelines: (entries) => tickPipelines(entries, h.ports),
+    tickFlows: async () => ({ changed: false }), scan: async () => ({ files: [], complete: true }),
+    publishHeartbeat: (heartbeat) => {
+      heartbeats.push(heartbeat);
+      // Bound the old defect without leaving its microtask loop alive.
+      if (heartbeat.state === "idle" && ++cycles === 12) held = false;
+    },
+  });
+  const unregister = registerPipelineTick(() => controller.tick());
+  try {
+    await controller.tick();
+    expect(controller.idle()).toBe(true);
+    expect(cycles).toBe(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(heartbeats.at(-1)?.state).toBe("idle");
+    held = false;
+    await controller.tick();
+    await controller.poll();
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(controller.idle()).toBe(true);
+  } finally { unregister(); }
+});
+
+test("automatic-update hold keeps a pending attempt and releases exactly one launch", async () => {
+  const h = harness();
+  let held = true;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.cursor?.state).toBe("pending");
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  expect(attempt.state).toBe("pending");
+  expect(attempt.spawnCalls ?? 0).toBe(0);
+  const detail = waiting.stateDetail;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe(detail);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  held = false;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.n).toBe(attempt.n);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
+  const h = harness();
+  let held = false;
+  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" }, prompt: "Review", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  h.setConversationActive(false);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  held = true;
+  for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(0);
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "review", state: "pending" });
+  held = false;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.flowRequests).toHaveLength(1);
+});
+
+test.each([false, true])("automatic drain holds reserved custody with dead owner=%s and resumes its identity", async (deadOwner) => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let held = false;
+  let reserveOnly = true;
+  h.ports.drainHold = () => held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation) ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = loadPipelines()[0]!;
+    const reserved = before.runs[0]!.attempts[0]!.activation!;
+    expect(reserved.phase).toBe("reserved");
+    if (deadOwner) {
+      reserved.owner = { pid: 2_147_483_647, startIdentity: "gone", bootEpoch: "gone" };
+      savePipelines([before]);
+    }
+    held = true;
+    await engineModule.drainStageActivations(h.ports);
+    const after = loadPipelines()[0]!.runs[0]!.attempts[0]!.activation!;
+    expect(after.id).toBe(reserved.id);
+    expect(after.owner).toBeUndefined();
+    expect(h.spawnInputs).toHaveLength(0);
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    held = false;
+    reserveOnly = false;
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation).toBeUndefined();
+  } finally {
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
+test("reserved activation rechecks update admission after waiting for the mutation lease", async () => {
+  const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  const h = harness();
+  let reserveOnly = true;
+  let held = false;
+  let scanned!: () => void;
+  h.ports.drainHold = () => {
+    scanned?.();
+    return held || (reserveOnly && !!loadPipelines()[0]?.runs[0]?.attempts[0]?.activation)
+      ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: 0, persistent: true } : null;
+  };
+  let release!: () => void;
+  let locking: Promise<void> | undefined;
+  let draining: Promise<void> | undefined;
+  try {
+    await create(h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+    reserveOnly = false;
+    const { withPipelineMutation } = await import("./store");
+    let entered!: () => void;
+    const acquired = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    locking = withPipelineMutation(async () => { entered(); await gate; });
+    await acquired;
+    const scanning = new Promise<void>(resolve => { scanned = resolve; });
+    draining = engineModule.drainStageActivations(h.ports);
+    await scanning;
+    held = true;
+    release(); await locking; await draining;
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toEqual(before);
+    held = false;
+    await engineModule.drainStageActivations(h.ports);
+    await engineModule.drainStageActivations(h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(h.spawnInputs[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+  } finally {
+    release?.(); await locking; await draining;
+    if (oldDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = oldDrain;
+  }
+});
+
+test("pipeline account admission retains reserved custody without parking or consuming a new launch key", async () => {
+  const h = harness();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "legacy-held-admission.json"));
+  setAgentRegistryForTests(registry);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
+  const ports = defaultPipelinePorts();
+  const keys: string[] = [];
+  h.ports.drainHold = ports.drainHold;
+  h.ports.spawnAgent = (input, reserve) => { keys.push(input.clientAttemptId); return ports.spawnAgent(input, reserve); };
+  let resume!: () => void, entered!: () => void, queued!: () => void;
+  const acquired = new Promise<void>(r => { entered = r; });
+  const gate = new Promise<void>(r => { resume = r; });
+  const waiting = new Promise<void>(r => { queued = r; });
+  const nativeLock = mutation.withAccountMutationLockAsync;
+  let locking: Promise<void> | undefined;
+  let ticking: ReturnType<typeof tickPipelines> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    await create(h.ports); await tickPipelines([], h.ports);
+    locking = nativeLock(async () => { entered(); await gate; }); await acquired;
+    lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+    ticking = tickPipelines([], h.ports); await waiting;
+    drain.writeDrain(drain.drainFile(), { id: "legacy-admission", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    resume(); await locking; await ticking;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    // Async Git now always drains a reserved activation outside the mutation
+    // lease. The refused dispatch retains its counted key for exact replay.
+    expect(loadPipelines()[0]!).toMatchObject({ state: "running", cursor: { state: "spawning" } });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ state: "spawning", spawnCalls: 1, activation: { phase: "reserved", replay: true } });
+    drain.releaseDrain(drain.drainFile(), "legacy-admission");
+    await tickPipelines([], h.ports);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    resume?.(); await locking; await ticking;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "legacy-admission"); setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
+  const h = harness();
+  savePipelines([]);
+  const dir = fs.mkdtempSync("/var/tmp/managed-pipeline-custody-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  let turns = admission === "early" ? 0 : 1;
+  let requests = 0;
+  let status: import("@/lib/runtime/contracts").ViewerDeploymentStatus | null = null;
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: rev(old), available: rev(target),
+    check: { ...idleCheck(), state: "update-available", relation: "behind" } }, update: null }));
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15,
+    mode: async () => ({ mode: "managed", record: null, reason: null }), releaseTarget: () => ({ revision: old }),
+    prepareCheckRepo: async () => dir, targetOnBranch: async () => true, describe: async (_repo: string, sha: string) => rev(sha),
+    hostHealth: async () => ({ pid: 102, generation: { revision: old } }), web: { pid: 101, port: null, startedAt: "" },
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: turns ? [{ turn: "running", host: "hosted" }] : [] }), pipelines: loadPipelines, presence: () => [], memoryAvailableMb: () => 8192 },
+    requestDeployment: async (body: import("@/lib/runtime/contracts").ViewerDeploymentRequest) => {
+      requests++;
+      status = { deploymentId: "deployment-test", idempotencyKey: body.idempotencyKey, requestedRevision: target, revision: target,
+        phase: "admitted", terminal: false, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+        owner: { pid: 102, startIdentity: null }, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), revisionNumber: 1 };
+      return { state: "accepted", deploymentId: "deployment-test", revision: target, replayed: false };
+    },
+    readDeployment: async () => status, findDeploymentByIdempotencyKey: async () => status,
+  } as unknown as ServiceDeps;
+  let service = new SelfUpdateService(deps);
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await service.autoTick();
+    if (admission === "drain-switch-off") { turns = 0; await service.autoTick(); }
+    now += 60_000;
+    await service.autoTick();
+    expect(requests).toBe(1);
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+    if (admission === "drain-switch-off") await service.setAuto(false);
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    service.stop();
+    now += DRAIN_LEASE_MS + 1;
+    service = new SelfUpdateService(deps);
+    service.startAuto();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(requests).toBe(1);
+    status = { ...status!, phase: "rolled-back", terminal: true, revisionNumber: 2 };
+    await service.refreshManaged();
+    await service.snapshot();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
+  const h = harness();
+  const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
+  const target = "a".repeat(40);
+  const old = "b".repeat(40);
+  let now = Date.parse("2026-01-01T00:00:00Z");
+  const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
+  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+    releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
+    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+  writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
+  const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
+    serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
+    processes: { web: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] } },
+    meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
+    green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
+    prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, hostHealth: async () => ({ pid: 102 }),
+    describe: async (_repo: string, sha: string) => rev(sha), buildEnv: () => ({}),
+    createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
+    targetOnBranch: async () => true,
+  } as unknown as ServiceDeps;
+  const makeService = () => {
+    const instance = new SelfUpdateService(deps);
+    instance.snapshot = async () => snapshot();
+    return instance;
+  };
+  let service = makeService();
+  h.ports.drainHold = () => activeDrain(path.join(dir, "auto-drain.json"), now);
+  try {
+    await create(h.ports, [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "verify" },
+      { id: "verify", kind: "run", role: { roleId: "reviewer" }, prompt: "Verify", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    if (admission === "drain") {
+      await service.autoTick();
+      expect(h.ports.drainHold()).not.toBeNull();
+    }
+    expect(fs.existsSync(record.requestFile)).toBe(false);
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "built safely")], h.ports);
+    if (admission === "drain") for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "verify", state: "pending" });
+    expect(h.spawnInputs).toHaveLength(1);
+    await service.autoTick();
+    now += 60_000;
+    await service.autoTick();
+    expect(JSON.parse(fs.readFileSync(record.requestFile, "utf8")).role).toBe("web");
+    await tickPipelines([], h.ports);
+    const identity = loadPipelines()[0]!.runs[1]!.attempts[0]!.n;
+    endRestartGate(restartGateFile(record.requestFile), JSON.parse(fs.readFileSync(record.requestFile, "utf8")).autoGateId);
+    const pending = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending;
+    record.web = { ...record.web, requestId: pending.requestId, revision: target.slice(0, 7) };
+    fs.rmSync(record.requestFile);
+    await service.autoTick();
+    if (admission === "early-switch-off") {
+      expect(await service.setAuto(false)).toEqual({ ok: true });
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      service.startAuto();
+      expect(h.ports.drainHold()).not.toBeNull();
+      await Bun.sleep(0);
+    }
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    if (admission === "host-fallback") {
+      await service.autoTick();
+      now += 60_000;
+      await service.autoTick();
+      const hostRequest = JSON.parse(fs.readFileSync(record.requestFile, "utf8"));
+      expect(hostRequest.role).toBe("runtime-host");
+      endRestartGate(restartGateFile(record.requestFile), hostRequest.autoGateId);
+      fs.rmSync(record.requestFile);
+      record.runtimeHost = { ...record.runtimeHost, requestId: hostRequest.requestId,
+        error: { kind: "fell-back", revision: old.slice(0, 7), detail: "candidate host failed" } };
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      service.stop();
+      now += DRAIN_LEASE_MS + 1;
+      service = makeService();
+      await service.autoTick();
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(1);
+      record.web.revision = old.slice(0, 7);
+    } else record.runtimeHost.revision = target.slice(0, 7);
+    await service.autoTick();
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.n).toBe(identity);
+  } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test.each([
   { prompt: "Build from {{prev.output}}", access: "read-write", sandbox: "full" },
@@ -10385,7 +10760,8 @@ test("a waiting Claude stage continues its original conversation after that acco
   h.ports.allowedAccountIds = () => allowed;
   h.ports.claudeAccountRecovered = () => recovered;
   const continuations: string[] = [];
-  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
+  const cohorts: Array<string | undefined> = [];
+  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); cohorts.push(input.cohortAt); return true; };
 
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.state).toBe("running");
@@ -10400,6 +10776,9 @@ test("a waiting Claude stage continues its original conversation after that acco
   expect(resumed.runs[0]!.attempts).toHaveLength(1);
   expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
   expect(continuations).toEqual([attempt.conversationId!]);
+  // The continuation belongs to the attempt's cohort under an update drain.
+  expect(attempt.startedAt).toBeTruthy();
+  expect(cohorts).toEqual([attempt.startedAt!]);
 });
 
 test("a previously limited Claude account becomes available for a later stage reseat and waiting reconciliation", async () => {
@@ -12480,6 +12859,7 @@ test("a terminal spent gate re-checks the last fix and completes only on pass (#
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
   await buildRound(h, "initial build");
   await critiqueRound(h, "fail", "finding");
   await buildRound(h, "last fix");
@@ -12515,13 +12895,83 @@ test.each([
   /* The failed final re-check parks without another fix. */
   expect(pipeline.state).toBe("needs_decision");
   expect(pipeline.cursor?.stageId).toBe("critique");
-  expect(pipeline.reviewPending).toBeUndefined();
+  expect(pipeline.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
   expect(pipeline.stateDetail).toContain("budget spent: 1 findings left");
   /* The unreviewed findings stay on the record, and the record names the heads. */
   expect(critiques[reviews - 1]).toMatchObject({ budgetSpent: true, reviewedHead: newHead ? REVIEW_HEADS[reviews - 1] : REVIEW_HEADS[0], verdict: { status: "fail", findings: [`P2 evidence gap ${reviews}`] } });
   const currentHead = newHead ? REVIEW_HEADS[reviews]! : REVIEW_HEADS[0]!;
   expect(pipeline.lastPassedCommit).toBe(currentHead);
   expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
+});
+
+test.each([{ rounds: 1, decision: false }, { rounds: 2, decision: false }, { rounds: 2, decision: true }])("terminal budget re-check continuation grants exactly $rounds fresh reviews on the same lane (decision: $decision)", async ({ rounds, decision }) => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 2 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  const lane = loadPipelines()[0]!;
+  saveTasks([{ id: "budget-note-task", project: lane.project, text: "Continue reviewed change", status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }]);
+  expect((await patchPipeline(lane.id, { action: "link-task", taskId: "budget-note-task" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await buildRound(h, "first head");
+  await critiqueRound(h, "fail", "first finding");
+  await buildRound(h, "second head");
+  await critiqueRound(h, "fail", "second finding");
+  await buildRound(h, "last budget fix");
+  if (decision) {
+    await tickPipelines([], h.ports);
+    const review = loadPipelines()[0]!.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+    h.messages.set(review.agentPath!, { text: 'Remaining finding\n\n```json\n{"status":"needs_decision","findings":["P1 remaining finding"]}\n```', ts: Date.now() + 100_000_000 });
+    await tickPipelines([entry(review.agentPath!)], h.ports);
+  } else {
+    await critiqueRound(h, "fail", "remaining finding");
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  const revision = pipelineRevision(parked);
+  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, attempt: 3, findings: 1, currentHead: REVIEW_HEADS[2] });
+  expect(parked.stateDetail).toContain("continue-review");
+  expect(loadTasks()[0]!.note?.text).toContain("continue-review");
+  expect(loadTasks()[0]!.note?.text).toContain("addRounds");
+  const grantRequest = { action: "continue-review" as const, clientRequestId: "actor-grant", addRounds: rounds, expectedRevision: revision };
+  expect((await patchPipeline(parked.id, grantRequest, h.ports, { kind: "agent", role: "orchestrator", conversationId: "conversation_other" })).status).toBe(403);
+  expect((await acceptHead(parked, "reject-failed-head")).status).toBe(409);
+  expect((await continueReview(parked, "bad-rounds", 0)).status).toBe(400);
+  expect((await continueReview(parked, "stale-grant", rounds, "a".repeat(64))).status).toBe(409);
+  expect((await continueReview(parked, "terminal-grant", rounds, revision)).error).toBeUndefined();
+  let current = loadPipelines()[0]!;
+  expect(current.id).toBe(parked.id);
+  expect(current.cursor).toMatchObject({ stageId: "build", activatedBy: { stageId: "critique", attempt: 3, edge: "fail" } });
+  expect(current.cursor!.input).toContain("P1 remaining finding");
+  expect(current.reviewGrants).toHaveLength(1);
+  expect(current.reviewGrants![0]).toMatchObject({ rounds, expectedRevision: revision });
+  expect((await continueReview(parked, "terminal-grant", rounds, revision)).replayed).toBe(true);
+  expect((await continueReview(parked, "competing-grant", rounds, revision)).status).toBe(409);
+  for (let n = 0; n < rounds; n++) {
+    await buildRound(h, `continued fix ${n}`);
+    current = loadPipelines()[0]!;
+    expect(current.cursor!.stageId).toBe("critique");
+
+    expect(current.lastPassedCommit).toBe(REVIEW_HEADS[3 + n]);
+    await critiqueRound(h, "fail", `retained finding ${n}`);
+    expect(h.spawnInputs.at(-1)!.role.roleId).toBe("reviewer");
+    expect(h.spawnInputs.at(-1)!.cwd).toBe(current.worktreeDir!);
+    expect(h.spawnInputs.at(-1)!.prompt).toContain(`continued fix ${n}`);
+  }
+  current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1 });
+  const reviews = current.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(3 + rounds);
+  expect(new Set(reviews.map((attempt) => attempt.conversationId)).size).toBe(3 + rounds);
+  expect(reviews.every((attempt) => attempt.state === "failed" || decision && attempt.state === "needs_decision")).toBe(true);
+  expect(current.lastPassedCommit).toBe(REVIEW_HEADS[2 + rounds]);
+  // A later explicit grant still requires a fix and an independent passing review.
+  expect((await continueReview(current, "final-grant", 1)).error).toBeUndefined();
+  await buildRound(h, "final fix");
+  await critiqueRound(h, "pass", "fresh approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
 });
 
 test("under the default a last fix with a new head takes the reviewer's pass edge, and the next stage reads the unreviewed findings (#2187)", async () => {
@@ -13518,7 +13968,9 @@ test("a publication that cannot land parks the pass without losing the commit", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain("publishing the passed stage: publishing the pipeline branch:");
+  // The first line names the cause and the next step; the evidence follows it.
+  expect(parked.stateDetail!.split("\n")[0]).toBe("publishing the passed stage: git push was refused (exit 1): ! [remote rejected] (shallow update not allowed). Fix it on this branch or on the base branch, then retry-stage.");
+  expect(parked.stateDetail).toContain("\npublishing the pipeline branch: exit 1");
   /* The stage's work is committed and recorded — the park is recoverable, and a
      retry resets to this commit rather than discarding the builder's output. */
   expect(parked.lastPassedCommit).toBe(box.passedSha);
@@ -16190,10 +16642,10 @@ async function reserveActivationOnly() {
   return h;
 }
 
-test("activation drain recovers the original registry launch after a process exits before binding", async () => {
+test.each([false, true])("activation drain recovers the original registry launch after a process exits before binding under hold=%s", async (held) => {
   const h = await reserveActivationOnly();
-  const registryPath = path.join(process.env.LLV_STATE_DIR!, "activation-crash-registry.json");
-  const marker = path.join(process.env.LLV_STATE_DIR!, "activation-crash-launch");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `activation-crash-registry-${held}.json`);
+  const marker = path.join(process.env.LLV_STATE_DIR!, `activation-crash-launch-${held}`);
   const child = Bun.spawn([process.execPath, "-e", `
     import fs from "node:fs";
     const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
@@ -16226,13 +16678,105 @@ test("activation drain recovers the original registry launch after a process exi
     engine, accountId: "test", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" },
   }}));
   try {
+    const drain = await import("@/lib/selfUpdate/drain");
+    if (held) drain.writeDrain(drain.drainFile(), { id: "submitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
     const ports = defaultPipelinePorts();
-    await engineModule.drainStageActivations({ ...h.ports, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
+    await engineModule.drainStageActivations({ ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
     const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(recovered).toMatchObject({ n: 1, launchId: launch, spawnCalls: 1, state: "needs_decision" });
     expect(recovered.activation).toBeUndefined();
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
-  } finally { resolve.mockRestore(); setAgentRegistryForTests(null); }
+  } finally {
+    const drain = await import("@/lib/selfUpdate/drain");
+    drain.releaseDrain(drain.drainFile(), "submitted-recovery");
+    resolve.mockRestore(); setAgentRegistryForTests(null);
+  }
+});
+
+test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitted reserving activation stays held at %s", async (seam) => {
+  const h = await reserveActivationOnly();
+  const drain = await import("@/lib/selfUpdate/drain");
+  const mutation = await import("@/lib/accounts/accountMutation");
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `unsubmitted-${seam}.json`);
+  // Exit the actual executor after its reserving checkpoint, before any receipt.
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    const registry = new AgentRegistry(process.env.LLV_TEST_REGISTRY);
+    setAgentRegistryForTests(registry);
+    accountManager.resolveProjectSpawn = (engine) => ({ kind: "available", account: {
+      engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR,
+      transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+    }});
+    registry.beginSpawnRequestAsync = async () => { process.exit(0); };
+    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready" });
+    process.exit(2);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath }, stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
+  expect(before).toMatchObject({ launchId: null, spawnCalls: 1, activation: { phase: "reserving", owner: { pid: child.pid } } });
+  const registry = new AgentRegistry(registryPath);
+  setAgentRegistryForTests(registry);
+  expect(registry.spawnReceiptForClientAttempt(before.activation!.clientAttemptId)).toBeNull();
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "account-a", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const dispatches: string[] = [];
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    dispatches.push(input.receipt.launchId);
+    return { path: null } as never;
+  });
+  const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+  let resume!: () => void;
+  let locking: Promise<void> | undefined;
+  let recovering: Promise<void> | undefined;
+  let lock: ReturnType<typeof spyOn<typeof mutation, "withAccountMutationLockAsync">> | undefined;
+  try {
+    const ports = defaultPipelinePorts();
+    const recoveryPorts = { ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt };
+    if (seam === "before-recovery") hold();
+    else {
+      let entered!: () => void, queued!: () => void;
+      const acquired = new Promise<void>(r => { entered = r; });
+      const gate = new Promise<void>(r => { resume = r; });
+      const waiting = new Promise<void>(r => { queued = r; });
+      const nativeLock = mutation.withAccountMutationLockAsync;
+      locking = nativeLock(async () => { entered(); await gate; });
+      await acquired;
+      lock = spyOn(mutation, "withAccountMutationLockAsync").mockImplementation((...args) => { queued(); return nativeLock(...args); });
+      recovering = engineModule.drainStageActivations(recoveryPorts);
+      await waiting;
+      hold(); resume(); await locking;
+    }
+    await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(0);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
+      id: before.activation!.id, clientAttemptId: before.activation!.clientAttemptId, phase: "reserved", replay: true,
+    } });
+    expect(held.activation!.owner).toBeUndefined();
+    const { probeQuiet } = await import("@/lib/selfUpdate/quiet");
+    expect((await probeQuiet({ busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot,
+      { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] }, Date.now(), true)).quiet).toBe(true);
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery");
+    await engineModule.drainStageActivations(recoveryPorts);
+    await engineModule.drainStageActivations(recoveryPorts);
+    expect(dispatches).toHaveLength(1);
+    const receipts = Object.values(registry.readOnlySnapshot().receipts);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
+  } finally {
+    resume?.(); await locking; await recovering;
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
+  }
 });
 
 test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {
@@ -17165,9 +17709,12 @@ test.each([
   let oldConversationMessages = 0;
   const restarted = { ...h.ports,
     restartRecoveryBootId: () => "boot-after-crash",
+    restartRecoveryBootStartedAt: () => Date.parse(h.ports.now()) + 1,
     conversationTurnInterrupted: async () => interruption,
     resumeSeveredTurn: async () => { oldConversationMessages += 1; return true; },
   };
+  // An idle host is read as interrupted only once its transcript has been silent for the whole bound.
+  if (interruption === "idle") h.advanceWallClock(IDLE_TURN_QUIET_MS);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(oldConversationMessages).toBe(0);
   expect(h.calls).toContain(`stop-host:build:${attempt.n}:${attempt.conversationId}`);
@@ -17189,6 +17736,7 @@ test.each([
   replacement.paneId = null;
   savePipelines([afterReplacement]);
   h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  if (interruption === "idle") h.advanceWallClock(IDLE_TURN_QUIET_MS);
   await tickPipelines([entry(replacement.agentPath!)], restarted);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
   expect(loadPipelines()[0]!.stateDetail).toContain("automatic restart attempt");
@@ -17407,6 +17955,7 @@ test("terminal stage evidence arriving during the final restart stop settles wit
   setAgentRegistryForTests(registry);
   const lastRecordAt = Date.parse(attempt.startedAt!) + 1;
   h.durableTurns.set(transcriptPath, { turn: "busy", message: null, lastRecordAt });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
   let stopCompleted = false;
   try {
     await withRuntimeSnapshot((requestNumber) => {
@@ -17485,7 +18034,8 @@ test.each(["pending", "deploy"] as const)("restart-parked retry preserves its %s
   const attempt = stored.runs[0]!.attempts[0]!;
   attempt.paneId = null;
   savePipelines([stored]);
-  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
   h.setStageHost(attempt.conversationId!, { outcome: "unconfirmed", operationId: null, detail: "termination is not confirmed" });
   const restarted: PipelinePorts = { ...h.ports, conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => false };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
@@ -17522,7 +18072,7 @@ test.each([true, false])("restart recovery does not message the old conversation
     conversationTurnInterrupted: async () => "idle", resumeSeveredTurn: async () => { sends += 1; return true; } };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(sends).toBe(0);
-  h.advanceWallClock(11 * 60_000);
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(sameBoot ? 1 : 2);
   expect(sends).toBe(0);
@@ -17548,7 +18098,7 @@ test.each([true, false])("restart replaces a delivered deploy-cut stage without 
     resumeSeveredTurn: async () => { sends += 1; return true; } };
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(sends).toBe(0);
-  h.advanceWallClock(11 * 60_000);
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
   await tickPipelines([entry(attempt.agentPath!)], restarted);
   expect(loadPipelines()[0]!.runs[0]!.attempts.length).toBe(2);
   expect(sends).toBe(0);
@@ -17585,6 +18135,814 @@ test("restart leaves a worker adopted after dead evidence running", async () => 
   expect(sent).toBe(0);
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+});
+
+/* A stage whose agent keeps working after its turn ended.
+
+   The host goes idle when the turn ends, and a Claude CLI then continues by
+   itself on a background-command notification, so "host idle, transcript busy"
+   is what an agent at work looks like as well as what a cut turn looks like. */
+test("an idle host whose transcript is still growing is left alone, and one silent for the whole bound is recovered", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const idle: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle",
+  };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:")).length;
+  const record = () => h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+
+  // The continuation writes a record every few minutes for well over the bound: never interrupted.
+  for (let step = 0; step < 8; step += 1) {
+    record();
+    h.advanceWallClock(3 * 60_000);
+    await tickPipelines([entry(attempt.agentPath!)], idle);
+  }
+  // One long step just inside the bound is still growing (the harness clock also moves on every read).
+  record();
+  h.advanceWallClock(IDLE_TURN_QUIET_MS - 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+
+  // An undated open transcript proves no silence either.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(0);
+
+  // A really interrupted turn: the same record is still the newest once the whole bound has passed.
+  record();
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  expect(stops()).toBe(1);
+  const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]).toMatchObject({ state: "failed", restartRecovery: { replacementAttempt: 2 } });
+});
+
+test.each([
+  { interruption: "dead", error: "stage host was lost while its turn was open", detail: "lost its host while its turn was open", parked: "lost its host too" },
+  { interruption: "idle", error: "stopped by Delegatus after its turn went silent", detail: "was stopped by Delegatus after its turn went silent", parked: "went silent too" },
+  { interruption: "stalled", error: "stopped by Delegatus after its turn went silent", detail: "was stopped by Delegatus after its turn went silent", parked: "went silent too" },
+] as const)("a replaced attempt names its cause when no restart happened: $interruption", async ({ interruption, error, detail, parked }) => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  // This process booted before the attempt started and no host generation changed: nothing restarted.
+  const sameBoot: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption,
+  };
+  // A host found dead has nothing to stop; a silent one is alive until this stop ends it.
+  if (interruption !== "dead") h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot);
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: `${error}; replaced by a fresh stage attempt` });
+  expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}; fresh attempt 2 is starting`);
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: interruption === "dead" ? "host-lost" : "engine-stop" });
+  await tickPipelines([], sameBoot);
+  expect(h.spawnInputs[1]!.prompt).toContain(`stage attempt 1 ${detail}.`);
+  expect(`${replaced.runs[0]!.attempts[0]!.error} ${replaced.stateDetail} ${h.spawnInputs[1]!.prompt}`).not.toContain("restart");
+
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot);
+  const again = loadPipelines()[0]!;
+  const replacement = again.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([again]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(replacement.agentPath!)], sameBoot);
+  const parkedLane = loadPipelines()[0]!;
+  expect(parkedLane.state).toBe("needs_decision");
+  expect(parkedLane.stateDetail).toBe(`the automatic replacement attempt ${parked}; retry-stage to start another attempt`);
+  expect(parkedLane.stateDetail).not.toContain("boot");
+});
+
+test("a replacement recorded before causes were told apart is described without naming a restart", async () => {
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, conversationTurnInterrupted: async () => "dead" });
+  const replaced = loadPipelines()[0]!;
+  // What an older release stored: the context without a cause.
+  delete replaced.runs[0]!.attempts[1]!.restartContext!.cause;
+  savePipelines([replaced]);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("stage attempt 1 was interrupted. Continue the same stage input");
+});
+
+/** A Claude stage whose host is a real row in a private registry: a launch
+    receipt, a live process the test owns, and the product's own persistence
+    binding writing that row. */
+async function idleStageHostFixture(h: ReturnType<typeof harness>) {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { bindClaudeHostPersistence } = await import("@/lib/runtime/registry");
+  await create(h.ports, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "idle-stage-host-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const transcriptPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(transcriptPath, "{}\n");
+  // The host process: a child this test started and ends by the pid recorded here.
+  const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+  child.unref();
+  const identity = captureProcessIdentity(child.pid!);
+  const key = { engine: "claude" as const, sessionId };
+  const claimOwner = "structured-host:fixture";
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: directory, transport: "structured", accountId: "account-a" });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key, artifactPath: transcriptPath, cwd: directory, accountId: "account-a", status: "idle", host: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: identity, eventCursor: 172,
+      protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner, pendingAction: null,
+  });
+  if (settled.kind !== "settled") throw new Error("structured conversation was unavailable");
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  attempt.conversationId = begun.receipt.conversationId;
+  attempt.agentPath = transcriptPath;
+  attempt.launchId = begun.receipt.launchId;
+  savePipelines([lane]);
+  setAgentRegistryForTests(registry);
+
+  let state: HostState = { status: "idle", sessionKey: sessionId, endpoint: "stdio:fixture", pid: identity.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 172, protocolVersion: "1", activeTurnRef: null,
+    pendingAttention: [], activeFlags: [], account: null };
+  const listeners = new Set<(next: HostState) => void>();
+  const host = {
+    releaseCalls: 0,
+    setWriterFence(): void {},
+    health: async () => structuredClone(state),
+    onStateChange(listener: (next: HostState) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    async release(): Promise<void> { host.releaseCalls += 1; },
+    emit(overrides: Partial<HostState>): void {
+      state = { ...state, ...overrides };
+      for (const listener of listeners) listener(structuredClone(state));
+    },
+  };
+  /* Process evidence for a stop that proceeds. The signal is recorded and
+     never sent, so the only process this fixture ever signals is its own child
+     in `end`. */
+  const signals: string[] = [];
+  let ended = false;
+  const termination = {
+    protectedPids: () => new Set<number>(),
+    ppidMap: () => new Map<number, number>([[identity.pid, 1]]),
+    processGroupId: () => null,
+    pidAlive: (pid: number) => pid === identity.pid && !ended,
+    processIdentity: (pid: number) => pid === identity.pid && !ended ? identity.startIdentity : null,
+    bootEpoch: () => identity.bootEpoch ?? null,
+    signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); ended = true; },
+    terminateOwnedHost: async () => false,
+    sleep: async () => {},
+  };
+  const row = () => registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+  const journal = () => {
+    const filename = path.join(directory, "host-termination-journal.ndjson");
+    return fs.existsSync(filename)
+      ? fs.readFileSync(filename, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { event: string; source: string; key: string })
+      : [];
+  };
+  const target = { stageId: "build", attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
+    agentPath: transcriptPath, paneId: null };
+  const snapshot = () => ({ runtime: { hostEpoch: 7 }, sessions: [
+    { conversationId: begun.receipt.conversationId, host: "alive", turn: "idle", attentionIds: [] },
+  ] });
+  return {
+    registry, key, claimOwner, transcriptPath, attempt, host, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
+    bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
+    end: () => {
+      setAgentRegistryForTests(null);
+      try { process.kill(child.pid!, "SIGKILL"); } catch { /* already gone */ }
+    },
+  };
+}
+
+test("a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  /* Time is faked where the chain depends on it: the binding's deferred write
+     is captured with its delay instead of being armed, and run by hand once the
+     recovery tick is over. */
+  const realSetTimeout = globalThis.setTimeout;
+  const deferred: Array<{ run: () => void; delayMs: number }> = [];
+  try {
+    const stop = await f.bind(30_000);
+    const bound = structuredClone(f.row());
+    // The turn ended: the host is idle and names no turn. The CLI then continues
+    // by itself on a background-command notification: the transcript opens a
+    // turn and grows, and the host reports cursor-only steps with no turn id.
+    const continuedAt = Date.parse(h.ports.now());
+    fs.appendFileSync(f.transcriptPath, "background command notification\n");
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: continuedAt });
+    globalThis.setTimeout = ((run: () => void, delayMs: number) => {
+      deferred.push({ run, delayMs });
+      return { unref() {} };
+    }) as unknown as typeof setTimeout;
+    try {
+      f.host.emit({ eventCursor: 173 });
+      f.host.emit({ eventCursor: 174 });
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(deferred.map((timer) => timer.delayMs)).toEqual([30_000]);
+    expect(f.row().structuredHost!.eventCursor).toBe(172);
+
+    // The recovery tick, two seconds into the continuation, on the product's own classifier and stop.
+    h.advanceWallClock(2_000);
+    await Bun.sleep(5);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      expect(await production.conversationTurnInterrupted!(f.attempt.conversationId!)).toBe("idle");
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(f.row().structuredTerminationSurvivors ?? []).toEqual([]);
+    expect(f.row()).toEqual(bound);
+    expect(f.journal()).toEqual([]);
+    expect(f.signals).toEqual([]);
+
+    // Thirty seconds after the first cursor-only step the deferred write fires.
+    deferred[0]!.run();
+    expect(f.host.releaseCalls).toBe(0);
+    expect(f.row()).toMatchObject({ status: "idle", claimOwner: f.claimOwner, structuredHost: { eventCursor: 174 } });
+    const after = loadPipelines()[0]!;
+    expect(after.state).toBe("running");
+    expect(after.runs[0]!.attempts).toHaveLength(1);
+    expect(after.runs[0]!.attempts[0]).toMatchObject({ state: "running" });
+    expect(after.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+
+    // The stage then finishes on the host it kept.
+    const finished = h.finish(f.transcriptPath, "pass", "Done after the push");
+    const message = h.messages.get(f.transcriptPath)!;
+    h.durableTurns.set(f.transcriptPath, { turn: "terminal", message, lastRecordAt: message.ts });
+    await tickPipelines([finished], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
+    stop();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    f.end();
+  }
+});
+
+test("an automatic stop withdrawn after it captured the tree leaves the registry row as it was", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    const before = structuredClone(f.row());
+    // The agent writes to its transcript between the capture and the first authority check.
+    const capture = f.registry.captureStructuredTerminationSurvivors.bind(f.registry);
+    let captured: unknown = null;
+    f.registry.captureStructuredTerminationSurvivors = (...args) => {
+      const receipt = capture(...args);
+      captured = structuredClone(f.row().structuredTerminationSurvivors);
+      fs.appendFileSync(f.transcriptPath, "the agent resumed work\n");
+      return receipt;
+    };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      expect(await production.stopInterruptedStageAgent!(f.target, { allowIdle: true })).toBeNull();
+    });
+    expect(captured).toHaveLength(1);
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toEqual(before);
+    expect(f.journal().map((line) => `${line.event}:${line.source}`)).toEqual([
+      "captured:pipeline-stage-stop build:1", "withdrawn:pipeline-stage-stop build:1",
+    ]);
+    // The row is free again: the host's own next write lands.
+    expect(f.registry.setStructuredHostClaimed(f.key, { ...before.structuredHost!, eventCursor: 173 }, "idle", f.claimOwner, 1))
+      .toMatchObject({ structuredHost: { eventCursor: 173 } });
+  } finally {
+    f.end();
+  }
+});
+
+test("a really interrupted idle turn is stopped by the product's own stop and replaced, and says who stopped it", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: f.termination });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    // The stop read through its own capture, went on to signal, and retired the row.
+    expect(f.signals).toEqual([`SIGTERM:${f.hostPid}`]);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    expect(f.row().structuredHost?.process ?? null).toBeNull();
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
+    expect(attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
+  } finally {
+    f.end();
+  }
+});
+
+/** The runtime's own release as the delivery controller performs it: the
+    host's process ends, the host reports `unhosted` through its persistence
+    binding, and the row is asked to retire with no confirmed identities. */
+function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, onReleased: () => void = () => {}) {
+  const retired: boolean[] = [];
+  return {
+    retired,
+    terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
+      // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
+      process.kill(f.hostPid, "SIGKILL");
+      f.termination.signal(f.hostPid, "SIGKILL");
+      onReleased();
+      f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
+      retired.push(f.registry.terminateStructuredHost(key, expected));
+      return true;
+    },
+  };
+}
+
+test("an automatic stop whose first step is the runtime's own release still retires the row and replaces the attempt", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    const release = runtimeReleaseOf(f);
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination, terminateOwnedHost: release.terminateOwnedHost } });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    // The runtime's own retirement was refused by the captured tree, and the host's terminal write moved the row.
+    expect(release.retired).toEqual([false]);
+    // The stop did not read its own consequences as somebody else's change: the ladder retired the row.
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.claimOwner).toBeNull();
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured"]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt" });
+  } finally {
+    f.end();
+  }
+});
+
+test("a descendant that outlives the runtime's release is still signalled, and the attempt is replaced", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    /* A descendant that left the host's process group. It is a number only: no
+       such process is consulted, and every signal here is recorded, never sent. */
+    const CHILD = 4_190_001;
+    let rootGone = false;
+    let childGone = false;
+    const signals: string[] = [];
+    const release = runtimeReleaseOf(f, () => { rootGone = true; });
+    const termination = { ...f.termination,
+      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [CHILD, f.hostPid]]),
+      pidAlive: (pid: number) => (pid === CHILD && !childGone) || (pid === f.hostPid && !rootGone),
+      processIdentity: (pid: number) => pid === CHILD ? (childGone ? null : "child:start") : f.termination.processIdentity(pid),
+      signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); if (pid === CHILD) childGone = true; },
+      terminateOwnedHost: release.terminateOwnedHost };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
+        restartRecoveryBootId: () => "same-boot",
+        restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(signals).toEqual([`SIGTERM:${CHILD}`]);
+    const row = f.row();
+    expect(row.status).toBe("dead");
+    expect(row.structuredHost?.process ?? null).toBeNull();
+    expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
+  } finally {
+    f.end();
+  }
+});
+
+test("a stop still withdraws when the host resumes before the runtime released anything", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    const before = structuredClone(f.row());
+    let asked = 0;
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination,
+        // The runtime holds nothing of this host, and the agent writes while it is asked.
+        terminateOwnedHost: async () => { asked += 1; fs.appendFileSync(f.transcriptPath, "the agent resumed work\n"); return false; } } });
+      expect(await production.stopInterruptedStageAgent!(f.target, { allowIdle: true })).toBeNull();
+    });
+    expect(asked).toBe(1);
+    expect(f.signals).toEqual([]);
+    expect(f.row()).toEqual(before);
+    expect(f.journal().map((line) => line.event)).toEqual(["captured", "withdrawn"]);
+  } finally {
+    f.end();
+  }
+});
+
+const SILENT_RUN = [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }];
+
+/** A structured stage that started before the service restarted one minute
+    into it, and then worked on for half an hour under the new process. */
+async function attemptThatWorkedOnAfterRestart(h: ReturnType<typeof harness>) {
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.advanceWallClock(30 * 60_000);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  return { attempt, ports: (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => bootAt,
+    conversationTurnInterrupted: async () => interruption }) };
+}
+
+test("an attempt that worked on after a restart and is stopped for silence later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], ports("idle"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 was stopped by Delegatus after its turn went silent; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("was stopped by Delegatus after its turn went silent");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt that worked on after a restart and whose host is found gone later is not called a restart", async () => {
+  const h = harness();
+  const { attempt, ports } = await attemptThatWorkedOnAfterRestart(h);
+  await tickPipelines([entry(attempt.agentPath!)], ports("dead"));
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open; fresh attempt 2 is starting");
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+});
+
+test("an attempt whose transcript did not grow after the restart is still called a restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  // The newest record is from before the boot, one minute into the attempt.
+  const bootAt = Date.parse(attempt.startedAt!) + 60_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: bootAt - 1 });
+  h.advanceWallClock(30 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2", restartRecoveryBootStartedAt: () => bootAt, conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+test("retry-stage leaves an idle host whose transcript is still growing, and stops it once the transcript has been silent for the bound", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  const idle: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:"));
+  // The continuation wrote a record two seconds ago.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(2_000);
+  await tickPipelines([entry(attempt.agentPath!)], idle);
+  const young = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(young).toMatchObject({ status: 409, error: "the running attempt is not confirmed stalled or has a pending delivery" });
+  expect(stops()).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+  // The same record, a minute short of the bound and then past it.
+  h.advanceWallClock(IDLE_TURN_QUIET_MS - 62_000);
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle)).toMatchObject({ status: 409 });
+  expect(stops()).toEqual([]);
+  h.advanceWallClock(60_000);
+  await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
+  expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "confirmed stalled attempt was stopped for retry" });
+});
+
+test("a recovery that parks names a restart only when the service restarted", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  // The same boot the attempt started under: Delegatus's own stop of a silent host stayed unresolved.
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" });
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe("interrupted-turn recovery could not confirm termination of the interrupted stage host");
+  expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+  /* The reservation refusal needs a stage whose run record is missing, which no
+     tick reaches for the attempt it is replacing; its words are read here. */
+  for (const step of ["termination", "reservation"] as const) {
+    expect(interruptedTurnRecoveryParkDetail(step, false)).not.toContain("restart");
+    expect(interruptedTurnRecoveryParkDetail(step, true)).toStartWith("restart recovery could not ");
+  }
+  expect(interruptedTurnRecoveryParkDetail("reservation", false)).toBe("interrupted-turn recovery could not reserve a fresh stage attempt");
+});
+
+test("the same unresolved stop after a real restart keeps naming the restart", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  h.setStageHost(attempt.conversationId!, { outcome: "unresolved", error: "1 process outlived the kill", survivors: [] });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) + 60_000,
+    conversationTurnInterrupted: async () => "dead" });
+  expect(loadPipelines()[0]!.stateDetail).toBe("restart recovery could not confirm termination of the interrupted stage host");
+});
+
+/* A Claude CLI appends undated bookkeeping (last-prompt, cost-state) as it
+   exits, and an undated newest record is dated by the file's mtime: every stop
+   that ends a live Claude host moves the transcript's newest record under a
+   turn that stays open. */
+test("a host Delegatus stopped is recorded as stopped by Delegatus although its exit moved the transcript", async () => {
+  const h = harness();
+  const f = await idleStageHostFixture(h);
+  try {
+    await f.bind(30_000);
+    h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+    h.advanceWallClock(IDLE_TURN_QUIET_MS);
+    let exitRecordAt = 0;
+    const release = runtimeReleaseOf(f, () => {
+      exitRecordAt = Date.parse(h.ports.now());
+      h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: exitRecordAt });
+    });
+    const sameBoot = { restartRecoveryBootId: () => "same-boot", restartRecoveryBootStartedAt: () => Date.parse(f.attempt.startedAt!) - 60_000 };
+    await withRuntimeSnapshot(f.snapshot, async () => {
+      const production = defaultPipelinePorts({ termination: { ...f.termination, terminateOwnedHost: release.terminateOwnedHost } });
+      await tickPipelines([entry(f.transcriptPath)], { ...h.ports, ...sameBoot,
+        conversationTurnInterrupted: production.conversationTurnInterrupted,
+        stopInterruptedStageAgent: production.stopInterruptedStageAgent,
+      });
+    });
+    expect(exitRecordAt).toBeGreaterThan(0);
+    // The session is unhosted from here on, which is what the next tick reads.
+    await tickPipelines([entry(f.transcriptPath)], { ...h.ports, ...sameBoot, conversationTurnInterrupted: async () => "dead" });
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed",
+      error: "stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt",
+      restartRecovery: { stopped: { kind: "idle", restarted: false, lastRecordAt: exitRecordAt }, replacementAttempt: 2 } });
+    expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "engine-stop" });
+    expect(h.spawnInputs.at(-1)!.prompt).toContain("stage attempt 1 was stopped by Delegatus after its turn went silent.");
+    expect(`${lane.runs[0]!.attempts[0]!.error} ${h.spawnInputs.at(-1)!.prompt}`).not.toContain("lost");
+  } finally {
+    f.end();
+  }
+});
+
+/** A structured stage whose stop ends a live host, and whose host writes one
+    more record as it exits. */
+async function stageWhoseStopMovesTheTranscript(h: ReturnType<typeof harness>, exit: (agentPath: string) => StageTurnEvidence) {
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  const stops: string[] = [];
+  const stopStageAgent: PipelinePorts["stopStageAgent"] = async (target) => {
+    stops.push(`${target.stageId}:${target.attempt}`);
+    if (stops.length > 1) return { outcome: "not-running" };
+    h.durableTurns.set(attempt.agentPath!, exit(attempt.agentPath!));
+    return { outcome: "stopped" };
+  };
+  return { attempt, stops, stopStageAgent };
+}
+
+test("an idle host cut by a restart is still called a restart after the stop's own exit record", async () => {
+  const h = harness();
+  const { attempt, stops, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h,
+    () => ({ turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) }));
+  // The service booted one second into the attempt and the transcript has not grown since.
+  const bootAt = Date.parse(attempt.startedAt!) + 1_000;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: bootAt - 500 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  const restarted = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "boot-2", restartRecoveryBootStartedAt: () => bootAt, conversationTurnInterrupted: async () => interruption });
+  await tickPipelines([entry(attempt.agentPath!)], restarted("idle"));
+  await tickPipelines([entry(attempt.agentPath!)], restarted("dead"));
+  expect(stops).toEqual(["build:1"]);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
+});
+
+test("a stop of ours whose replacement waited for a later tick still names the stop, even across a service restart", async () => {
+  const h = harness();
+  let exitRecordAt = 0;
+  // The exit leaves evidence this tick cannot replace on; the host is gone all the same.
+  const { attempt, stops, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h, () => {
+    exitRecordAt = Date.parse(h.ports.now());
+    return { turn: "busy", message: null, lastRecordAt: exitRecordAt, launchOnly: true };
+  });
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle" });
+  const held = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(held).toHaveLength(1);
+  expect(held[0]).toMatchObject({ state: "running", restartRecovery: { stopped: { kind: "idle", restarted: false, lastRecordAt: exitRecordAt } } });
+
+  // The service restarts before the next tick; nothing was written after the host was gone.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: exitRecordAt });
+  h.advanceWallClock(60_000);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "boot-2",
+    restartRecoveryBootStartedAt: () => Date.parse(h.ports.now()) - 1_000,
+    conversationTurnInterrupted: async () => "dead" });
+  expect(stops).toEqual(["build:1", "build:1"]);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stopped by Delegatus after its turn went silent; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
+});
+
+test("a host that worked on after an earlier stop of ours and is then found dead is a lost host", async () => {
+  const h = harness();
+  let exitRecordAt = 0;
+  const { attempt, stopStageAgent } = await stageWhoseStopMovesTheTranscript(h, () => {
+    exitRecordAt = Date.parse(h.ports.now());
+    return { turn: "busy", message: null, lastRecordAt: exitRecordAt, launchOnly: true };
+  });
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  const sameBoot = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports, stopStageAgent,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption });
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot("idle"));
+  // The conversation was hosted again and wrote more before that host died by itself.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: exitRecordAt + 5 * 60_000 });
+  h.advanceWallClock(6 * 60_000);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot("dead"));
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
+  expect(lane.runs[0]!.attempts[0]!.restartRecovery!.stopped).toBeUndefined();
+});
+
+test("a withdrawn automatic stop leaves no recovery reservation on the attempt, whatever the transcript did meanwhile", async () => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "idle",
+    // The agent resumed while the stop was looking, so the stop withdrew.
+    stopInterruptedStageAgent: async () => {
+      h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+      return null;
+    } });
+  const after = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(after).toHaveLength(1);
+  expect(after[0]).toMatchObject({ state: "running" });
+  expect(after[0]!.restartRecovery).toBeUndefined();
+});
+
+/* The park text of a second interruption describes the replacement's own
+   interruption, and says "too" or "again" only when the attempt it replaced is
+   recorded with the same cause. */
+test.each([
+  { first: "dead", second: "idle", cause: "host-lost", parked: "the automatic replacement attempt went silent; retry-stage to start another attempt" },
+  { first: "idle", second: "dead", cause: "engine-stop", parked: "the automatic replacement attempt lost its host; retry-stage to start another attempt" },
+] as const)("a replacement interrupted differently from the attempt it replaced claims nothing about that attempt: $first then $second", async ({ first, second, cause, parked }) => {
+  const h = harness();
+  await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const sameBoot = (interruption: "idle" | "dead"): PipelinePorts => ({ ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => interruption });
+  if (first !== "dead") h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(attempt.agentPath!)], sameBoot(first));
+  await tickPipelines([], sameBoot(first));
+  const replaced = loadPipelines()[0]!;
+  const replacement = replaced.runs[0]!.attempts[1]!;
+  expect(replacement.restartContext).toMatchObject({ previousAttempt: 1, cause });
+  replacement.paneId = null;
+  savePipelines([replaced]);
+  h.durableTurns.set(replacement.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(replacement.startedAt!) + 1 });
+  h.advanceWallClock(IDLE_TURN_QUIET_MS);
+  await tickPipelines([entry(replacement.agentPath!)], sameBoot(second));
+  const parkedLane = loadPipelines()[0]!;
+  expect(parkedLane.state).toBe("needs_decision");
+  expect(parkedLane.stateDetail).toBe(parked);
+  expect(parkedLane.stateDetail).not.toContain("too");
+  expect(parkedLane.stateDetail).not.toContain("again");
+  expect(parkedLane.stateDetail).not.toContain("restart");
 });
 
 test("an OOM death retries once after headroom recovers in the same worktree, then parks", async () => {
@@ -18753,6 +20111,7 @@ test("restart recovers a newer interrupted turn after a provider continuation ev
   expect(f.sends).toHaveLength(1);
   const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   f.h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: f.now() + 1 });
+  f.advance(IDLE_TURN_QUIET_MS + 1);
   f.h.setConversationActive(null);
   const restarted: PipelinePorts = { ...f.h.ports,
     restartRecoveryBootId: () => "new-turn-boot",
@@ -18870,4 +20229,513 @@ test.each(["codex", "claude"] as const)("an open scan keeps a provider continuat
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(f.sends).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.actionAt).toBeDefined();
+});
+
+
+test("resumable review budget notes name the same-lane grant action in both languages", async () => {
+  const { parkedTaskNote } = await import("./taskStatusNote");
+  for (const locale of ["en", "uk"] as const) {
+    const note = parkedTaskNote("private diagnostics", locale, true, { kind: "review-budget" });
+    expect(note).toContain("continue-review");
+    expect(note).toContain("addRounds");
+    expect(note).not.toContain("private diagnostics");
+  }
+});
+
+test("terminal review continuation returns each fix to review even when the fix has a terminal pass edge", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[0] },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1], role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0], id: "fix", next: null },
+  ] as never);
+  const { pipeline: parked } = await driveWithController(h);
+  expect(parked.state).toBe("needs_decision");
+  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
+  const request = { action: "continue-review" as const, clientRequestId: "terminal-fix-grant", addRounds: 2, expectedRevision: pipelineRevision(parked) };
+  expect((await patchPipeline(parked.id, request, h.ports, actor)).error).toBeUndefined();
+  expect((await patchPipeline(parked.id, request, h.ports, actor)).replayed).toBe(true);
+  for (let n = 0; n < 2; n++) {
+    await tickPipelines([], h.ports);
+    const fix = loadPipelines()[0]!.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!;
+    expect(fix.input).toContain(n === 0 ? "P2 evidence gap 2" : "P1 unresolved");
+    h.beforeBuildPass();
+    await tickPipelines([h.finish(fix.agentPath!, "pass", `fix ${n}`)], h.ports);
+    expect(loadPipelines()[0]!.cursor?.stageId).toBe("critique");
+    await critiqueRound(h, "fail", "unresolved");
+  }
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+});
+
+test.each([1, 2] as const)("terminal review continuation carries its reviewer return and final budget through a nested terminal repair (%i granted rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, id: "critique", role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h, (stageId) => stageId === "critique")).pipeline;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
+
+  const actor = { kind: "agent" as const, role: "orchestrator" as const, conversationId: parked.srcConversationId! };
+  const grant = await patchPipeline(parked.id, {
+    action: "continue-review", clientRequestId: `nested-repair-grant-${rounds}`, addRounds: rounds,
+    expectedRevision: pipelineRevision(parked),
+  }, h.ports, actor);
+  expect(grant.error).toBeUndefined();
+
+  const continued = (await driveWithController(h, (stageId, attempt) =>
+    stageId === "critique" || stageId === "fix" && attempt === 2)).pipeline;
+  const fixes = continued.runs.find((run) => run.stageId === "fix")!.attempts;
+  const repairs = continued.runs.find((run) => run.stageId === "repair")!.attempts;
+  const reviews = continued.runs.find((run) => run.stageId === "critique")!.attempts;
+  expect(fixes[1]!.state).toBe("failed");
+  expect(repairs[0]!.state).toBe("passed");
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy?.edge).toBe("pass");
+  expect(reviews.slice(2).every((attempt) => attempt.state === "failed")).toBe(true);
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.lastPassedCommit).toBe(parked.reviewPending!.currentHead);
+  expect(continued.reviewPending).toMatchObject({ terminalRecheck: true, findings: 1, currentHead: ORIGIN_MAIN_SHA });
+  expect(reviews.at(-1)!.activatedBy).toMatchObject({ budgetRecheck: true });
+  expect(continued.reviewGrants).toMatchObject([{ rounds }]);
+});
+
+
+test.each(["retry-stage", "skip-stage"] as const)("a failed terminal budget park refuses %s until a bounded grant", async (action) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const spawned = h.spawnInputs.length;
+  for (let n = 0; n < 3; n++) {
+    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+    await tickPipelines([], h.ports);
+    expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  }
+  expect(h.spawnInputs).toHaveLength(spawned);
+  expect(loadPipelines()[0]!.reviewGrants).toBeUndefined();
+  expect((await continueReview(parked, `fenced-${action}`, 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "granted fix");
+  await critiqueRound(h, "pass", "independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+test("a budget park with a failed fix publication requires a grant before fix and fresh review", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  const reviews = parked.runs.find(run => run.stageId === "critique")!.attempts.length;
+  const box = publishHarness(h);
+  box.setLocalHead(ORIGIN_MAIN_SHA); box.setDirty(false); box.setPushFails(true);
+  parked.publication = "remote-branch";
+  parked.delivery!.publish = "enabled";
+  parked.publishedCommit = null;
+  savePipelines([parked]);
+  expect((await patchPipeline(parked.id, { action: "publish" }, h.ports)).status).toBe(409);
+  await tickPipelines([], h.ports);
+  const failed = loadPipelines()[0]!;
+  expect(failed).toMatchObject({ state: "needs_decision", publishedCommit: null,
+    reviewPending: parked.reviewPending, delivery: { operation: { state: "settled", result: { ok: false } } } });
+  for (const action of ["retry-stage", "skip-stage"] as const) {
+    expect(await patchPipeline(parked.id, { action }, h.ports)).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+  }
+  box.setPushFails(false);
+  expect((await continueReview(failed, "unpublished-budget-grant", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "build", input: expect.stringContaining("evidence gap 2") });
+  await buildRound(h, "granted fix after publication failure");
+  await critiqueRound(h, "pass", "fresh independent approval after granted fix");
+  const completed = loadPipelines()[0]!;
+  expect(completed).toMatchObject({ state: "completed", publishedCommit: ORIGIN_MAIN_SHA, reviewGrants: [{ rounds: 1 }] });
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews + 1);
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-2)!.verdict!.status).toBe("fail");
+  expect(box.order).toContain("push-rejected");
+  expect(box.order).toContain(`push:${ORIGIN_MAIN_SHA}`);
+});
+
+test.each([false, true])("board actions admit only a bounded terminal continuation (legacy park: %s)", async (legacy) => {
+  const { pipelineActionOptions, actionObserved } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  if (legacy) {
+    delete parked.reviewPending;
+    savePipelines([parked]);
+  }
+  const options = pipelineActionOptions(parked);
+  expect(options.find((option) => option.action === "continue-review")?.refusal).toBeNull();
+  for (const action of ["retry-stage", "skip-stage", "accept-head"] as const) {
+    expect(options.find((option) => option.action === action)?.refusal).not.toBeNull();
+  }
+  expect(actionObserved("continue-review", null, parked)).toBe(false);
+  expect(pipelineAnswers(parked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["continue-review"]);
+  expect((await continueReview(parked, `board-grant-${legacy}`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  await buildRound(h, "first board fix");
+  await critiqueRound(h, "fail", "retained defect");
+  await buildRound(h, "second board fix");
+  await critiqueRound(h, "pass", "fresh independent approval");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+test("terminal continuation refuses stale budget metadata after a newer review blocks", async () => {
+  const h = movingHeadHarness();
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const { pipeline: parked } = await driveWithController(h);
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect((await continueReview(parked, "granted-before-block", 2)).error).toBeUndefined();
+  await buildRound(h, "fix before blocked review");
+  await tickPipelines([], h.ports);
+  // Old persisted metadata must not authorize a newer attempt.
+  const newer = loadPipelines()[0]!;
+  newer.reviewPending = parked.reviewPending;
+  savePipelines([newer]);
+  const review = newer.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Blocked review\n\n```json\n{"status":"fail","findings":["P1 review blocked"],"blocked":true,"blockedReason":"Review environment unavailable"}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.stateDetail).toBe("Review environment unavailable");
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "continue-review")?.refusal).toBe("no-review");
+  expect((await continueReview(blocked, "stale-budget", 2)).status).toBe(409);
+  expect(loadPipelines()[0]!.reviewGrants).toHaveLength(1);
+  await patchPipeline(blocked.id, { action: "pause" }, h.ports);
+  const resumed = await patchPipeline(blocked.id, { action: "resume" }, h.ports);
+  expect(resumed.pipeline!.stateDetail).not.toContain("continue-review");
+});
+
+
+test.each([false, true])("consecutive terminal grants each buy two reviews on unchanged heads (nested repairs: %s)", async (nested) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, ...(nested ? { onFail: { to: "repair", maxRounds: 3 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+  ] as never);
+  let parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  for (let grant = 0; grant < 2; grant++) {
+    expect((await continueReview(parked, `successive-${grant}`, 2)).error).toBeUndefined();
+    parked = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && (n === 2 || n === 4))).pipeline;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4 + grant * 2);
+    expect(parked.reviewGrants).toHaveLength(grant + 1);
+    expect(parked.reviewPending?.currentHead).toBe(ORIGIN_MAIN_SHA);
+  }
+});
+
+
+test.each([{ rounds: 1, nested: false }, { rounds: 2, nested: false }, { rounds: 1, nested: true }, { rounds: 2, nested: true }])("a terminal continuation retains validation through all $rounds reviews (nested repair: $nested)", async ({ rounds, nested }) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: "validate", ...(nested ? { onFail: { to: "repair", maxRounds: 1 } } : {}) },
+    ...(nested ? [{ ...BUILD_ONLY[0]!, id: "repair", next: null }] : []),
+    { ...BUILD_ONLY[0]!, id: "validate", next: "critique" },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  const validations = parked.runs.find((run) => run.stageId === "validate")?.attempts.length ?? 0;
+  expect((await continueReview(parked, "validation-grant", rounds)).error).toBeUndefined();
+  const continued = (await driveWithController(h, (stageId, n) => stageId === "critique" || nested && stageId === "fix" && n === 2)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds);
+  const review = continued.runs.find((run) => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.stageId).toBe("validate");
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  expect((await continueReview(continued, "validation-resume", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("fix");
+  expect(loadPipelines()[0]!.cursor?.input).toContain(review.verdict!.findings![0]!);
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find((run) => run.stageId === "validate")!.attempts).toHaveLength(validations + rounds + 1);
+});
+
+test.each([1, 2] as const)("a final granted fix repaired inside its budget remains resumable (%i rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 2 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "before-final-repair", rounds)).error).toBeUndefined();
+  const repaired = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && n === rounds + 1)).pipeline;
+  const repair = repaired.runs.find(run => run.stageId === "repair")!.attempts[0]!;
+  expect(repair.state).toBe("passed");
+  expect(repair.activatedBy?.budgetSpent).toBeUndefined();
+  expect(repaired.reviewPending).toMatchObject({ terminalRecheck: true, fixStageId: "repair", fixAttempt: repair.n, currentHead: ORIGIN_MAIN_SHA });
+  const lastReview = repaired.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(lastReview.activatedBy).toMatchObject({ stageId: "repair", attempt: repair.n, budgetRecheck: true });
+  expect((await continueReview(repaired, "after-final-repair", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "fix", input: expect.stringContaining("P2 evidence gap") });
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3 + rounds);
+  expect(completed.runs.find(run => run.stageId === "fix")!.attempts.at(-1)!.input).toContain(lastReview.verdict!.findings![0]!);
+});
+
+
+test.each([
+  { failure: "host", retryRound: 0 }, { failure: "spawn", retryRound: 0 },
+  { failure: "host", retryRound: 2 }, { failure: "spawn", retryRound: 2 },
+] as const)("reviewer $failure retries spend no extra granted round (round $retryRound)", async ({ failure, retryRound }) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, `retry-${failure}-grant`, 3)).error).toBeUndefined();
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+  }
+  await buildRound(h, "fix before reviewer retry");
+  const spawn = h.ports.spawnAgent;
+  if (failure === "spawn") {
+    h.ports.spawnAgent = async () => { throw new Error("runtime host request timed out"); };
+    h.ports.sleep = async () => {};
+  } else {
+    h.ports.spawnAgent = async (input, reserve) => ({ ...await spawn(input, reserve), paneId: null });
+  }
+  await tickPipelines([], h.ports);
+  const interruptedLane = loadPipelines()[0]!;
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  expect(interrupted.activatedBy?.budgetRecheck === true).toBe(retryRound === 2);
+  if (failure === "host") {
+    h.durableTurns.set(interrupted.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(interrupted.startedAt!) + 1 });
+    h.ports.conversationTurnInterrupted = async () => "stalled";
+    h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  } else {
+    expect(interruptedLane.state).toBe("needs_decision");
+  }
+  expect((await patchPipeline(parked.id, { action: "retry-stage", expectedStageId: "critique", expectedAttempt: interrupted.n }, h.ports)).error).toBeUndefined();
+  h.ports.spawnAgent = spawn;
+  delete h.ports.conversationTurnInterrupted;
+  await critiqueRound(h, "fail", "first completed granted review");
+  const retried = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(retried.activatedBy).toEqual(interrupted.activatedBy);
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
+    await buildRound(h, `granted fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed granted review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  const reviews = final.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(6);
+  expect(reviews.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("a terminal budget decision with findings requires a grant rather than a decision answer", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await critiqueRound(h, "fail", "initial finding");
+  await buildRound(h, "last budget fix");
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  h.messages.set(review.agentPath!, { text: 'Review still has findings\n\n```json\n{"status":"needs_decision","findings":["P1 retained defect"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  const revision = pipelineRevision(parked);
+  const result = await patchPipeline(parked.id, {
+    action: "resolve-decision", clientRequestId: "budget-decision-answer", answer: "Review this head again",
+    expectedRevision: revision, expectedStageId: "critique", expectedAttempt: review.n,
+  }, h.ports, { kind: "operator" });
+  expect(result).toMatchObject({ status: 409, error: expect.stringContaining("continue-review") });
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
+  expect(loadPipelines()[0]!.decisionAnswers).toBeUndefined();
+  expect((await continueReview(parked, "budget-decision-grant", 1)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P1 retained defect");
+  await buildRound(h, "granted defect fix");
+  await critiqueRound(h, "pass", "fresh review passes");
+  expect(loadPipelines()[0]!.state).toBe("completed");
+});
+
+
+test.each([false, true])("a blocked terminal reviewer retries its unspent activation (granted: %s)", async (granted) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  if (granted) {
+    const parked = (await driveWithController(h)).pipeline;
+    expect((await continueReview(parked, "blocked-final-grant", 1)).error).toBeUndefined();
+    await buildRound(h, "granted fix");
+  } else {
+    await tickPipelines([], h.ports);
+    await buildRound(h, "initial build");
+    await critiqueRound(h, "fail", "initial finding");
+    await buildRound(h, "last budget fix");
+  }
+  await tickPipelines([], h.ports);
+  const review = loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(review.activatedBy?.budgetRecheck).toBe(true);
+  h.messages.set(review.agentPath!, { text: 'Review unavailable\n\n```json\n{"status":"fail","blocked":true,"blockedReason":"Review environment unavailable","findings":["P1 review blocked"]}\n```', ts: Date.now() + 100_000_000 });
+  await tickPipelines([entry(review.agentPath!)], h.ports);
+  const blocked = loadPipelines()[0]!;
+  expect(blocked.reviewPending).toBeUndefined();
+  const { pipelineActionOptions } = await import("@/components/kanban/stagesModel");
+  const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "retry-stage")?.refusal).toBeNull();
+  expect(pipelineActionOptions(blocked).find((option) => option.action === "skip-stage")?.refusal).not.toBeNull();
+  expect(pipelineAnswers(blocked, (stage) => stage.id)?.choices.map((choice) => choice.action)).toEqual(["retry-stage"]);
+  expect((await patchPipeline(blocked.id, { action: "skip-stage" }, h.ports)).status).toBe(409);
+  expect((await patchPipeline(blocked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "pass", "environment restored; independent review passes");
+  const completed = loadPipelines()[0]!;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.activatedBy).toEqual(review.activatedBy);
+});
+
+
+test.each(["tick", "direct"] as const)("an older failed terminal park regains same-lane continuation metadata (%s)", async (recovery) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
+  const legacy = (await driveWithController(h)).pipeline;
+  delete legacy.reviewPending;
+  legacy.stateDetail = "budget spent: 1 findings left (critique): retained finding";
+  savePipelines([legacy]);
+  if (recovery === "tick") {
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique", fixStageId: "build" });
+    expect(loadPipelines()[0]!.stateDetail).toContain("continue-review");
+  }
+  const parked = loadPipelines()[0]!;
+  expect((await continueReview(parked, `legacy-${recovery}-grant`, 2)).error).toBeUndefined();
+  expect(loadPipelines()[0]!.id).toBe(legacy.id);
+  expect(loadPipelines()[0]!.cursor?.input).toContain("P2 evidence gap 2");
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(4);
+});
+
+
+test.each([1, 2] as const)("an inner terminal grant retains the outer review obligation (%i outer rounds)", async (rounds) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  await create(h.ports, [
+    { ...BUILD_ONLY[0]!, next: "critique" },
+    { ...BUDGET_STAGES({ to: "fix", maxRounds: 1 }, null)[1]!, role: { roleId: "reviewer" }, access: "read-only" },
+    { ...BUILD_ONLY[0]!, id: "fix", next: null, onFail: { to: "repair", maxRounds: 1 } },
+    { ...BUILD_ONLY[0]!, id: "repair", next: null },
+  ] as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "outer-grant", rounds)).error).toBeUndefined();
+  const innerPark = (await driveWithController(h, (stageId, n) => stageId === "critique" || stageId === "fix" && (n === 2 || n === 3))).pipeline;
+  expect(innerPark.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "fix", fixStageId: "repair" });
+  expect((await continueReview(innerPark, "inner-grant", 1)).error).toBeUndefined();
+  const returned = (await driveWithController(h)).pipeline;
+  expect(returned.state).toBe("needs_decision");
+  expect(returned.reviewPending).toMatchObject({ terminalRecheck: true, stageId: "critique" });
+  const reviews = returned.runs.find(run => run.stageId === "critique")!.attempts;
+  expect(reviews).toHaveLength(2 + rounds);
+  expect(reviews[2]!.activatedBy).toMatchObject({ stageId: "fix", attempt: 4, edge: "pass" });
+  expect(returned.reviewGrants).toMatchObject([{ stageId: "critique", rounds }, { stageId: "fix", rounds: 1 }]);
+  expect((await continueReview(returned, "outer-final-grant", 1)).error).toBeUndefined();
+  const completed = (await driveWithController(h, new Set())).pipeline;
+  expect(completed.state).toBe("completed");
+  expect(completed.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!.verdict?.status).toBe("pass");
+});
+
+
+test.each([0, 2] as const)("automatic reviewer host retries preserve a three-round grant (round %i)", async (retryRound) => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  const parked = (await driveWithController(h)).pipeline;
+  expect((await continueReview(parked, "automatic-retry-grant", 3)).error).toBeUndefined();
+  for (let round = 0; round < retryRound; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+  }
+  await buildRound(h, "fix before automatic host retries");
+  await tickPipelines([], h.ports);
+  const activation = loadPipelines()[0]!.cursor!.activatedBy;
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  const interruptedLane = loadPipelines()[0]!;
+  expect(interruptedLane.state).toBe("needs_decision");
+  expect(interruptedLane.cursor).toMatchObject({ stageId: "critique", activatedBy: activation });
+  const interrupted = interruptedLane.runs.find(run => run.stageId === "critique")!.attempts.at(-1)!;
+  expect(interrupted.verdict).toBeNull();
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: interrupted.launchId!, conversationId: interrupted.conversationId!, transcript: interrupted.agentPath, sessionId: interrupted.sessionId, paneId: null });
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await critiqueRound(h, "fail", "review completes after host recovery");
+  expect(loadPipelines()[0]!.state).toBe(retryRound === 2 ? "needs_decision" : "running");
+  for (let round = retryRound + 1; round < 3; round++) {
+    await buildRound(h, `fix ${round + 1}`);
+    await critiqueRound(h, "fail", `completed review ${round + 1}`);
+    expect(loadPipelines()[0]!.state).toBe(round === 2 ? "needs_decision" : "running");
+  }
+  const final = loadPipelines()[0]!;
+  expect(final.runs.find(run => run.stageId === "critique")!.attempts.slice(2).filter(attempt => attempt.verdict)).toHaveLength(3);
+  expect(final.reviewPending?.terminalRecheck).toBe(true);
+});
+
+
+test("transport traversals before a terminal park cannot shorten a later grant", async () => {
+  const h = movingHeadHarness(() => ORIGIN_MAIN_SHA);
+  movingHeadPorts = h.ports;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
+  stages[1] = { ...stages[1]!, role: { roleId: "reviewer" }, access: "read-only" };
+  await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await buildRound(h, "initial build");
+  await tickPipelines([], h.ports);
+  for (let lost = 0; lost < 3; lost++) {
+    structuredLatest(1);
+    h.setConversationActive(false);
+    const lostAt = h.ports.now();
+    h.ports.conversationHostUnavailableSince = async () => lostAt;
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+    if (lost < 2) await tickPipelines([], h.ports);
+  }
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("build");
+  h.ports.conversationHostUnavailableSince = async () => null;
+  h.setConversationActive(null);
+  const parked = (await driveWithController(h)).pipeline;
+  expect(parked.reviewPending?.terminalRecheck).toBe(true);
+  expect(failEdgeRoundsUsed(parked, parked.stages[1]!)).toBe(2);
+  const completedBefore = parked.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict).length;
+  expect((await continueReview(parked, "after-transport-grant", 3)).error).toBeUndefined();
+  const continued = (await driveWithController(h)).pipeline;
+  expect(continued.state).toBe("needs_decision");
+  expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
 });

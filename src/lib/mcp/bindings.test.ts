@@ -26,6 +26,7 @@ import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
 import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -479,6 +480,34 @@ test("gateway spawn with no MCP selection sends the Viewer baseline explicitly",
   await gateway({ clientRequestId: "root-agent-baseline", cwd: "/repo", title: "Root child", ["prompt"]: "inspect" });
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]?.mcpServers).toEqual(["viewer"]);
+});
+
+test("automatic drain refuses autonomous spawns and permits operator launches", async () => {
+  const file = drainFile();
+  let spawns = 0;
+  const control = { post: async () => { spawns++; return { conversationId: "conversation_child", path: null, launchId: "launch_child",
+    state: "starting", initialMessage: "pending", transport: "structured" }; } };
+  const as = (kind: string) => viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_caller", role: "builder" }) } as never).spawn_agent;
+  writeDrain(file, { id: "mcp-test", target: "a".repeat(40), since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    const args = { cwd: "/repo", title: "Work", ["prompt"]: "Finish the work" };
+    await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    expect(spawns).toBe(0);
+    await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
+    expect(spawns).toBe(1);
+  } finally { releaseDrain(file, "mcp-test"); }
+});
+
+test("automatic update answer keeps totals and drain metadata within six KB", async () => {
+  const control = { post: async () => ({}), get: async () => ({ mode: "checkout", auto: { availability: "available", enabled: true, phase: "waiting", longWait: true,
+    drain: { state: "draining", at: "2026-01-01T04:00:00Z" },
+    blockers: { turns: 40, stages: 40, busy: false, unreadable: null, memoryMb: null, operatorActiveAt: null,
+      turnList: Array.from({ length: 20 }, (_, i) => ({ conversationId: `conversation_${i}`, engine: "codex", project: "Example".repeat(20), stage: null, seat: true })),
+      stageList: Array.from({ length: 20 }, (_, i) => ({ pipelineId: `pipeline_${i}`, stageId: "build", cursor: "running", task: "Build the feature".repeat(5), conversationId: `conversation_${i}` })) } } }) };
+  const result = await viewerMcpBindings(undefined, control).auto_updates({ clientRequestId: "bounded-update" });
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(6000);
+  expect(result).toMatchObject({ blockers: { turns: 40, stages: 40 }, drain: { state: "draining" } });
 });
 
 test("spawn_agent stamps the launcher from server attribution and never from the arguments (spawn-completion-notice §1)", async () => {
@@ -4206,12 +4235,111 @@ test("task placement bindings require atomic guards and classify field refusals 
   expect(result.unchanged).toBe(true);
 });
 
+test("MCP task writes normalize holds, preserve step operator reasons and server provenance", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-hold-provenance-"));
+  sandboxes.push(sandbox);
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state") };
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+    const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
+  }
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+    import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+    import { viewerMcpBindings } from "./src/lib/mcp/bindings";
+    import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
+    import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistedTaskRows } from "./src/lib/tasks/storeFixture";
+    if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
+    let conversationId = "conversation_create_bound";
+    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "agent", conversationId, role: "builder" }),
+      taskSelectionSource: () => ({ read: (id: string) => persistedTaskRows(TASKS_FILE).find(task => task.id === id) ?? null }),
+      getPipelines: () => ({ pipelines: [] }),
+    }), new MemoryMcpReceiptStore());
+    const server = createViewerMcpServer(service);
+    const client = new Client({ name: "task-hold-provenance", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args });
+      const payload = result.structuredContent as Record<string, unknown> | undefined;
+      if (!payload || payload.ok !== true) throw new Error(JSON.stringify(payload ?? result.content));
+      return payload;
+    };
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      id: "step-" + index, text: "Cause " + index, state: index < 5 ? "done" : "open",
+      ...(index === 5 ? { hold: { kind: "worker", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
+    }));
+    try {
+    const created = await call("create_task", {
+      clientRequestId: "hold-create-bound", project: "fixture-project", text: "Track a waiting reason", full: true, steps,
+      hold: { kind: "worker", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+    });
+    const createdTask = created.task;
+    conversationId = "conversation_update_bound";
+    const updated = await call("update_task", {
+      clientRequestId: "hold-update-bound", taskId: created.taskId, full: true,
+      hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+    });
+    const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
+    const normalizedCreate = await call("create_task", {
+      clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
+      hold: { kind: "unknown-kind", note: "x".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "x".repeat(201) } }],
+    });
+    const unknownUpdate = await call("update_task", {
+      clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
+      hold: { kind: "unknown-kind", note: "z".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "z".repeat(201) } }],
+    });
+    const normalizedUpdate = await call("update_task", {
+      clientRequestId: "hold-update-normalized", taskId: normalizedCreate.taskId, full: true,
+      hold: { kind: "worker", note: "y".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "worker", note: "y".repeat(201) } }],
+    });
+    const operatorUpdate = await call("update_task", {
+      clientRequestId: "step-operator-update", taskId: normalizedCreate.taskId, full: true, hold: null,
+      steps: [{ id: "long", text: "Choose release", state: "open", hold: { kind: "operator", note: "Choose release A or B" } }],
+    });
+    const operatorRead = await call("get_task", { clientRequestId: "step-operator-read", taskId: normalizedCreate.taskId });
+    const statuses = [];
+    for (const status of ["inbox", "assigned", "blocked", "done"]) {
+      const changed = await call("update_task", { clientRequestId: "legacy-status-" + status, taskId: created.taskId, full: true, status });
+      statuses.push(changed.task.status);
+    }
+    console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
+      normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
+      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses }));
+    } finally { await client.close(); await server.close(); }
+  `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  const error = await new Response(child.stderr).text();
+  expect([await child.exited, error]).toEqual([0, ""]);
+  const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
+  expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
+  expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
+  expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
+  expect(result.readTask.hold).toEqual(result.updatedTask.hold);
+  expect(result.createdTask.steps).toHaveLength(8);
+  expect(result.createdTask.steps?.filter(step => step.state === "done")).toHaveLength(5);
+  expect(result.createdTask.steps?.[5]?.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound" });
+  expect(result.readTask.steps).toEqual(result.updatedTask.steps);
+  for (const [task, kind, letter] of [[result.normalizedCreate, "unstated", "x"], [result.unknownUpdate, "unstated", "z"], [result.normalizedUpdate, "worker", "y"]] as const) {
+    expect(task.hold).toMatchObject({ kind, note: letter.repeat(200), by: "agent" });
+    expect(task.steps?.[0]?.hold).toMatchObject({ kind, note: letter.repeat(200), by: "agent" });
+  }
+  expect(result.normalizedUpdate.steps?.[0]?.hold?.since).toBe(result.normalizedCreate.steps?.[0]?.hold?.since);
+  expect(result.operatorRead.steps).toEqual(result.operatorUpdate.steps);
+  expect(result.operatorRead.steps?.[0]?.hold).toMatchObject({ kind: "operator", note: "Choose release A or B", since: result.normalizedCreate.steps?.[0]?.hold?.since });
+  expect(result.statuses).toEqual(["inbox", "assigned", "blocked", "done"]);
+});
+
 
 test("continue-review forwards its receipt key, added budget and server actor, answers the grant and wakes the controller (#1938)", async () => {
   const calls: unknown[] = [];
   const reviewContinuation = { clientRequestId: "continue-1", expectedRevision: "a".repeat(64), stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40), actor: { kind: "operator" }, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, reviewContinuation, replayed: false };
@@ -4234,7 +4362,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
 
 test("continue-review from a conversation that did not create the pipeline is refused before its receipt is spent (#1938)", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async () => { throw new Error("must not be reached"); },
     callerAttribution: () => ({ kind: "manager", conversationId: "conversation_other", role: "orchestrator" }),
   } as never);
@@ -4248,7 +4376,7 @@ test("resolve-decision forwards its receipt key and server actor and wakes the c
   const calls: unknown[] = [];
   const decisionAnswer = { clientRequestId: "decision-answer", stageId: "build", attempt: 1, nextAttempt: 2, at: "2026-09-20T00:00:00.000Z" };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    readPipelineRecord: () => ({ id: "pipeline_1", srcConversationId: "conversation_creator" }),
+    readPipelineRecord: () => ({ id: "pipeline_1", project: "proj-a", srcConversationId: "conversation_creator" }),
     patchPipeline: async (_id: string, request: unknown, _ports: unknown, actor: unknown) => {
       calls.push({ request, actor });
       return { pipeline: { id: "pipeline_1", state: "running" }, decisionAnswer, replayed: false };
@@ -4379,4 +4507,14 @@ test("MCP note authors follow authenticated attribution and round-trip through r
     expect(clear.ok).toBe(true);
     expect(loadTasks()[0]!.note).toBeUndefined();
   }
+});
+
+test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries its autonomous admission restriction to the route", async (kind) => {
+  let sentHeaders: Record<string, string> | undefined;
+  const control = { post: async (_path: string, _body: Record<string, unknown>, headers?: Record<string, string>) => {
+    sentHeaders = headers; return { conversationId: "conversation_fixture_admission", launchId: "fixture-admission", state: "starting", initialMessage: "pending" };
+  } };
+  const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
+  await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
+  expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
 });

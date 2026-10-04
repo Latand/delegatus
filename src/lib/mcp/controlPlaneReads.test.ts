@@ -6,6 +6,7 @@ import path from "node:path";
 import { targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 import { setAgentRegistryForTests } from "@/lib/agent/registry";
+import { systemScheduler } from "@/lib/deadline";
 
 /**
  * The control-plane reads consume ONE completed scan and ONE projection (#845).
@@ -423,6 +424,10 @@ test("get_conversation enforces tailLines through the validated transcript-path 
 });
 
 test("get_conversation returns a held path tail with deadline-partial metadata", async () => {
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  try {
   const root = path.dirname(transcriptPath);
   const pathAllowed = (candidate: string) => {
     try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
@@ -438,7 +443,7 @@ test("get_conversation returns a held path tail with deadline-partial metadata",
         { tailLines: options.tailLines },
         { roots: [["codex-sessions", root]], pathAllowed },
       );
-      await Bun.sleep(20);
+      clockNow = deadlineAt + 1;
       return held;
     },
     listFiles: async () => { throw new Error("path tails must stay on the targeted reader"); },
@@ -447,13 +452,14 @@ test("get_conversation returns a held path tail with deadline-partial metadata",
 
   const result = await bindings.get_conversation(
     { clientRequestId: "get-path-tail-deadline-partial", transcriptPath, tailLines: 10 },
-    { deadlineAt: Date.now() + 5 },
+    { deadlineAt },
   ) as { truncated: boolean; hint: string; tail: { lines: string[]; truncated: boolean } };
 
   expect(result.tail.lines).toHaveLength(3);
   expect(result.tail.truncated).toBe(false);
   expect(result.truncated).toBe(true);
   expect(result.hint).toContain("internal read deadline");
+  } finally { clock.mockRestore(); }
 });
 
 test("get_conversation cancels a targeted miss when its caller leaves", async () => {
@@ -490,28 +496,67 @@ test("get_conversation cancels a targeted miss when its caller leaves", async ()
 });
 
 test("get_conversation deadlines a targeted miss without orphan work", async () => {
-  const { counts, injected } = dependencies({ completedTranscript: false });
-  let targetedSignal: AbortSignal | undefined;
-  const domain = injected as unknown as {
-    targetedFileEntry(pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number }): Promise<ReturnType<typeof scanRow> | undefined>;
-  };
-  domain.targetedFileEntry = async (_pathname, options = {}) => new Promise((_resolve, reject) => {
-    targetedSignal = options.signal;
-    options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 20;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  const timers = new Map<object, { handler: () => void; ms: number }>();
+  const schedule = spyOn(systemScheduler, "setTimeout").mockImplementation((handler, ms) => {
+    const handle = {};
+    timers.set(handle, { handler, ms });
+    return handle;
   });
-  const bindings = viewerMcpBindings(undefined, undefined, injected);
+  const clear = spyOn(systemScheduler, "clearTimeout").mockImplementation((handle) => {
+    timers.delete(handle as object);
+  });
+  try {
+    const { counts, injected } = dependencies({ completedTranscript: false });
+    let targetedSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const targetedStarted = new Promise<void>((resolve) => { started = resolve; });
+    let readerSettled = false;
+    const domain = injected as unknown as {
+      targetedFileEntry(pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number }): Promise<ReturnType<typeof scanRow> | undefined>;
+    };
+    domain.targetedFileEntry = async (_pathname, options = {}) => new Promise<ReturnType<typeof scanRow> | undefined>((_resolve, reject) => {
+      targetedSignal = options.signal;
+      options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+      started();
+    }).finally(() => { readerSettled = true; });
+    const bindings = viewerMcpBindings(undefined, undefined, injected);
 
-  const call = bindings.get_conversation(
-    { clientRequestId: "get-deadline", transcriptPath },
-    { deadlineAt: Date.now() + 20 },
-  );
+    const call = bindings.get_conversation(
+      { clientRequestId: "get-deadline", transcriptPath },
+      { deadlineAt },
+    );
 
-  await expect(call).rejects.toMatchObject({ name: "DeadlineExceededError" });
-  expect(targetedSignal?.aborted).toBeTrue();
-  expect(counts.rawScans).toBe(0);
+    const startState = await Promise.race([
+      targetedStarted.then(() => "targeted" as const),
+      call.then(() => "resolved" as const, () => "rejected" as const),
+    ]);
+    expect(startState).toBe("targeted");
+    const overall = timers.entries().next().value;
+    expect(overall).toBeDefined();
+    expect(overall![1].ms).toBe(20);
+    clockNow = deadlineAt;
+    timers.delete(overall![0]);
+    overall![1].handler();
+    await expect(call).rejects.toMatchObject({ name: "DeadlineExceededError" });
+    expect(targetedSignal?.aborted).toBeTrue();
+    expect(readerSettled).toBeTrue();
+    expect(timers.size).toBe(0);
+    expect(counts.rawScans).toBe(0);
+  } finally {
+    clear.mockRestore();
+    schedule.mockRestore();
+    clock.mockRestore();
+  }
 });
 
 test("get_conversation returns hydrated records when the deadline lands after the partial exists", async () => {
+  let clockNow = Date.now();
+  const deadlineAt = clockNow + 1_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  try {
   const { injected } = dependencies({ completedTranscript: false });
   const domain = injected as unknown as {
     targetedFileEntry(pathname: string): Promise<{
@@ -527,7 +572,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
     }>;
   };
   domain.targetedFileEntry = async () => {
-    await Bun.sleep(20);
+    clockNow = deadlineAt + 1;
     return {
       entry: scanRow(0),
       session: {
@@ -544,7 +589,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
 
   const result = await bindings.get_conversation(
     { clientRequestId: "get-deadline-partial", transcriptPath, maxRecords: 8 },
-    { deadlineAt: Date.now() + 5 },
+    { deadlineAt },
   ) as {
     messages: Array<{ kind: "message"; role: "assistant"; ts: null; text: string }>;
     truncated: boolean;
@@ -554,6 +599,7 @@ test("get_conversation returns hydrated records when the deadline lands after th
   expect(result.messages).toEqual([{ kind: "message", role: "assistant", ts: null, text: "partial answer" }]);
   expect(result.truncated).toBe(true);
   expect(result.hint).toContain("internal read deadline");
+  } finally { clock.mockRestore(); }
 });
 
 test("get_conversation returns a bounded partial from a synthetic 100 MiB transcript", async () => {

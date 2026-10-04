@@ -55,6 +55,7 @@ async function body(request: NextRequest): Promise<Record<string, unknown>> {
    the surface also starts a check (network: ls-remote, fetch), and that
    stays behind the same gate as POST /check. */
 function mayStartCheck(request: Request): boolean {
+  if (new URL(request.url).searchParams.get("readOnly") === "1") return false;
   return rejectCrossOrigin(request as NextRequest) === null && requireOperatorAuthority(request).ok;
 }
 
@@ -91,6 +92,10 @@ export async function postAuto(request: NextRequest): Promise<NextResponse> {
   const refused = operatorGate(request);
   if (refused) return refused;
   const input = await body(request);
+  if (input.choice === "deploy-now" || input.choice === "keep-waiting") {
+    if (typeof input.decisionId !== "string") return invalid("bad-key", "decisionId is required");
+    return answer(await selfUpdateService().decideDrain(input.decisionId, input.choice));
+  }
   if (typeof input.enabled !== "boolean") {
     return NextResponse.json({ error: "enabled must be a boolean", code: "bad-enabled" }, { status: 400, headers: noStore });
   }

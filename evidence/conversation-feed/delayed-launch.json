@@ -1,0 +1,34 @@
+[
+  {
+    "locale": "en",
+    "width": 1440,
+    "rows": 1,
+    "retired": true,
+    "overflow": false,
+    "pageErrors": []
+  },
+  {
+    "locale": "en",
+    "width": 390,
+    "rows": 1,
+    "retired": true,
+    "overflow": false,
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 1440,
+    "rows": 1,
+    "retired": true,
+    "overflow": false,
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 390,
+    "rows": 1,
+    "retired": true,
+    "overflow": false,
+    "pageErrors": []
+  }
+]

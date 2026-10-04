@@ -42,6 +42,9 @@ import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
+import { publishBlockerNames } from "./selfUpdate/blockerNames";
+import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
+import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -957,7 +960,20 @@ function ViewerApp() {
      rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
+  const updateFeed = useSelfUpdateFeed(true);
+  const updateDecision = updateFeed.snapshot?.auto?.decision;
+  /* The update surface names the work it waits on by project name and
+     conversation title; the server sends keys and ids. */
+  const updateBlockers = updateFeed.snapshot?.auto?.blockers;
+  useEffect(() => {
+    const wanted = new Set([...(updateBlockers?.turnList ?? []), ...(updateDecision?.blockers?.turnList ?? [])].map((turn) => turn.conversationId));
+    const conversations: Record<string, string> = {};
+    if (wanted.size) for (const file of allFiles) {
+      if (file.conversationId && wanted.has(file.conversationId) && file.title) conversations[file.conversationId] = cleanTitle(file.title, 90);
+    }
+    publishBlockerNames({ projects: projectDisplayNames, conversations });
+  }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision), [files, pipelines, clock, closingPipelines, updateDecision]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1050,18 +1066,11 @@ function ViewerApp() {
     };
   }, [panelFloating, setPanelOpen]);
 
-  /* «Show only needs me» filter: React-only state that auto-disables once no
-     conversation waits (below, beside the paths it keeps lit) — a filter
-     surviving reload would silently gray the whole board (D6). Desktop-only, like the F key: the mobile
-     strip and map render without the dimming channel, so the funnel stays
-     hidden there and the state clears if the viewport shrinks into the phone
-     layout mid-session. */
-  const [attentionFilter, setAttentionFilter] = useState(false);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (isMobile) setAttentionFilter(false);
-  }, [isMobile]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  /* «Show only needs me» filter: React-only state that turns itself off once
+     nothing on the board waits (below, beside the queue it keeps lit) — a
+     filter surviving reload would silently gray the whole board (D6). It is
+     per tab, so per device, and it survives every re-render and poll. */
+  const [needsOnly, setNeedsOnly] = useState(false);
 
   const cancelPendingIntent = useCallback(() => setPendingHash(null), []);
   const requestFocus = useCallback((path: string) => {
@@ -1264,26 +1273,6 @@ function ViewerApp() {
      out without moving the pointer's neighbors (D12). */
   const cycleRef = useRef<string | null>(null);
 
-  /* Membership key first, Set second: polls rebuild the queue array, but the
-     set identity only moves when membership does, so the memoized node layers
-     never re-render for an unchanged filter (D6). */
-  const attentionKey = useMemo(
-    () => needsYou.flatMap((entry) => (entry.kind === "conversation" ? [entry.item.file.path] : [])).sort().join("\n"),
-    [needsYou],
-  );
-  /* The filter keeps waiting conversations lit, so it exists only while one
-     waits: a queue of parked lanes alone (#2129) leaves it nothing to keep,
-     and switched on it would dim the whole board. */
-  const attentionFilterable = attentionKey !== "";
-  /* eslint-disable-next-line react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (!attentionFilterable) setAttentionFilter(false);
-  }, [attentionFilterable]);
-  const attentionPaths = useMemo<ReadonlySet<string> | null>(
-    () => (attentionFilter && attentionFilterable ? new Set(attentionKey.split("\n")) : null),
-    [attentionFilter, attentionFilterable, attentionKey],
-  );
-
   /* N never leaves the current project (D4): the same items and order the
      global list holds, conversations and lanes, taken off its memo. */
   const projectEntries = useMemo(
@@ -1308,6 +1297,16 @@ function ViewerApp() {
      phone and the desktop cannot disagree either (#2129). */
   const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
   const shellQueueCount = shellEntries.length;
+  /* The filter is offered while anything on the board on screen waits, a
+     parked lane (#2129) included: that card is what stays lit. Scoped to the
+     board, so it never offers to dim a board where nothing would stay lit.
+     The boards read it from one attribute on <main> (globals.css), so
+     flipping it re-renders none of them. */
+  const needsOnlyAvailable = shellQueueCount > 0;
+  /* eslint-disable-next-line react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!needsOnlyAvailable) setNeedsOnly(false);
+  }, [needsOnlyAvailable]);
   /* An agent's request_attention on the phone (docs/design/needs-attention.md
      §6): a dot on the ⚠ badge and a row in its sheet, never a move. Each row
      names where it points, in the words the board uses for it. */
@@ -1336,6 +1335,7 @@ function ViewerApp() {
      returns to the board the operator left. */
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         if (entry.item.project !== project) applyProject(entry.item.project);
         requestFocus(entry.item.file.path);
@@ -1351,9 +1351,8 @@ function ViewerApp() {
   );
 
   useEffect(() => {
-    /* N and F are desktop keys (D4/D6): the phone layout renders without the
-       scheme dimming channel, and a hardware keyboard there must never drive
-       hidden filter state or focus jumps. */
+    /* N and F are desktop keys (D4/D6): a phone has no hardware keys, and the
+       filter has its own funnel in the ⚠ sheet there. */
     if (isMobile) return;
     /* Same guard as useSchemeCamera: hotkeys stay quiet while a composer or
        any form control is focused. */
@@ -1371,9 +1370,9 @@ function ViewerApp() {
         event.preventDefault();
         openAttentionEntry(next);
       } else if (event.key === "f" || event.key === "F") {
-        if (!attentionFilterable) return;
+        if (!needsOnlyAvailable) return;
         event.preventDefault();
-        setAttentionFilter((value) => !value);
+        setNeedsOnly((value) => !value);
       } else if (event.key === "b" || event.key === "B") {
         /* B for the rail (issue #1819). Free on both sides: the Viewer binds
            only N, F and / at window level, the kanban board U and /, and the
@@ -1389,7 +1388,7 @@ function ViewerApp() {
     };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
-  }, [isMobile, projectEntries, attentionFilterable, openAttentionEntry, openSearch, toggleRail]);
+  }, [isMobile, projectEntries, needsOnlyAvailable, openAttentionEntry, openSearch, toggleRail]);
 
   /* A panel row's click is a deliberate act, so unlike the N hotkey it may
      switch the project; the focus hand-off glides the board to the node. A
@@ -1410,6 +1409,7 @@ function ViewerApp() {
      conversation's row, landing on the lane's card. */
   const jumpToEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         jumpToItem(entry.item);
         return;
@@ -1523,9 +1523,9 @@ function ViewerApp() {
       <AttentionIsland
         count={needsYou.length}
         panelOpen={panelOpen}
-        filterActive={attentionFilter}
+        filterActive={needsOnly && needsOnlyAvailable}
         onTogglePanel={() => setPanelOpen((value) => !value)}
-        onToggleFilter={attentionFilterable ? () => setAttentionFilter((value) => !value) : undefined}
+        onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
       />
       {panelFloating ? panel("overlay") : null}
     </div>
@@ -1561,6 +1561,7 @@ function ViewerApp() {
     return {
       attentionCount: shellQueueCount,
       noticeDot: phoneNotices.unseen,
+      filterActive: needsOnly && needsOnlyAvailable,
       arrival: toastFile ? (
         <AttentionToast
           file={toastFile}
@@ -1631,13 +1632,15 @@ function ViewerApp() {
               onOpenNotice={(notice) => openNotice(notice, close)}
               onClearNotice={clearNotice}
               onNoticesSeen={markNoticesSeen}
+              filterActive={needsOnly}
+              onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
             />
           );
         }
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
@@ -1689,7 +1692,7 @@ function ViewerApp() {
           conversation took the difference for an open keyboard, and 42 px of
           empty band stayed under its composer. Clipping the slide here keeps the
           page the phone's width. */}
-      <main ref={mainRef} className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
+      <main ref={mainRef} data-needs-only={needsOnly && needsOnlyAvailable ? "" : undefined} className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
         {/* Desktop: the corner attention anchor — the badge pill sits where the
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
@@ -1770,7 +1773,6 @@ function ViewerApp() {
             openNonce={openNonce}
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}
             placeRequest={placeRequest}
-            attentionPaths={attentionPaths}
             archived={archivedProjects.has(dashboardProject)}
             catalogKnown={catalogProjects.has(dashboardProject)}
             catalogConversationCount={catalogConversationCounts.get(dashboardProject) ?? 0}
@@ -1821,7 +1823,7 @@ function ViewerApp() {
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       <LinkedSettingsHost />
-      <TelemetrySettingsHost />
+      <TelemetrySettingsHost project={project === OVERVIEW ? undefined : project} />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

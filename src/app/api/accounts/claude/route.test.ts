@@ -1,3 +1,5 @@
+import { clearAccountTestState } from "@/lib/accounts/accountsStoreFixture";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -13,12 +15,12 @@ process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_CLAUDE_HOME = path.join(sandbox, "legacy");
 
 const { ClaudeLoginSupervisor, setClaudeLoginSupervisorForTests } = await import("@/lib/accounts/claudeLogin");
-const { claudeProjectRoots, claudeRegistryPath, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderHeaders } = await import("@/lib/accounts/claude");
+const { claudeProjectRoots, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderHeaders } = await import("@/lib/accounts/claude");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
 const { seedAccountRegistry } = await import("@/lib/accounts/accountsStoreFixture");
 const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
-const { agentRegistry } = await import("@/lib/agent/registry");
+const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
 
 function deleteRequest(body: unknown) {
@@ -41,7 +43,9 @@ class FakeChild extends EventEmitter {
 let child: FakeChild;
 
 beforeEach(() => {
-  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
   resetAccountCollectionsForTests();
   fs.rmSync(path.join(sandbox, "accounts"), { recursive: true, force: true });
   fs.rmSync(path.join(sandbox, "shared"), { recursive: true, force: true });
@@ -60,6 +64,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  closeAgentRegistryForTests();
   setClaudeLoginSupervisorForTests(null);
   if (oldState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = oldState;

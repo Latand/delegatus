@@ -664,7 +664,7 @@ describe("a decision the operator owes outranks every word for «it is running»
     for (const [surface, overrides, liveness] of LIVENESSES) {
       const state = deriveOrchestratorPanelState({ ...seated, file: file(overrides), surface });
       expect(state).toMatchObject({ liveness, attention: null });
-      expect(badgeOf(state)).toBe(liveness);
+      expect(badgeOf(state)).toBe(liveness === "live" ? "working" : liveness);
     }
   });
 
@@ -678,13 +678,11 @@ describe("a decision the operator owes outranks every word for «it is running»
     expect(badgeOf(state)).toBe("needs-you");
   });
 
-  test("the attention read is the QUEUE's: an abandoned open turn with no live process owes nothing", () => {
+  test("the attention read follows the queue: stalled turns owe nothing", () => {
     const abandoned = file({ activity: "stalled", proc: "done", mtime: NOW - 60 });
     expect(deriveOrchestratorPanelState({ ...seated, file: abandoned, surface: "live-root" })).toMatchObject({ attention: null });
     const held = file({ activity: "stalled", proc: "running", mtime: NOW - 60 });
-    expect(deriveOrchestratorPanelState({ ...seated, file: held, surface: "live-root" })).toMatchObject({
-      attention: `/transcripts/orchestrator.jsonl:stalled:${NOW - 60}`,
-    });
+    expect(deriveOrchestratorPanelState({ ...seated, file: held, surface: "live-root" })).toMatchObject({ attention: null });
   });
 });
 

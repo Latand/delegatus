@@ -19,7 +19,9 @@ test("keyed RPC shares snapshot normalization, identity precedence and absence s
       voiceDeliveries: [{ deliveryId: "voice-one", responses: [{ responseId: "response-one", text: "retained body" }] }],
     },
   });
-  const expected = journal.snapshot().sessions[0]!;
+  const snapshotSession = journal.snapshot().sessions[0]!;
+  expect(snapshotSession.retirementBlocked).toBeUndefined();
+  const expected = { ...snapshotSession, retirementBlocked: false };
   const snapshotSpy = spyOn(journal, "snapshotJson");
   const host = new RuntimeHost(journal);
   try {
@@ -42,7 +44,7 @@ test("upgrade creates the artifact index without rewriting old projections or co
   journal.append({ scope: runtimeScope("session", "conversation_old"), kind: "session-status", payload: {
     artifactPath: "/sessions/old.jsonl", host: "dead", turn: "idle", liveTurn: { text: "stale" },
   } });
-  const expected = journal.snapshot().sessions[0]!;
+  const expected = { ...journal.snapshot().sessions[0]!, retirementBlocked: false };
   const pending = journal.unconsumedEvents("pending-consumer");
   journal.close();
   const legacy = new Database(filename);

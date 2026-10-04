@@ -5639,57 +5639,196 @@ async function selfUpdateAutoMain(): Promise<void> {
   };
   const auto = { availability: "available" as const, enabled: true, off: null, phase: "waiting" as const, target: revision(next), green: { state: "green" as const },
     blockers: { turns: 2, stages: 1, operatorActiveAt: "2026-01-01T23:55:00Z", busy: false, memoryMb: null, unreadable: null }, waitingSince: "2026-01-01T00:00:00Z", longWait: false };
+  /* The shapes the server sends: a project is its key and a conversation is its id. The
+     surface must name both in words, so the fixture carries neither a name nor a title. */
+  const projectKey = "repo-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+  const projectName = "harbor-billing";
+  const build = { pipelineId: "pipeline_7c1d2e3f", stageId: "build", task: "Ship the billing export for March", cursor: "running", conversationId: "conversation_0d9c3b7e-51a4-4c2e-9f10-6b7a8c9d0e1f" };
+  const review = { pipelineId: "pipeline_a4b5c6d7", stageId: "review", task: "Review the invoice rounding fix", cursor: "reviewing", conversationId: "conversation_5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b" };
+  const turn = (conversationId: string, engine: string, extra: { seat?: boolean; stage?: typeof build } = {}) => ({ conversationId, engine, project: projectKey,
+    seat: extra.seat ?? false, stage: extra.stage ? { pipelineId: extra.stage.pipelineId, stageId: extra.stage.stageId } : null });
+  const working = { ...auto.blockers, operatorActiveAt: null, turns: 5, stages: 2, stageList: [build, review], turnList: [
+    turn(build.conversationId, "claude", { stage: build }), turn(review.conversationId, "codex", { stage: review }),
+    turn("conversation_4f6d2a10-9b7e-4c55-8a31-2f0e6d7c9b12", "claude"), turn("conversation_91a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b", "codex"),
+    turn("conversation_aa11bb22-cc33-4d44-8e55-ff6677889900", "codex", { seat: true }),
+  ] };
+  const overranAt = "2026-01-02T06:00:00Z";
   const states: Record<string, Snapshot> = {
     off: { ...base, auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
-    longWait: { ...base, auto: { ...auto, longWait: true } },
+    draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...working, busy: true, busyReason: "pipeline-controller" } } },
+    "draining-counts": { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" } } },
+    overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt }, blockers: working,
+      decision: { id: "drain-example", at: overranAt, project: "Delegatus", blockers: working } } },
+    kept: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt, choice: "keep-waiting" }, blockers: working, decision: null } },
+    "long-names": { ...base, auto: { ...auto, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...auto.blockers,
+      turnList: [{ conversationId: "conversation_seat", engine: "codex", project: "Project".repeat(11) + "Name", seat: true, stage: null }],
+      stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "T".repeat(80), cursor: "running", conversationId: "conversation_builder" }] } } },
+    applied: { ...base, serving: { web: revision(next), runtimeHost: revision(next) }, processes: { web: processView(next), runtimeHost: processView(next) },
+      auto: { ...auto, phase: "idle", blockers: null, waitingSince: null }, history: [
+        { at: "2026-01-02T07:00:00Z", by: "auto", kind: "restart-host", target: next, from: old, outcome: "done" },
+        { at: "2026-01-02T06:59:00Z", by: "auto", kind: "restart-web", target: next, from: old, outcome: "done" }] },
     fallback: { ...base, auto: { ...auto, enabled: false, phase: "idle", off: { at: "2026-01-02T00:00:00Z", target: next, stage: "restart-web", reason: "health probe failed" }, blockers: null } },
     managed: { ...base, mode: "managed", auto: { ...auto, enabled: false, phase: "idle", blockers: null } },
   };
+  const opaque = /repo-[0-9a-f]{16,}|conversation_[0-9a-f-]{8,}/;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  const shot = async (page: Page, tag: string) => {
+    const frame = path.join(OUT_DIR, `${tag}.png`);
+    await page.screenshot({ path: frame });
+    if (evidenceDir) {
+      fs.mkdirSync(evidenceDir, { recursive: true });
+      fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+    }
+  };
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, false);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    // The isolated install's first-run toast otherwise covers phone choices.
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+    for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) for (const [name, snapshot] of Object.entries(states)) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
-      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      const height = width === 390 ? 844 : 900;
+      const context = await browser.newContext({ viewport: { width, height }, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
-      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      // The name this browser remembered for the project, as after any earlier visit.
+      await context.addInitScript(({ language, names }: { language: string; names: Record<string, string> }) => {
+        localStorage.setItem("llv_lang", language);
+        localStorage.setItem("llvProjectNames", JSON.stringify(names));
+      }, { language: lang, names: { [projectKey]: projectName } });
       const page = await context.newPage();
-      await page.route("**/api/self-update", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot) }));
-      await page.goto(`${baseUrl}/`);
-      await page.waitForFunction(() => {
-        if (document.querySelector("[data-self-update-dialog]")) return true;
-        window.dispatchEvent(new Event("llv:open-self-update"));
-        return false;
-      }, undefined, { timeout: 60_000 });
-      await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
-      const geometry = await page.evaluate(() => {
+      /* Every update answer is this fixture; a decision click is answered by `decided` and
+         moves `current`, the way the service's next snapshot would. */
+      let current = snapshot;
+      let decided: { status: number; snapshot: Snapshot } = { status: 202, snapshot: states.kept! };
+      await page.route(/\/api\/self-update(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) }));
+      await page.route("**/api/self-update/events*", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: `event: state\ndata: ${JSON.stringify(current)}\n\n` }));
+      await page.route("**/api/self-update/auto", (route) => {
+        const answered = decided;
+        current = answered.snapshot;
+        return route.fulfill({ status: answered.status, contentType: "application/json", body: JSON.stringify(answered.status === 202 ? answered.snapshot
+          : { error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: answered.snapshot }) });
+      });
+      const openDialog = async () => {
+        await page.waitForFunction(() => {
+          if (document.querySelector("[data-self-update-dialog]")) return true;
+          window.dispatchEvent(new Event("llv:open-self-update"));
+          return false;
+        }, undefined, { timeout: 60_000 });
+        await page.waitForSelector('[data-section="auto"]', { timeout: 30_000 });
+      };
+      const measure = () => page.evaluate(() => {
         const dialog = document.querySelector<HTMLElement>("[data-self-update-dialog]")!;
         const card = dialog.querySelector<HTMLElement>('[data-section="auto"]')!;
         const button = card.querySelector<HTMLButtonElement>('[data-action="toggle-auto"]')!;
         const outer = dialog.getBoundingClientRect();
         const rect = card.getBoundingClientRect();
         const control = button.getBoundingClientRect();
-        return { overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        const blockerRows = [...card.querySelectorAll<HTMLElement>("ul li")].map((row) => {
+          const range = document.createRange();
+          range.selectNodeContents(row);
+          const bounds = [...range.getClientRects()];
+          return { text: row.innerText, overflow: row.scrollWidth - row.clientWidth,
+            left: Math.min(...bounds.map((bound) => bound.left)), right: Math.max(...bounds.map((bound) => bound.right)),
+            lines: bounds.length };
+        });
+        const choices = [...card.querySelectorAll<HTMLButtonElement>('[data-action="deploy-now"], [data-action="keep-waiting"]')].map((choice) => {
+          const box = choice.getBoundingClientRect();
+          return { action: choice.dataset.action, x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom };
+        });
+        const drain = card.querySelector<HTMLElement>("[data-drain-state]");
+        return { blockerRows, choices, drain: drain ? { state: drain.dataset.drainState, choice: drain.dataset.drainChoice ?? null } : null,
+          alert: card.querySelector<HTMLElement>('[role="alert"]')?.innerText ?? null,
+          cardOverflow: card.scrollWidth - card.clientWidth, overflow: dialog.scrollWidth - dialog.clientWidth, card: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
           controlVisible: control.left >= outer.left && control.right <= outer.right && control.top >= outer.top && control.bottom <= outer.bottom,
-          text: card.innerText.slice(0, 600) };
+          text: card.innerText.slice(0, 900) };
       });
-      const tag = `${width}-${lang}-${name}`;
-      report.frames[tag] = geometry;
-      if (geometry.overflow > 1 || !geometry.controlVisible) report.failures.push(`${tag}: overflow or clipped switch`);
-      if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${tag}: wrong interface language`);
-      const frame = path.join(OUT_DIR, `${tag}.png`);
-      await page.screenshot({ path: frame });
-      if (evidenceDir) {
-        fs.mkdirSync(evidenceDir, { recursive: true });
-        fs.copyFileSync(frame, path.join(evidenceDir, `${tag}.png`));
+      const tag = `${width}-${lang}-${colorScheme}-${name}`;
+      const check = (frame: string, geometry: Awaited<ReturnType<typeof measure>>) => {
+        report.frames[frame] = geometry;
+        if (geometry.overflow > 1 || geometry.cardOverflow > 1 || !geometry.controlVisible) report.failures.push(`${frame}: overflow or clipped switch`);
+        if (geometry.blockerRows.some((row) => row.overflow > 1 || row.left < geometry.card.x - 1 || row.right > geometry.card.x + geometry.card.width + 1)) {
+          report.failures.push(`${frame}: blocker text spills beyond card`);
+        }
+        if (opaque.test(geometry.text)) report.failures.push(`${frame}: a project key or a conversation id is on screen`);
+        const rows = geometry.blockerRows.map((row) => row.text);
+        if (new Set(rows).size !== rows.length) report.failures.push(`${frame}: a blocker row is listed twice`);
+        if (!geometry.text.includes(lang === "uk" ? "Автооновлення" : "Automatic updates")) report.failures.push(`${frame}: wrong interface language`);
+      };
+      /* An answered overrun says what was chosen and offers nothing to press. */
+      const checkKept = (frame: string, geometry: Awaited<ReturnType<typeof measure>>) => {
+        check(frame, geometry);
+        if (geometry.choices.length || geometry.drain?.choice !== "keep-waiting" || !geometry.text.includes(lang === "uk" ? "Ви обрали чекати далі" : "You chose to keep waiting")
+          || /Try again|Спробуйте ще раз|Deploy now|Оновити зараз/.test(geometry.text)) report.failures.push(`${frame}: the answered overrun still reads as an open choice`);
+      };
+      await page.goto(`${baseUrl}/`);
+      await openDialog();
+      const geometry = await measure();
+      if (name === "kept") checkKept(tag, geometry); else check(tag, geometry);
+      if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some((row) => row.lines < 2))) {
+        report.failures.push(`${tag}: long blocker name did not wrap`);
+      }
+      if (name === "draining-counts" && !geometry.blockerRows.some((row) => /: 2$/.test(row.text))) report.failures.push(`${tag}: counts are missing where no work is named`);
+      if (name === "overran") {
+        // Five pieces of work, five rows, and both choices on the first screen.
+        if (geometry.blockerRows.length !== 5 || geometry.choices.length !== 2) report.failures.push(`${tag}: the decision does not list each piece of work once beside two choices`);
+        if (geometry.choices.some((choice) => choice.bottom > height || choice.height < 44)) report.failures.push(`${tag}: a choice is below the first screen or under 44 px`);
+      }
+      await shot(page, tag);
+      if (name === "overran") {
+        /* A refusal: the decision was answered elsewhere. The 409 carries what is true now. */
+        decided = { status: 409, snapshot: states.kept! };
+        await page.locator('[data-self-update-dialog] [data-action="keep-waiting"]').click();
+        await page.waitForSelector("[data-self-update-dialog] [data-auto-drain-decision]", { state: "detached", timeout: 30_000 });
+        checkKept(`${tag}-refused`, await measure());
+        await shot(page, `${tag}-refused`);
+        /* An accepted «Keep waiting», then the same after a reload. */
+        current = snapshot;
+        decided = { status: 202, snapshot: states.kept! };
+        await page.goto(`${baseUrl}/`);
+        await openDialog();
+        await page.locator('[data-self-update-dialog] [data-action="keep-waiting"]').click();
+        await page.waitForSelector("[data-self-update-dialog] [data-auto-drain-decision]", { state: "detached", timeout: 30_000 });
+        checkKept(`${tag}-accepted`, await measure());
+        await shot(page, `${tag}-accepted`);
+        await page.reload();
+        await openDialog();
+        checkKept(`${tag}-reloaded`, await measure());
+        await shot(page, `${tag}-reloaded`);
+        /* The standing Needs-you control carries the same decision; neither choice is submitted. */
+        current = snapshot;
+        if (width === 390) {
+          // A hash change alone keeps the page, and with it the open dialog.
+          await page.goto(`${baseUrl}/#p=__overview__`);
+          await page.reload();
+          await page.locator('[data-mobile2-open="attention"]').click();
+        } else {
+          await page.goto(`${baseUrl}/`);
+          await page.locator("[data-attention-island] > button").first().click();
+        }
+        const fold = page.locator('[data-needs-you-fold="Delegatus"]');
+        if (await fold.count() && await fold.getAttribute("aria-expanded") === "false") await fold.click();
+        const choice = page.locator('[data-auto-drain-decision="drain-example"]').first();
+        await choice.waitFor({ state: "visible", timeout: 30_000 });
+        await choice.scrollIntoViewIfNeeded();
+        const choices = await choice.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const rows = [...element.querySelectorAll("li")].map((row) => row.textContent ?? "");
+          return { overflow: element.scrollWidth - element.clientWidth, left: box.left, right: box.right, rows, text: element.textContent ?? "",
+            choices: [...element.querySelectorAll("button")].map((button) => button.getBoundingClientRect().height) };
+        });
+        report.frames[`${tag}-needs-you`] = choices;
+        if (choices.overflow > 1 || opaque.test(choices.text) || choices.rows.length !== 5 || new Set(choices.rows).size !== 5
+          || choices.choices.length !== 2 || choices.choices.some((size) => size < 44)) report.failures.push(`${tag}: Needs-you decision is unreadable`);
+        if (width === 390 && (choices.left < 12 || choices.right > 378)) report.failures.push(`${tag}: Needs-you decision runs to the screen edge`);
+        await shot(page, `${tag}-needs-you`);
       }
       await context.close();
     }

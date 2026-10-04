@@ -565,7 +565,7 @@ test("an empty task band offers Remove from board; a band holding a conversation
 });
 
 test("collapsing one task's history leaves another task's open reader alone; folding the reader's own band closes it", async () => {
-  const finished = { ...task("older-idle", "Repair old links", "2026-01-01T00:00:00.000Z", [quietOne, quietTwo]), status: "done" as const };
+  const finished = { ...task("older-idle", "Repair old links", "2026-01-01T00:00:00.000Z", [quietOne, quietTwo]), status: "done" as const, doneAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   const host = mount(undefined, [finished, tasks[1]!]);
   await settle();
   const viewport = viewportOf(host);

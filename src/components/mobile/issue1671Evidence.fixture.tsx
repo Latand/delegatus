@@ -9,6 +9,10 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
  * reducer, and every write is recorded on `window.evidence`, so the driver
  * reads what a gesture really sent. All data is invented.
  */
+import { useEffect, useState } from "react";
+import { LogFeed } from "@/components/LogFeed";
+import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
+import type { LogTailState } from "@/hooks/useLogTail";
 import { createRoot } from "react-dom/client";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
@@ -617,6 +621,21 @@ const LONG_TITLE = [
 ].join(" ");
 const kanbanPipelines: Pipeline[] = [];
 const kanbanTasks: unknown[] = [];
+/* `?cards=N` (the whole-card drag's smoothness gate): N more tasks in Assigned, each with a long
+   title, a lane with a stage at work and a working conversation, so the phone board has the
+   weight of a busy afternoon. */
+const MANY_CARDS = Number(new URLSearchParams(location.search).get("cards") ?? "0");
+if (KANBAN && MANY_CARDS > 0) {
+  for (let index = 0; index < MANY_CARDS; index += 1) {
+    const id = `t-bulk-${index}`;
+    const title = `Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, case ${index + 1}`;
+    const worker = kanbanConversation(`${title.slice(0, 60)} · build`, index % 2 === 0 ? "working" : "settled", 300 + index * 20);
+    kanbanPipelines.push(kanbanLane(`lane-bulk-${index}`, title, [id], "running", [
+      { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 240 + index, role: "reviewer" }, { id: "verify" },
+    ]));
+    kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
+  }
+}
 if (KANBAN) {
   /* Assigned */
   kanbanPipelines.push(kanbanLane("lane-decision", "Mobile data: stop repeated full-board downloads", ["t-data"], "needs_decision", [
@@ -1628,4 +1647,53 @@ if (OVERVIEW_SCENE) {
   localStorage.setItem("llvProject", PROJECT);
   if (!location.hash) location.hash = `#p=${PROJECT}`;
 }
-createRoot(document.getElementById("root")!).render(<Viewer />);
+/** Long-history scene uses the real parser, rows, scroll controller and CSS.
+ * Only the transport is synthetic; the driver resolves an in-flight page. */
+/** `?long-operator=1` lengthens the operator's messages past the 500
+ * characters at which the feed folds one into a `<details>`; the default scene
+ * sits exactly on that limit. */
+const LONG_OPERATOR = new URLSearchParams(location.search).has("long-operator");
+const historyMessage = (n: number) => JSON.stringify({ type: "response_item", payload: {
+  type: "message", id: `history-${n}`, role: n % 2 ? "assistant" : "user",
+  content: [{ type: n % 2 ? "output_text" : "input_text", text: `Message ${n}\n\n` +
+    (n % 3 === 0 && !(LONG_OPERATOR && n % 2 === 0)
+      ? "```ts\n" + "const value = 42;\n".repeat(12) + "```"
+      : "A synthetic paragraph with enough words to wrap on a phone.\n\n".repeat(LONG_OPERATOR && n % 2 === 0 ? 14 : 8)) }],
+}});
+const historyLines = Array.from({ length: 180 }, (_, n) => historyMessage(n));
+let finishHistory: ((count: number) => void) | undefined;
+function ScrollHistoryFixture() {
+  const [tail, setTail] = useState<LogTailState>(() => ({ lines: historyLines.slice(60), linesStart: 60,
+    size: 10000, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: true, loadingOlder: false, prependGen: 0,
+    loadOlder: async () => 0,
+  }));
+  const [follow, setFollow] = useState(true);
+  const control = window as unknown as { historyFixture: { prepend(): void; append(): void; pending: boolean } };
+  const [pending, setPending] = useState(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => ({ ...tail, loadOlder: () => {
+    setPending(true);
+    setTail((value) => ({ ...value, loadingOlder: true }));
+    return new Promise<number>((resolve) => { finishHistory = resolve; });
+  } }) });
+  useEffect(() => {
+    control.historyFixture = {
+      pending,
+      prepend: () => {
+        setTail((value) => ({ ...value, lines: [...historyLines.slice(0, 60), ...value.lines], linesStart: 0,
+          prependGen: value.prependGen + 1, hasMore: false, loadingOlder: false }));
+        setPending(false);
+        finishHistory?.(60);
+      },
+      append: () => setTail((value) => ({ ...value, lines: [...value.lines, historyMessage(180 + value.lines.length)] })),
+    };
+  }, [control, pending]);
+  return <>
+    <header className="sticky top-0 shrink-0 border-b border-border px-3 py-2">Synthetic conversation</header>
+    <LogFeed file={conversation("/fixtures/scroll-history.jsonl", "Long synthetic history", { fmt: "codex", engine: "codex" })}
+      compact={new URLSearchParams(location.search).has("compact")} showSvc={false} lineFilter=""
+      onStatus={() => {}} paused={false} follow={follow} setFollow={setFollow} />
+  </>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("scroll-history")
+  ? <ScrollHistoryFixture /> : <Viewer />);

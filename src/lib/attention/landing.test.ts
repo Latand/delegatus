@@ -26,7 +26,12 @@ import path from "node:path";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attention-landing-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
+const previousCodexHome = process.env.LLV_CODEX_HOME;
 process.env.LLV_STATE_DIR = sandbox;
+process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
+fs.mkdirSync(process.env.LLV_CODEX_HOME, { recursive: true });
+// Admission requires a signed-in account; the fixture never launches its CLI.
+fs.writeFileSync(path.join(process.env.LLV_CODEX_HOME, "auth.json"), "{}\n");
 
 const PROJECT = "repo-fixture";
 const DEVICE = "device-desktop";
@@ -58,6 +63,8 @@ type FocusTarget = import("./types").FocusTarget;
 type FilesData = import("@/hooks/useFiles").FilesData;
 
 afterAll(() => {
+  if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+  else process.env.LLV_CODEX_HOME = previousCodexHome;
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -179,7 +186,7 @@ test("a lane the server admitted is on the board before anything requests attent
   expect(view.records?.tasks.map((row) => row.id)).toEqual([task.id]);
 
   /* The scan the board draws from is the one that is behind. */
-  let scanCarries = { pipelines: [] as Pipeline[], tasks: [] as BoardTask[] };
+  const scanCarries = { pipelines: [] as Pipeline[], tasks: [] as BoardTask[] };
   const { cache } = clientCache(() => scanCarries);
   await cache.revalidate();
   const board = boardFor(() => cache.read());
@@ -314,7 +321,7 @@ test("the phone's rows-only read carries a freshly admitted lane and touches no 
 
   /* The phone names no device, so it gets the rows and nothing else. */
   const surface = attentionRecordsForSurface();
-  expect(Object.keys(surface)).toEqual(["records"]);
+  expect(Object.keys(surface)).toEqual(["records", "notices"]);
   expect(surface.records?.pipelines.map((row) => row.id)).toEqual([pipeline.id]);
   expect(surface.records?.tasks.map((row) => row.id)).toEqual([task.id]);
 

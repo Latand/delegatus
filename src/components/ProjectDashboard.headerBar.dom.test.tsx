@@ -121,6 +121,7 @@ const OVERRIDES: Record<string, unknown> = {
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (url === "/api/tmux") {
@@ -556,8 +557,8 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   /* #2187 §6: the project's merge setting stays in its group when Archive and
      Delete stand down, and its Bridge reports setting (#2146) beside it. */
   expect(Array.from(project.children).map((child) =>
-    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.tagName,
-  )).toEqual(["merge", "bridge"]);
+    child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-share-project-switch]") ? "share" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.querySelector("[data-asks-you-switch]") ? "asks" : child.tagName,
+  )).toEqual(["merge", "share", "bridge", "asks"]);
 });
 
 test("the view switch keeps its place when the view changes: Conversations reserves the create group", async () => {

@@ -113,17 +113,22 @@ function task(id: string, project: string, status: TaskStatus, text: string, pat
 }
 
 const LEDGER_BUILDER = "/sessions/ledger-builder.jsonl";
+const LEDGER_QUIET = "/sessions/ledger-quiet.jsonl";
 const ATLAS_WORKER = "/sessions/atlas-worker.jsonl";
-/* Nobody's conversation waits on the operator: only the lane does. */
+/* Nobody's conversation waits on the operator: only the lane does. A second
+   ledger card works on and waits on no one, so the filter has one card to dim. */
 const FILES: FileEntry[] = [
   conversation(LEDGER_BUILDER, LEDGER, "Builder of the ledger export"),
+  conversation(LEDGER_QUIET, LEDGER, "Writer of the ledger glossary"),
   conversation(ATLAS_WORKER, ATLAS, "Worker on the atlas legend"),
 ];
 const TASKS: BoardTask[] = [
   task("t-ledger", LEDGER, "assigned", "Reconcile the ledger export", LEDGER_BUILDER),
+  task("t-ledger-quiet", LEDGER, "assigned", "Tidy the ledger glossary", LEDGER_QUIET),
   task("t-atlas", ATLAS, "assigned", "Redraw the atlas legend", ATLAS_WORKER),
 ];
 const LEDGER_CARD = "task:t-ledger";
+const QUIET_CARD = "task:t-ledger-quiet";
 
 const LANE = "lane-ledger-decide";
 const role = (roleId: string) => ({ roleId, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
@@ -162,7 +167,7 @@ function stubFetch(): void {
     if (url.startsWith("/api/files")) {
       return Response.json({
         files: [...FILES, ...laterFiles],
-        projectCatalog: [LEDGER, ATLAS].map((project) => ({ project, conversations: 1, smt: NOW - 30 })),
+        projectCatalog: [LEDGER, ATLAS].map((project) => ({ project, conversations: project === LEDGER ? 2 : 1, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
         flows: [], pipelines: [lane(laneDismissed)], workflows: [], tasks: TASKS, systemHealth: { tmux: { status: "healthy" } },
       });
@@ -380,15 +385,41 @@ test("desktop: after a jump to the lane the board still seeds a conversation the
   await until(() => seeded(fresh));
 });
 
-test("desktop: with only a lane waiting the island offers no filter, and F arms none", async () => {
+/** The funnel's own state, as the board reads it: one attribute on <main>. */
+const filterOn = (host: HTMLElement) => host.querySelector("main")!.hasAttribute("data-needs-only");
+
+test("desktop: with only a lane waiting the island offers the filter, F presses it, and the lane's card stays lit while the quiet one is not", async () => {
   const host = await mountOn(LEDGER);
   expect(islandCount(host)).toBe(1);
-  expect(filterControl(host)).toBeNull();
-  await press("f");
-  expect(filterControl(host)).toBeNull();
+  const funnel = filterControl(host);
+  expect(funnel).not.toBeNull();
+  expect(funnel!.getAttribute("aria-pressed")).toBe("false");
+  expect(filterOn(host)).toBe(false);
 
-  /* A conversation starts waiting: the filter appears, unpressed, so the F
-     above left nothing armed behind the missing control. */
+  await press("f");
+  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("true");
+  expect(filterOn(host)).toBe(true);
+  /* The attribute the stylesheet keys on: the lane's card carries it, the
+     quiet card on the same board does not. */
+  expect(card(host, LEDGER_CARD)?.getAttribute("data-attention")).toBe("needs");
+  expect(card(host, QUIET_CARD)).not.toBeNull();
+  expect(card(host, QUIET_CARD)!.hasAttribute("data-attention")).toBe(false);
+  /* The control's words flip with its state. */
+  expect(filterControl(host)?.getAttribute("aria-label")).toBe(en("attention.filterOff"));
+
+  await press("f");
+  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("false");
+  expect(filterOn(host)).toBe(false);
+
+  /* The funnel is a button too. */
+  await click(filterControl(host));
+  expect(filterOn(host)).toBe(true);
+});
+
+test("desktop: a conversation that starts waiting lights its own card under the filter", async () => {
+  const host = await mountOn(LEDGER);
+  await press("f");
+  expect(filterOn(host)).toBe(true);
   const asking = "/sessions/ledger-asking.jsonl";
   laterFiles = [conversation(asking, LEDGER, "Planner of the ledger cutover", {
     activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
@@ -396,9 +427,42 @@ test("desktop: with only a lane waiting the island offers no filter, and F arms 
   } as Partial<FileEntry>)];
   await rescan();
   await until(() => islandCount(host) === 2);
-  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("false");
-  await press("f");
+  /* The state survives the re-render the scan caused. */
+  expect(filterOn(host)).toBe(true);
   expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("true");
+});
+
+test("desktop: on a board where nothing waits the funnel is not offered and F sets nothing, though another project's lane waits", async () => {
+  const host = await mountOn(ATLAS);
+  /* The count is global; the board's queue is not. */
+  expect(islandCount(host)).toBe(1);
+  expect(filterControl(host)).toBeNull();
+  await press("f");
+  expect(filterControl(host)).toBeNull();
+  expect(filterOn(host)).toBe(false);
+});
+
+test("desktop: the Overview offers the filter for any project's lane", async () => {
+  dom.localStorage.setItem("llvProject", "__overview__");
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  mounted = root;
+  await act(async () => { root.render(<Viewer />); });
+  await until(() => filterControl(host as unknown as HTMLElement) !== null);
+  await press("f");
+  expect(filterOn(host as unknown as HTMLElement)).toBe(true);
+});
+
+test("desktop: once the last waiting item is dismissed the filter turns itself off", async () => {
+  const host = await mountOn(LEDGER);
+  await press("f");
+  expect(filterOn(host)).toBe(true);
+
+  await click(host.querySelector(`[data-dismiss="${LEDGER_CARD}"]`));
+  await until(() => islandCount(host) === 0);
+  expect(filterControl(host)).toBeNull();
+  expect(filterOn(host)).toBe(false);
 });
 
 test("desktop: a lane dismissed on its card leaves the island's count with the column's", async () => {
@@ -452,4 +516,36 @@ test("phone: the ⚠ badge counts the same lane, and 0 once it is dismissed", as
   laneDismissed = true;
   const again = await mountOn(LEDGER);
   expect(phoneBadge(again)).toBe(0);
+});
+
+test("phone: the ⚠ sheet's funnel dims the cards that do not wait, and the lane's shell stays lit", async () => {
+  phone = true;
+  const host = await mountOn(LEDGER);
+  const shells = () => [...host.querySelectorAll("[data-phone-card-shell]")] as HTMLElement[];
+  expect(shells().length).toBeGreaterThanOrEqual(2);
+  expect(filterOn(host)).toBe(false);
+
+  await click(host.querySelector("[data-mobile2-attention-count]")!.closest("button") ?? host.querySelector("[data-mobile2-attention-count]"));
+  await until(() => Boolean(dom.document.querySelector("[data-mobile2-sheet='attention']")));
+  const funnel = dom.document.querySelector("[data-mobile2-sheet='attention'] [data-attention-filter]") as HTMLElement | null;
+  expect(funnel).not.toBeNull();
+  expect(funnel!.getAttribute("aria-pressed")).toBe("false");
+  expect(funnel!.getAttribute("aria-label")).toBe(en("attention.filterOnTouch"));
+
+  await click(funnel);
+  const pressed = dom.document.querySelector("[data-mobile2-sheet='attention'] [data-attention-filter]") as unknown as HTMLElement;
+  expect(pressed.getAttribute("aria-pressed")).toBe("true");
+  expect(filterOn(host)).toBe(true);
+  /* The sheet stays open: the pressed funnel is what shows it took. */
+  expect(dom.document.querySelector("[data-mobile2-sheet='attention']")).not.toBeNull();
+
+  const lit = shells().filter((shell) => shell.getAttribute("data-attention") === "needs");
+  const quiet = shells().filter((shell) => !shell.hasAttribute("data-attention"));
+  expect(lit).toHaveLength(1);
+  expect(lit[0]!.textContent).toContain("Reconcile the ledger export");
+  expect(quiet.length).toBeGreaterThanOrEqual(1);
+  expect(quiet.some((shell) => (shell.textContent ?? "").includes("Tidy the ledger glossary"))).toBe(true);
+
+  await click(pressed);
+  expect(filterOn(host)).toBe(false);
 });

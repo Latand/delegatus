@@ -1,4 +1,4 @@
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { resolveContinuityAccount } from "@/lib/accounts/manager";
@@ -10,6 +10,8 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -27,6 +29,27 @@ import { spawnTransport } from "./spawnTransport";
 export interface StructuredRecoveryRequest {
   path: string;
   conversationId?: string | null;
+  origin?: MessageOrigin;
+  operationId?: string;
+  /** Immutable journal admission time when no registry reservation exists. */
+  admittedAt?: string;
+}
+
+/** No successor receipt exists yet; callers keep the original message queued. */
+export class StructuredRecoveryHeldForUpdateError extends Error {
+  constructor() {
+    super("new autonomous recovery is held for the automatic update");
+    this.name = "StructuredRecoveryHeldForUpdateError";
+  }
+}
+
+function assertRecoveryAdmission(request: StructuredRecoveryRequest, registry: AgentRegistry): void {
+  if (request.origin?.kind !== "agent") return;
+  const hold = activeDrain();
+  if (!hold) return;
+  const acceptedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
+  const accepted = Date.parse(acceptedAt ?? request.admittedAt ?? "");
+  if (!Number.isFinite(accepted) || accepted >= Date.parse(hold.since)) throw new StructuredRecoveryHeldForUpdateError();
 }
 
 export interface StructuredRecoveryResult {
@@ -379,18 +402,22 @@ async function recoverCandidate(
     );
     let begun: SpawnBeginResult;
     try {
-      begun = await registry.beginSpawnRequestAsync({
-        engine: current.engine,
-        cwd: current.spec.cwd,
-        transport: "structured",
-        accountId: account.accountId,
-        conversationId: current.conversationId,
-        parentConversationId: current.parentConversationId,
-        purpose: "resume-successor",
-        origin: { kind: "successor" },
-        expectedArtifactPath: current.path,
-        launchProfile: current.spec.launchProfile,
-      });
+      begun = await withAccountMutationLockAsync(() => {
+        // Admission may have closed while recovery waited for this lease.
+        assertRecoveryAdmission(request, registry);
+        return registry.beginSpawnRequestAsync({
+          engine: current.engine,
+          cwd: current.spec.cwd,
+          transport: "structured",
+          accountId: account.accountId,
+          conversationId: current.conversationId,
+          parentConversationId: current.parentConversationId,
+          purpose: "resume-successor",
+          origin: { kind: "successor" },
+          expectedArtifactPath: current.path,
+          launchProfile: current.spec.launchProfile,
+        });
+      }, { holder: "resume admission", caller: "resume" });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
          the reservation's transaction is admitted, so this recovery reserved
@@ -459,7 +486,7 @@ export async function recoverDeadStructuredConversation(
   if (!candidate) return null;
   const recoveryKey = dependencies.ownership
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
-    : `${registry.filename}:${candidate.conversationId}`;
+    : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;
   const pending = recoveries.get(recoveryKey);
   if (pending) return pending;
   if (candidate.hostLive && !dependencies.ownership) return liveHostResult(candidate);
