@@ -10149,6 +10149,9 @@ export async function patchPipeline(
       if (survivorRefusal) return survivorRefusal;
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
       if (elsewhere) return elsewhere;
+      if (pipeline.state === "needs_decision" && stage && attempt && openRuntimeSwitch(attempt)) {
+        return { error: "the runtime switch for this attempt is still unresolved; wait for its continuation and runtime outcome before retrying", status: 409 };
+      }
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
         if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {

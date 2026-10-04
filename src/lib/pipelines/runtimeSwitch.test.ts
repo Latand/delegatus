@@ -274,6 +274,29 @@ test("a cancellation that cannot be confirmed parks with its reason", async () =
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("switch has already started") });
   expect(h.continuations).toHaveLength(1);
 });
+test("retry-stage stays fenced while a parked runtime switch still owns its continuation, including after engine restart", async () => {
+  const h = switchHarness(); h.setOutcome("pending");
+  h.ports.cancelRuntimeSwitch = async () => { throw new Error("switch has already started"); };
+  const requested = await requestSwitch(h);
+  await tickPipelines([], h.ports); h.advance(10 * 60_000); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  // The retry receipt is complete, yet the accepted switch and queued continuation remain owned.
+  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  const restarted = await import(`./engine?retry-fence-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  const retry = await restarted.patchPipeline(requested.pipeline!.id, {
+    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+  }, h.ports);
+  expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("runtime switch") });
+
+  // The persisted open phase continues to fence ticks after a fresh engine module loads.
+  await restarted.tickPipelines([], h.ports); await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(1);
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "switching", continuationDispatch: { key: expect.any(String) } });
+  expect(lane.cursor).toMatchObject({ stageId: "plan", state: "running" });
+  expect(h.continuations).toHaveLength(1);
+});
 test("operator kill supersedes the switch without resurrecting the stage", async () => {
   const h = switchHarness(); await requestSwitch(h); h.ports.runtimeSwitchKilled = async () => true;
   await tickPipelines([], h.ports);
