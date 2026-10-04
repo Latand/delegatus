@@ -2,6 +2,9 @@ import fs from "node:fs";
 
 import { boardFor, importLegacyBoard, mutateBoard, setBoardWriteHookForTests } from "./store";
 
+// Keep the child result channel JSON-only when lease recovery logs diagnostics.
+console.info = console.error;
+
 const [mode, filePath, arg, gate] = process.argv.slice(2);
 if (!mode || !filePath) throw new Error("board store child arguments are required");
 

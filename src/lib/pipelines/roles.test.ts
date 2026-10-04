@@ -57,12 +57,12 @@ test("role resolution fails closed when the Builder preset is unavailable", () =
     .toBe("Builder role is unavailable in the role registry");
 });
 
-test("production role lookup reads the fresh Astra Builder preset", () => {
+test("production role lookup reads the current Sol Builder preset", () => {
   expect(resolvePipelineRole({}, "run", pipelineRoleLookup).role).toMatchObject({
     roleId: null,
     engine: "codex",
-    model: "gpt-6-astra",
-    effort: "medium",
+    model: "gpt-6.1-sol",
+    effort: "high",
     access: "read-write",
     promptScaffold: null,
   });
@@ -152,7 +152,7 @@ test("a Builder fix round resolves to the fix row its domain and size select", (
   expect(fix({ domain: "frontend" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
   expect(fix({ domain: "docs" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
   expect(fix({ domain: "frontend", size: "trivial" })).toMatchObject({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
-  expect(fix({})?.promptScaffold).toContain("Apply-fixes guidance: the brief is a list of findings.");
+  expect(fix({})?.promptScaffold).toContain("You are a Builder in apply-fixes mode.");
 });
 
 test("validatePipelineRoleParams enforces canonical value rules and skips required-when-absent", () => {

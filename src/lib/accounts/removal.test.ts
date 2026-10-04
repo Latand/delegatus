@@ -1,3 +1,5 @@
+import { clearAccountTestState } from "@/lib/accounts/accountsStoreFixture";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,7 +10,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-removal-test-
 const previousState = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 
-const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { AgentRegistry, setAgentRegistryForTests, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 type ViewerConversationId = import("@/lib/accounts/migration/contracts").ViewerConversationId;
 const { procBackend } = await import("@/lib/proc");
@@ -23,12 +25,15 @@ const DEAD_PID = 2_147_483_646;
 const DAYS_LATER = { now: () => Date.now() + 3 * 24 * 60 * 60 * 1000 };
 
 beforeEach(() => {
-  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
   setAgentRegistryForTests(new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "agent-registry.json")));
 });
 
 afterAll(() => {
-  setAgentRegistryForTests(null);
+  closeAgentRegistryForTests();
+  resetLegacyDocumentStoresForTests();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   fs.rmSync(sandbox, { recursive: true, force: true });

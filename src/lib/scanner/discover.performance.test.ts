@@ -1,3 +1,5 @@
+import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { closeAgentRegistryForTests } from "../agent/registry";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -78,6 +80,7 @@ test("large-catalog reconciliation catalogs every conversation, reporting its ev
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 }, 30_000);
@@ -190,7 +193,7 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental, 
     const lags = await eventLoopLagsWhile(async () => {
       const scan = await discoverFilesWithProjectCatalog(roots, undefined, { persist: true });
       expect(scan.projectCatalog.reduce((total, project) => total + project.conversations, 0)).toBe(LARGE_CATALOG_SIZE);
-      expect(scan.files.every((entry) => entry.project === "large-catalog")).toBe(true);
+      expect(scan.files.every((entry) => entry.project === projectInfoFromCwd("/repo/large-catalog")!.project)).toBe(true);
     });
     const durationMs = performance.now() - startedAt;
     const migratedCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as { resolutionVersion: number };
@@ -207,6 +210,7 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental, 
     fs.closeSync = originalClose;
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
+    closeAgentRegistryForTests();
     await rm(base, { recursive: true, force: true });
   }
 }, 30_000);

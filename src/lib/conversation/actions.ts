@@ -20,6 +20,7 @@ export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
   operationId?: string;
+  onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
   conversationId: string;
   transcriptPath: string;
   action: string;
@@ -134,10 +135,12 @@ export async function applyConversationAction(
       conversationId: conversation?.id ?? request.conversationId,
       action: request.action,
       operationId: request.operationId,
+      ...(request.action === "kill" && request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
       ...(request.action === "permission" ? { decision: request.decision, requestId: request.requestId } : {}),
     });
     if (structured) return structured;
   }
+  if (request.onlyIfIdle) return failure("automatic retirement requires the structured control channel", 409);
   if (!transcriptPath) return failure("conversationId or transcriptPath is required", 400);
   if (request.action === "permission") {
     return failure("no structured host holds this conversation; a terminal-hosted permission prompt is answered with dialog-key", 409);

@@ -178,6 +178,11 @@ test("production reads only named authorization and subject rows without writing
   const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: registryFixture(), normalize: normalizeRegistry });
   seed.close();
   const database = new Database(filename);
+  // Remove JSON-expression indexes only in this corruption fixture so SQLite
+  // permits the deliberately invalid bytes; the keyed reader must never parse them.
+  for (const { name } of database.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'registry_rows' AND sql LIKE '%json_extract%'").all()) {
+    database.exec(`DROP INDEX "${name.replaceAll('"', '""')}"`);
+  }
   // An unrelated corrupt receipt must never be parsed by this read.
   database.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts','unrelated','invalid JSON',0)").run();
   database.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts',?,?,1)")

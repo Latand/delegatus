@@ -23,6 +23,38 @@ const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
 
+for (const engine of ["claude", "codex"] as const) for (const mode of ["fresh", "resume"] as const) test(`admitted ${engine} ${mode} terminal installs separate memory context with the receipt capability`, async () => {
+  const previousCapability = process.env.LLV_SPAWN_CAPABILITY;
+  delete process.env.LLV_SPAWN_CAPABILITY;
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    expect(request.headers.get("x-llv-spawn-capability")).toBe("a".repeat(43));
+    const input = await request.json();
+    return Response.json({ block: input.delegatus_confirm ? "" : "Synthetic terminal memory context" });
+  } });
+  try {
+  const home = path.join(SANDBOX, `memory-${engine}-${mode}`); fs.mkdirSync(home, { recursive: true });
+  const native = engine === "claude" ? "CLAUDE.md" : "memory.md";
+  fs.writeFileSync(path.join(home, native), "Synthetic native memory stays intact.");
+  const { resumeSpecForSession } = await import("./cli");
+  const spec = mode === "fresh" ? freshSpecFor(engine, SANDBOX, { claudeConfigDir: home, codexHome: home, deferClaudeSpawnPolicy: true })
+    : resumeSpecForSession(engine, "12345678-1234-1234-1234-123456789abc", SANDBOX, home)!;
+  const admitted = withSpawnCapability(spec, "a".repeat(43), { ...process.env, LLV_VIEWER_PORT: String(server.port) });
+  const settings = engine === "codex" ? path.join(home, "hooks.json")
+    : (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
+  expect(fs.existsSync(settings)).toBe(true);
+  const hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  expect(hook).toBeDefined();
+  expect(hook.additionalContextLimit).toBe(40000);
+  expect(admitted.command).toContain("LLV_SPAWN_CAPABILITY");
+  if (engine === "codex") expect(admitted.command).toContain("shared-memory-trust");
+  const proc = Bun.spawn(["bash", "-c", hook.command], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "a".repeat(43) } });
+  proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "synthetic-session", prompt: "Synthetic terminal operator prompt" })); proc.stdin.end();
+  expect(await proc.exited).toBe(0);
+  expect(JSON.parse(await new Response(proc.stdout).text())).toEqual({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "Synthetic terminal memory context" } });
+  expect(fs.readFileSync(path.join(home, native), "utf8")).toBe("Synthetic native memory stays intact.");
+  } finally { server.stop(true); if (previousCapability === undefined) delete process.env.LLV_SPAWN_CAPABILITY; else process.env.LLV_SPAWN_CAPABILITY = previousCapability; }
+});
+
 afterAll(() => {
   restorePolicyReader();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;

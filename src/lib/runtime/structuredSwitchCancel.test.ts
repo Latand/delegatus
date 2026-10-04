@@ -199,7 +199,7 @@ test("cancelling a claimed switch that waits for the turn rolls it back, settles
   expect(cancelled.reconfigure?.operationId).toBe(fixture.effect.operationId);
   expect(String(cancelled.reconfigure?.status)).toBe("cancelled");
   expect(registry.snapshot().migrationIntents[migration.intentId]?.state).toBe("stopped");
-  expect(cancelled.generations.at(-1)?.launchProfile).toEqual(fixture.profileBefore);
+  expect(cancelled.generations.at(-1)?.launchProfile).toEqual({ ...fixture.profileBefore, serviceTier: fixture.profileBefore.serviceTier ?? null });
   /* The held delivery goes back to the source with its payload and identity; nothing else moves. */
   const rearmed = delivery(fixture, held.id);
   expect({ state: rearmed.state, generationId: rearmed.generationId, text: rearmed.text, operationId: rearmed.command.operationId, clientMessageId: rearmed.clientMessageId, attempts: rearmed.attempts })

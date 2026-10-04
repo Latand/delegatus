@@ -349,6 +349,7 @@ test("a send forces the pending switch and becomes the successor's first deliver
   let migrationTicks = 0;
   const client = {
     snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
+    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(registry.conversation(conversation.id)!, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
     command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; text: string }) => {
       commands.push({ conversationId: command.conversationId, text: command.text });
       return {
@@ -407,6 +408,7 @@ test("an image send whose successor has no host yet is held durably, never rejec
     /* The source is hosted and idle; once the switch commits, the successor's
        host has not published a session yet. */
     snapshot: async () => structuredSnapshot(conversation, "idle", snapshots++ === 0 ? 1 : 0),
+    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(conversation, "idle", snapshots++ === 0 ? 1 : 0).sessions.find(session => session.conversationId === identity.conversationId) ?? null,
     command: async () => { throw new Error("no successor host is published yet"); },
   } as unknown as RuntimeHostClient;
 
