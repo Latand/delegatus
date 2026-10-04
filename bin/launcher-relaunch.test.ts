@@ -59,7 +59,7 @@ async function until<T>(read: () => T | null | false, budget = process.platform 
   throw new Error("Terminal handoff did not settle");
 }
 
-async function fixture() {
+async function fixture(equalsPort = false) {
   const root = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/var/tmp", "dlg-terminal-")); roots.push(root);
   const state = path.join(root, "request-context");
   const base = path.join(root, "package");
@@ -111,7 +111,7 @@ async function fixture() {
   await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
   const port = (listener.address() as net.AddressInfo).port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
-  const args = ["--no-open", "--port", String(port)];
+  const args = equalsPort ? ["--no-open", `--port=${port}`] : ["--no-open", "--port", String(port)];
   const start = (entry: string, argv: string[] = args) => {
     const child = spawn(process.execPath, ["--bun", entry, ...argv], { cwd: base, env, stdio: ["ignore", "pipe", "pipe"] }); children.add(child); return child;
   };
@@ -144,6 +144,18 @@ async function fixture() {
     import { appendFileSync, openSync, closeSync } from "node:fs";
     import path from "node:path";
     const directory = ${JSON.stringify(diagnosticsDir)};
+    if (process.env.LLV_TEST_PROBE_PORT) {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (input, options) => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.port !== process.env.LLV_TEST_PROBE_PORT) {
+          appendFileSync(path.join(directory, "foreign-probe"), "refused");
+          throw new Error("Probe refused before reaching an unowned port");
+        }
+        appendFileSync(path.join(directory, "owned-probes"), url.port + "\\n");
+        return originalFetch(input, options);
+      };
+    }
     appendFileSync(path.join(directory, process.pid + ".preload.jsonl"), JSON.stringify({ pid: process.pid, execArgv: process.execArgv }) + "\\n");
     const observed = { ...cp };
     let sequence = 0;
@@ -170,7 +182,7 @@ async function fixture() {
   const bootstrap = (encoded = plan) => {
     const preload = ["--preload", diagnosticsPreload, ...(process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")])];
     const child = spawn(process.execPath, ["--bun", ...preload, path.resolve("bin/launcher-relaunch.mjs"), "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
-      { cwd: base, env: { ...env, LLV_TEST_WINDOWS_STATE_ROOT: root }, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+      { cwd: base, env: { ...env, LLV_TEST_WINDOWS_STATE_ROOT: root, ...(equalsPort ? { LLV_TEST_PROBE_PORT: String(port) } : {}) }, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
     let error = "", stdout = "";
     child.stderr!.on("data", data => { error = (error + data).slice(-4096); });
     child.stdout!.on("data", data => { stdout = (stdout + data).slice(-4096); });
@@ -219,7 +231,7 @@ async function fixture() {
       print("page-health", { status: page.status, body: (await page.text()).slice(0, 2048) });
     } catch (error) { print("page-health", String(error)); }
   };
-  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose };
+  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose, diagnosticsDir };
 }
 
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
@@ -274,4 +286,20 @@ test("terminal entrypoint refuses an invalid request filename before changing cu
   expect(run.child.exitCode).toBe(1);
   expect(run.error()).toContain("Invalid launcher request filename");
   expect(readFileSync(path.join(path.dirname(f.before.requestFile), "apply.json"), "utf8")).toBe(before);
+}, 90000);
+
+for (const rollback of [false, true]) test(`equals-port terminal entrypoint probes only its owned listener, rollback=${rollback}`, async () => {
+  const f = await fixture(true);
+  if (rollback) writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("synthetic import failure");\n');
+  await stop(f.old); await stopRecorded(f.before);
+  const run = f.bootstrap();
+  await until(() => run.child.exitCode !== null ? true : null);
+  expect(existsSync(path.join(f.diagnosticsDir, "foreign-probe"))).toBe(false);
+  expect(run.child.exitCode).toBe(rollback ? 1 : 0);
+  const probes = readFileSync(path.join(f.diagnosticsDir, "owned-probes"), "utf8").trim().split("\n");
+  expect(probes.length).toBeGreaterThan(0);
+  expect(probes.every(port => port === String(f.port))).toBe(true);
+  const record = f.readRecord()!;
+  expect(record.web.revision).toBe((rollback ? "a" : "b").repeat(7));
+  expect(record.runtimeHost.revision).toBe(record.web.revision);
 }, 90000);

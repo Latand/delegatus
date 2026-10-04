@@ -87,8 +87,6 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   let child = start(loads ? nextEntry : priorEntry);
   let failed = !loads;
   let startedPrior = !loads;
-  const portIndex = args.findIndex(arg => arg === "--port" || arg === "-p");
-  const port = Number(portIndex >= 0 ? args[portIndex + 1] : 8898);
   const key = viewerBootGateKey(process.env);
   const headers = probeHeadersFrom(dirname(directory));
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
@@ -104,7 +102,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       && record.web.revision === (failed ? plan.priorRevision : plan.target.slice(0, 7))
       && (failed || record.launcher.requestId === intent.requestId)) {
       const socketHealthy = await terminalHostHealthy(record);
-      if (socketHealthy && await probePageAndChunk(port, 5000, headers) === null) {
+      if (socketHealthy && await probePageAndChunk(record.port, 5000, headers) === null) {
         if (failed) {
           if (!owned && read(trialFile)?.requestId === intent.requestId) rmSync(trialFile, { force: true });
           console.error("Update failed; the verified prior release is serving under its launcher."); return 1;
