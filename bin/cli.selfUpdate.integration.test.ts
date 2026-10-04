@@ -1618,13 +1618,20 @@ function cleanTerminalEnv(fixture: ReturnType<typeof install>): NodeJS.ProcessEn
   return env;
 }
 
-test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ["SIGTERM", "pending"], ["SIGINT", "pending"]] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
+test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ...(["SIGTERM", "SIGINT"] as const).flatMap(signal => (["pending", "consumed", "preflight", "starting"] as const).map(boundary => [signal, boundary] as const))] as const)("cold recovery retains the real apply across request consumption during load preflight: %s / %s", async (signal, boundary) => {
   const { ApplyController } = await import("../src/lib/selfUpdate/apply");
   const { activeDrain } = await import("../src/lib/selfUpdate/drain");
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
   const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
   const { idleUpdate } = await import("../src/lib/selfUpdate/types");
-  const fixture = install(); const running = await start(fixture);
+  const fixture = install();
+  if (boundary === "starting") {
+    const next = path.join(fixture.checkout, "node_modules", ".bin", "next");
+    writeFileSync(next, readFileSync(next, "utf8").replace("const stop = () => {", "const stop = async () => { await Bun.sleep(2000);"));
+    git(fixture.checkout, "add", "-f", "."); git(fixture.checkout, "commit", "-m", "bounded child shutdown fixture");
+    fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
+  }
+  const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   const candidate = release(fixture, "crash-preflight");
   const marker = path.join(candidate.dir, "preflight-entered");
@@ -1635,10 +1642,12 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ["SIGTERM", "pending
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
   if (boundary === "pending") process.kill(before.launcher.pid, "SIGSTOP");
   apply.send(before as never);
-  const trialFile = before.requestFile.replace(/request([^/]*)$/, "trial$1");
-  if (boundary === "consumed") {
-    await until(() => existsSync(marker) && !existsSync(before.requestFile));
-    expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, state: "preflight" });
+  const trialFile = path.join(path.dirname(before.requestFile), path.basename(before.requestFile).replace(/^request/, "trial"));
+  if (boundary !== "pending") {
+    await until(() => existsSync(trialFile) && (boundary === "starting"
+      ? JSON.parse(readFileSync(trialFile, "utf8")).state === "starting"
+      : boundary === "preflight" || existsSync(marker) && !existsSync(before.requestFile)));
+    expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, state: boundary === "starting" ? "starting" : "preflight" });
   } else {
     expect(JSON.parse(readFileSync(before.requestFile, "utf8"))).toMatchObject({ requestId: apply.current!.requestId, role: "relaunch" });
     expect(existsSync(trialFile)).toBe(false);
@@ -1646,7 +1655,7 @@ test.each([["SIGKILL", "consumed"], ["SIGKILL", "pending"], ["SIGTERM", "pending
   const killed = new Promise(resolve => running.child.once("exit", resolve));
   process.kill(before.launcher.pid, signal);
   if (boundary === "pending" && signal !== "SIGKILL") process.kill(before.launcher.pid, "SIGCONT");
-  await killed;
+  await Promise.race([killed, Bun.sleep(6000).then(() => { throw new Error("Launcher ignored termination at the custody boundary"); })]);
   expect(readRecord(fixture.state).launcher).toMatchObject({ pid: before.launcher.pid, startIdentity: before.launcher.startIdentity });
   // A crashed launcher leaves its recorded children. Stop only these fixture
   // PIDs; cold startup then exercises the durable handoff on the same install.

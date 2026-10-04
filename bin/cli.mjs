@@ -900,6 +900,7 @@ function installSignalHandlers(serverRef, tailscaleProcessRef, runtimeHostSuperv
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
+    relaunch?.requestStop();
     onShutdown();
     await stopAll(serverRef.current, tailscaleProcessRef.current, runtimeHostSupervisor);
     process.exit(0);
@@ -1178,7 +1179,7 @@ async function main() {
     recoverWeb = null;
     pauseWebRecovery();
     restartRequests?.stop();
-    record.remove();
+    if (!relaunch.retainsCustody()) record.remove();
   });
 
   /* The --tailscale switch keeps its foreground serve, which stops with the
@@ -1352,7 +1353,7 @@ async function main() {
           if (relaunch.hasTrial()) await relaunch.failed(detail);
           record.set("launcher", { state: "healthy", requestId, error: { kind: "message", text: detail } });
         } finally {
-          if (recoverWeb && record.read().web.state !== "healthy") recoverWeb();
+          if (!relaunch.isStopping() && recoverWeb && record.read().web.state !== "healthy") recoverWeb();
         }
         return;
       }

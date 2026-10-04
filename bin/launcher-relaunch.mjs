@@ -155,6 +155,8 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
   const canExec = process.platform !== "win32" && typeof process.execve === "function";
   let directTrial = false;
   let trial = null;
+  let stopping = false;
+  let preflightChild = null;
   try {
     const value = JSON.parse(readFileSync(trialFile, "utf8"));
     if (typeof value.requestId === "string" && typeof value.previousEntry === "string"
@@ -167,6 +169,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     else atomic(paths.releasePointer, pointer);
   };
   const exec = (nextEntry, requestId) => {
+    if (stopping) return;
     const safeArgs = args.filter(arg => arg !== "--new-token" && arg !== "--new-operator-token");
     if (!safeArgs.includes("--no-open")) safeArgs.push("--no-open");
     process.chdir(dirname(dirname(nextEntry)));
@@ -176,7 +179,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     });
     throw new Error("launcher exec returned without replacing the process");
   };
-  let pendingRecovery = trial?.state === "preflight";
+  let pendingRecovery = trial?.state === "preflight" || trial?.state === "starting" && trial.stopped === true;
   if (pendingRecovery) directTrial = true;
   if (!trial) {
     try {
@@ -204,12 +207,24 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
   }
   return {
     canExec,
+    requestStop() {
+      stopping = true;
+      if (trial && trial.state !== "rolled-back") {
+        trial = { ...trial, stopped: true };
+        try { atomic(trialFile, `${JSON.stringify(trial)}\n`); }
+        catch { /* Retain the original trial even if the stop marker cannot persist. */ }
+      }
+      preflightChild?.kill("SIGTERM");
+    },
+    isStopping: () => stopping,
+    retainsCustody: () => trial !== null || existsSync(paths.request),
     hasTrial: () => trial !== null && trial.state !== "rolled-back",
     isReplacementStart: () => trial !== null,
     async recoverPending() {
       if (pendingRecovery) await this.failed("The launcher stopped before taking the durable update request.");
     },
     async begin(request, next) {
+      if (stopping) return;
       if (!canExec) throw new Error("This interpreter needs a launcher restart to apply an update.");
       if (next.sha !== request.target || next.dir === release.dir) throw new Error("Relaunch target is not the installed release.");
       const nextEntry = join(next.dir, "bin", "cli.mjs");
@@ -232,14 +247,23 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       const scratch = mkdtempSync(join(tmpdir(), "delegatus-launcher-preflight-"));
       let preflight;
       try {
-        preflight = spawnSync(process.execPath, [...process.execArgv, nextEntry, "--version"], {
-          cwd: next.dir, timeout: 30_000, stdio: "ignore",
-          env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"),
-            XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch,
-            LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot },
+        preflight = await new Promise(resolve => {
+          const child = spawn(process.execPath, [...process.execArgv, nextEntry, "--version"], {
+            cwd: next.dir, stdio: "ignore",
+            env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, "config"),
+              XDG_CACHE_HOME: join(scratch, "cache"), LLV_STATE_DIR: scratch,
+              LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot },
+          });
+          preflightChild = child;
+          const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+          child.once("error", () => { clearTimeout(timeout); resolve(false); });
+          child.once("exit", code => { clearTimeout(timeout); resolve(code === 0); });
         });
-      } finally { rmSync(scratch, { recursive: true, force: true }); }
-      if (preflight.status !== 0) {
+      } finally { preflightChild = null; rmSync(scratch, { recursive: true, force: true }); }
+      // Signal handling shares this fence with every image transition. The
+      // durable preflight trial remains authoritative for a cold recovery.
+      if (stopping) return;
+      if (!preflight) {
         restore(rollbackPointer);
         record.set("launcher", { state: "healthy", requestId: request.requestId,
           error: { kind: "fell-back", revision: next.sha.slice(0, 7), detail: "The replacement launcher failed its load check." } });
@@ -256,9 +280,11 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       await stop();
       // The PID and its start identity survive exec. Retain that custody
       // record while children are down so another startup cannot take it.
+      if (stopping) return;
       exec(nextEntry, trial.requestId);
     },
     succeeded() {
+      if (stopping) return;
       const error = trial?.state === "rolled-back"
         ? { kind: "fell-back", revision: trial.target.slice(0, 7), detail: trial.detail }
         : null;
@@ -268,8 +294,10 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       delete process.env.LLV_LAUNCHER_TRIAL;
     },
     async failed(detail) {
+      if (stopping) return false;
       if (!trial || trial.state === "rolled-back") return false;
       await stop();
+      if (stopping) return false;
       restore(trial.rollbackPointer);
       trial = { ...trial, state: "rolled-back", detail };
       atomic(trialFile, `${JSON.stringify(trial)}\n`);
