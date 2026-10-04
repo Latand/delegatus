@@ -1,3 +1,5 @@
+import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
+import type { MaintenanceFailureKind } from "@/lib/boardMaintenance/types";
 import type { MessageKey, TFunction } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import type { SeatTickWakeReasonKind } from "@/lib/monitor/types";
@@ -25,11 +27,6 @@ export type SeatTickStateKind = "healthy" | "stale" | "blocked" | "paused" | "un
     a state nothing has recorded. */
 export type SeatTickTone = "ok" | "warn" | "muted" | "unknown";
 
-export interface SeatTickRow {
-  label: string;
-  value: string;
-}
-
 export interface SeatTickReading {
   state: SeatTickStateKind;
   tone: SeatTickTone;
@@ -44,8 +41,12 @@ export interface SeatTickReading {
   line: string;
   /** The sentence at the top of the Actual section. */
   sentence: string;
-  /** The read-only rows, in the order an operator reads them. */
-  rows: SeatTickRow[];
+  /** The status block's wake line: the headline with its dot, and the one
+      detail line under it (last and next wake, or the blocker once, or the
+      clause that explains a stale reading). */
+  status: { headline: string; detail: string | null };
+  /** The last delivery the journal holds, for Details. */
+  lastDelivery: string;
   /** What holds the next wake back, in one clause, or null. */
   blocker: string | null;
   /** The record departs from the default, so Restore default has something to
@@ -62,6 +63,7 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "child-terminal": "seatTick.reason.childTerminal",
   "own-lane-settled": "seatTick.reason.ownLaneSettled",
   "deploy-settled": "seatTick.reason.deploySettled",
+  "maintenance-settled": "seatTick.reason.maintenanceSettled",
   "permission-request": "seatTick.reason.permissionRequest",
 };
 
@@ -240,32 +242,44 @@ function nextWakeValue(answer: SeatTickSettingsAnswer, blocker: string | null, n
     : t("seatTick.nextWake.inMin", { n: minutes });
 }
 
-function rowsOf(answer: SeatTickSettingsAnswer, blocker: string | null, now: number, t: TFunction): SeatTickRow[] {
-  const unknown = t("seatTick.unknown");
+function lastWakeValue(answer: SeatTickSettingsAnswer, now: number, t: TFunction): string {
   const state = answer.state;
-  const checkAge = seatTickAge(state?.lastCheckAt ?? null, now, t);
   const wakeAge = seatTickAge(state?.lastWakeAt ?? null, now, t);
   const reasons = state ? reasonWords(state.lastWakeReasons, t) : "";
+  return wakeAge === null
+    ? (state ? t("seatTick.never") : t("seatTick.unknown"))
+    : reasons ? t("seatTick.row.wakeWithReasons", { age: wakeAge, reasons }) : wakeAge;
+}
+
+function lastDeliveryOf(answer: SeatTickSettingsAnswer, now: number, t: TFunction): string {
   const deliveryAge = seatTickAge(answer.lastDelivery?.at ?? null, now, t);
-  return [
-    { label: t("seatTick.row.lastCheck"), value: checkAge ?? unknown },
-    {
-      label: t("seatTick.row.lastWake"),
-      value: wakeAge === null
-        ? (state ? t("seatTick.never") : unknown)
-        : reasons ? t("seatTick.row.wakeWithReasons", { age: wakeAge, reasons }) : wakeAge,
-    },
-    { label: t("seatTick.row.nextWake"), value: nextWakeValue(answer, blocker, now, t) },
-    {
-      label: t("seatTick.row.lastDelivery"),
-      value: answer.lastDelivery && deliveryAge
-        ? t("seatTick.row.delivery", { outcome: outcomeWord(answer.lastDelivery.outcome, t), age: deliveryAge })
-        /* No delivery in the journal's window is not proof that none ever
-           happened: the journal is bounded, so it is reported as what it is. */
-        : answer.journalError ? unknown : state ? t("seatTick.row.noDelivery") : unknown,
-    },
-    { label: t("seatTick.row.blocker"), value: blocker ?? (state ? t("seatTick.none") : unknown) },
-  ];
+  return answer.lastDelivery && deliveryAge
+    ? t("seatTick.row.delivery", { outcome: outcomeWord(answer.lastDelivery.outcome, t), age: deliveryAge })
+    /* No delivery in the journal's window is not proof that none ever
+       happened: the journal is bounded, so it is reported as what it is. */
+    : answer.journalError ? t("seatTick.unknown") : answer.state ? t("seatTick.row.noDelivery") : t("seatTick.unknown");
+}
+
+/** The second line of the wake status. It states each fact once: a blocker
+    or a stale tick is explained here and nowhere else in the panel. */
+function statusDetail(
+  answer: SeatTickSettingsAnswer,
+  kind: SeatTickStateKind,
+  blocker: string | null,
+  stopped: boolean | null,
+  sentence: string,
+  now: number,
+  t: TFunction,
+): string | null {
+  if (kind === "blocked") return t("seatTick.status.held", { blocker: blocker ?? t("seatTick.unknown") });
+  if (kind === "unknown") return sentence;
+  if (kind === "stale" || (kind === "paused" && stopped === true)) {
+    const every = answer.policy.checkIntervalMinutes;
+    return every === null ? t("seatTick.status.checksOff") : t("seatTick.status.staleHint", { every });
+  }
+  if (kind === "paused") return null;
+  const last = t("seatTick.status.lastWake", { value: lastWakeValue(answer, now, t) });
+  return `${last} · ${t("seatTick.status.nextWake", { value: nextWakeValue(answer, blocker, now, t) })}`;
 }
 
 function sentenceOf(
@@ -331,7 +345,8 @@ export function seatTickReading(
       summary,
       line: t("seatTick.line", { summary }),
       sentence: summary,
-      rows: [],
+      status: { headline: t("seatTick.status.wakes", { summary }), detail: null },
+      lastDelivery: t("seatTick.unknown"),
       blocker: null,
       offDefault: false,
     };
@@ -369,6 +384,11 @@ export function seatTickReading(
         : checkAge ? t("seatTick.line.lastCheck", { age: checkAge }) : t("seatTick.line.unknown");
 
   const summary = t("seatTick.summary", { configured, actual });
+  const sentence = sentenceOf(answer, kind, blocker, stopped, now, t);
+  /* A blocked tick names its blocker once, in the detail line; the headline
+     keeps the plain last-check clause. */
+  const quiet = checkAge ? t("seatTick.line.lastCheck", { age: checkAge }) : t("seatTick.line.unknown");
+  const headlineSummary = kind === "blocked" ? t("seatTick.summary", { configured, actual: quiet }) : summary;
   return {
     state: kind,
     tone: toneOf(kind, stopped),
@@ -376,9 +396,166 @@ export function seatTickReading(
     configured,
     summary,
     line: t("seatTick.line", { summary }),
-    sentence: sentenceOf(answer, kind, blocker, stopped, now, t),
-    rows: rowsOf(answer, blocker, now, t),
+    sentence,
+    status: { headline: t("seatTick.status.wakes", { summary: headlineSummary }), detail: statusDetail(answer, kind, blocker, stopped, sentence, now, t) },
+    lastDelivery: lastDeliveryOf(answer, now, t),
     blocker,
     offDefault: !effective.isDefault,
+  };
+}
+
+/*
+ * The board maintenance timer's reading (#2162), as a pure function of the
+ * `maintenance` block the settings answer carries. Like the tick's reading it
+ * holds the words and the tone and nothing else: every rule about when a run
+ * is due lives on the server, which sends `nextRunAt` and `waitingOn` already
+ * decided, so no arithmetic about intervals is repeated here.
+ */
+
+export type MaintenanceStateKind = "off" | "on" | "running";
+
+/** One piece of a status line. A link segment is the "3 need you ↗" and
+    "Accounts ↗" the operator can act on; the line joins its segments with
+    a middle dot. */
+export type StatusSegment =
+  | { kind: "text"; text: string }
+  | { kind: "card"; text: string; taskId: string }
+  | { kind: "accounts"; text: string; engine: "claude" | "codex" };
+
+export interface MaintenanceReading {
+  state: MaintenanceStateKind;
+  /** The dot: a failed last run or an unreadable run store is a warning, a
+      switched-off timer is muted, anything else is quiet green. */
+  tone: SeatTickTone;
+  /** The status block's maintenance line: the headline with its dot and the
+      second line's segments (result, links, next run). */
+  status: { headline: string; segments: StatusSegment[] };
+  /** The group's "Last run" row, and the links that belong under it. */
+  last: { text: string; links: StatusSegment[] };
+  /** The group's "Next run" row. */
+  next: string;
+  /** The card the live run, or else the last ended run, is on. Null when there
+      is none or the run never got a card. */
+  cardTaskId: string | null;
+  /** The run store could not be read; the setting still answers. */
+  warning: string | null;
+}
+
+/** Every failure kind has a row: the record type makes a new kind a compile
+    error here rather than a blank result line. */
+export const MAINTENANCE_FAILURES: Record<MaintenanceFailureKind, MessageKey> = {
+  "no-account": "seatTick.maintenance.failure.noAccount",
+  "no-repository": "seatTick.maintenance.failure.noRepository",
+  "launch-refused": "seatTick.maintenance.failure.launchRefused",
+  "launch-failed": "seatTick.maintenance.failure.launchFailed",
+  "host-died": "seatTick.maintenance.failure.hostDied",
+  "turn-error": "seatTick.maintenance.failure.turnError",
+  "agent-fail": "seatTick.maintenance.failure.agentFail",
+  "needs-decision": "seatTick.maintenance.failure.needsDecision",
+  "timed-out": "seatTick.maintenance.failure.timedOut",
+};
+
+/** Why nothing is scheduled, or null while a time can be named. Shared by the
+    group's "Next run" row and the status line so the two cannot word one wait
+    two ways. */
+function maintenanceWait(m: BoardMaintenanceAnswer, t: TFunction): string | null {
+  if (!m.enabled) return t("seatTick.maintenance.next.off");
+  if (m.live) return t("seatTick.maintenance.next.afterRun");
+  if (m.waitingOn === "wakes-off") return t("seatTick.maintenance.pausedWakesOff");
+  if (m.waitingOn === "deployment") return t("seatTick.maintenance.next.waitingDeployment");
+  if (m.waitingOn === "no-seat") return t("seatTick.maintenance.next.waitingNoSeat");
+  return null;
+}
+
+function maintenanceNext(m: BoardMaintenanceAnswer, now: number, locale: string, t: TFunction): string {
+  const wait = maintenanceWait(m, t);
+  if (wait) return wait;
+  const at = seatTickLocalTime(m.nextRunAt, now, locale);
+  /* No instant means the tick's checks are off in this Viewer: nothing will
+     start a run, and an invented time would say otherwise. */
+  if (!at) return t("seatTick.maintenance.next.checksOff");
+  return m.lastRun ? t("seatTick.maintenance.next.at", { time: at }) : t("seatTick.maintenance.next.firstRun", { time: at });
+}
+
+/** The next run as the status line's last segment: "next ≈ 08:34", or the
+    one wait that holds it back. Null when there is nothing to say (off, or a
+    run that is live). */
+function maintenanceNextShort(m: BoardMaintenanceAnswer, now: number, locale: string, t: TFunction): string | null {
+  if (!m.enabled || m.live) return null;
+  const wait = maintenanceWait(m, t);
+  if (wait) return wait;
+  const at = seatTickLocalTime(m.nextRunAt, now, locale);
+  if (!at) return t("seatTick.maintenance.next.checksOff");
+  if (m.lastRun?.state === "failed") return t("seatTick.maintenance.status.retry", { time: at });
+  return t(m.lastRun ? "seatTick.maintenance.status.next" : "seatTick.maintenance.status.firstRun", { time: at });
+}
+
+export function maintenanceReading(
+  m: BoardMaintenanceAnswer | null | undefined,
+  now: number,
+  locale: string,
+  t: TFunction,
+  fallbackEngine: "claude" | "codex" = "codex",
+): MaintenanceReading | null {
+  if (!m) return null;
+  const last = m.lastRun;
+  const failed = last?.state === "failed";
+  const warning = m.runsError ? t("seatTick.maintenance.runsUnreadable") : null;
+  const state: MaintenanceStateKind = m.live ? "running" : m.enabled ? "on" : "off";
+  const paused = m.waitingOn === "wakes-off";
+  const since = seatTickLocalTime(m.live?.launchedAt ?? m.live?.claimedAt ?? null, now, locale);
+  const endedAt = last ? seatTickLocalTime(last.endedAt ?? last.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
+  /* The runtime the refused launch ran on, as the run recorded it; a record
+     from before it was kept reads as the maintainer row's current engine. */
+  const failedEngine = last?.failure?.engine ?? fallbackEngine;
+  const reason = last?.failure
+    ? t(MAINTENANCE_FAILURES[last.failure.kind] ?? "seatTick.maintenance.failure.unknown", { engine: failedEngine === "claude" ? "Claude" : "Codex" })
+    : t("seatTick.maintenance.failure.unknown");
+  const noAccount = failed && last?.failure?.kind === "no-account";
+  const attention = !failed && last && last.attentionCount > 0 && last.taskId
+    ? ({ kind: "card", text: t("seatTick.maintenance.needYou", { count: last.attentionCount }), taskId: last.taskId } satisfies StatusSegment)
+    : null;
+  const accounts = noAccount ? ({ kind: "accounts", text: t("seatTick.maintenance.accounts"), engine: failedEngine } satisfies StatusSegment) : null;
+
+  /* The status line. */
+  const segments: StatusSegment[] = [];
+  let headline: string;
+  if (state === "off") {
+    headline = t("seatTick.maintenance.status.off");
+  } else if (state === "running") {
+    headline = since ? t("seatTick.maintenance.status.running", { time: since }) : t("seatTick.maintenance.status.runningNoTime");
+    if (m.pauseReason) segments.push({ kind: "text", text: t("seatTick.maintenance.pausedWakesOff") });
+  } else {
+    const result = last && endedAt
+      ? t(failed ? "seatTick.maintenance.status.failed" : "seatTick.maintenance.status.done", { time: endedAt })
+      : t("seatTick.maintenance.status.never");
+    headline = t("seatTick.maintenance.status.every", { n: m.intervalHours, result });
+    if (last && failed) segments.push({ kind: "text", text: reason });
+    else if (last) segments.push({ kind: "text", text: t("seatTick.maintenance.status.changed", { n: last.counts.tasks }) });
+    if (attention) segments.push(attention);
+    else if (last && !failed && !paused) segments.push({ kind: "text", text: t("seatTick.maintenance.status.nobody") });
+    if (accounts) segments.push(accounts);
+  }
+  const nextShort = maintenanceNextShort(m, now, locale, t);
+  if (nextShort && state !== "running") segments.push({ kind: "text", text: nextShort });
+
+  /* The group's last-run row. */
+  const lastText = last && endedAt
+    ? failed
+      ? t("seatTick.maintenance.lastFailedWhy", { time: endedAt, reason })
+      : t("seatTick.maintenance.lastDone", { time: endedAt, n: last.counts.tasks })
+    : t("seatTick.never");
+  const links: StatusSegment[] = [];
+  if (attention) links.push(attention);
+  if (accounts) links.push(accounts);
+
+  return {
+    state,
+    tone: failed || warning ? "warn" : state === "off" || paused ? "muted" : "ok",
+    status: { headline, segments },
+    last: { text: lastText, links },
+    next: maintenanceNext(m, now, locale, t),
+    cardTaskId: m.live?.taskId ?? last?.taskId ?? null,
+    warning,
   };
 }

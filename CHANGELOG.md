@@ -8,6 +8,264 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- **A task card is dragged by any part of it, and the drag keeps up with the
+  pointer.** On a desktop a press anywhere on the card, the title, the
+  description, a conversation tile or the pipeline block included, starts a drag
+  after 8 px; a press that moves less is the click it always was, and the click
+  after a drag is swallowed. On a phone, hold a task card for 0.35 s and it lifts
+  with a dock of the four columns at the bottom: let go over one to move the task,
+  let go in place for the card menu. The card now follows the pointer by transform
+  alone, and the board's live animations pause while it is held.
+
+## [1.9.0] — 2026-10-01
+
+### Added
+- **Board maintenance on the seat tick.** The seat tick panel (the popover
+  on a desktop, the sheet on a phone) has a **Board maintenance** group with
+  a switch and an interval in hours, from 1 to 168. It is off by default and
+  runs every 3 hours once switched on. Each run starts one maintainer agent
+  for the project, on its own task card, that reads the previous run's
+  summary and log, checks transcripts, branches and stage attempts, and then
+  updates statuses and blocked reasons on the board. It never edits files in
+  a repository, never deletes or hides your task details, and cannot mark
+  done a task that has an open pipeline or a live agent. A run that
+  succeeds summarizes its card, marks it done and hides it, and archives its
+  conversation. A failed run leaves a blocked card. The group shows the last
+  run, its result, the next run and a link to the run's card, and a run
+  waits while a deployment is running. The same settings are available to
+  agents through `seat_tick_settings`, which now also returns the last and
+  live run, the next-run estimate and the run history ([#2384]).
+- **Each tool call shows the context tokens it added.** Next to a call's
+  duration the feed now prints how many context tokens the call's result
+  added, such as `352ms · 12.4k`, for Claude and Codex, on tool lines, rows
+  inside a group, the phone's run rows, the group header and the MCP call
+  card. The number is the growth in the provider's prompt size, or an
+  estimate marked `~` when no measurement is possible, and a call that is
+  still running shows nothing. Four bands set the colour: under 1 000 is
+  quiet, 1 000 to 9 999 amber, 10 000 to 19 999 orange and 20 000 and above
+  semibold red. The hover text says whether the value was measured, shared
+  between parallel calls or estimated ([#2383]).
+- **A linked task shows its pipeline and where it is managed.** A task that
+  runs on a linked install now shows its pipeline on the card here: the
+  stages in the owner's order, each stage's state, the loop counters and the
+  current stage. The card has a tinted border and a "Managed on" chip with
+  the machine's name where **+ Agent** was. Only identifiers and states
+  cross the link, never prompts, findings, paths or conversation ids, and an
+  install on an earlier release keeps syncing and shows the card without a
+  pipeline ([#2377]).
+- **A clear message when no agent CLI is installed.** The start output now
+  says how to install Claude Code and Codex when neither is found, and the
+  setup guide's account connection finds the Codex CLI inside the macOS
+  Codex app bundle, as agent launches do. The landing prompts check and
+  install the chosen CLI and register the MCP server with absolute paths,
+  and the Delegatus package entrypoints run on Bun alone, without `node` on
+  `PATH`. `docs/macos-newcomer.md` holds the manual checklist ([#2376]).
+- **Anonymous install ping, on by default.** Once per UTC day the production
+  Viewer sends delegatus.org a random id made for this purpose, the
+  version, the OS, the architecture and the install kind (`packaged`,
+  `checkout` or `docker`). It sends no path, host or user name, project,
+  account, engine or usage figure, and the landing Worker stores the five
+  values with the country Cloudflare reports, and no IP address. The first
+  start shows a notice in the product and in the start output. Turn it off
+  in **Settings → Anonymous install ping**, with `DELEGATUS_TELEMETRY=0`
+  or with `DO_NOT_TRACK=1`; the two variables win over the setting. Tests,
+  builds, development servers and CI send nothing ([#2382]).
+
+### Fixed
+- **Scrolling a fully expanded conversation on the board is smooth.** After
+  **show earlier** had loaded the whole history of a long conversation, each
+  scroll frame measured every answer in the feed to decide which one the
+  speak button reads, and the board frame resized itself in container units
+  on every frame. The measure now looks only at answers on screen, the board
+  frame no longer re-resolves its size on scroll, and the reading anchor
+  uses a bisection. In a trace of one 451-row conversation, 43% of the
+  frames moved the scroll before and 99% do now. History and what **show
+  earlier** loads are unchanged ([#2388]).
+- **Reports from a project without a name no longer fail.** A report filed
+  with `bridge_report` from a project known only by its key failed while the
+  report header was built on the server. The header now reads "Unnamed
+  project" or "Проєкт без назви". Named projects are unchanged ([#2387]).
+- **Landing demos on a phone stay inside a phone frame.** An expanded phone
+  demo used to switch to an unscaled, edge-to-edge viewport. It now keeps its
+  390 px viewport and scales the whole frame to the available width and
+  height, with a rounded border, in portrait and landscape, and it refits
+  when the visible area shrinks ([#2385]).
+
+### Maintainer notes
+- The privacy inspection jobs cache their media tools (apt indexes and
+  `.deb` archives) per runner image, install them offline and bound retries,
+  so a slow package mirror no longer fails the privacy checks ([#2380]).
+- A new workflow, `macos-newcomer`, installs Bun and the packed package on a
+  clean macOS runner, starts the real package and checks the launcher message
+  and the setup API with no CLI, with each engine's stub and with a Codex
+  app-bundle stub. It runs manually, on relevant pull requests and on release
+  tags ([#2376]).
+
+## [1.8.0] — 2026-09-30
+
+### Added
+- **Read aloud starts at once with Soniox.** The speaker button in a
+  conversation header reads the answer in view. The first sentence is
+  requested alone and plays as soon as its audio arrives, and the later
+  sentences are fetched a few at a time behind it. In our browser
+  measurement of one 329-character answer the sound began after a median
+  of 0.5 seconds, where the previous path took a median of 18 seconds. The
+  header button and each answer's own button share one **Stop**, which
+  works while the audio is still loading and after the feed has scrolled or
+  grown. OpenAI and ElevenLabs speech play as before ([#2366]).
+- **A Context toggle in the Codex composer.** A Codex conversation's
+  composer can send its draft into the running turn as context. In Auto the
+  toggle follows the turn: it switches on after the turn has been running
+  for 0.4 seconds, off 2.5 seconds after it ends, and waits for 1.5 seconds
+  without typing. A press overrides Auto for that card. The sent words show
+  at once as a pending row that settles against the transcript. A refused
+  context message offers **Edit** and is never sent again by itself, an
+  unanswered one offers **Check status**, and while the runtime is offline
+  the send is refused with its reason and the draft stays in the box. A
+  host that has not advertised context injection keeps the toggle and says
+  why when you tap it.
+- **Codex service tier per launch, per stage and per role.** `spawn_agent`,
+  the stages of `create_pipeline`, `pipeline_action` `override-stage` and
+  the role table accept a `serviceTier`. The tier is checked against the
+  chosen account's model catalog before the launch. An explicit tier that no
+  account offers is refused with the offered tiers named, and a role's
+  default tier falls back to the standard one with the fallback shown. The
+  tier stays with the agent through resume, restart and reconfiguration.
+  The existing `fast` option still means the `priority` tier, and the
+  runtime pill names a tier other than standard. Your Codex
+  `config.toml` is left alone.
+- **Agents can read and change the role mapping.** The new `role_presets`
+  tool returns each role's engine, model and effort, the shipped values,
+  the valid model and effort choices, and the registry revision. The
+  orchestrator seat and your own session can write with the same patch the
+  Settings agent mapping uses. A model or effort outside the launch
+  catalogue is refused with every violation listed and nothing written, a
+  stale `expectedRevision` is refused with the current registry, and every
+  write is recorded in `role-presets-audit.jsonl` beside `role-presets.json`
+  ([#2348]).
+- **Agents can switch automatic updates.** The new `auto_updates` tool
+  returns the state the Update dialog shows. The orchestrator seat of the
+  Delegatus project, or your own session, can turn the switch on or off. It
+  is the dialog's switch, so the dialog, its "turned off because" line and
+  the update controller all see the change. Other callers are refused
+  before anything is asked of the Viewer, and enabling is refused where
+  automatic updates are unavailable. The dialog's history now lists each
+  switch with who made it and when ([#2360]).
+- **The landing page counts four anonymous actions and says so.** The
+  footer, in English and Ukrainian, now discloses the site analytics. The
+  page records that a visitor copied the prompt, copied the
+  `bunx delegatus-cli` command, started the demo or opened it full screen,
+  together with the page language, the agent for a prompt copy and the country Cloudflare
+  reports. It sets no cookie and stores no visitor id or IP address, and the
+  copy and fullscreen controls work when analytics is unavailable ([#2365]).
+- **For maintainers: usage metrics from one command.**
+  `scripts/usage-metrics.ts` reads npm daily downloads and version splits, GitHub views, unique visitors,
+  referrers and stars, and sampled Cloudflare visits to the landing page.
+  `--line` prints the Ukrainian daily message. Every run appends a snapshot
+  without credentials to a local history file, `--history` moves it, and a
+  source that fails is named while the rest still print ([#2368]).
+
+### Changed
+- **Linked boards keep fresh state and the local band limit.** A link's
+  freshness, cursors and sync queue now live in one place across the web
+  app's bundles, so a linked board no longer looks frozen and two syncs of
+  one link no longer run at once. A task that arrives from a linked install carries the sender's shown or hidden
+  membership. A done task with no membership arrives hidden, and arrivals
+  past the 300-band limit stay hidden, so linking a project with a long
+  history no longer floods the board. Done tasks that had already arrived
+  are hidden once, and a band you restore or hide yourself is kept ([#2359],
+  [#2370]).
+- **Shared tasks keep their titles.** A project you agreed to share crosses
+  with its complete task text where it used to arrive as "Untitled task".
+  Tasks that had already arrived with that placeholder are filled in on the
+  next sync, and a newer edit of yours wins. Each of the two installs needs
+  this release before they exchange tasks again: an install without it
+  rejects the new rows and applies none of that page ([#2359]).
+- **A narrow task card draws its pipeline stages as one vertical chain.**
+  Under 380 px the stages stand one under another on a rail with no sideways
+  arrow, their names wrap in place, and a fail branch such as **Review fix**
+  is indented under its reviewer on a dashed elbow. Wider lanes keep their
+  row ([#2363]).
+- **Completed task bands leave the board after three days.** A task marked
+  done drops off the board three days later and stops counting toward the
+  project's band limit. It stays in the task list, in search and in
+  `get_task`. The seat's own task stays. A new admission or a later decision
+  request brings a hidden task back, and a new admission starts its three
+  days again.
+- **Review budgets default to three rounds.** Pipeline fail edges, flows,
+  workflows, converted review loops, the embedded review flow and the board
+  all start at three review rounds. A higher number applies only when it is
+  set explicitly, and values already stored stay as they are. The
+  orchestrator mandate now picks the rounds by risk: one for low, two for
+  normal, three for high, more only on request.
+- **Builder fallbacks land on GPT-6.1-Sol.** When a role moves from Claude
+  to Codex, Sonnet (`sonnet` and `claude-sonnet-5-5`) now lands on GPT-6.1
+  Sol instead of GPT-6 Sol, and the `builder:frontend-fixes` and
+  `builder:docs-fixes` rows use GPT-6.1 Sol at high effort. Your saved role
+  rows do not change ([#2347]).
+- **Messages from agents steer an active Codex turn.** A message from an
+  agent or a seat to a Codex agent in the middle of a turn now steers that
+  turn, or queues, and falls back to a durable delivery under the same
+  operation if the steer cannot be made.
+- **The orchestrator seat panel is quieter.** Launch chips, MCP task rows
+  and shell rows are one line each, with the full text in a tooltip.
+  Launch-recovery bookkeeping no longer shows as raw JSON, the runtime pill
+  follows the seat's own launch profile, the mandate shows as a collapsed
+  **Mandate** card, and Claude ToolSearch rows are dropped from the feed.
+  A structured runtime pill drops a stale draft so that a send carries the
+  model the pill names.
+
+### Fixed
+- **Next.js 16.3.6 security update.** Delegatus moves from Next.js 16.3.3 to
+  16.3.6, which closes the remote code execution advisory in `next/og`
+  `ImageResponse` (GHSA-vcvr-r3jv-pc5j) that affected 16.2.0 up to 16.3.5.
+- **A message to an agent arrives once or fails with its reason.** A
+  message to a finished or idle agent is delivered once within a bounded
+  wait or ends in a failure that names its cause. A finished flow reviewer
+  no longer holds its launch marker, so the next message resumes it. A
+  resume that cannot publish its host is settled failed within 60 seconds.
+  A structured launch that meets a runtime-host handover retries for up to
+  30 seconds where it gave up after three attempts. A held message whose
+  delivery cannot start is retried and, after 10 minutes, fails with
+  "not delivered" and the cause, which makes a resend safe. A `send_message`
+  that the Viewer refused before reserving anything reports "not executed"
+  with the reason, where it read "outcome unknown". A failure inside the
+  registry migration rolls the whole step back ([#2358]).
+- **Admitted messages stay pending across a restart, and resend works.** A
+  message the runtime had already admitted is read back after a restart
+  until its durable receipt arrives, and a delivered receipt overrides a
+  stale local "failed". The resend control appears only when its handler is
+  there and resends the failed retry the receipt names. A manual status check
+  after a failed poll settles the row as delivered without sending it again
+  ([#2338]).
+- **Transient network and Git failures are retried.** A DNS or connect
+  error, a Git ref, index or packed-refs lock held by another Git process
+  and a checkout killed by host load are retried with a bounded backoff
+  before a lane parks or a deploy fails. This covers a pipeline's base fetch,
+  a deploy's mirror fetch and the image build's `docker build --pull` and
+  `bun install`. When the retries run out, the park or the error names the
+  cause, the host where there is one, and what to do ([#2355]).
+- **A healthy promoted release is no longer rolled back for being busy.**
+  The wait after promotion restarts each time the new Viewer reports a
+  startup phase or adoption count it had not reported, with a 20-minute
+  ceiling, and its error says which bound fired. A rollback that fails at
+  first keeps the reason for the rollback beside its own error. A Compose
+  key the running deployer cannot apply is refused before the image build
+  with instructions to deploy a revision that teaches the deployer the key
+  first, which `docs/RELEASING.md` now describes ([#2350]).
+- **The resource worker no longer creates account stores.** The background
+  resource collector used to write account files and `state.sqlite` into
+  the state directory when it started. It no longer loads the scanner up
+  front, and a state directory holding only the registry stays that way
+  ([#2349]).
+- **Codex queues survive a cold restart.** When Delegatus adopts an idle
+  Codex conversation whose native queue still holds a submitted message,
+  it starts that message once after resuming, without adding the input
+  again, and keeps the conversation's attention and recorded pauses. A
+  queue stranded by an earlier release is recovered from the queue panel,
+  which the docs describe.
+
 ## [1.7.1] — 2026-09-29
 
 ### Added
@@ -1467,7 +1725,9 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
+[1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/Latand/delegatus/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Latand/delegatus/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Latand/delegatus/compare/v1.5.0...v1.6.0
@@ -1624,7 +1884,30 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2335]: https://github.com/Latand/delegatus/pull/2335
 [#2336]: https://github.com/Latand/delegatus/pull/2336
 [#2337]: https://github.com/Latand/delegatus/pull/2337
+[#2338]: https://github.com/Latand/delegatus/pull/2338
 [#2339]: https://github.com/Latand/delegatus/pull/2339
 [#2340]: https://github.com/Latand/delegatus/pull/2340
 [#2342]: https://github.com/Latand/delegatus/pull/2342
 [#2343]: https://github.com/Latand/delegatus/pull/2343
+[#2347]: https://github.com/Latand/delegatus/pull/2347
+[#2348]: https://github.com/Latand/delegatus/pull/2348
+[#2349]: https://github.com/Latand/delegatus/pull/2349
+[#2350]: https://github.com/Latand/delegatus/pull/2350
+[#2355]: https://github.com/Latand/delegatus/pull/2355
+[#2358]: https://github.com/Latand/delegatus/pull/2358
+[#2359]: https://github.com/Latand/delegatus/pull/2359
+[#2360]: https://github.com/Latand/delegatus/pull/2360
+[#2363]: https://github.com/Latand/delegatus/pull/2363
+[#2365]: https://github.com/Latand/delegatus/pull/2365
+[#2366]: https://github.com/Latand/delegatus/pull/2366
+[#2368]: https://github.com/Latand/delegatus/pull/2368
+[#2370]: https://github.com/Latand/delegatus/pull/2370
+[#2376]: https://github.com/Latand/delegatus/pull/2376
+[#2377]: https://github.com/Latand/delegatus/pull/2377
+[#2380]: https://github.com/Latand/delegatus/pull/2380
+[#2382]: https://github.com/Latand/delegatus/pull/2382
+[#2383]: https://github.com/Latand/delegatus/pull/2383
+[#2384]: https://github.com/Latand/delegatus/pull/2384
+[#2385]: https://github.com/Latand/delegatus/pull/2385
+[#2387]: https://github.com/Latand/delegatus/pull/2387
+[#2388]: https://github.com/Latand/delegatus/pull/2388

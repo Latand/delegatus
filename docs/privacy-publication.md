@@ -3,8 +3,10 @@
 Every pull request runs `privacy-publication` from the default branch through
 `pull_request_target`. The job checks out trusted scanner, test, workflow, and
 fingerprint files separately, then handles the pull-request checkout as opaque
-inspection input. Candidate code is never executed. The scan covers committed,
-staged, unstaged, and untracked changes relative to the exact base SHA.
+inspection input for the trusted scan. After the trusted verdict and cache
+writes, the candidate's privacy tests run without credentials under a 90-second
+timeout. The scan covers committed, staged, unstaged, and untracked changes
+relative to the exact base SHA.
 Diagnostics expose finding classes and counts. Matched values, OCR text,
 metadata values, and file paths remain suppressed.
 
@@ -29,6 +31,24 @@ Fine-grained PAT detection also covers nested encoding and separator-split
 prefixes. Text-like files remain inspectable with NUL bytes or UTF-16 encoding.
 Unsupported binary inputs fail closed. Publication inputs and supporting files
 with symlinks in any path component are rejected before their targets are read.
+
+Email detection exempts a single ASCII instance label (including systemd hex
+escapes) followed by one of the systemd unit types `.service`,
+`.socket`, `.scope`, `.slice`, `.timer`, `.mount`, `.automount`, `.path`,
+`.device`, and `.swap`. These suffixes are not delegated TLDs; template unit
+names and cgroup paths therefore name no mailbox. `.target` remains reportable
+because [IANA delegates it as a TLD](https://www.iana.org/domains/root/db/target.html).
+This rule also applies to commit messages and merge-boundary identities. The
+suffix must end the text or be followed immediately by ASCII whitespace,
+`/`, `"`, `'`, a backtick, `)`, `]`, `,`, `;`, or `:`. Every other following
+character disqualifies the exemption, including dots, hyphens and all
+non-ASCII characters. Extra domain components and delegated TLDs remain
+reportable. Original text and a decoded view preserving zero-width characters
+are checked alongside canonical text so decoding cannot create an accepted
+unit boundary. A Markdown projection keeps the accepted source boundary of
+the same unchanged unit before a sentence-ending period; a complete domain
+continuation remains reportable. Quoted mailbox local parts remain reportable;
+they are not systemd names and can contain a real address.
 
 Media dispatch recognizes PNG, JPEG, GIF, BMP, TIFF, WebP, ISO-BMFF, AVI, and
 Matroska signatures before applying the declared-extension fallback. Renamed
@@ -78,21 +98,121 @@ catalog and passes `--require-known-values`. A missing, empty, or malformed
 catalog produces `configuration_error`. The workflow has no dependency on an
 Actions secret for this coverage.
 
-Catalog entries contain normalized lengths and SHA-256 fingerprints. Runtime
-matching hashes same-length windows after NFKC, lowercase, markup, and separator
-normalization, so formatting and token splitting cannot bypass the catalog.
+Catalog entries contain normalized lengths and SHA-256 fingerprints. Entries
+without `exactOnly: true` retain compact matching after NFKC, lowercase, markup,
+and separator normalization. Catalog schema version 1 and existing entries
+remain supported.
+
+A per-value `exactOnly: true` entry hashes the NFKC, case-folded value with
+separators preserved. It matches same-length contiguous windows of decoded
+source text after the gate's existing percent/entity decoding and Unicode
+normalization. It applies across every inspected context, including resource
+strings, HTML attributes, commit messages, composed merge identity names, metadata and OCR output. Spaces,
+hyphens and other separators interrupt the match; the flag never exempts a
+context containing the contiguous value. Markdown projection cannot join split
+spellings for this policy. Generic credential, address and resource checks
+continue to run independently.
 
 Keep raw private labels in the ignored `.privacy-known-values` operator file.
-Refresh the committed fingerprints with:
+Legacy lines contain one value each. A value requiring exact matching uses a
+JSON line with `value` and `exactOnly: true`; unflagged JSON entries also work.
+For an invented compound, the line shape is:
+
+```json
+{"value":"freshwater","exactOnly":true}
+```
+
+Opt into JSON lines with the generator's `--json-lines` option and, for the
+gate's raw file/environment input, `LLV_PRIVACY_KNOWN_VALUES_FORMAT=jsonl`.
+The default `plain` mode preserves every legacy line, including JSON-looking
+labels. JSON-lines mode also accepts legacy lines alongside policy entries.
+Invalid formats and policy types fail closed. If the same value is configured with
+both policies, compact coverage remains active. Refresh the committed
+fingerprints after updating the private input:
 
 ```sh
 bun run privacy:fingerprints -- \
-  --input .privacy-known-values \
+  --json-lines --input .privacy-known-values \
   --output scripts/privacy-known-value-fingerprints.json
 ```
 
 The generator emits a status and count. Raw labels stay out of its diagnostics
-and the generated catalog.
+and the generated catalog. Preserve per-value policy in the private input so
+regeneration retains it.
+
+The committed catalog is the source of truth for the `exactOnly` policy added
+in #2391. Its entry was selected by fingerprint because the original raw input
+was generated elsewhere and is unavailable locally. Before the next regeneration
+from a raw file, add `exactOnly: true` to that value's JSON line and use
+`--json-lines`, as shown above. Never copy the raw value into public evidence.
+Regenerating from an unmarked line removes the flag and restores compact
+matching. Review the generated catalog diff before committing: retain each
+existing `exactOnly: true` entry unless its policy change was explicitly approved.
+
+## Approved public values
+
+The `approvedPublicCatalog` fingerprint allowlist in
+[`scripts/privacy-publication-gate.ts`](../scripts/privacy-publication-gate.ts)
+is reviewed public data. Only an explicit operator approval permits an entry;
+the PR adding or changing an entry must quote that approval and explain the
+purpose, exact matching rule, and checks with their results.
+
+The operator approved publishing the Celestia relay on 2026-10-01 at 20:00:
+«селестія - дозволяю». At 20:30 the operator requested completion:
+«це б доробит». The three sanctioned forms are the bare relay hostname,
+its HTTPS origin and its discovery URL at `/.well-known/delegatus-relay.json`.
+They are stored as raw lengths and SHA-256 fingerprints with `raw-utf8-v1`
+identity normalization. This preserves exact case-sensitive matching without
+publishing the literals in source, tests or documentation. Tests assemble the
+forms from separate pieces at runtime.
+
+The exemption requires an exact case-sensitive sanctioned spelling in raw text,
+before percent/entity/JSON decoding, NFKC, case folding, or Markdown projection.
+The preceding character must be start of text, ASCII whitespace (space, tab,
+newline, carriage return, vertical tab, form feed), or one of `"`, `'`, backtick,
+`(`, `[`, `=`, `:`. The following character must be end of text, ASCII whitespace,
+or one of `"`, `'`, backtick, `)`, `]`, `,`, `;`. A trailing slash is not sanctioned.
+Every other adjacent character withholds the exemption, including NUL, Unicode
+spaces, zero-width characters, a dot, hyphen, letter, percent escape or entity.
+
+Quotes and balanced wrappers retain their raw outer boundaries; quoting a
+fragment cannot conceal an adjacent Unicode or encoded continuation. Call and
+index envelopes retain their callees across whitespace, default-ignorable code
+points and source comments.
+These bytes stay inside the raw envelope; its outer boundaries remain strict.
+Unicode and encoded trivia outside source comments disqualifies call and index exemptions.
+A separator inside that span cannot conceal the raw character before the callee. Source
+operand checks and decoded inspection views can revoke a raw-approved candidate
+when it belongs to an extended email, host, URI or concatenated expression.
+They cannot grant an exemption to a spelling or boundary introduced by decoding.
+Template ownership uses the expression ending immediately before the opening
+backtick after skipping whitespace, line breaks and comments. Identifier endings
+(including Unicode and escaped names), closed groups, calls, members and earlier
+literals withhold approval regardless of the surrounding keyword or statement.
+Returned call/index operands keep that ownership too. Explicit Markdown prose
+with an unquoted HTTP link on the same physical line keeps its inline-code
+exemption; quotes, escapes, comment delimiters and a new line cannot create that
+prose classification. The lexer does not evaluate callable values or fully parse
+JavaScript/TypeScript: ambiguous expression endings conservatively withhold
+approval, including identifier-shaped prose that could be an executable tag.
+The former NFKC whitespace-preservation workaround is removed: Unicode
+neighbours are rejected before normalization. JSON escapes still receive an
+additional inspection view, and other privacy rules still read the original.
+
+The same masking runs for all inspected text, including code, tests, JSON,
+commit messages, composed merge identity names, metadata and OCR. Both the committed fingerprint catalog and
+private lists supplied through `LLV_PRIVACY_KNOWN_VALUES*` use that masked
+known-value input. The catalog stays intact: the bare base domain, private
+email addresses and other subdomains still match. Other privacy rules inspect
+the complete original text, so an approved occurrence cannot exempt credentials,
+email addresses, identifiers or private paths around it. Diagnostics continue
+to suppress matched values.
+
+Hosted checks execute the trusted gate from the default branch. A policy-change
+PR must pass both that gate and its own candidate gate with the committed
+known-value catalog and commit checking. Fingerprints keep the sanctioned
+literals out of every published file, so the trusted policy can inspect this
+change before the new exemption reaches the default branch.
 
 ## Authenticated GitHub publication audit
 

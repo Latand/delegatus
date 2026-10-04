@@ -40,7 +40,7 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
   const kbInset = useKeyboardInset();
   const read = useSeatTickSettings(project, true);
   /* One draft, read by the body's fields and by the footer's Save. */
-  const state = useSeatTickDraft(read.record);
+  const state = useSeatTickDraft(read);
 
   return (
     <div
@@ -51,7 +51,7 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
         name="tick"
         title={t("seatTick.sheetTitle", { project: projectName })}
         onClose={onClose}
-        footer={<SeatTickActions read={read} state={state} offDefault={read.record?.effective.isDefault === false} surface="mobile" />}
+        footer={state.dirty || read.error ? <SeatTickActions read={read} state={state} surface="mobile" /> : null}
       >
         <div data-testid="mobile-seat-tick-sheet">
           <SeatTickBody

@@ -74,7 +74,7 @@ test("a read answers every role's config and variants, the revision, the health 
   const registry = await read();
   expect(registry.revision).toStartWith("roles-");
   expect(registry.health).toEqual({ state: "healthy" });
-  expect(registry.roles.map((role) => role.id)).toEqual(["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer"]);
+  expect(registry.roles.map((role) => role.id)).toEqual(["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger", "maintainer"]);
   const builder = registry.roles.find((role) => role.id === "builder")!;
   expect(builder.config).toEqual(builder.shipped.config);
   expect(Object.keys(builder.variants!)).toContain("frontend");

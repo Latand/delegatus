@@ -506,3 +506,29 @@ test("a completion finding at the schema bound keeps its whole body", () => {
   expect(normalizeStageCompletion({ verdict: "fail", findings: [{ severity: "P1", text: "x".repeat(1_996) }] }))
     .toMatchObject({ code: "STAGE_REPORT_INVALID" });
 });
+
+
+test("blocked state is identical in fenced verdicts, reports, and stored verdicts", () => {
+  const verdict: StageVerdict = { status: "fail", blocked: true, blockedReason: "Required check service is unavailable" };
+  const message = "Evidence.\n".repeat(5_000) + "\n```json\n" + JSON.stringify(verdict) + "\n```";
+  expect(parseStageVerdict(message)).toEqual({ verdict, output: message.slice(0, 32_000) });
+  expect(normalizeStageCompletion({ verdict: "fail", blocked: true, blockedReason: "  Required check service is unavailable  " })).toEqual({ verdict, summary: null });
+  expect(stageVerdictFrom(verdict)).toEqual(verdict);
+  expect(stageVerdictFrom({ status: "fail", blocked: false })).toEqual({ status: "fail", blocked: false });
+});
+
+test.each([
+  { status: "fail", blocked: "true", blockedReason: "Reason" },
+  { status: "fail", blocked: true },
+  { status: "fail", blocked: true, blockedReason: "   " },
+  { status: "fail", blocked: true, blockedReason: "x".repeat(2_001) },
+  { status: "pass", blocked: true, blockedReason: "Reason" },
+  { status: "needs_decision", blocked: true, blockedReason: "Reason" },
+  { status: "fail", blocked: false, blockedReason: "Reason" },
+  { status: "fail", blockedReason: "Reason" },
+])("malformed blocked fields are refused by both completion paths: %j", (value) => {
+  expect(stageVerdictFrom(value)).toBeNull();
+  expect(parseStageVerdict("```json\n" + JSON.stringify(value) + "\n```")).toBeNull();
+  const { status, ...fields } = value;
+  expect(normalizeStageCompletion({ verdict: status, ...fields })).toMatchObject({ code: "STAGE_REPORT_INVALID" });
+});

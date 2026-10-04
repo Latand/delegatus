@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 
@@ -9,10 +10,11 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
-import { systemBootEpoch } from "@/lib/processIdentity";
+import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
+import { conversationTurnLiveness } from "./liveness";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -36,8 +38,12 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-spawn-"));
+const ownedFixtureCleanup: Array<() => Promise<void>> = [];
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
-afterEach(async () => { await bindStructuredDeliveryQueue([]); });
+afterEach(async () => {
+  for (const cleanup of ownedFixtureCleanup.splice(0)) await cleanup();
+  await bindStructuredDeliveryQueue([]);
+});
 
 test("structured Claude permission mapping distinguishes trusted autonomous spawn paths", () => {
   expect(structuredClaudePermissionMode("bypassPermissions", {
@@ -953,6 +959,59 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
     transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
   } as RuntimeHostClient;
 }
+
+test.each([false, true])("structured Claude symlink materialization with precomputed transcript=%s", async (precomputed) => {
+  const id = crypto.randomUUID();
+  const directory = path.join(sandbox, `symlink-${id}`);
+  const real = path.join(directory, "disk", "repository-pipeline");
+  const link = path.join(directory, "Projects");
+  fs.mkdirSync(real, { recursive: true });
+  fs.symlinkSync(path.dirname(real), link, "junction");
+  const cwd = path.join(link, "repository-pipeline");
+  const home = path.join(directory, "home", ".claude");
+  const projects = path.join(home, "projects");
+  // Independent of Delegatus's predictor: the host writes at its physical cwd.
+  const artifactPath = path.join(projects, fs.realpathSync.native(cwd).replace(/[^A-Za-z0-9]/g, "-"), `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "claude", cwd, transport: "structured", accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd }),
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  const host = new RoundTripHost("claude", artifactPath, id);
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+  try {
+    const response = await spawnStructuredConversation({
+      engine: "claude", receipt: begun.receipt,
+      spec: { command: "claude", cwd, engine: "claude", windowName: "symlink",
+        ...(precomputed ? { transcript: claudeTranscriptPath(cwd, id, projects) } : {}) },
+      account: { engine: "claude", accountId: "account-a", kind: "managed", home, transcriptRoot: projects, env: { NODE_ENV: "test" } },
+      "prompt": "materialize through the symlink", registry, client,
+    }, {
+      startHost: async () => host,
+      bindHost: async (targetRegistry, key, runningHost, claimOwner, claimEpoch) => {
+        const state = await runningHost.health();
+        targetRegistry.setStructuredHostClaimed(key, {
+          kind: "claude-broker", endpoint: state.endpoint,
+          process: { pid: process.pid, startIdentity: "test-process" },
+          eventCursor: state.eventCursor, protocolVersion: state.protocolVersion,
+          writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
+          pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+        }, "idle", claimOwner, claimEpoch);
+        return () => {};
+      },
+      processIdentity: () => ({ pid: process.pid, startIdentity: "test-process" }),
+      durableSetupTimeoutMs: 2_000,
+    });
+    expect(response).toMatchObject({ launched: true, state: "settled", initialMessage: "delivered", path: artifactPath });
+    expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "completed", artifactPath });
+  } finally {
+    await host.release();
+    journal.close();
+  }
+});
 
 class RoundTripHost implements SpawnedStructuredHost {
   readonly sent: QueueEntry[] = [];
@@ -3417,6 +3476,64 @@ test("a resume claim loser leaves the winning writer projection and ownership in
   journal.close();
 });
 
+test("a retained survivor fences resume before runtime admission even after the host column was cleared", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `resume-survivor-fence-${sessionId}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "codex-subscription", launchProfile,
+    status: "dead", host: null, structuredHost: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+  });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription",
+    conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath,
+    launchProfile,
+  });
+  if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+  const snapshot = registry.readOnlySnapshot();
+  const current = snapshot.entries[`codex:${sessionId}`]!;
+  const survivors: ProcessIdentity[] = [{ pid: 41_111, startIdentity: "41111:retained", bootEpoch: systemBootEpoch() }];
+  const snapshotSpy = spyOn(registry, "readOnlySnapshot").mockImplementation(() => ({
+    ...snapshot,
+    entries: { ...snapshot.entries, [`codex:${sessionId}`]: { ...current, structuredHost: null, structuredTerminationSurvivors: survivors } },
+  }));
+  let runtimeAdmissions = 0;
+  let starts = 0;
+  const trackingClient: RuntimeHostClient = {
+    ...client,
+    command: async input => {
+      if (input.kind === "spawn") runtimeAdmissions += 1;
+      return client.command(input);
+    },
+  };
+  try {
+    await expect(spawnStructuredConversation({
+      engine: "codex", receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "resume", engine: "codex", transcript: artifactPath, launchProfile },
+      account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "", registry, client: trackingClient,
+    }, {
+      startHost: async () => { starts += 1; return new RoundTripHost("codex", artifactPath, sessionId); },
+      processIdentity: () => captureProcessIdentity(process.pid),
+    })).rejects.toThrow("structured resume host termination still has live survivors");
+    expect(runtimeAdmissions).toBe(0);
+    expect(starts).toBe(0);
+    expect(await client.effectBatch(["runtime.spawn"], 0)).toEqual([]);
+  } finally {
+    snapshotSpy.mockRestore();
+    journal.close();
+  }
+});
+
 describe.each(["bind", "publish", "first-message"] as const)("structured spawn %s failure", (barrier) => {
   test("a concurrent replay never observes success", async () => {
     const id = crypto.randomUUID();
@@ -4553,7 +4670,7 @@ test("a delivering kill terminalizes a stale structured wrapper owned by the liv
   expect(await client.effectBatch(["runtime.kill"], 0)).toEqual([]);
 });
 
-test("a dead predecessor kill terminalizes without touching its live successor", async () => {
+test.each([false, true])("a predecessor kill terminalizes without touching its live successor (predecessor alive: %s)", async (live) => {
   const predecessorId = crypto.randomUUID();
   const successorId = crypto.randomUUID();
   const cwd = path.join(sandbox, `successor-kill-${predecessorId}`);
@@ -4564,75 +4681,167 @@ test("a dead predecessor kill terminalizes without touching its live successor",
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeClient(journal);
   const conversation = registry.ensureConversation("codex", predecessorPath, "codex-subscription");
-  const predecessorKey = { engine: "codex" as const, sessionId: predecessorId };
-  registry.upsert({
-    key: predecessorKey,
-    artifactPath: predecessorPath,
-    cwd,
-    accountId: "codex-subscription",
-    status: "dead",
-    host: null,
-    structuredHost: null,
-    claimEpoch: 1,
-    claimOwner: null,
-    pendingAction: null,
-  });
-  const resumed = beginLegacySpawnFixture(registry, {
-    engine: "codex",
-    cwd,
-    accountId: "codex-subscription",
-    conversationId: conversation.id,
-    purpose: "resume-successor",
-  });
-  if (resumed.kind !== "created") throw new Error("successor receipt was unavailable");
-  const successorKey = { engine: "codex" as const, sessionId: successorId };
-  const settled = registry.settleSpawn(resumed.receipt.launchId, {
-    key: successorKey,
-    artifactPath: successorPath,
-    cwd,
-    accountId: "codex-subscription",
-    status: "live",
-    host: null,
-    structuredHost: {
-      kind: "codex-app-server",
-      endpoint: "fake:successor",
-      process: { pid: process.pid, startIdentity: "successor-process" },
-      eventCursor: 1,
-      protocolVersion: "fake-v1",
-      writerClaimEpoch: 2,
-      activeTurnRef: "successor-turn",
-      pendingAttention: [],
-      activeFlags: [],
-    },
-    claimEpoch: 2,
-    claimOwner: "structured-host:successor",
-    pendingAction: null,
-  });
-  if (settled.kind !== "settled") throw new Error("successor settlement failed");
-  const successorBefore = registry.snapshot().entries[`codex:${successorId}`];
-  const operationId = `kill_${predecessorId}`;
-  await client.command({
-    kind: "kill",
-    operationId,
-    idempotencyKey: operationId,
-    conversationId: conversation.id,
-    sessionKey: predecessorKey,
-  });
-  const successorHost = new RoundTripHost("codex", successorPath, successorId);
+  const child = live ? spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }) : null;
+  if (child) await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  const exited = child ? new Promise<void>(resolve => { child.once("exit", () => resolve()); }) : null;
+  try {
+    const predecessorKey = { engine: "codex" as const, sessionId: predecessorId };
+    registry.upsert({
+      key: predecessorKey,
+      artifactPath: predecessorPath,
+      cwd,
+      accountId: "codex-subscription",
+      status: live ? "live" : "dead",
+      host: null,
+      structuredHost: child ? {
+        kind: "codex-app-server", endpoint: `stdio:${child.pid}`, process: captureProcessIdentity(child.pid!),
+        eventCursor: 1, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: "first-turn",
+        pendingAttention: [], activeFlags: [],
+      } : null,
+      claimEpoch: 1,
+      claimOwner: null,
+      pendingAction: null,
+    });
+    const resumed = beginLegacySpawnFixture(registry, {
+      engine: "codex",
+      cwd,
+      accountId: "codex-subscription",
+      conversationId: conversation.id,
+      purpose: "resume-successor",
+    });
+    if (resumed.kind !== "created") throw new Error("successor receipt was unavailable");
+    const successorKey = { engine: "codex" as const, sessionId: successorId };
+    const settled = registry.settleSpawn(resumed.receipt.launchId, {
+      key: successorKey,
+      artifactPath: successorPath,
+      cwd,
+      accountId: "codex-subscription",
+      status: "live",
+      host: null,
+      structuredHost: {
+        kind: "codex-app-server",
+        endpoint: "fake:successor",
+        process: { pid: process.pid, startIdentity: "successor-process" },
+        eventCursor: 1,
+        protocolVersion: "fake-v1",
+        writerClaimEpoch: 2,
+        activeTurnRef: "successor-turn",
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 2,
+      claimOwner: "structured-host:successor",
+      pendingAction: null,
+    });
+    if (settled.kind !== "settled") throw new Error("successor settlement failed");
+    const successorBefore = registry.snapshot().entries[`codex:${successorId}`];
+    const operationId = `kill_${predecessorId}`;
+    await client.command({
+      kind: "kill",
+      operationId,
+      idempotencyKey: operationId,
+      conversationId: conversation.id,
+      sessionKey: predecessorKey,
+    });
+    const successorHost = new RoundTripHost("codex", successorPath, successorId);
 
-  await bindStructuredDeliveryQueue([{ key: successorKey, host: successorHost }], { registry, client });
+    await bindStructuredDeliveryQueue([{ key: successorKey, host: successorHost }], { registry, client });
 
-  expect((await client.operationStatus(operationId))?.receipt.status).toBe("delivered");
-  expect(registry.snapshot().entries[`codex:${successorId}`]).toEqual(successorBefore);
-  expect(successorHost.releaseCount).toBe(0);
-  expect(hasStructuredDeliveryHost(successorKey)).toBeTrue();
-  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
-    sessionKey: successorKey,
-    host: "hosted",
-    hostKind: "codex-app-server",
-  });
-  expect(await client.effectBatch(["runtime.kill"], 0)).toEqual([]);
+    expect((await client.operationStatus(operationId))?.receipt.status).toBe("delivered");
+    expect(registry.snapshot().entries[`codex:${successorId}`]).toEqual(successorBefore);
+    expect(successorHost.releaseCount).toBe(0);
+    expect(hasStructuredDeliveryHost(successorKey)).toBeTrue();
+    expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+      sessionKey: successorKey,
+      host: "hosted",
+      hostKind: "codex-app-server",
+    });
+    expect(await client.effectBatch(["runtime.kill"], 0)).toEqual([]);
+    if (child) {
+      await exited;
+      expect(procBackend.pidAlive(child.pid!)).toBeFalse();
+    }
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
 });
+
+test.each(["path", "conversationId", "lost-parent-settlement"])("kill by %s ends an unadopted live launch host and fences its queued first prompt", async (target) => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "unadopted-launch-kill-"));
+  const id = crypto.randomUUID();
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id, cwd } }) + "\n");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  const exited = new Promise<void>(resolve => { child.once("exit", () => resolve()); });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const baseClient = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "account-a" });
+  if (begun.kind !== "created") throw new Error("launch receipt was unavailable");
+  let lostSettlement = false;
+  const client: RuntimeHostClient = {
+    ...baseClient,
+    transitionOperation: async (...args) => {
+      if (target === "lost-parent-settlement" && !lostSettlement && args[0] === begun.receipt.launchId && args[1] === "failed") {
+        lostSettlement = true;
+        throw new RuntimeHostUnavailableError("runtime host request timed out");
+      }
+      return baseClient.transitionOperation(...args);
+    },
+  };
+  const conversation = { id: begun.receipt.conversationId };
+  const key = { engine: "codex" as const, sessionId: id };
+  const identity = captureProcessIdentity(child.pid!);
+  try {
+    expect(registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key, artifactPath, cwd, accountId: "account-a", status: "live", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: `stdio:${child.pid}`, process: identity,
+        eventCursor: 1, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: "first-turn",
+        pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, pendingAction: null,
+    }).kind).toBe("settled");
+    await client.command({ kind: "spawn", operationId: begun.receipt.launchId, idempotencyKey: begun.receipt.launchId,
+      conversationId: conversation.id, engine: "codex", cwd, prompt: "the original launch prompt", accountId: "account-a" });
+    await client.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: key, host: "hosted", hostKind: "codex-app-server",
+      turn: "running", activeTurnId: "first-turn", provenance: "structured", accountId: "account-a", cwd, artifactPath,
+    } });
+    const sendId = `spawn_message_${begun.receipt.launchId}`;
+    await client.command({ kind: "send", operationId: sendId, idempotencyKey: sendId,
+      conversationId: conversation.id, text: "the original launch prompt", policy: "queue" });
+    const killId = `kill_unadopted_${id}`;
+    expect(procBackend.pidAlive(child.pid!)).toBeTrue();
+    expect(registry.readOnlySnapshot().entries[`codex:${id}`]?.status).toBe("live");
+    expect(await dispatchStructuredControl({ action: "kill", operationId: killId,
+      path: target === "path" ? artifactPath : "", conversationId: target !== "path" ? conversation.id : "",
+    }, { registry, client, enabled: () => true, kick: () => {} })).toMatchObject({ status: 202 });
+    const binding = bindStructuredDeliveryQueue([], { registry, client });
+    if (target === "lost-parent-settlement") await expect(binding).rejects.toThrow("runtime host request timed out");
+    else await binding;
+    if (target === "lost-parent-settlement") await Bun.sleep(1_100);
+    await kickStructuredDeliveryQueue();
+    expect((await client.operationStatus(killId))?.receipt.status).toBe("delivered");
+    await exited;
+    expect(registry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "dead", structuredHost: null, claimOwner: null });
+    expect((await client.operationStatus(sendId))?.receipt.status).toBe("failed");
+    expect(journal.snapshot().sessions.find(session => session.conversationId === conversation.id)).toMatchObject({ host: "dead", turn: "idle" });
+    await recoverPendingStructuredSpawns(registry, client);
+    expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]?.state).toBe("failed");
+    expect((await client.operationStatus(begun.receipt.launchId))?.receipt.status).toBe("failed");
+    await kickStructuredDeliveryQueue();
+    expect(await client.effectBatch(["runtime.spawn", "runtime.send", "runtime.kill"], 0)).toEqual([]);
+  } finally {
+    // Only the process created above is ours to clean up, even on the red run.
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+}, 15_000);
 
 test("a queued kill waits when an unadopted structured process may still be live", async () => {
   const id = crypto.randomUUID();
@@ -4682,6 +4891,178 @@ test("a queued kill waits when an unadopted structured process may still be live
   expect(registry.snapshot().entries[`codex:${id}`]).toEqual(entryBefore);
   expect(await client.effectBatch(["runtime.kill"], 0)).toHaveLength(1);
 });
+
+test("a partial structured kill retains child identity across a root-dead retry", async () => {
+  const id = crypto.randomUUID();
+  const cwd = fs.mkdtempSync(path.join(sandbox, `partial-kill-${id}-`));
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const childPidFile = path.join(cwd, "child.pid");
+  const childScript = `require("node:fs").writeFileSync(process.env.CHILD_PID_FILE, String(process.pid)); setInterval(() => {}, 1000)`;
+  const parentScript = `const { spawn } = require("node:child_process");\nspawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], { detached: true, stdio: "ignore", env: process.env });\nsetInterval(() => {}, 1000);`;
+  const root = spawn(process.execPath, ["-e", parentScript], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, CHILD_PID_FILE: childPidFile },
+  });
+  await new Promise<void>((resolve, reject) => { root.once("spawn", resolve); root.once("error", reject); });
+  const rootExited = new Promise<void>(resolve => { root.once("exit", () => resolve()); });
+  let childPid: number | null = null;
+  await waitFor(() => {
+    if (!fs.existsSync(childPidFile)) return false;
+    childPid = Number(fs.readFileSync(childPidFile, "utf8"));
+    return Number.isSafeInteger(childPid) && childPid! > 1;
+  });
+  const childIdentity = captureProcessIdentity(childPid!);
+  const registryPath = path.join(cwd, "registry.json");
+  const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  const key = { engine: "codex" as const, sessionId: id };
+  const rootIdentity = captureProcessIdentity(root.pid!);
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "codex-subscription", status: "live", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: `stdio:${root.pid}`, process: rootIdentity,
+      eventCursor: 1, protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: "turn:live",
+      pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, pendingAction: null,
+  });
+  const operationId = `kill_partial_${id}`;
+  await client.command({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey: key });
+  const originalKill = process.kill.bind(process);
+  let refuseChildSignals = true;
+  let evidenceAtFirstSignal: ProcessIdentity[] | null = null;
+  let failedRecoveryHost: RoundTripHost | null = null;
+  const killSpy = spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+    if (evidenceAtFirstSignal === null && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      evidenceAtFirstSignal = registry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors ?? [];
+    }
+    if (pid === childPid && refuseChildSignals && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    }
+    return originalKill(pid, signal as NodeJS.Signals);
+  }) as typeof process.kill);
+  const severedNow = Date.now() + 91_000;
+  const severedLiveness = {
+    now: () => severedNow,
+    uptimeSeconds: () => os.uptime() + 91,
+    processCpuMs: () => 0,
+    readTranscript: async () => ({
+      lastEventAt: severedNow - 182_000,
+      kind: "tool-call" as const,
+      lastWriteAt: severedNow - 182_000,
+      turn: "busy" as const,
+    }),
+  };
+  expect(await conversationTurnLiveness(registry, conversation.id, severedLiveness)).toMatchObject({ state: "severed" });
+  const registeredHost = Object.assign(new RoundTripHost("codex", artifactPath, id), {
+    health: async (): Promise<HostState> => ({
+      status: "active",
+      sessionKey: id,
+      endpoint: `stdio:${root.pid}`,
+      pid: root.pid!,
+      processStartIdentity: rootIdentity.startIdentity,
+      eventCursor: 1,
+      protocolVersion: "fixture",
+      activeTurnRef: "turn:live",
+      pendingAttention: [],
+      activeFlags: [],
+      account: { type: "chatgpt" as const, planType: "subscription" as const },
+    }),
+    release: async () => {
+      if (procBackend.pidAlive(root.pid!)) originalKill(root.pid!, "SIGTERM");
+      await rootExited;
+    },
+    releaseIfOwned: async (expected: ProcessIdentity) => {
+      if (expected.pid !== rootIdentity.pid || expected.startIdentity !== rootIdentity.startIdentity) return false;
+      await registeredHost.release();
+      return true;
+    },
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: registeredHost }], { registry, client, liveness: severedLiveness }).catch(error => {
+      expect(String(error)).toContain("the kill was refused");
+    });
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      if (journal.operationResult(operationId)?.receipt.status === "queued"
+        && !procBackend.pidAlive(root.pid!) && procBackend.pidAlive(childPid!)) break;
+      await Bun.sleep(10);
+    }
+    expect((await client.operationStatus(operationId))?.receipt.status).toBe("queued");
+    expect(procBackend.pidAlive(root.pid!)).toBeFalse();
+    expect(procBackend.pidAlive(childPid!)).toBeTrue();
+    expect((evidenceAtFirstSignal ?? []) as ProcessIdentity[]).toContainEqual(rootIdentity);
+    expect((evidenceAtFirstSignal ?? []) as ProcessIdentity[]).toContainEqual(childIdentity);
+    expect(registry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "live", structuredHost: { process: rootIdentity } });
+    expect(captureProcessIdentity(childPid!)).toEqual(childIdentity);
+    const reopenedRegistry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
+    expect(reopenedRegistry.claimStructuredHost(key, rootIdentity, { allowUnhosted: true })).toBeNull();
+
+    let starts = 0;
+    const recoveryHost = failedRecoveryHost = new RoundTripHost("codex", artifactPath, id);
+    const recovered = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      registry: reopenedRegistry,
+      client,
+      transport: () => "structured",
+      resolveAccount: () => ({
+        engine: "codex",
+        accountId: "codex-subscription",
+        kind: "managed",
+        home: cwd,
+        transcriptRoot: cwd,
+        env: { NODE_ENV: "test" },
+      }),
+      spawn: input => spawnStructuredConversation(input, {
+        startHost: async () => { starts += 1; return recoveryHost; },
+        bindHost: async (targetRegistry, targetKey, runningHost, claimOwner, claimEpoch) => {
+          const state = await runningHost.health();
+          targetRegistry.setStructuredHostClaimed(targetKey, {
+            kind: "codex-app-server",
+            endpoint: state.endpoint,
+            process: rootIdentity,
+            eventCursor: state.eventCursor,
+            protocolVersion: state.protocolVersion,
+            writerClaimEpoch: claimEpoch,
+            activeTurnRef: state.activeTurnRef,
+            pendingAttention: state.pendingAttention,
+            activeFlags: state.activeFlags,
+          }, "idle", claimOwner, claimEpoch);
+          return () => {};
+        },
+        publishHost: async (targetKey, runningHost) => {
+          await bindStructuredDeliveryQueue([{ key: targetKey, host: runningHost }], { registry: reopenedRegistry, client });
+          return async () => {};
+        },
+        processIdentity: () => rootIdentity,
+      }),
+      processIdentity: () => rootIdentity,
+      requestDeliveryDrain: () => {},
+    });
+    expect(recovered).toBeNull();
+    expect(starts).toBe(0);
+    expect(procBackend.pidAlive(childPid!)).toBeTrue();
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]?.structuredTerminationSurvivors).toContainEqual(childIdentity);
+
+    refuseChildSignals = false;
+    await Bun.sleep(1_100);
+    await bindStructuredDeliveryQueue([], { registry: reopenedRegistry, client, liveness: severedLiveness });
+    await kickStructuredDeliveryQueue();
+
+    expect(procBackend.pidAlive(childPid!)).toBeFalse();
+    expect((await client.operationStatus(operationId))?.receipt.status).toBe("delivered");
+    expect(reopenedRegistry.readOnlySnapshot().entries[`codex:${id}`]).toMatchObject({ status: "dead", structuredHost: null, structuredTerminationSurvivors: [] });
+    expect(killSpy.mock.calls.filter(([pid]) => pid === childPid).length).toBeGreaterThan(0);
+  } finally {
+    killSpy.mockRestore();
+    if (procBackend.pidAlive(childPid!)) originalKill(childPid!, "SIGKILL");
+    if (procBackend.pidAlive(root.pid!)) originalKill(root.pid!, "SIGKILL");
+    await rootExited;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await failedRecoveryHost?.release();
+    journal.close();
+  }
+}, 20_000);
 
 test("a queued kill waits through a processless structured adoption claim", async () => {
   const id = crypto.randomUUID();
@@ -4763,6 +5144,32 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
       env: { NODE_ENV: "test" },
     };
     const host = new RoundTripHost(engine, artifactPath, id);
+    const hostProcess = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+    const hostProcessIdentity = captureProcessIdentity(hostProcess.pid);
+    if (!hostProcessIdentity) throw new Error("round-trip host process identity is unavailable");
+    ownedFixtureCleanup.push(async () => {
+      if (hostProcess.exitCode === null) hostProcess.kill("SIGKILL");
+      await hostProcess.exited;
+    });
+    const hostHealth = host.health.bind(host);
+    const hostRelease = host.release.bind(host);
+    Object.assign(host, {
+      health: async (): Promise<HostState> => ({
+        ...await hostHealth(),
+        pid: hostProcess.pid,
+        processStartIdentity: hostProcessIdentity.startIdentity,
+      }),
+      release: async () => {
+        if (hostProcess.exitCode === null) hostProcess.kill("SIGTERM");
+        await hostProcess.exited;
+        await hostRelease();
+      },
+      releaseIfOwned: async (expected: ProcessIdentity) => {
+        if (expected.pid !== hostProcessIdentity.pid || expected.startIdentity !== hostProcessIdentity.startIdentity) return false;
+        await host.release();
+        return true;
+      },
+    });
 
     const response = await spawnStructuredConversation({
       engine,
@@ -4782,7 +5189,7 @@ describe.each(["codex", "claude"] as const)("%s structured spawn round trip", (e
         targetRegistry.setStructuredHostClaimed(key, {
           kind: engine === "codex" ? "codex-app-server" : "claude-broker",
           endpoint: state.endpoint,
-          process: state.pid ? { pid: state.pid, startIdentity: state.processStartIdentity } : null,
+          process: state.pid ? hostProcessIdentity : null,
           eventCursor: state.eventCursor,
           protocolVersion: state.protocolVersion,
           writerClaimEpoch: claimEpoch,

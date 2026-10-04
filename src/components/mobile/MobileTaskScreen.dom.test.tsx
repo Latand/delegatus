@@ -141,6 +141,7 @@ function mount(ports: TaskMutationPorts, pipelinePorts: PipelinePorts, subject: 
         taskId={subject.id}
         layout={layout(files)}
         project="fixture"
+        projectName="Fixture"
         groups={[]}
         manual={[]}
         files={files}
@@ -304,6 +305,10 @@ test("the phone lists only what opens: a transcript the board did not load opens
   }) as typeof fetch;
   try {
     const { host } = mount(taskPorts([]), noPipelinePorts, subject);
+    /* The transcript off the board has no row of its own: it waits behind one line in the folded earlier section. */
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    click(q(host, "[data-phone-task-past-toggle]"));
+    click(q(host, "[data-phone-task-elsewhere-toggle]"));
     const open = qa(host, "[data-phone-task-not-loaded]");
     expect(open.length).toBe(1);
     click(open[0]!);
@@ -315,6 +320,55 @@ test("the phone lists only what opens: a transcript the board did not load opens
     expect(requests.filter((request) => request.method !== "GET")).toEqual([{ url: "/api/tasks/t-ghost/assignment", method: "PATCH", body: { launchId: "launch-ghost", conversationId: null, dismiss: "launch-did-not-start" } }]);
   } finally {
     globalThis.fetch = realFetch;
+    dom.location.hash = "";
+  }
+});
+
+test("the phone folds many conversations off the board into one line inside the earlier section, which lists nothing while folded and opens each from its list", async () => {
+  const wall = Array.from({ length: 24 }, (_, index) => ({
+    conversationId: `conversation_wall_${index}`, path: `/elsewhere/wall-${index}.jsonl`, panePid: null, state: "linked", error: null, at: iso(3_600 - index * 60),
+  }));
+  const subject = { ...theTask, id: "t-wall", assignments: wall } as unknown as BoardTask;
+  /* The lanes of the task: finished attempts that make the Past attempts count. */
+  const own = [lane("done-a", "completed", "passed", 3_600), lane("done-b", "completed", "passed", 5_400)].map((one) => ({ ...one, taskIds: ["t-wall"] }) as unknown as Pipeline);
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject, { pipelines: own });
+    /* Folded: the header alone, no line, no rows. */
+    const section = q(host, "[data-phone-task-past]")!;
+    expect(section.textContent).toBe(en("kanban.past.head", { count: 2 }));
+    expect(qa(host, "[data-phone-task-elsewhere-toggle]").length).toBe(0);
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    /* Open: the attempts, each once and as many as the header says, and one line. */
+    click(q(host, "[data-phone-task-past-toggle]"));
+    const rows = qa(host, "[data-phone-task-past-row]").map((row) => row.getAttribute("data-phone-task-past-row"));
+    expect(rows.length).toBe(2);
+    expect(new Set(rows).size).toBe(2);
+    const lines = qa(host, "[data-phone-task-elsewhere-toggle]");
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.textContent).toBe(`${en("kanban.past.elsewhere", { count: 24 })} · ${en("kanban.past.elsewhereShow")}`);
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+    /* Its list holds every one, and each opens. */
+    click(lines[0]!);
+    const listed = qa(host, "[data-phone-task-not-loaded]");
+    expect(listed.length).toBe(24);
+    click(listed[3]!);
+    const { formatConversationHash } = await import("@/lib/accounts/identity");
+    expect(dom.location.hash).toBe(formatConversationHash({ conversationId: "conversation_wall_3", path: "/elsewhere/wall-3.jsonl" }));
+  } finally {
+    dom.location.hash = "";
+  }
+});
+
+test("the phone does not claim the task has no agents while its conversations are off the board", () => {
+  const wall = Array.from({ length: 12 }, (_, index) => ({
+    conversationId: `conversation_wall_${index}`, path: `/elsewhere/wall-${index}.jsonl`, panePid: null, state: "linked", error: null, at: iso(3_600 - index * 60),
+  }));
+  const subject = { ...theTask, id: "t-wall-only", assignments: wall } as unknown as BoardTask;
+  try {
+    const { host } = mount(taskPorts([]), noPipelinePorts, subject);
+    expect(q(host, "[data-phone-task-agents]")!.textContent).not.toContain(en("mobile2.kanban.noAgents"));
+    expect(qa(host, "[data-phone-task-not-loaded]").length).toBe(0);
+  } finally {
     dom.location.hash = "";
   }
 });
@@ -477,4 +531,130 @@ test("priority is set from the task sheet: the menu's Priority row opens three l
   flushSync(() => nav.openSheet("menu"));
   click(q(body, '[data-phone-task-menu="priority"]'));
   expect(q(body, '[data-phone-task-priority][aria-checked="true"]')!.getAttribute("data-phone-task-priority")).toBe("high");
+});
+
+test("the tick notice offers a 44 px control that opens the project's seat tick sheet, and its close returns to the task", () => {
+  const notice = {
+    ...theTask,
+    id: "t-tick-notice",
+    text: "Тікер: кожні 30 хв до 18:00\nЧастота пробуджень цього проєкту змінена.\nmonitor-ref: seat-tick-settings",
+  } as unknown as BoardTask;
+  const { host, nav } = mount(taskPorts([]), noPipelinePorts, notice);
+  const open = q(host, "[data-phone-task-tick-open]")!;
+  expect(open.getAttribute("data-phone-task-tick-open")).toBe("fixture");
+  expect(open.textContent).toContain(en("kanban.tickNotice.open"));
+  /* A phone control is at least 44 px: the row's own minimum, not a link. */
+  expect(open.className).toContain("min-h-12");
+  expect(nav.getState().sheet).toBeNull();
+  click(open);
+  expect(nav.getState().sheet).toBe("tick");
+  const sheet = q(dom.document.body as unknown as HTMLElement, "[data-testid='mobile-seat-tick-sheet']");
+  expect(sheet).not.toBeNull();
+  expect(q(dom.document.body as unknown as HTMLElement, "[data-mobile2-sheet='tick']")?.textContent ?? "").toContain("Fixture");
+  flushSync(() => nav.closeSheet());
+  expect(nav.getState().sheet).toBeNull();
+  expect(nav.getState().stack.at(-1)).toEqual({ kind: "task", id: "t-tick-notice" });
+});
+
+test("an ordinary task has no tick control", () => {
+  const { host } = mount(taskPorts([]), noPipelinePorts);
+  expect(q(host, "[data-phone-task-tick-open]")).toBeNull();
+});
+
+/* The phone's «Ask» (the task chip button): the opened task's bottom bar puts
+   this task into its project's orchestrator composer as a chip, then takes the
+   operator to the seat's conversation, where ‹ comes back to this task. */
+test("«Ask» attaches the task as a chip and opens the orchestrator's conversation", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  const { resetManagerIdentityForTest } = await import("@/components/voice/managerIdentity");
+  const realFetch = globalThis.fetch;
+  resetTaskChipsForTests();
+  resetManagerIdentityForTest();
+  globalThis.fetch = (async (input: unknown) => {
+    if (String(input) === "/api/orchestrator/seat?project=fixture") {
+      return new Response(JSON.stringify({ exists: true, seat: { conversationId: "conversation_fixture_7" } }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const opened: string[] = [];
+    const seat = file(7, { title: "Orchestrator" });
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { files: [seat], onOpen: (entry) => opened.push(entry.path) });
+    const ask = q(host, "[data-phone-task-ask-orchestrator]");
+    expect(ask).not.toBeNull();
+    expect(ask!.getAttribute("aria-label")).toContain("Kanban: say what each pipeline of a task does");
+    expect(ask!.closest("[data-phone-task-bar]")).not.toBeNull();
+    click(ask);
+    expect(readTaskChips("fixture")).toMatchObject([{ id: "t-many", title: "Kanban: say what each pipeline of a task does" }]);
+    await sleep(10);
+    expect(opened).toEqual([seat.path]);
+  } finally {
+    globalThis.fetch = realFetch;
+    resetTaskChipsForTests();
+    resetManagerIdentityForTest();
+  }
+});
+
+test("«Ask» carries the card's title, identifiers intact and capped at the desktop's length", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  resetTaskChipsForTests();
+  const title = "request_attention: the target blinks, intent open opens the conversation (#1696) in __init__.py";
+  const { host } = mount(taskPorts([]), noPipelinePorts, { ...theTask, text: `${title}\nBody.` } as BoardTask);
+  click(q(host, "[data-phone-task-ask-orchestrator]"));
+  expect(readTaskChips("fixture")).toMatchObject([{ id: "t-many", title: title.slice(0, 80).trim() }]);
+  resetTaskChipsForTests();
+});
+
+test("«Ask» with no live seat to open still attaches the chip and says so", async () => {
+  const { readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  const { resetManagerIdentityForTest } = await import("@/components/voice/managerIdentity");
+  const realFetch = globalThis.fetch;
+  resetTaskChipsForTests();
+  resetManagerIdentityForTest();
+  globalThis.fetch = (async () => new Response(JSON.stringify({ exists: false, seat: null }), { status: 200 })) as unknown as typeof fetch;
+  try {
+    const opened: string[] = [];
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { onOpen: (entry) => opened.push(entry.path) });
+    click(q(host, "[data-phone-task-ask-orchestrator]"));
+    await sleep(10);
+    expect(readTaskChips("fixture").map((chip) => chip.id)).toEqual(["t-many"]);
+    expect(opened).toEqual([]);
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain("Kanban: say what each pipeline of a task does");
+  } finally {
+    globalThis.fetch = realFetch;
+    resetTaskChipsForTests();
+    resetManagerIdentityForTest();
+  }
+});
+
+test("«Ask» on a full composer attaches nothing, says so, and does not leave the task", async () => {
+  const { addTaskChip, MAX_TASK_CHIPS, readTaskChips, resetTaskChipsForTests } = await import("@/components/orchestrator/taskChips");
+  resetTaskChipsForTests();
+  for (let n = 0; n < MAX_TASK_CHIPS; n += 1) addTaskChip("fixture", { id: `other-${n}`, title: `Other ${n}` });
+  try {
+    const opened: string[] = [];
+    const { host } = mount(taskPorts([]), noPipelinePorts, theTask, { onOpen: (entry) => opened.push(entry.path) });
+    click(q(host, "[data-phone-task-ask-orchestrator]"));
+    await sleep(10);
+    expect(readTaskChips("fixture")).toHaveLength(MAX_TASK_CHIPS);
+    expect(readTaskChips("fixture").some((chip) => chip.id === "t-many")).toBe(false);
+    expect(opened).toEqual([]);
+    expect(q(host, "[data-test-receipt]")).not.toBeNull();
+  } finally {
+    resetTaskChipsForTests();
+  }
+});
+
+test("the opened phone task shows the full passive note beneath its description", () => {
+  const note = { text: "Review is running. The route checks are next.", author: { kind: "agent" as const, conversationId: "conversation_fixture" }, updatedAt: iso(120) };
+  const { host } = mount(taskPorts([]), noPipelinePorts, { ...theTask, note });
+  const line = q(host, "[data-task-note=full]");
+  expect(line?.textContent).toContain(note.text);
+  expect(line?.querySelectorAll("button,input,textarea")).toHaveLength(0);
+  expect(line?.querySelector("time")?.getAttribute("datetime")).toBe(note.updatedAt);
+  const description = q(host, "[data-phone-task-description]")!;
+  expect(description.compareDocumentPosition(line!) & 4).toBe(4);
+  const ask = q(host, "[data-phone-task-ask-orchestrator]");
+  expect(ask?.closest("[data-phone-task-bar]")).not.toBeNull();
+  expect(ask?.getAttribute("aria-label")).toBeTruthy();
 });

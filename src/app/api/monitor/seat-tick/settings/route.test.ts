@@ -102,6 +102,17 @@ const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1
 const put = (body: unknown, headers: Record<string, string> = browser) =>
   PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
 
+test("HTTP and seat_tick_settings report maintenance paused while wakes are off", async () => {
+  const written = await put({ project: PROJECT, enabled: false, reason: "fixture pause", maintenance: { enabled: true, intervalHours: 3 } });
+  expect(written.status).toBe(200);
+  const http = await written.json() as SeatTickSettingsAnswer;
+  expect(http.maintenance).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null });
+  const tool = await viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [],
+  } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT });
+  expect(tool.maintenance).toMatchObject(http.maintenance);
+});
+
 /** The active seats attribution is measured against: which conversation holds
     the target project's seat, and which holds another project's. */
 function seatFile(...held: Array<{ project: string; conversationId: string; seatEpoch: number }>): void {
@@ -244,7 +255,7 @@ test("a seat changing ANOTHER project's tick carries its own project, so the boa
     project: OTHER_PROJECT,
     seatEpoch: null,
   });
-  expect(body.cardText).toContain(`whose own project is ${OTHER_PROJECT}`);
+  expect(body.cardText).toContain(`чий власний проєкт — ${OTHER_PROJECT}`);
 });
 
 test("an identified caller that holds no seat and owns no project names none, rather than inventing one", async () => {
@@ -255,13 +266,13 @@ test("an identified caller that holds no seat and owns no project names none, ra
     { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
   )).json() as SeatTickSettingsAnswer;
   expect(body.actor).toEqual({ kind: "agent", conversationId: OTHER_CONVERSATION, project: null, seatEpoch: null });
-  expect(body.cardText).toContain("Set by an agent session");
+  expect(body.cardText).toContain("Змінив(ла): сесія агента");
   expect(body.cardText).not.toContain("whose own project is");
 });
 
 test("the module's rules hold verbatim, and a refusal stores nothing", async () => {
   const refusals = [
-    [{ project: PROJECT, enabled: false }, "a reason is required when the tick is disabled or its wake interval is changed"],
+    [{ project: PROJECT, enabled: false }, "instructions (reason) are required when the tick is disabled or its wake interval changes"],
     [{ project: PROJECT, wakeIntervalMinutes: -5, reason: "why" }, "wakeIntervalMinutes must be a positive number of minutes, or null for the default"],
     [{ project: PROJECT, wakeIntervalMinutes: SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES + 1, reason: "far too long" }, `must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}`],
     [{ project: PROJECT, monitorPrompt: "x".repeat(SEAT_TICK_PROMPT_LIMIT + 1) }, `the limit is ${SEAT_TICK_PROMPT_LIMIT}`],
@@ -286,10 +297,24 @@ test("an expiry, and restoring the default with no reason, go through the same r
 
   const restored = await (await put({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null })).json() as SeatTickSettingsAnswer;
   expect(restored.changed).toBe(true);
-  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: null, until: null });
+  expect(restored.effective).toMatchObject({ isDefault: true, enabled: true, reason: "a deploy is running", until: null });
   expect(restored.cardText).toBeNull();
-  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: null, until: null });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ enabled: true, wakeIntervalMinutes: null, reason: "a deploy is running", until: null });
   expect(settingsRevision()).toBeGreaterThan(before!);
+});
+
+test("PUT and GET retain default-cadence instructions, and clearing them preserves the seat note", async () => {
+  const reason = "Handle the incoming tasks by priority.";
+  const monitorPrompt = "Track the active lanes.";
+  const saved = await put({ project: PROJECT, reason, monitorPrompt });
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).settings).toMatchObject({ reason, monitorPrompt, wakeIntervalMinutes: null });
+  const read = await GET(new NextRequest(`http://localhost/api/monitor/seat-tick/settings?project=${PROJECT}`));
+  expect((await read.json()).settings).toMatchObject({ reason, monitorPrompt });
+  const cleared = await put({ project: PROJECT, reason: null });
+  expect(cleared.status).toBe(200);
+  expect((await cleared.json()).settings).toMatchObject({ reason: null, monitorPrompt });
+  expect(readSeatTickSettings(PROJECT, settingsFile)).toMatchObject({ reason: null, monitorPrompt });
 });
 
 test("a change with no fields is a read, as the tool's is", async () => {
@@ -383,7 +408,30 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   }
   expect(body.effective.monitorPrompt).toBe(tool.monitorPrompt);
   /* The card the board carries while this stands, in the card's own words. */
-  expect(body.cardText).toContain("This project's seat tick is not on its default settings");
-  expect(body.cardText).toContain("one every 240 minute(s)");
+  /* No operator language is recorded in this sandbox, so the card is in the
+     default Ukrainian, and its first line is the setting itself. */
+  expect(body.cardText?.split("\n")[0]).toBe("Тікер: кожні 4 год");
+  expect(body.cardText).toContain("Пробудження цього проєкту йдуть кожні 4 год");
   expect(body.cardText).toContain("slow it down over the weekend");
+});
+
+
+test("maintenance-only write needs no reason and exposes the same run records through HTTP and MCP", async () => {
+  const project = "fixture-maintenance-route";
+  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200" } });
+  expect(written.status).toBe(200);
+  const answer = await written.json();
+  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, lastRun: null, runsError: null });
+  const { claimMaintenanceRun, patchMaintenanceRun } = await import("@/lib/boardMaintenance/store");
+  const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 168, seat: { seatEpoch: 1, conversationId: "fixture-seat" }, repoDir: "/fixtures/repository" });
+  if (!result.claimed) throw new Error(result.reason);
+  patchMaintenanceRun(result.run.runId, { state: "failed", launchedAt: result.run.claimedAt, endedAt: new Date().toISOString(), taskId: "fixture-card", failure: { kind: "no-account", detail: "fixture reason" }, log: { ...result.run.log, leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+  const http = await (await get(`?project=${project}`)).json();
+  expect(http.maintenance.lastRun).toMatchObject({ taskId: "fixture-card", state: "failed", failure: { kind: "no-account" } });
+  const tool = await viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [],
+  } as never).seat_tick_settings({ clientRequestId: "fixture-maintenance-read", project, verbose: true });
+  const same = { ...http.maintenance };
+  delete same.nextRunAt;
+  expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
 });

@@ -6,11 +6,12 @@ import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { OrchestratorPanel, type SeatSignal } from "@/components/orchestrator/OrchestratorPanel";
+import { onSeatTickPanelRequest } from "@/components/orchestrator/openSeatTick";
 import type { OrchestratorSeatRead } from "@/components/orchestrator/useOrchestratorSeat";
 
 import {
   clampSeatHeight, clampSeatTopWidth, clampSeatWidth, publishSeatSignal, SEAT_KEY_STEP, SEAT_SIDE_MAX_WIDTH, SEAT_SIDE_MIN_WIDTH,
-  SEAT_TOP_MIN_WIDTH, useKanbanSeat,
+  SEAT_TOP_MIN_WIDTH, expandKanbanSeat, useKanbanSeat,
 } from "./kanbanSeatStore";
 
 /** The board's room for the seat on top: its container less the board's edge on each side (`--kb-edge`). */
@@ -79,6 +80,13 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
   /* The header toggle's dot reads the seat's state from here. */
   const onSeatSignal = useCallback((signal: SeatSignal) => publishSeatSignal(project, signal), [project]);
   useEffect(() => () => publishSeatSignal(project, null), [project]);
+
+  /* The tick chip lives in the seat's header, which a folded seat does not
+     draw: a request for this project's tick panel unfolds the seat, and the
+     chip that mounts with the header opens the panel. */
+  useEffect(() => onSeatTickPanelRequest((target) => {
+    if (target === project) expandKanbanSeat(project);
+  }), [project]);
 
   /* Expanding hands focus to the composer; collapsing takes it out of the
      hidden conversation to the control that expands it again. */

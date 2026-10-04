@@ -28,7 +28,9 @@ import type {
   PatchPipelineRequest,
   StageVerdictStatus,
 } from "@/lib/pipelines/types";
-import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
+import {
+  LIVE_ATTEMPT_STATES, PIPELINE_BUSY_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState, type StageChipState,
+} from "@/lib/pipelines/stageChip";
 import { failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 
 import { PIPELINES_CHANGED_EVENT } from "./pipelineEvents";
@@ -39,7 +41,7 @@ export { PIPELINES_CHANGED_EVENT };
     minus the ones a pipeline may not use (deployer needs interactive deploy
     confirmation). Mirrors the server's PIPELINE_ROLE_IDS; the API re-validates. */
 export const PIPELINE_ROLE_OPTIONS: readonly PipelineRoleId[] = (
-  ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer"] as const
+  ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger"] as const
 ).filter((roleId) => !PIPELINE_DISALLOWED_ROLE_IDS.includes(roleId));
 
 /** The stage-override form's raw values (issue #118 on-canvas controls). */
@@ -140,7 +142,6 @@ export function pipelineStateLabel(t: TFunction, state: PipelineState): string {
   return t(`pipelineState.${state}`);
 }
 
-export const PIPELINE_BUSY_STATES: ReadonlySet<PipelineState> = new Set(["provisioning", "running"]);
 /** A lane that asks the operator for something. A paused lane is not one:
     someone paused it on purpose, and nothing is asked
     (docs/design/needs-attention.md §3, reason 10). */
@@ -159,29 +160,11 @@ export function pipelineReviewHeads(t: TFunction, source: Pick<Pipeline, "review
   });
 }
 
-/**
- * Is the pipeline actively working its cursor stage? Pausing a running pipeline
- * flips `state` to `paused` but preserves the busy state in `pausedState`; the
- * cursor stage must keep its active tone (only the pulse/chevron animation
- * freezes, which callers handle). Reading `state` alone would demote a paused
- * live stage to `pending`/`dim`.
- */
-export function pipelineCursorActive(pipeline: Pipeline): boolean {
-  if (PIPELINE_BUSY_STATES.has(pipeline.state)) return true;
-  return pipeline.state === "paused" && pipeline.pausedState !== null && PIPELINE_BUSY_STATES.has(pipeline.pausedState);
-}
 
 /* ── Stage chip state matrix (§3 of the #93 design) ─────────────────────── */
 
-export type StageChipState =
-  | "pending"
-  | "running"
-  | "reviewing"
-  | "committing"
-  | "passed"
-  | "failed"
-  | "needs_decision"
-  | "skipped";
+export { LIVE_ATTEMPT_STATES, PIPELINE_BUSY_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState };
+export type { StageChipState };
 
 export const STAGE_TONES: Record<StageChipState, { color: string; soft: string }> = {
   pending: { color: "var(--color-muted)", soft: "var(--color-sunken)" },
@@ -211,13 +194,7 @@ export const STAGE_GLYPH: Record<StageChipState, string> = {
   skipped: "↷",
 };
 
-export function latestAttempt(pipeline: Pipeline, stageId: string): PipelineStageAttempt | null {
-  return latestOperationalStageAttempt(pipeline, stageId);
-}
 
-export function stageAttempts(pipeline: Pipeline, stageId: string): PipelineStageAttempt[] {
-  return pipeline.runs.find((run) => run.stageId === stageId)?.attempts ?? [];
-}
 
 /** Whether a stage is still open to configuration: it never ran, in a pipeline
     that is not over. The engine snapshots a stage's config at its first
@@ -238,16 +215,6 @@ export const PIPELINE_PLACEHOLDER_STATES: ReadonlySet<PipelineState> = new Set([
   "running",
   "needs_decision",
   "paused",
-]);
-
-/** Attempt states that are still in flight — the engine created the attempt and it
-    has not yet settled on a verdict. These are exactly the states an attempt passes
-    through while its surface travels from a bare cursor to a placed board rect
-    (pending → spawning → running/reviewing/committing). A settled attempt
-    (passed/failed/skipped/needs_decision) is terminal evidence, folded into compact
-    navigable history rather than a live placeholder. */
-export const LIVE_ATTEMPT_STATES: ReadonlySet<PipelineAttemptState> = new Set([
-  "pending", "spawning", "running", "reviewing", "committing",
 ]);
 
 /** The stages of a pipeline that render as conversation-shaped placeholder cards
@@ -552,38 +519,6 @@ export function pipelineStripByPath(pipelines: Pipeline[]): Map<string, Pipeline
   return map;
 }
 
-/**
- * Resolves a stage's chip state from its latest attempt and the pipeline cursor,
- * following the state matrix: a terminal attempt state wins; otherwise a stage
- * under an active cursor shows running/reviewing/committing; everything else is
- * pending.
- */
-export function stageChipState(pipeline: Pipeline, stage: PipelineStage): StageChipState {
-  /* A lane stopped after its last fix (#1938, #2187 §3.4) waits on its review
-     stage: that stage takes the mark and the ink a decision's stage takes. */
-  if ((pipeline.state === "needs_review" || pipeline.pausedState === "needs_review") && pipeline.reviewPending?.stageId === stage.id) return "needs_decision";
-  const attempt = latestAttempt(pipeline, stage.id);
-  if (attempt) {
-    if (attempt.state === "passed") return "passed";
-    if (attempt.state === "skipped") return "skipped";
-    if (attempt.state === "failed") return "failed";
-    /* A needs_decision whose findings the engine routed along the fail edge
-       (#1785) is settled and the lane moved on, so it must not read as the one
-       thing the needs chip means — that the operator is holding the pipeline up.
-       It is the loop source it became: the failed chip, which the progress line
-       ranks below live work and `stageViews` folds to pending-again once the fix
-       stage re-runs. A parked needs_decision carries no such mark and keeps the
-       chip, the progress line and the sheet focus it has today. */
-    if (attempt.state === "needs_decision") return attempt.decisionRequested ? "failed" : "needs_decision";
-  }
-  const onCursor = pipeline.cursor?.stageId === stage.id;
-  if (onCursor && pipelineCursorActive(pipeline)) {
-    if (pipeline.cursor?.state === "committing" || attempt?.state === "committing") return "committing";
-    if (stage.kind === "review-loop" || pipeline.cursor?.state === "reviewing" || attempt?.state === "reviewing") return "reviewing";
-    return "running";
-  }
-  return "pending";
-}
 
 export function stageAccess(pipeline: Pipeline, stage: PipelineStage): PipelineAccess {
   const attempt = latestAttempt(pipeline, stage.id);
@@ -647,6 +582,20 @@ export function attemptNavTarget(attempt: PipelineStageAttempt | null): StageNav
   if (!attempt) return null;
   if (!attempt.conversationId && !attempt.agentPath) return null;
   return { conversationId: attempt.conversationId, agentPath: attempt.agentPath };
+}
+
+/** The stage's own conversations and parked question, independent of scan timing. */
+export function stageAgentRowModel(pipeline: Pipeline, stageId: string) {
+  const attempts = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical);
+  const latest = attempts.at(-1) ?? null;
+  return {
+    target: attemptNavTarget(latest),
+    question: latest?.state === "needs_decision" ? latest.report?.summary?.trim() || null : null,
+    earlier: attempts.slice(0, -1).flatMap((attempt, index) => {
+      const target = attemptNavTarget(attempt);
+      return target ? [{ n: attempt.n, position: index + 1, state: attempt.state, target }] : [];
+    }),
+  };
 }
 
 /** Resolve a stage-graph navigation target to the file its card should open.

@@ -130,11 +130,29 @@ export function revokeGrant(id: string): boolean {
   dropAgents(`grant:${id}`);
   writeGrants(file);
   forgetGrantCount(id);
+  grantSync.delete(id);
   partialShared.delete(id);
   return true;
 }
 
-export function grantRows() { return readGrants().grants.map(grantView); }
+const grantSync = sharedLinkState("protocol.grantSync", () => new Map<string, { lastCall: number | null; state: "active" | "failing"; error: string | null }>());
+export function markGrantSync(grant: Grant, error: string | null): void {
+  const id = grant.id;
+  const held = grantSync.get(id);
+  const lastCall = error ? held?.lastCall ?? grant.lastCall ?? null : Date.now();
+  grantSync.set(id, { lastCall, state: error ? "failing" : "active", error });
+  // Persist the first success and state transitions. Quiet successful calls
+  // update memory only, matching the outgoing peer's cheap freshness path.
+  if ((grant.syncError ?? null) !== error || (!error && grant.lastCall == null)) {
+    const file = readGrants();
+    const current = file.grants.find((row) => row.id === id);
+    if (!current) return;
+    current.lastCall = lastCall;
+    current.syncError = error;
+    writeGrants(file);
+  }
+}
+export function grantRows() { return readGrants().grants.map((grant) => ({ ...grantView(grant), ...grantSync.get(grant.id) ?? { lastCall: grant.lastCall ?? null, state: grant.syncError ? "failing" : "active", error: grant.syncError ?? null } })); }
 const peerCalls = sharedLinkState("protocol.peerCalls", () => new Map<string, number>());
 export function markPeerCall(id: string, at: number): void { peerCalls.set(id, at); }
 export function peerRows() { return readPeers().peers.map(({ token: _token, ...peer }) => ({ ...peer, lastCall: peerCalls.get(peer.id) ?? peer.lastCall })); }
@@ -189,7 +207,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   const agentAfter = wire.agents === undefined ? undefined : decodeCursor(wire.agents);
   if (wire.agents !== undefined && agentAfter === undefined) return { status: 400, body: { error: "malformed" } };
   const agentPage = wire.agentPage === undefined ? 0 : wire.agentPage;
-  if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 200 || (agentPage as number) % 50 !== 0) return { status: 400, body: { error: "malformed" } };
+  if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 400) return { status: 400, body: { error: "malformed" } };
   const push = wire.push && typeof wire.push === "object" && !Array.isArray(wire.push) ? wire.push as Record<string, unknown> : null;
   const pushAgents = push?.agents;
   const served = serveTasks(grant, { ...wire, ...(push && push.rows === undefined ? { push: undefined } : {}) }, agreed);

@@ -463,6 +463,38 @@ test("a project that chose the log only posts nothing, even with one allowed cha
 
 /* A project keyed by its identity hash with no GitHub repository and no
    display name: nothing in either copy of the report names it by that key. */
+for (const language of ["uk", "en"] as const) {
+  for (const reportClass of ["question", "status"] as const) {
+    test(`opaque log-only ${reportClass} reports and replays use the ${language} unnamed label`, async () => {
+      locale = language;
+      const project = `dir-${"a".repeat(32)}`;
+      setBridgeReports(project, true, "operator");
+      setReportTelegram(project, null, "operator");
+      const service = serviceAs(MANAGER, project);
+      const args = {
+        clientRequestId: `opaque-${language}-${reportClass}`,
+        key: `opaque-${language}-${reportClass}`,
+        class: reportClass,
+        summary: language === "uk" ? "Потрібне рішення оператора." : "Operator decision required.",
+      };
+      const answer = await service.callTool("bridge_report", args) as ReportAnswer;
+      expect(answer.recorded).toBe(true);
+      expect(answer.destinations).toEqual({ bridge: { seq: answer.seq! } });
+      const rows = readBridgeReportLog().reports;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.body.split("\n")[0]).toContain(language === "uk" ? "Проєкт без назви" : "Unnamed project");
+      expect(rows[0]!.body).not.toContain(project);
+      expect(rows[0]!.telegram).toBeUndefined();
+      const replay = await service.callTool("bridge_report", args) as ReportAnswer;
+      expect(replay).toMatchObject({ recorded: true, replayed: true, seq: answer.seq });
+      const keyReplay = await service.callTool("bridge_report", { ...args, clientRequestId: `${args.clientRequestId}-again` }) as ReportAnswer;
+      expect(keyReplay).toMatchObject({ recorded: false, alreadyRecorded: true, seq: answer.seq });
+      expect(readBridgeReportLog().reports).toHaveLength(1);
+      expect(transport.callsOf("sendMessage")).toHaveLength(0);
+    });
+  }
+}
+
 test("a report header never prints an internal dir- or repo- key", async () => {
   await connectTeamChat();
   for (const [index, project] of ["dir-0123456789abcdef0123", "repo-fedcba9876543210fedc"].entries()) {

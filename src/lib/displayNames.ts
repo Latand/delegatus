@@ -86,9 +86,10 @@ const KNOWN_ROLE_WORDS = new Set([
   "reviewer",
   "builder",
   "architect",
-  "cleaner",
+  "cleaner", "maintainer",
   "prod-auditor",
   "deployer",
+  "merger",
   "verifier",
 ]);
 

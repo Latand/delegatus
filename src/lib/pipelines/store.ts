@@ -9,6 +9,7 @@ import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
+import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
 import { initializeStateCollections, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -34,7 +35,7 @@ const stateDatabaseFile = () => statePath("state.sqlite");
 const artifactsRoot = () => statePath("pipelines");
 
 type PipelineFile = { schemaVersion: number; pipelines: Pipeline[] };
-const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer"] as const;
+const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger"] as const;
 
 export class PipelineStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -43,15 +44,16 @@ export class PipelineStoreError extends Error {
   }
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
+  fs.writeFileSync(temp, stringifyRegistryDocument(value), "utf8");
   fs.renameSync(temp, filePath);
 }
-function readJson(filePath: string): unknown {
+function readJson(filePath: string): { raw: unknown; source: string } | undefined {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    const source = fs.readFileSync(filePath, "utf8");
+    return { raw: JSON.parse(source) as unknown, source };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw new PipelineStoreError(`could not read pipeline registry: ${filePath}`, { cause: error });
@@ -147,6 +149,46 @@ function isVerdictRecovery(value: unknown): boolean {
   );
 }
 
+function isProviderCondition(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  return ["usage_limit", "transient", "auth_required", "other", "host_death", "turn_cut"].includes(String(condition.kind))
+    && isNullableString(condition.scope) && (condition.scope === null || String(condition.scope).length <= 64)
+    && isNullableString(condition.resetLabel) && (condition.resetLabel === null || String(condition.resetLabel).length <= 160)
+    && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
+}
+
+/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
+function isEvidenceTimestamp(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function isProviderWait(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
+    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
+    && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
+    && dated(wait.startedAt) && dated(wait.resumeAt)
+    && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
+    && (wait.actionAt === undefined || dated(wait.actionAt))
+    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
+    && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
+}
+
+function isProviderRecoveries(value: unknown): boolean {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.length <= 8 && value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    return typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
+      && ["wait", "continue", "switch", "relaunch", "park"].includes(String(entry.action))
+      && isProviderCondition(entry.condition) && typeof entry.summary === "string" && entry.summary.length <= 2000;
+  });
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -155,6 +197,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
+    (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
     isNullableString(attempt.launchId) &&
@@ -173,11 +216,21 @@ function isAttempt(value: unknown, index: number): boolean {
         && limited.accountId.length > 0
         && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || (Number.isSafeInteger(limited.limitedAt) && limited.limitedAt >= 0))
+        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
+    (attempt.providerRecoveryBudget === undefined || (
+      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
+      && !Array.isArray(attempt.providerRecoveryBudget)
+      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
+      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
+      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
+    )) &&
+    isProviderWait(attempt.providerWait) &&
+    isProviderRecoveries(attempt.providerRecoveries) &&
     isNullableString(attempt.flowId) &&
     (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
     (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
@@ -228,6 +281,7 @@ function isSpawnActivation(value: unknown): boolean {
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
     && (activation.replay === undefined || typeof activation.replay === "boolean")
+    && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
     && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
     && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0
@@ -264,7 +318,9 @@ function isStageProvenance(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const provenance = value as Record<string, unknown>;
   const pullRequest = provenance.pullRequest as Record<string, unknown> | null;
-  return isNullableString(provenance.head)
+  return (provenance.state === undefined || ["pending", "complete", "unknown"].includes(String(provenance.state)))
+    && (provenance.pullRequestState === undefined || ["pending", "observed", "absent", "unknown"].includes(String(provenance.pullRequestState)))
+    && isNullableString(provenance.head)
     && typeof provenance.branch === "string"
     && (provenance.uncommitted === null
       || (Array.isArray(provenance.uncommitted) && provenance.uncommitted.every((path) => typeof path === "string")))
@@ -273,7 +329,7 @@ function isStageProvenance(value: unknown): boolean {
     && Array.isArray(provenance.outputs)
     && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
       && typeof (output as { path: unknown }).path === "string"
-      && typeof (output as { present: unknown }).present === "boolean"));
+      && ((output as { present: unknown }).present === null || typeof (output as { present: unknown }).present === "boolean")));
 }
 
 /** A stage attempt's own completion report (graph slice 2). */
@@ -287,6 +343,7 @@ function isStageReport(value: unknown): boolean {
     && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
     && isStageProvenance(report.provenance)
+    && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
 }
 
@@ -301,6 +358,8 @@ function isStageReportEntry(value: unknown): boolean {
     && ["pass", "fail", "needs_decision"].includes(String(entry.status))
     && Number.isSafeInteger(entry.findings) && (entry.findings as number) >= 0
     && (entry.replaces === null || (Number.isSafeInteger(entry.replaces) && (entry.replaces as number) >= 1))
+    && (entry.provenanceState === undefined || ["pending", "complete", "unknown"].includes(String(entry.provenanceState)))
+    && (entry.provenanceAt === undefined || typeof entry.provenanceAt === "string")
     && isNullableString(entry.summary);
 }
 
@@ -554,6 +613,7 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   const operation = delivery.operation;
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
+    && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
@@ -678,7 +738,15 @@ function isTaskFinishWait(value: unknown): boolean {
   return typeof wait.taskId === "string" && wait.taskId.length > 0 && typeof wait.since === "string" && isStringList(wait.open);
 }
 
+/** Validation of a parsed record is total. A nested value of the wrong type
+    can throw inside a shape check (for example String({toString: null})); that
+    makes this record unreadable, while the JSON parser remains strict. */
 function isPipeline(value: unknown): value is Pipeline {
+  try { return isPipelineShape(value); }
+  catch { return false; }
+}
+
+function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
@@ -699,6 +767,7 @@ function isPipeline(value: unknown): value is Pipeline {
     typeof pipeline.branch === "string" &&
     typeof pipeline.baseBranch === "string" &&
     typeof pipeline.baseRef === "string" &&
+    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
     typeof pipeline.lastPassedCommit === "string" &&
     (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
     (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
@@ -710,6 +779,7 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
+    (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
     isNullableString(pipeline.srcPath) &&
     isNullableString(pipeline.srcConversationId) &&
@@ -734,6 +804,25 @@ function isPipeline(value: unknown): value is Pipeline {
     (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
       && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
     (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
+    (pipeline.publicationAdmission === undefined || (Boolean(pipeline.publicationAdmission && typeof pipeline.publicationAdmission === "object")
+      && typeof pipeline.publicationAdmission.id === "string" && /^[0-9a-f]{40}$/i.test(pipeline.publicationAdmission.sha)
+      && /^[0-9a-f]{64}$/.test(pipeline.publicationAdmission.fence) && ["pending", "settled"].includes(pipeline.publicationAdmission.state)
+      && (pipeline.publicationAdmission.error === undefined || typeof pipeline.publicationAdmission.error === "string"))) &&
+    (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
+      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover", "skip-stage"].includes(pipeline.remoteAction.action)
+      && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
+      && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
+      && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
+      && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
+      && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
+      && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)
+        && typeof pipeline.remoteAction.retryReceipt.launchId === "string"
+        && ["failed", "conflicted", "completed"].includes(pipeline.remoteAction.retryReceipt.state)
+        && (pipeline.remoteAction.retryReceipt.claimId === undefined || typeof pipeline.remoteAction.retryReceipt.claimId === "string")))
+      && (pipeline.remoteAction.action !== "takeover" || (Boolean(pipeline.remoteAction.takeover)
+        && typeof pipeline.remoteAction.takeover?.expectedOwner === "string"
+        && Number.isSafeInteger(pipeline.remoteAction.takeover?.expectedEpoch) && pipeline.remoteAction.takeover!.expectedEpoch > 0
+        && typeof pipeline.remoteAction.takeover?.reason === "string" && pipeline.remoteAction.takeover.reason.length > 0)))) &&
     (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
     (pipeline.pos === undefined || (
       typeof pipeline.pos === "object" && pipeline.pos !== null &&
@@ -882,51 +971,48 @@ export function loadPipelinesForStartup(): Pipeline[] {
     throw new PipelineStoreError("pipeline startup collections are incomplete");
   }
   const records = active === null && archived === null
-    ? [...parsePipelinesFile(pipelinesFile(), false, true), ...parsePipelinesFile(pipelinesArchiveFile(), false, true)]
+    ? [...parsePipelinesFile(pipelinesFile(), true), ...parsePipelinesFile(pipelinesArchiveFile(), true)]
     : [...(active ?? []), ...(archived ?? [])];
-  if (!records.every(isPipeline)) throw new PipelineStoreError("pipeline registry contains malformed records");
-  if (new Set(records.map((record) => record.id)).size !== records.length) {
+  if (new Set(records.map(registryRecordKey)).size !== records.length) {
     throw new PipelineStoreError("pipeline startup records have contradictory identities");
   }
-  return records.map(reviveLoadedPipeline);
+  return records.flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
 }
 
-function parsePipelinesFile(filename: string, lenient: boolean, strictPresence = false): Pipeline[] {
-  const raw = readJson(filename);
+function parsePipelinesFile(filename: string, strictPresence = false): unknown[] {
+  const document = readJson(filename);
+  const raw = document?.raw;
   // Ordinary legacy readers historically accept null as empty. Startup must
   // distinguish that malformed content from positive missing-file evidence.
   if (raw === undefined || (raw === null && !strictPresence)) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    if (lenient) return [];
     throw new PipelineStoreError("pipeline registry must be an object");
   }
   const file = raw as Partial<PipelineFile>;
   if (typeof file.schemaVersion !== "number" || !MIGRATABLE_SCHEMA_VERSIONS.has(file.schemaVersion)) {
-    if (lenient) return [];
     throw new PipelineStoreError(`unsupported pipeline registry schema: ${String(file.schemaVersion)}`);
   }
   if (!Array.isArray(file.pipelines)) {
-    if (lenient) return [];
     throw new PipelineStoreError("pipeline registry contains malformed records");
   }
-  const records = file.pipelines.map((pipeline) => migratePipelineRecord(pipeline, file.schemaVersion!));
-  if (!lenient && !records.every(isPipeline)) throw new PipelineStoreError("pipeline registry contains malformed records");
-  const accepted = lenient ? records.filter(isPipeline) : records as Pipeline[];
-  if (lenient && accepted.length !== records.length) {
-    console.error(`[pipelines] skipped ${records.length - accepted.length} malformed archived pipeline record(s)`);
-  }
-  return accepted.map(reviveLoadedPipeline);
+  const records = file.pipelines.map((pipeline) => {
+    const migrated = migratePipelineRecord(pipeline, file.schemaVersion!);
+    // Never normalize a record this release cannot understand.
+    return isPipeline(migrated) ? reviveLoadedPipeline(migrated) : pipeline;
+  });
+  rememberRecordBytes(records, jsonArrayRecordBytes(document!.source, "pipelines"), isPipeline);
+  return records;
 }
 
 export function planPipelineStateMigration(): {
   pipelines: { records: number; keys: string[] };
   archive: { records: number; keys: string[] };
 } {
-  const pipelines = parsePipelinesFile(pipelinesFile(), false);
-  const archive = parsePipelinesFile(pipelinesArchiveFile(), true);
+  const pipelines = parsePipelinesFile(pipelinesFile());
+  const archive = parsePipelinesFile(pipelinesArchiveFile());
   return {
-    pipelines: { records: pipelines.length, keys: pipelines.map((pipeline) => pipeline.id) },
-    archive: { records: archive.length, keys: archive.map((pipeline) => pipeline.id) },
+    pipelines: { records: pipelines.length, keys: pipelines.map(registryRecordKey) },
+    archive: { records: archive.length, keys: archive.map(registryRecordKey) },
   };
 }
 
@@ -966,6 +1052,12 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
       : undefined,
     restored: undefined,
     stages: pipeline.stages.map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
+    stageReports: pipeline.stageReports?.map((entry) => ({
+      ...entry,
+      ...(entry.provenanceAt === undefined ? {} : {
+        provenanceAt: typeof entry.provenanceAt === "string" ? entry.provenanceAt : entry.at,
+      }),
+    })),
     cursor: pipeline.cursor
       ? { ...pipeline.cursor, input: pipeline.cursor.input ?? null, activatedBy: pipeline.cursor.activatedBy ?? null }
       : null,
@@ -982,6 +1074,10 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
+            providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
+              ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
+            providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),
             flowId: attempt.flowId ?? null,
             expectedReviewHeadSha: attempt.expectedReviewHeadSha ?? null,
             reviewHeadSha: attempt.reviewHeadSha ?? null,
@@ -992,6 +1088,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             activatedBy: attempt.activatedBy ?? null,
             output: attempt.output ?? null,
             verdict: attempt.verdict ?? null,
+            ...(attempt.acceptedForReview === true ? { acceptedForReview: true as const } : {}),
             error: attempt.error ?? null,
             verdictRecovery: attempt.verdictRecovery ? { ...attempt.verdictRecovery } : undefined,
             ...(attempt.retiredLaunches
@@ -1012,9 +1109,58 @@ const pipelineStores = new Map<string, {
   archive: SqliteStateCollection<Pipeline>;
 }>();
 
-function decodePipeline(value: unknown): Pipeline | null {
-  if (!isPipeline(value)) throw new PipelineStoreError("pipeline registry contains malformed records");
+function decodePipeline(value: unknown, collection = "pipelines"): Pipeline | null {
+  if (!isPipeline(value)) {
+    pipelineRecordIssue(value, collection);
+    return null;
+  }
   return reviveLoadedPipeline(value);
+}
+
+/** Unknown vocabulary is diagnosed separately from a broken known shape. The
+    substituted copy is used only to validate structure, never for execution. */
+function pipelineRecordIssue(value: unknown, collection = "pipelines"): RegistryRecordIssue {
+  const unknown: string[] = [];
+  const copy = structuredClone(value);
+  const visit = (node: unknown, location: string) => {
+    if (!node || typeof node !== "object") return;
+    for (const [key, item] of Object.entries(node)) {
+      const row = node as Record<string, unknown>;
+      let known: readonly string[] | undefined;
+      let replacement = "pending";
+      if (key === "roleId") { known = PIPELINE_ROLE_IDS; replacement = "builder"; }
+      if (key === "kind" && /^stages\.\d+$/.test(location)) { known = ["run", "review-loop"]; replacement = "run"; }
+      if (key === "state" && location === "") { known = ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"]; replacement = "paused"; }
+      if (key === "pausedState" && location === "") { known = ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"]; replacement = "running"; }
+      if (key === "state" && location === "cursor") known = ["pending", "spawning", "running", "reviewing", "committing"];
+      if (key === "state" && /^runs\.\d+\.attempts\.\d+$/.test(location)) known = ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"];
+      if (known && typeof item === "string" && item.length > 0 && !known.includes(item)) {
+        unknown.push(`${location ? `${location}.` : ""}${key}=${item}`);
+        row[key] = replacement;
+      } else visit(item, location ? `${location}.${key}` : key);
+    }
+  };
+  visit(copy, "");
+  const unknownState = unknown.some((field) => field.startsWith("state="));
+  // Different states admit different shapes (an empty draft, a completed lane
+  // without a cursor). Try the known shapes instead of assigning one state's
+  // constraints to a future vocabulary value.
+  const forward = unknown.length > 0 && (unknownState && copy && typeof copy === "object"
+    ? ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"]
+      .some((state) => isPipeline({ ...copy, state }))
+    : isPipeline(copy));
+  return reportRegistryRecord(collection, value, forward ? "unknown-but-preserved" : "malformed",
+    forward ? `unsupported vocabulary (${unknown.join(", ")}); preserved without launch or settlement` : undefined);
+}
+
+/** Fresh diagnostic field for health and auto-update readers. Corrupt JSON
+    still throws through the authoritative SQLite snapshot reader. */
+export function pipelineRegistryHealth(): RegistryRecordIssue[] {
+  const collections = readStateCollectionsRows(stateDatabaseFile(), ["pipelines", "pipelines_archive"]);
+  return ["pipelines", "pipelines_archive"].flatMap((collection) => {
+    const records = collections.get(collection) ?? parsePipelinesFile(collection === "pipelines" ? pipelinesFile() : pipelinesArchiveFile(), true);
+    return records.filter((record) => !isPipeline(record)).map((record) => pipelineRecordIssue(record, collection));
+  });
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
@@ -1027,22 +1173,24 @@ function pipelineControllerActive(pipeline: Pipeline): boolean {
   return true;
 }
 
-export function pipelineStateCollectionSeeds(): [StateCollectionSeed<Pipeline>, StateCollectionSeed<Pipeline>] {
+export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, StateCollectionSeed<unknown>] {
   return [
     {
       collection: "pipelines",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
       migrationId: "pipelines-json-v1",
-      loadRecords: () => parsePipelinesFile(pipelinesFile(), false),
-      key: (pipeline: Pipeline) => pipeline.id,
-      controllerActive: pipelineControllerActive,
+      loadRecords: () => parsePipelinesFile(pipelinesFile()),
+      key: registryRecordKey,
+      recordJson: preservedRecordJson,
+      controllerActive: (pipeline) => !isPipeline(pipeline) || pipelineControllerActive(pipeline),
     },
     {
       collection: "pipelines_archive",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
       migrationId: "pipelines-archive-json-v1",
-      loadRecords: () => parsePipelinesFile(pipelinesArchiveFile(), true),
-      key: (pipeline: Pipeline) => pipeline.id,
+      loadRecords: () => parsePipelinesFile(pipelinesArchiveFile()),
+      key: registryRecordKey,
+      recordJson: preservedRecordJson,
       controllerActive: () => false,
     },
   ];
@@ -1058,6 +1206,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
+    preserveRejectedRecords: true,
     clone: reviveLoadedPipeline,
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
@@ -1078,7 +1227,8 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   const archive = new SqliteStateCollection<Pipeline>(filename, {
     ...common,
     collection: "pipelines_archive",
-    onDecodeError: (error) => console.error("[pipelines] skipped malformed archived SQLite row", error),
+    decode: (value) => decodePipeline(value, "pipelines_archive"),
+    strictDecode: true,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
@@ -1163,8 +1313,9 @@ export function pipelineLockWaitMs(): number {
  * A refusal raised before `mutate` runs is a {@link StoreBusyBeforeAdmissionError}
  * (#1766): the lease was never taken, so nothing was read, written or reserved
  * and the same request may run again under the same idempotency key. A busy
- * error from anywhere after that keeps its ordinary ambiguous meaning — the
- * lease release raises the same message after the row is committed. */
+ * error from inside the callback keeps its ordinary ambiguous meaning: an
+ * earlier persist may have committed. Lease release never throws; failed
+ * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
@@ -1199,8 +1350,8 @@ export async function withPipelineStartupAdmission<T>(
 ): Promise<T> {
   let entered = false;
   try {
-    // Refuse malformed legacy archives before the ordinary store can migrate
-    // them leniently. Admission rereads under the lease before any effects.
+    // Verify file integrity before admission. Individual rejected records are
+    // preserved and unavailable to the callback; corrupt files refuse it.
     loadPipelinesForStartup();
     return await withPipelineMutation(() => {
       entered = true;
@@ -1222,27 +1373,17 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
   delivery.journal = [...delivery.journal, { at: new Date().toISOString(), kind, ownerId: delivery.ownerId, epoch: delivery.epoch, conversationId, reason }].slice(-100);
 }
 
-function terminalDeliveryFailure(pipeline: Pipeline): string | null {
-  const terminalAttempt = pipeline.state === "needs_decision" && pipeline.cursor
-    ? pipeline.runs.find((run) => run.stageId === pipeline.cursor!.stageId)?.attempts.findLast((attempt) => !attempt.historical)
-    : null;
-  return terminalAttempt?.verdict?.status === "fail" && terminalAttempt.completedAt
-    ? `${pipeline.cursor!.stageId}:${terminalAttempt.n}:${terminalAttempt.startedAt ?? ""}` : null;
-}
-
 function releaseTerminalDelivery(pipeline: Pipeline): void {
   if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
   const delivery = pipeline.delivery;
-  const failure = terminalDeliveryFailure(pipeline);
-  const failed = failure !== null && failure !== delivery?.settledFailure;
-  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed" && !failed)) return;
+  // Parks retain the lane's claim so its cursor can resume and publish.
+  if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
   if (delivery.operation?.state === "running") return;
   delivery.active = false;
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
-  if (failed) delivery.settledFailure = failure;
-  deliveryJournal(pipeline, "release", failed ? "terminal failure without an active fail edge" : `pipeline ${pipeline.state}`);
+  deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -1303,10 +1444,11 @@ export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): 
   return `Viewer publication denied: target owner is ${owner?.id ?? delivery?.ownerId ?? "unclaimed"} at epoch ${owner?.delivery?.epoch ?? delivery?.epoch ?? 0}; this lane must request explicit takeover`;
 }
 
-export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
+export async function takeoverPipelineDelivery(id: string, expectedOwner: string, expectedEpoch: number, reason: string, conversationId: string | null, admitted?: (pipeline: Pipeline) => boolean): Promise<{ pipeline?: Pipeline; error?: string; status?: number }> {
   return withDeliveryMutationAsync((tx) => {
     const pipeline = tx.get(id);
     if (!pipeline?.delivery) return { error: "pipeline has no delivery target", status: 409 };
+    if (admitted && !admitted(pipeline)) return { error: "takeover admission superseded", status: 409 };
     const target = pipeline.delivery.target;
     const owner = tx.pipelineLookup({ ...target, active: true });
     const previous = owner ?? tx.pipelineLookup(target);
@@ -1324,11 +1466,21 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       tx.put(old);
     }
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
-      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal,
-      settledFailure: terminalDeliveryFailure(pipeline) ?? pipeline.delivery.settledFailure };
+      ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     pipeline.publication = "remote-branch";
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
+    const action = pipeline.remoteAction;
+    if (action?.state === "pending" && action.action === "takeover"
+      && action.takeover?.expectedOwner === expectedOwner && action.takeover.expectedEpoch === expectedEpoch
+      && action.takeover.reason === reason
+      && (action.actor?.kind === "agent" ? action.actor.conversationId : null) === conversationId) {
+      // Ownership and its admitted outcome are one durable mutation. There
+      // is no restart window in which the new epoch still has an old fence.
+      pipeline.remoteAction = { ...action, state: "settled", settledAt: new Date().toISOString() };
+      if (pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
+      deliveryJournal(pipeline, "recovery", "takeover remote verification settled", conversationId);
+    }
     tx.put(pipeline);
     return { pipeline };
   });
@@ -1342,8 +1494,8 @@ export function savePipelines(pipelines: Pipeline[]): void {
     the full record for the closed list and by-id reads. */
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
-/** Lenient read: the archive is cold storage, so a malformed or legacy record
-    is skipped with a log line instead of poisoning every closed-list read. */
+/** Cold records use the same per-record isolation and strict JSON parsing as
+    the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
   return archiveStore().snapshot();
 }
@@ -1466,6 +1618,7 @@ export function buildPipeline(input: {
     ...identity,
     baseBranch: "",
     baseRef: "",
+    baseRefPinned: false,
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,

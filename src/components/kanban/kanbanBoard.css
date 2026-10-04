@@ -4,6 +4,14 @@
    mirrored name for name, so light and dark follow the app's theme. Sizes,
    spacing and radii are the prototype's; keep them in step with it. */
 
+/* Grid track values belong to the board itself. They must not invalidate
+   the styles of every descendant when the wide share changes. */
+@property --c-inbox { syntax: "*"; inherits: false; }
+@property --c-assigned { syntax: "*"; inherits: false; }
+@property --c-blocked { syntax: "*"; inherits: false; }
+@property --c-done { syntax: "*"; inherits: false; }
+@property --kb-column-width { syntax: "<length>"; inherits: false; initial-value: 280px; }
+
 .kb {
   --shelf-w: 264px;
   --work-min: 520px;
@@ -169,8 +177,8 @@
 /* The snap keeps the board's own edge: without the scroll padding a column
    snaps flush to the scroller and the edge padding scrolls away. */
 .kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--kb-edge); gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
-.kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
-.kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
+.kb .board.scroll .column { flex: 0 0 auto; width: var(--kb-column-width, 280px); scroll-snap-align: start; }
+.kb .board.scroll .column[data-status="assigned"] { --kb-column-width: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
 .kb .board.tabs { display: flex; flex-direction: column; padding: 0 12px 12px; overflow: hidden; }
 .kb .board.tabs .column { display: none; }
@@ -178,7 +186,7 @@
 
 /* Every column has the 1 px frame Assigned and a widened shelf draw, clear on
    a shelf, so a title and a card sit at the same place in each. */
-.kb .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
+.kb .column { contain: layout style; display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
 .kb .column[data-status="inbox"] { grid-area: inbox; }
 .kb .column[data-status="assigned"] { grid-area: assigned; }
 .kb .column[data-status="blocked"] { grid-area: blocked; }
@@ -193,7 +201,22 @@
 .kb .column.drop { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The wide share (#1841): a widened shelf takes the workspace's dot grid and
    Assigned the shelf's fill, and the swap animates. */
-.kb .board:not(.scroll):not(.tabs) { transition: grid-template-columns var(--motion-base) var(--ease-standard); }
+/* The layout helper owns the visible width transition. Reflowing tracks on
+   every frame repeatedly wraps every card on the board. */
+.kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
+.kb .board, .kb .col-body { overflow-anchor: none; }
+/* Promotion exists only while these real surfaces are moving. */
+.kb[data-column-layout-active] .column { transition: none; }
+.kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
+.kb [data-layout-animating="content"] { transform-origin: top left; will-change: transform; }
+/* Keep promoted glyphs paused while their temporary text layers are released. */
+.kb [data-layout-animating="content"].mglyph::before,
+.kb [data-layout-animating="content"] .mglyph::before,
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-column-text-held] .mglyph::before,
+.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb :is([data-layout-animating="content"], [data-column-text-held]) :is(.pedge, .pdot, .pmark),
+.kb :is([data-layout-animating="content"], [data-column-text-held]) .pmark::before { animation-play-state: paused !important; }
 .kb .column.wide {
   background-color: var(--surface-canvas);
   background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px);
@@ -201,8 +224,8 @@
   border: 1px solid var(--border-default);
 }
 .kb .column[data-status="assigned"].shelf { background: var(--surface-well); border-color: transparent; }
-.kb .board.scroll .column.wide { flex-basis: 480px; }
-.kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
+.kb .board.scroll .column.wide { --kb-column-width: 480px; }
+.kb .board.scroll .column[data-status="assigned"].shelf { --kb-column-width: 280px; }
 .kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 /* The mouse resting in a narrow column is about to widen it
    (`useColumnDwell`): the column's frame and its Widen button take the accent,
@@ -228,6 +251,11 @@
    end in an ellipsis before anything wraps; under 300 px they shorten to a
    dot and their number. Each carries its full text as a title. */
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
+/* While the layout helper scales the head surface and counter-scales its text
+   layer, the end-aligned buttons sit at their final wide position. The head
+   clips them to its own box, so none paints over the gutter before the frame
+   edge reaches it. The buttons' focus rings fit inside the 12 px padding. */
+.kb .col-head:is([data-layout-animating], [data-column-text-held]) { overflow: clip; }
 .kb .col-head > * { flex-shrink: 0; }
 .kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }
@@ -248,7 +276,7 @@
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
-.kb .col-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+.kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
@@ -284,10 +312,45 @@
 .kb .card:hover { border-color: var(--border-strong); }
 .kb .card:focus-visible { outline: 2px solid var(--color-accent); }
 .kb .card.dragging { opacity: 0.35; }
-.kb .card.ghost { position: fixed; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); transform: rotate(1.5deg); opacity: 0.95; content-visibility: visible; }
+.kb .card.ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); content-visibility: visible; will-change: transform; }
+/* The whole card is the drag handle (cardDrag.ts). The pointer is captured on
+   the held card, so nothing under the ghost takes hover, and a text selection is
+   refused by `selectstart` there. No inherited property (`user-select`,
+   `pointer-events`) is set on the board for it: that would restyle every element
+   on it (3000 and more) in the frame the drag begins. */
+.kb .card[data-id] { cursor: grab; }
+.kb[data-card-drag] .card.dragging { cursor: grabbing; }
+/* A working agent's glyph turns, breathes and pulses on SVG children, which
+   Chromium animates on the main thread: a style recalculation and a layout in
+   every frame, for as many glyphs as the board has live, and four times as long
+   on a phone's CPU. A held card has the operator's eye, and the board stands
+   still around it. The desktop marks its board (`.kb`), the phone its body. The
+   glyph's `animation` shorthand resets the play state, hence `!important`; no
+   `*` or attribute-substring subject, which would restyle every element on the
+   page when the attribute is set (a 4000-element recalculation). */
+[data-card-drag] .mglyph[data-live="1"]::before,
+[data-card-drag] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+[data-card-drag] .animate-pulse,
+[data-card-drag] .motion-safe\:animate-pulse,
+[data-card-drag] .pedge.live,
+[data-card-drag] .pnode.pulse .pdot,
+[data-card-drag] .pstrip.pulse .pmark::before { animation-play-state: paused !important; }
 .kb .card.flash { animation: kb-flash var(--motion-slow) var(--ease-standard) 2; }
 @keyframes kb-flash { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent); } }
 .kb .card.done { background: var(--surface-quiet); }
+/* A card whose task runs on another machine (docs/design/synced-task-card.md
+   §5): a translucent pinstripe over whatever surface the card has, and an
+   info-tinted border. The stripe never sets a background colour, so a done
+   card keeps its quiet fill beneath it. */
+.remote-surface {
+  --remote-edge: color-mix(in srgb, var(--color-info) 40%, var(--border-default));
+  --remote-pattern: repeating-linear-gradient(135deg, var(--remote-stripe) 0 3px, transparent 3px 10px);
+  background-image: var(--remote-pattern);
+}
+/* The card's own `background` shorthand resets the image, so the desktop card
+   says it again after it, with the specificity to win. */
+.kb .card.remote { border-color: var(--remote-edge); background-image: var(--remote-pattern); }
+.kb .card.remote:hover { border-color: color-mix(in srgb, var(--color-info) 60%, var(--border-default)); }
 .kb .card.done .title { color: var(--color-secondary); }
 .kb .card .label { position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 2px 2px 0; background: var(--label, transparent); }
 .kb .card .saving { position: absolute; left: 12px; right: 12px; top: 0; height: 2px; border-radius: 0 0 2px 2px; background: var(--color-accent); transform-origin: left; animation: kb-saving 900ms var(--ease-standard) infinite; display: none; }
@@ -367,7 +430,15 @@
 .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); margin-block: calc((16px - var(--target, 32px)) / 2); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
+/* Where "+ Agent" would start work here, a passive chip says where it starts.
+   Solid, so it sits clear of the stripe; the label clamps to one line and, when
+   the age and the chip do not share a line, the chip drops to its own and ends it. */
+.host-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 20px; padding: 0 6px; margin-left: auto; border-radius: var(--radius-control); border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
+.host-chip-icon { width: 12px; height: 12px; flex: none; color: var(--color-info); }
+.host-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
+.kb .card .ask svg { width: 14px; height: 14px; color: var(--color-accent); }
+.kb .card .ask.on { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .card .album .album-new { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; color: var(--color-accent); white-space: nowrap; }
 .kb .card .album .album-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .kb .card .undo { display: inline-flex; align-items: center; height: var(--target, 32px); padding: 0 6px; margin-left: -6px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-accent); }
@@ -679,8 +750,15 @@
 .kb .kb-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
 .kb .kb-pane { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
-.kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: size; }
-.kb .board-frame { flex: 0 0 auto; height: max(440px, 100cqh); min-height: 0; display: flex; flex-direction: column; outline: none; }
+.kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: inline-size; }
+/* The frame is the page's own height, 440px at the least. It was sized in
+   `cqh` against a size container, and every scroll frame of the page then
+   re-resolved its style and laid the whole board out again (about 11 ms on a
+   busy board). `container-type: size` also made the page's height independent
+   of its content, which a percentage does not need: the page is a flexed item
+   of a definite column, so 100% resolves against it. Width queries still
+   resolve against the page (`inline-size`). */
+.kb .board-frame { flex: 0 0 auto; height: max(440px, 100%); min-height: 0; display: flex; flex-direction: column; outline: none; }
 /* The board's scrollers scroll on the compositor. At a device pixel ratio
    under 1.5 Chromium keeps a scroller whose background is not opaque on the
    main thread, to keep LCD text in it, and none of these has one of its own:
@@ -959,6 +1037,8 @@
   border-radius: var(--radius-control); border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); background: var(--surface-card);
   container-type: inline-size; text-align: left;
 }
+/* A launched reader keeps the height of the draft it came from (launchedConversations.ts). */
+.kb .reader.conv.launched:not(.folded):not(.in-sheet):not(.full) { height: var(--conv-in-card-h); }
 .kb .reader.conv:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
 .kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
 .kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
@@ -1011,12 +1091,12 @@
 /* A shelf column holding an open conversation widens to reading width; the
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
-.kb .board.scroll .column.reading { flex-basis: 460px; }
+.kb .board.scroll .column.reading { --kb-column-width: 460px; }
 
 /* Written as specific as the Assigned shelf's 280 px basis above, and after
    it, so an Assigned column that gave the wide share away keeps the agent's
    minimum too. */
-.kb .board.scroll .column[data-status].agent { flex-basis: var(--agent-min); }
+.kb .board.scroll .column[data-status].agent { --kb-column-width: var(--agent-min); }
 
 /* An empty column folds to a strip. Rested on by a mouse (`.open`, set after
    DWELL_CUE_MS), focused or under a dragged card (`.drop`) it opens to the
@@ -1026,7 +1106,7 @@
 .kb .board:has(> .column.strip[data-status="assigned"]:is(.open, :focus-within, .drop)) { --kb-open-assigned: var(--kb-track-assigned); }
 .kb .board:has(> .column.strip[data-status="blocked"]:is(.open, :focus-within, .drop)) { --kb-open-blocked: var(--kb-track-blocked); }
 .kb .board:has(> .column.strip[data-status="done"]:is(.open, :focus-within, .drop)) { --kb-open-done: var(--kb-track-done); }
-.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { flex-basis: var(--strip-w); }
+.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { --kb-column-width: var(--strip-w); }
 .kb .column.strip:not(.open, :focus-within, .drop) { overflow: hidden; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu]) { display: none; }
@@ -1292,13 +1372,16 @@
 .kb .card .history .hopen { font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 0 6px; min-height: 22px; border-radius: 4px; }
 .kb .card .history .hopen:hover { background: var(--color-accent-soft); }
 .kb .card .history .hnone { font-size: var(--text-caption); color: var(--color-muted); }
+.kb .card .history .helsewhere { align-self: flex-start; max-width: 100%; margin-left: 4px; font-size: var(--text-label); color: var(--color-muted); padding: 0 4px; min-height: 22px; border-radius: 4px; text-align: left; }
+.kb .card .history .helsewhere:hover { background: var(--surface-well); color: var(--color-secondary); }
+.kb .card .history ul[data-elsewhere] { max-height: 160px; overflow-y: auto; }
 .kb .card .history .hsub { margin: 4px 0 0 16px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot, .kb .pstrip.pulse .pmark::before { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
-  .kb .card .history summary, .kb .card .history .hopen { min-height: 44px; }
+  .kb .card .history summary, .kb .card .history .hopen, .kb .card .history .helsewhere { min-height: 44px; }
 }
 
 /* ── Stages (K5b, prototype `renderSheet`, `renderPane`, `renderStageDraft`, `renderDraftMessage`) ─ */
@@ -1552,3 +1635,16 @@
 :is(.kb, [data-phone-kanban]) .remote-agent time { grid-column: 3; grid-row: 1; white-space: nowrap; }
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
+
+/* Keyboard focus and an open reader expose the full note. Pointer focus keeps
+   the compact note; a note already expanded by the keyboard holds its geometry
+   until the pointer click has landed, even on a neighbouring card. */
+.kb .card [data-task-note="full"] { display: none; }
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="full"],
+.kb .card:not(.folded):focus-visible [data-task-note="full"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="full"],
+.kb .card:not(.folded).has-reader [data-task-note="full"] { display: flex; }
+.kb .card:not(.folded):has(:focus-visible) [data-task-note="compact"],
+.kb .card:not(.folded):focus-visible [data-task-note="compact"],
+.kb .card:not(.folded)[data-note-pointer-full] [data-task-note="compact"],
+.kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }

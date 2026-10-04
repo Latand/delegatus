@@ -523,7 +523,7 @@ install"):
     bind), would otherwise come back from a restart open to that proxy.
     Whoever authenticates against a release it did not start (the runtime
     host's trusted local entry, the deploy adapter's health probes) finds
-    that key through `viewerBootGateKey` (`src/lib/access/phoneAccessBootGate.ts:45-57`,
+    that key through `viewerBootGateKey` (`bin/viewerGateKey.mjs`,
     used by `viewerReleaseCredentialResolver`, `deploymentProxy.ts:176-201`),
     which today reads the key file only while the phone-access flag exists.
     It gains the second condition, read from the same root: a saved
@@ -959,11 +959,18 @@ Pairing adds B's label (hostname by default, editable), `installId`,
 version to B. The grant row on B records when it was last used and how many
 requests it made.
 
-### 5.2 No third party
+### 5.2 Direct peers and the separate install ping
 
 Peer requests go directly from A's Viewer to the address the user typed.
-There is no relay, rendezvous, telemetry or lookup service; nothing reaches
-any server run by the Delegatus project. The reverse proxy (or Tailscale)
+Linked-install traffic uses no project-run relay, rendezvous or lookup service.
+Separately, the production Viewer sends a default-on anonymous install ping
+once per UTC day to `https://delegatus.org/api/ping`: a dedicated random UUID,
+version, OS, architecture and install kind. That UUID is independent of the
+linked-install `installId`; no linked-install or project data enters the ping.
+The Worker adds Cloudflare's country and stores no IP. The first-start notice
+and Settings disclose it. Disable it in Settings, with `DELEGATUS_TELEMETRY=0`
+or `DO_NOT_TRACK=1`; environment opt-outs always win. See the README's
+“What leaves your machine” section. The reverse proxy (or Tailscale)
 in front of B is the user's own. The Telegram connector is not a transport
 for links (§11).
 
@@ -1474,6 +1481,11 @@ text stamp from the same sender may fill a local `Untitled task`
 placeholder with real text. The receiving copy's details remain intact in that
 case, and a newer local text stamp keeps its text. No manual retitle or cursor
 reset is needed. Scans and retries retain the normal tombstone and size fences.
+Task wire v4 keeps the v3 row shape and advertises a new replay capability.
+An already-consumed v3 initiator observes the accepting install's v4 response
+and uses its existing upgrade path to rescan both directions once. Its saved
+peer version makes that replay durable across restart. Board membership stays
+available to every peer advertising v3 or newer.
 
 Per group, because the common collision is the operator dragging a card on one
 machine while an agent on the other flips its status; per-task LWW would drop

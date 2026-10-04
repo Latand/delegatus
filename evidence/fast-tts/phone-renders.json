@@ -1,0 +1,50 @@
+[
+  {
+    "viewport": 390,
+    "scheme": "light",
+    "idle": {
+      "x": 1,
+      "right": 45,
+      "width": 44,
+      "height": 44,
+      "barHeight": 52,
+      "titleOverlap": false
+    },
+    "sharedStop": true,
+    "pageErrors": []
+  },
+  {
+    "viewport": 390,
+    "scheme": "dark",
+    "idle": {
+      "x": 1,
+      "right": 45,
+      "width": 44,
+      "height": 44,
+      "barHeight": 52,
+      "titleOverlap": false
+    },
+    "sharedStop": true,
+    "pageErrors": []
+  },
+  {
+    "pcmOutput": {
+      "firstSample": 16224,
+      "expectedSamples": 172800,
+      "mismatches": 0,
+      "sampleRate": 24000,
+      "uiStallMs": 500
+    },
+    "providerTexts": [
+      "The first sentence should start speaking immediately.",
+      "The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately.",
+      "Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken."
+    ],
+    "stopClock": 8.026666666666667,
+    "cachedReplayRequests": 0,
+    "finalQuantumSilent": true,
+    "samplesBeyondStopClock": 0,
+    "baseLatency": 0.010041666666666667,
+    "outputLatency": 0.032
+  }
+]

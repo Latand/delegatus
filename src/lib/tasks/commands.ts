@@ -12,7 +12,7 @@ import { readTaskPriorityInput } from "./priority";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
-import { LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_PRIORITIES, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
+import { TASK_NOTE_LIMIT, type TaskNoteAuthor, LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_PRIORITIES, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
 /* The caps live beside the type, which a client component can import without
    pulling this module's node dependencies into the browser bundle. */
@@ -83,6 +83,8 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  /** Short status note for the operator; null or blank clears it. */
+  note?: unknown;
   expectedProject?: unknown;
   expectedRevision?: unknown;
   text?: unknown;
@@ -146,6 +148,8 @@ export interface TaskWorkLinkContext {
 export type SeatHolding = "holds" | "free" | "unknown";
 
 export interface PatchTaskOptions {
+  /** Trusted transport attribution, never read from the request body. */
+  noteAuthor?: TaskNoteAuthor;
   requirePlacementGuards?: boolean;
   hasBoardMembers?: (task: BoardTask) => boolean;
   /** Who is writing: the operator's dashboard or an agent's tool call. */
@@ -156,6 +160,8 @@ export interface PatchTaskOptions {
   workLinks?: (task: BoardTask) => TaskWorkLinkContext;
   /** See {@link TaskCommandDeps.explicit}: a text written without it is private. */
   explicit?: boolean;
+  /** Internal system cards that must remain visible may occupy an overflow band. */
+  allowBoardOverflow?: boolean;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -175,6 +181,8 @@ export interface TaskCommandDeps {
       it may cross to a linked board. Every other writer leaves it private
       (docs/design/linked-installs.md M.3). */
   explicit?: boolean;
+  /** Internal system cards that must remain visible may occupy an overflow band. */
+  allowBoardOverflow?: boolean;
 }
 
 /** The refusal both admission paths give when the board is full. */
@@ -370,7 +378,7 @@ export function createTask(
      against it: a task created off the board joins the history, which has no
      cap, and no durable identity is ever refused to keep a display small.
      The getter consults seats only if the shared rule reaches an expired row. */
-  if (board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
+  if (!deps.allowBoardOverflow && board !== "hidden" && countBoardTasks(existing, project, deps.hasBoardMembers ?? (() => false), (task) => ({ now: Date.parse(now), get holdsSeat() { return deps.seatHolding?.(task) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
     return boardFullError("project");
   }
 
@@ -459,6 +467,17 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "note")) {
+    if (input.note !== null && typeof input.note !== "string") {
+      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: "note must be a string or null" };
+    }
+    const text = typeof input.note === "string" ? input.note.replace(/\s+/g, " ").trim() : "";
+    if (text.length > TASK_NOTE_LIMIT) {
+      return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "note", error: `note must be at most ${TASK_NOTE_LIMIT} characters` };
+    }
+    const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
+    patch.note = text ? { text, author, updatedAt: now } : undefined;
+  }
 
   if (Object.hasOwn(input, "text")) {
     const text = normalizeText(input.text);
@@ -524,7 +543,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     const hasMembers = options.hasBoardMembers ?? (() => false);
     const visibility = { now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(task) === "holds"; } };
     const candidate = withTaskCompletion({ ...task, ...patch, board, updatedAt: now }, task);
-    if (board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
+    if (!options.allowBoardOverflow && board === "shown" && taskShowsOnBoard(candidate, hasMembers(candidate), visibility)
       && !taskShowsOnBoard(task, hasMembers(task), visibility)
       && countBoardTasks(existing, task.project, hasMembers, (row) => ({ now: Date.parse(now), get holdsSeat() { return options.seatHolding?.(row) === "holds"; } })) >= BOARD_TASKS_PER_PROJECT_LIMIT) {
       return boardFullError("board");
@@ -601,12 +620,17 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   const presentationOnly = Object.keys(input).every((key) => PRESENTATION_KEYS.has(key) || key === "expectedProject" || key === "expectedRevision")
     && Object.keys(input).some((key) => PRESENTATION_KEYS.has(key));
   const updated: BoardTask = withTaskCompletion({ ...task, ...patch, updatedAt: presentationOnly ? task.updatedAt : now }, task);
+  if (Object.hasOwn(patch, "board")) {
+    delete updated.boardAutoHidden;
+    updated.boardChoice = true;
+  }
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */
   if (Object.hasOwn(patch, "dueAt") && patch.dueAt === undefined) {
     delete updated.dueAt;
     delete updated.dueTz;
   }
+  if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
   if (updated.placement === "unplaced") delete updated.pos;
   if (Object.hasOwn(patch, "details") && patch.details === undefined) delete updated.details;
   if (Object.hasOwn(patch, "color") && patch.color === undefined) delete updated.color;

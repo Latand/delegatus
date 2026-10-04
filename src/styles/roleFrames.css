@@ -40,6 +40,7 @@
   --rf-prod-auditor: #e11d48; --rf-prod-auditor-2: #f97316; --rf-prod-auditor-ink: #be123c; --rf-prod-auditor-fill: #be123c;
   --rf-deployer: #c026d3;     --rf-deployer-2: #8b5cf6;     --rf-deployer-ink: #a21caf;     --rf-deployer-fill: #a21caf;
   --rf-neutral: #94a3b8;      --rf-neutral-2: #cbd5e1;      --rf-neutral-ink: #475569;      --rf-neutral-fill: #475569;
+  --rf-maintainer: #94a3b8;      --rf-maintainer-2: #cbd5e1;      --rf-maintainer-ink: #475569;      --rf-maintainer-fill: #475569;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -53,6 +54,7 @@
     --rf-prod-auditor: #fb7185; --rf-prod-auditor-2: #fb923c; --rf-prod-auditor-ink: #fda4af;
     --rf-deployer: #e879f9;     --rf-deployer-2: #a78bfa;     --rf-deployer-ink: #f0abfc;
     --rf-neutral: #64748b;      --rf-neutral-2: #94a3b8;      --rf-neutral-ink: #cbd5e1;
+    --rf-maintainer: #64748b;      --rf-maintainer-2: #94a3b8;      --rf-maintainer-ink: #cbd5e1;
   }
 }
 [data-theme="dark"] {
@@ -65,6 +67,7 @@
   --rf-prod-auditor: #fb7185; --rf-prod-auditor-2: #fb923c; --rf-prod-auditor-ink: #fda4af;
   --rf-deployer: #e879f9;     --rf-deployer-2: #a78bfa;     --rf-deployer-ink: #f0abfc;
   --rf-neutral: #64748b;      --rf-neutral-2: #94a3b8;      --rf-neutral-ink: #cbd5e1;
+  --rf-maintainer: #64748b;      --rf-maintainer-2: #94a3b8;      --rf-maintainer-ink: #cbd5e1;
 }
 
 [data-role="orchestrator"] { --role: var(--rf-orchestrator); --role-2: var(--rf-orchestrator-2); --role-ink: var(--rf-orchestrator-ink); --role-fill: var(--rf-orchestrator-fill); }
@@ -74,6 +77,7 @@
 [data-role="cleaner"] { --role: var(--rf-cleaner); --role-2: var(--rf-cleaner-2); --role-ink: var(--rf-cleaner-ink); --role-fill: var(--rf-cleaner-fill); }
 [data-role="builder"] { --role: var(--rf-builder); --role-2: var(--rf-builder-2); --role-ink: var(--rf-builder-ink); --role-fill: var(--rf-builder-fill); }
 [data-role="prod-auditor"] { --role: var(--rf-prod-auditor); --role-2: var(--rf-prod-auditor-2); --role-ink: var(--rf-prod-auditor-ink); --role-fill: var(--rf-prod-auditor-fill); }
+[data-role="merger"],
 [data-role="deployer"] { --role: var(--rf-deployer); --role-2: var(--rf-deployer-2); --role-ink: var(--rf-deployer-ink); --role-fill: var(--rf-deployer-fill); }
 [data-role="neutral"] { --role: var(--rf-neutral); --role-2: var(--rf-neutral-2); --role-ink: var(--rf-neutral-ink); --role-fill: var(--rf-neutral-fill); }
 
@@ -269,3 +273,5 @@
    emblem alone, and the frame's colour says the rest. */
 :root[data-role-frame] [data-role-host="phone"] .role-mark-word { display: none; }
 :root[data-role-frame="bracket"] [data-role-host="phone"] .role-mark { padding: 0; border: 0; }
+
+[data-role="maintainer"] { --role: var(--rf-maintainer); --role-2: var(--rf-maintainer-2); --role-ink: var(--rf-maintainer-ink); --role-fill: var(--rf-maintainer-fill); }

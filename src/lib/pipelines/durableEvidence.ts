@@ -7,6 +7,8 @@ import { heldBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTa
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { numberValue, recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
 
+import { classifyProviderCondition } from "./providerConditions";
+
 type RecordLike = Record<string, unknown>;
 
 /**
@@ -42,6 +44,7 @@ export type StageTurnEvidence = {
   terminalProviderMessage?: {
     text: string;
     ts: number;
+    errorClass?: string | null;
     /** Usage-limit evidence from this same terminal turn. */
     usageLimit?: { resetsAt: number | null };
   } | null;
@@ -90,12 +93,59 @@ function isCodexUsageLimit(payload: RecordLike): boolean {
 }
 
 /** Claude CLI writes a synthetic assistant with this terminal API-error code
-    and notice when the account's session capacity is spent. The displayed
-    local clock label has no date, so it cannot establish a reset instant. */
+    and notice when the account's session capacity is spent. */
 function isClaudeUsageLimit(record: RecordLike, text: string): boolean {
   return record.isApiErrorMessage === true
     && record.error === "rate_limit"
-    && /^You've hit your session limit\b/i.test(text);
+    && classifyProviderCondition("claude", stringValue(record.error), text).kind === "usage_limit";
+}
+
+/** Resolve a native reset label against the closing record's date in its own
+    timezone. Never use this machine's timezone or the artifact's mtime: they
+    can differ from the provider's clock, including after a transcript replay. */
+function claudeUsageLimitResetAt(record: RecordLike, text: string): number | null {
+  const timestamp = stringValue(record.timestamp) ?? "";
+  if (!/(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp)) return null;
+  const recordedAt = Date.parse(timestamp);
+  const label = /\bresets\s+(?:([a-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:,\s*|\s+at\s+|\s+))?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*\(([^)]+)\)/i.exec(text);
+  if (!label || !Number.isFinite(recordedAt)) return null;
+  let hour = Number(label[4]);
+  const minute = Number(label[5] ?? 0);
+  if (minute > 59 || (label[6] ? hour < 1 || hour > 12 : hour > 23)) return null;
+  if (label[6]) hour = hour % 12 + (label[6].toLowerCase() === "pm" ? 12 : 0);
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: label[7]!.trim(), year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23",
+    });
+    const localTime = (instant: number) => {
+      const parts = Object.fromEntries(formatter.formatToParts(instant).map(part => [part.type, part.value]));
+      return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+    };
+    const localDate = new Date(localTime(recordedAt));
+    const month = label[1] ? ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(label[1].slice(0, 3).toLowerCase()) : localDate.getUTCMonth();
+    const day = label[2] ? Number(label[2]) : localDate.getUTCDate();
+    const year = label[3] ? Number(label[3]) : localDate.getUTCFullYear();
+    if (month < 0 || day < 1 || day > 31) return null;
+    // A clock-only notice means the next daily occurrence. A named date may
+    // cross New Year; an explicit year is never silently rolled forward.
+    for (let next = 0; next < (label[3] ? 1 : 2); next += 1) {
+      const wall = Date.UTC(year + (label[1] ? next : 0), month, day + (label[1] ? 0 : next), hour, minute);
+      const date = new Date(wall);
+      if (label[1] && (date.getUTCMonth() !== month || date.getUTCDate() !== day)) return null;
+      // Sample both sides of a timezone transition and round-trip candidates.
+      // A repeated DST clock uses the later occurrence to avoid an early retry;
+      // a nonexistent clock cannot establish a reset instant.
+      const candidates = [-86_400_000, 0, 86_400_000].map(delta => {
+        const probe = wall + delta;
+        return wall - (localTime(probe) - probe);
+      }).filter(instant => localTime(instant) === wall);
+      if (candidates.length === 0) return null;
+      const reset = Math.max(...candidates);
+      if (reset >= recordedAt) return reset / 1_000;
+    }
+  } catch { /* An absent/unsupported timezone leaves the reset unknown. */ }
+  return null;
 }
 
 const CODEX_TURN_END_TYPES = new Set(["task_complete", "turn_complete", "turn_completed", "turn_aborted"]);
@@ -133,6 +183,30 @@ function codexUsageLimitResetAt(records: RecordLike[], endIndex: number): number
   return null;
 }
 
+function providerTurnRecords(records: RecordLike[], codex: boolean): RecordLike[] {
+  if (codex) return records;
+  // A metadata replay ending in shutdown preserves any native provider class.
+  // A real continuation prompt or real assistant output starts a newer turn.
+  let closedByMarker = false;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    if (record.type === "result" || record.type === "assistant" && record.isApiErrorMessage === true) {
+      return closedByMarker ? records.slice(0, index + 1) : records;
+    }
+    if (record.type === "assistant") {
+      if (recordValue(record.message)?.model !== "<synthetic>" || !/^no response requested\.?$/i.test(claudeAssistantText(record).trim())) return records;
+      closedByMarker = true;
+    } else if (record.type === "user") {
+      const content = stringValue(recordValue(record.message)?.content) ?? claudeAssistantText(record);
+      const interrupted = record.interruptedByShutdown === true || "interruptedMessageId" in record
+        || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content);
+      if (interrupted) closedByMarker = true;
+      else if (!closedByMarker || record.isMeta !== true) return records;
+    }
+  }
+  return records;
+}
+
 /**
  * The notice the provider wrote when it ended the turn, read from the record
  * that CLOSED it — the assistant record Claude flags `isApiErrorMessage`, or
@@ -155,16 +229,25 @@ function terminalProviderMessageFromRecords(
       const type = stringValue(payload.type) ?? "";
       if (CODEX_TURN_START_TYPES.has(type)) return null;
       if (!CODEX_TURN_END_TYPES.has(type)) continue;
-      const failure = codexTurnEndFailure(payload);
+      const failure = codexTurnEndFailure(payload) ?? (type === "turn_aborted" ? "stage turn aborted before completion" : null);
       return failure
         ? {
             text: failure,
+            errorClass: codexErrorInfo(payload) ?? (type === "turn_aborted" ? "turn_aborted" : null),
             ts: recordTs(record, fallbackTs),
             ...(isCodexUsageLimit(payload)
               ? { usageLimit: { resetsAt: codexUsageLimitResetAt(records, index) } }
               : {}),
           }
         : null;
+    }
+    const message = recordValue(record.message);
+    const content = stringValue(message?.content) ?? claudeAssistantText(record);
+    const interrupted = record.type === "user" && (record.interruptedByShutdown === true
+      || "interruptedMessageId" in record || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content));
+    if (interrupted || (record.type === "result" && record.subtype === "interrupted")
+      || (record.type === "assistant" && ["aborted", "interrupted"].includes(stringValue(message?.stop_reason) ?? ""))) {
+      return { text: "stage turn interrupted before completion", ts: recordTs(record, fallbackTs), errorClass: "turn_aborted" };
     }
     if (record.type === "user") return null;
     if (record.type !== "assistant") continue;
@@ -173,8 +256,9 @@ function terminalProviderMessageFromRecords(
     return text
       ? {
           text,
+          errorClass: stringValue(record.error),
           ts: recordTs(record, fallbackTs),
-          ...(isClaudeUsageLimit(record, text) ? { usageLimit: { resetsAt: null } } : {}),
+          ...(isClaudeUsageLimit(record, text) ? { usageLimit: { resetsAt: claudeUsageLimitResetAt(record, text) } } : {}),
         }
       : null;
   }
@@ -208,14 +292,16 @@ export async function durableStageTurnEvidence(
   let evidenceRead = read;
   let evidenceBytes = 131_072;
   let reportProse: string | null = null;
+  let turnRecords = evidenceRead.records;
   let message;
   let turn;
   while (true) {
-    message = lastAssistantMessageFromRecords(evidenceRead.records, codex ? "codex-sessions" : "claude-projects", fallbackTs);
-    turn = turnStateFromRecords(evidenceRead.records, codex ? "codex" : "claude");
+    turnRecords = providerTurnRecords(evidenceRead.records, codex);
+    message = lastAssistantMessageFromRecords(turnRecords, codex ? "codex-sessions" : "claude-projects", fallbackTs);
+    turn = turnStateFromRecords(turnRecords, codex ? "codex" : "claude");
     if (Number.isFinite(reportTime)) {
       reportProse = lastAssistantMessageFromRecords(
-        evidenceRead.records.filter((record) => {
+        turnRecords.filter((record) => {
           const timestamp = recordTs(record, fallbackTs);
           return timestamp <= reportTime && (!Number.isFinite(startedTime) || timestamp > startedTime);
         }),
@@ -241,11 +327,13 @@ export async function durableStageTurnEvidence(
     if (expanded.integrity !== "complete") break;
     evidenceRead = expanded;
   }
-  const newest = evidenceRead.records.at(-1);
+  const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
+  const nativeCut = terminalNotice?.errorClass === "turn_aborted";
+  const newest = turnRecords.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
-    turn: turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
-    message,
+    turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
+    message: nativeCut ? null : message,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex
@@ -255,8 +343,8 @@ export async function durableStageTurnEvidence(
     /* Gated on the same turn reading the rest of the engine trusts: a provider
        error the CLI may still retry inside an open turn keeps the busy
        projection (#516), and so never reads as the end of the turn here. */
-    terminalProviderMessage: turn.state === "terminal"
-      ? terminalProviderMessageFromRecords(evidenceRead.records, codex, fallbackTs)
+    terminalProviderMessage: nativeCut || turn.state === "terminal"
+      ? terminalNotice
       : null,
     ...(codex
       ? { backgroundTasks: [], backgroundReportedAt: null }

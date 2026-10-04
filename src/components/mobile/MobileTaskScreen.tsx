@@ -1,17 +1,23 @@
 "use client";
 
-import { ArrowDown, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, UserRoundCheck } from "lucide-react";
+import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
 import { TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { dismissUnstartedLaunch, dismissUnstartedLaunches } from "@/components/kanban/kanbanAssignments";
-import { KANBAN_STATUSES, summarizePipeline, workingStageConversations, type KanbanPipeline, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
+import { KANBAN_STATUSES, summarizePipeline, workingStageConversations, type KanbanPipeline, type KanbanRecordedConversation, type KanbanUnstartedLaunch } from "@/components/kanban/kanbanModel";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { browserPipelinePorts, type PipelinePorts } from "@/components/kanban/pipelinePorts";
+import { RemoteLane, useManagedOnText } from "@/components/kanban/RemoteLanes";
+import { remoteCardFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { textField, withField } from "@/components/kanban/taskText";
 import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
+import { addTaskChip } from "@/components/orchestrator/taskChips";
+import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
@@ -27,6 +33,7 @@ import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { TASK_COLORS, TASK_PRIORITIES, taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus } from "@/lib/tasks/types";
+import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -37,6 +44,7 @@ import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useSc
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
+import { MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
 import { useMobileNav, useMobileNavStore, useMobileScreenState, useMobileScrollMemory, useSheetSelection } from "./mobileNav";
@@ -92,6 +100,17 @@ const ROW = "flex min-h-11 w-full items-center gap-2 rounded-[12px] bg-card px-3
 const NEEDS_EDGE = "shadow-[inset_3px_0_0_var(--color-warning),var(--shadow-1)]";
 const Sep = () => <span aria-hidden className="shrink-0 opacity-60">·</span>;
 
+/** Where "+ Agent" would start work here, a passive pill says where it starts. */
+function RemoteHostPill({ remote }: { remote: RemoteCard }) {
+  const { label, hint } = useManagedOnText(remote);
+  return (
+    <span data-phone-task-host={remote.install} title={hint} className="inline-flex min-h-11 min-w-0 items-center gap-1.5 rounded-full border border-border bg-card px-4 text-body font-semibold text-secondary">
+      <ArrowLeftRight className="h-4 w-4 shrink-0 text-info" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  );
+}
+
 export interface MobileTaskScreenProps extends PhoneBoardInput {
   taskId: string;
   /** The task mutations the phone's screens share; absent, the screen keeps its own. */
@@ -99,6 +118,8 @@ export interface MobileTaskScreenProps extends PhoneBoardInput {
   mutationPorts?: TaskMutationPorts;
   host?: MobileShellHost | null;
   renderSheet?: SheetRenderer;
+  /** The project's display name, for the seat tick sheet the tick notice opens. */
+  projectName?: string;
   /** What an agent row offers on a swipe: the board rows' own actions. */
   rowActions?: (target: MobileRowActionTarget) => readonly MobileRowAction[];
   /** Lanes whose close is on their way: gone from the screen on the tap. */
@@ -281,10 +302,12 @@ function AskCard({ file, now, onOpen }: { file: FileEntry; now: number; onOpen: 
 
 /** Earlier attempts and review rounds of the task's lanes, newest first,
     folded to one row (§3.5, 7). A row whose transcript is in the scan opens it. */
-function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
+function EarlierAttempts({ taskId, lanes, past, elsewhere, files, nowMs, onOpen }: {
   taskId: string;
   lanes: readonly KanbanPipeline[];
   past: NonNullable<ReturnType<typeof cardOfTask>>["past"];
+  /** The task's conversations this board did not load: one line, never rows of their own. */
+  elsewhere: readonly KanbanRecordedConversation[];
   files: readonly FileEntry[];
   nowMs: number;
   onOpen: (file: FileEntry) => void;
@@ -292,11 +315,12 @@ function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
   const { t } = useLocale();
   /* Open or folded as the operator left it when Back returns here (#2105). */
   const [open, setOpen] = useMobileScreenState({ kind: "task", id: taskId }, "earlier", false);
+  const [listed, setListed] = useState(false);
   const names = useMemo(() => new Map(lanes.map((lane) => [lane.pipeline.id, stageNames(t, lane.pipeline)] as const)), [lanes, t]);
-  if (!past.length) return null;
+  if (!past.length && !elsewhere.length) return null;
   const age = (atMs: number) => (atMs ? humanizeDuration(blockAgeSeconds((nowMs - atMs) / 1000)) : "");
   return (
-    <section data-phone-task-past={past.length} className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
+    <section data-phone-task-past={past.length} data-phone-task-elsewhere={elsewhere.length} className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
       <button
         type="button"
         aria-expanded={open}
@@ -305,7 +329,7 @@ function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
         onClick={() => setOpen((value) => !value)}
       >
         <ScrollText className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">{t("kanban.past.head", { count: past.length })}</span>
+        <span className="min-w-0 flex-1 truncate">{past.length ? t("kanban.past.head", { count: past.length }) : t("kanban.past.elsewhereHead", { count: elsewhere.length })}</span>
         <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
       </button>
       {open ? (
@@ -338,6 +362,38 @@ function EarlierAttempts({ taskId, lanes, past, files, nowMs, onOpen }: {
             );
           })}
         </ul>
+      ) : null}
+      {open && elsewhere.length ? (
+        <div className="border-t border-border">
+          <button
+            type="button"
+            aria-expanded={listed}
+            data-phone-task-elsewhere-toggle=""
+            className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-label text-muted active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+            onClick={() => setListed((value) => !value)}
+          >
+            <span className="min-w-0 flex-1 truncate">{t("kanban.past.elsewhere", { count: elsewhere.length })} · {t(listed ? "kanban.past.elsewhereHide" : "kanban.past.elsewhereShow")}</span>
+            <ChevronRight className={`h-4 w-4 shrink-0 transition-transform motion-reduce:transition-none ${listed ? "rotate-90" : ""}`} aria-hidden />
+          </button>
+          {listed ? (
+            <ul className="m-0 flex max-h-[240px] list-none flex-col overflow-y-auto p-0">
+              {elsewhere.map((ref, index) => (
+                <li key={ref.key} className="border-t border-border">
+                  <button
+                    type="button"
+                    data-phone-task-not-loaded={ref.key}
+                    aria-label={t("kanban.past.elsewhereOpenAria", { n: index + 1 })}
+                    className="flex min-h-11 w-full items-center gap-2 py-1.5 pl-3 pr-2.5 text-left text-ui font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                    onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{t("kanban.past.elsewhereRow", { n: index + 1 })}</span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );
@@ -443,6 +499,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const stored = useRef(new Map<string, BoardTask>());
   stored.current = new Map(props.allTasks.map((entry) => [entry.id, entry] as const));
   const task = allTasks.find((entry) => entry.id === taskId) ?? null;
+  /* A task another machine runs draws that machine's lanes and says where it is managed. */
+  const remoteFeed = useRemoteFeed(props.project);
+  const remote = useMemo(() => remoteCardFor(task, remoteFeed), [task, remoteFeed]);
   const card = useMemo(() => cardOfTask(model, taskId), [model, taskId]);
   const status: TaskStatus = card?.status ?? statuses.get(taskId) ?? task?.status ?? "inbox";
   const nowMs = now * 1000;
@@ -512,8 +571,10 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const title = task ? (card?.titlePending ? t("kanban.untitled") : (card?.title || textField(task.text, "title")) || t("kanban.untitled")) : "";
   const pendingTitle = card ? card.titlePending : Boolean(task && !textField(task.text, "title"));
   const description = task ? textField(task.text, "description") : "";
+  const tickNotice = task ? isSeatTickNotice(task.text) : false;
   const details = task?.details ?? "";
   const receiptTitle = cleanTitle(title, 48);
+  const chipTitle = taskChipTitle(title);
 
   /* ── Edits ────────────────────────────────────────────────────────────── */
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -619,6 +680,21 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         null,
         { error: true },
       );
+    });
+  };
+  /* «Ask»: this task becomes a chip in the project's orchestrator composer,
+     and the operator goes to the seat's conversation to say what about it. The
+     screen is pushed over the board, so ‹ from the seat comes back here. */
+  const askOrchestrator = () => {
+    if (!task) return;
+    if (!addTaskChip(props.project, { id: task.id, title: chipTitle, color: task.color ?? null, icon: task.icon ?? null })) {
+      showReceipt(t("taskChip.full"), null, { error: true });
+      return;
+    }
+    void designatedManagerConversationId(props.project).then((seatId) => {
+      const seat = seatId ? files.find((entry) => entry.conversationId === seatId) : undefined;
+      if (seat) props.onOpenConversation(seat);
+      else showReceipt(t("taskChip.added", { title: receiptTitle }));
     });
   };
   const addAgent = () => {
@@ -829,6 +905,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         </MobileSheet>
       );
     }
+    /* The tick notice's own sheet: the project's seat tick panel, over this
+       screen, through the same sheet the seat card opens from its seat sheet. */
+    if (name === "tick" && tickNotice) {
+      return <MobileSeatTickSheet project={props.project} projectName={props.projectName ?? props.project} onClose={close} />;
+    }
     if (name === "links" && linksFor) {
       return (
         <MobileSheet name="links" title={t("workLinks.listTitle")} onClose={close}>
@@ -941,7 +1022,18 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
         <span className="min-w-0 truncate">{t(STATUS_LABEL[status])}</span>
         <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
       </button>
-      {props.onAddAgent ? (
+      <span className="flex min-w-0 items-center gap-2">
+      <button
+        type="button"
+        data-phone-task-ask-orchestrator=""
+        aria-label={t("taskChip.askAria", { title: receiptTitle })}
+        className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-accent/50 px-4 text-body font-semibold text-accent active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        onClick={askOrchestrator}
+      >
+        <Bot className="h-4 w-4" aria-hidden />
+        {t("taskChip.ask")}
+      </button>
+      {remote ? <RemoteHostPill remote={remote} /> : props.onAddAgent ? (
         <button
           type="button"
           data-phone-task-add-agent=""
@@ -953,6 +1045,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           {t("kanban.addAgent")}
         </button>
       ) : null}
+      </span>
     </div>
   ) : undefined;
 
@@ -997,6 +1090,23 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 the stages, what agents ask, the task with its agents, and
                 its history. */}
             <div data-phone-task-groups="" className="flex shrink-0 flex-col gap-6">
+              {/* 2a. A task another machine runs: its lanes in the frame a finished
+                  lane uses, with the remote surface, drawn by the same block with
+                  no control. No sheet opens on them. */}
+              {remote?.lanes.length ? (
+                <section data-phone-task-remote-lanes={remote.lanes.length} className="flex shrink-0 flex-col gap-2">
+                  {remote.lanes.map((remoteLane) => (
+                    <div
+                      key={remoteLane.k}
+                      data-phone-task-lane={remoteLane.k.slice(2)}
+                      className="phone-lane remote-surface shrink-0 rounded-[12px] bg-card px-3 pb-1.5 pt-1"
+                      style={{ boxShadow: "var(--shadow-1), inset 0 0 0 1px var(--remote-edge)" }}
+                    >
+                      <RemoteLane lane={remoteLane} host={remote.host} title={pendingTitle ? "" : title} density="task" nowMs={nowMs} />
+                    </div>
+                  ))}
+                </section>
+              ) : null}
               {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
               {live.length || ended.length ? (
                 <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
@@ -1051,6 +1161,22 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   </button>
                 )}
 
+                <TaskStatusNote note={task.note} nowMs={now * 1000} full />
+
+                {/* The standing tick notice opens the panel that holds the setting it describes. */}
+                {tickNotice ? (
+                  <button
+                    type="button"
+                    data-phone-task-tick-open={props.project}
+                    className={`${ROW} shrink-0 min-h-12`}
+                    onClick={() => nav.openSheet("tick")}
+                  >
+                    <Timer className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-body font-semibold text-primary">{t("kanban.tickNotice.open")}</span>
+                    <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+                  </button>
+                ) : null}
+
                 {/* The task's album: every picture its agents made or looked at. */}
                 <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />
 
@@ -1059,7 +1185,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   <h2 className={`${SECTION} m-0`}>
                     {t("mobile2.task.agents")}
                     <Sep />
-                    <span className="text-label font-semibold tabular-nums text-muted">{agents.length + notLoadedRefs.length}</span>
+                    <span className="text-label font-semibold tabular-nums text-muted">{agents.length}</span>
                   </h2>
                   {agents.map((agent) => {
                     const rowTitle = agentTitle(agent);
@@ -1095,27 +1221,12 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                     </button>
                   ))}
-                  {/* A conversation the board did not load still opens, through its
-                      conversation id or its transcript. A stage's is left to its
-                      pipeline's Earlier attempts. */}
-                  {notLoadedRefs.map((ref) => (
-                    <button
-                      key={ref.key}
-                      type="button"
-                      data-phone-task-not-loaded={ref.key}
-                      className={`${ROW} min-h-14 bg-quiet shadow-none ring-1 ring-inset ring-border`}
-                      onClick={() => { window.location.hash = formatConversationHash({ conversationId: ref.conversationId ?? undefined, path: ref.path ?? "" }); }}
-                    >
-                      <span className="min-w-0 flex-1 truncate text-body font-semibold text-secondary">{t("kanban.notLoadedOpen")}</span>
-                      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
-                    </button>
-                  ))}
                   {/* A launch that did not start opens nothing: it says so, and
                       can be dismissed. A failed one says so at once, with its
                       error, and opens its launch view, where Retry lives. Two or
                       more fold behind one summary row. */}
                   {unstarted.length ? <UnstartedLaunches taskId={taskId} title={title} launches={unstarted} onOpen={props.onOpenConversation} /> : null}
-                  {!agents.length && !notLoadedRefs.length && !unstarted.length && !card?.drafts.length ? (
+                  {!remote && !agents.length && !unstarted.length && !card?.drafts.length && !notLoadedRefs.length ? (
                     <p className="m-0 px-1 text-ui text-muted">{t("mobile2.kanban.noAgents")}</p>
                   ) : null}
                 </section>
@@ -1149,7 +1260,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     ) : null}
                   </section>
                 ) : null)}
-                <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+                <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} elsewhere={notLoadedRefs} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
               </div>
             </div>
           </>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { translate } from "@/lib/i18n";
+import { translate } from "@/lib/i18n/core";
 import { operatorLocale } from "@/lib/operator/settings";
 import { withReportDestinations } from "@/lib/projects/reportDestination";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";

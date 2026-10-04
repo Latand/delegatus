@@ -160,6 +160,12 @@ export function normalizeFlowSpec(value: unknown): { ok: true; spec?: string } |
   return spec ? { ok: true, spec } : { ok: true };
 }
 
+/** Controller-only observations collected before acquiring its mutation lease. */
+export interface PreparedFlowGit {
+  cwd: string;
+  mergeIdentity: Awaited<ReturnType<typeof resolveFlowMergeIdentity>>;
+}
+
 /** `actor` is who asked for the flow: the operator by default. A pipeline's
     review-loop stage creates its flow as the Viewer, after the stage itself was
     judged at pipeline create. */
@@ -167,6 +173,7 @@ export async function createFlowFromRequest(
   req: CreateFlowRequest,
   entries: FileEntry[],
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+  preparedGit?: PreparedFlowGit,
 ): Promise<{ flow?: Flow; error?: string; status?: number }> {
   const normalizedSpec = normalizeFlowSpec(req.spec);
   if (!normalizedSpec.ok) {
@@ -231,19 +238,17 @@ export async function createFlowFromRequest(
   }
   const cwd = headCwd(resolvedPath);
   if (!cwd) return { error: "could not determine the session working directory", status: 409 };
+  if (preparedGit && (!req.baseRef?.trim() || preparedGit.cwd !== cwd)) {
+    return { error: "flow working directory or base changed after Git observation", status: 409 };
+  }
   const project = scanned?.project ?? projectForCwd(cwd) ?? path.basename(cwd);
   const baseMode = req.baseMode === "merge-base" ? "merge-base" : "head";
   const base =
     typeof req.baseRef === "string" && req.baseRef.trim()
       ? { ok: true as const, sha: req.baseRef.trim() }
-      : resolveBaseRef(cwd, baseMode);
+      : (await resolveBaseRef(cwd, baseMode));
   if (!base.ok) return { error: base.error, status: 409 };
-  const flows = loadFlows();
-  const existing = flows.find((flow) =>
-    (flow.implementerConversationId === owner.id || flow.implementerPath === resolvedPath)
-    && flow.closedAt === null
-    && flow.state !== "closed");
-  if (existing) return { error: "implementer already has an active flow", status: 409 };
+  const identity = preparedGit ? preparedGit.mergeIdentity : await resolveFlowMergeIdentity(cwd);
   const flow: Flow = {
     id: crypto.randomUUID().slice(0, 8),
     template: "implement-review-loop",
@@ -266,39 +271,49 @@ export async function createFlowFromRequest(
     state: "waiting_ready",
     pausedState: null,
     stateDetail: null,
-    mergeEvidence: (() => {
-      const identity = resolveFlowMergeIdentity(cwd);
-      return identity ? { ...identity, prNumber: null, mergedAt: null, checkedAt: null, source: null } : null;
-    })(),
+    mergeEvidence: identity ? { ...identity, prNumber: null, mergedAt: null, checkedAt: null, source: null } : null,
     kickoffDelivery: null,
     hostClaim: null,
     rounds: [],
     createdAt: isoNow(),
     closedAt: null,
   };
-  registry.rememberMembership(owner.id, {
-    kind: "flow",
-    containerId: flow.id,
-    role: "implementer",
-    slot: "implementer",
-    stageId: null,
-    stageOrder: 0,
-    round: null,
-    parentConversationId: null,
+  const admission = await withFlowMutation((flows, persist) => {
+    if (flows.some((current) =>
+      (current.implementerConversationId === owner.id || current.implementerPath === resolvedPath)
+      && current.closedAt === null && current.state !== "closed")) {
+      return { error: "implementer already has an active flow", status: 409 };
+    }
+    registry.rememberMembership(owner.id, {
+      kind: "flow", containerId: flow.id, role: "implementer", slot: "implementer",
+      stageId: null, stageOrder: 0, round: null, parentConversationId: null,
+    });
+    flows.push(flow);
+    persist();
+    return { flow };
   });
-  flows.push(flow);
-  saveFlows(flows);
+  if (!admission.flow) return admission;
   if (req.deliverKickoff !== false) {
+    let delivery: Flow["kickoffDelivery"] = null;
+    let failure: string | null = null;
     try {
       const deliveryPath = await sendToImplementer(flow, new Map(entries.map((item) => [item.path, item])), kickoffPrompt(flow.spec));
-      flow.kickoffDelivery = { path: deliveryPath, deliveredAt: isoNow() };
-      saveFlows(flows);
+      delivery = { path: deliveryPath, deliveredAt: isoNow() };
     } catch (error) {
-      flow.state = "paused";
-      flow.pausedState = "waiting_ready";
-      flow.stateDetail = error instanceof Error ? error.message : String(error);
-      saveFlows(flows);
+      failure = error instanceof Error ? error.message : String(error);
     }
+    return await withFlowMutation((flows, persist) => {
+      const current = flows.find((item) => item.id === flow.id);
+      if (!current) return { error: "flow changed during kickoff delivery", status: 409 };
+      if (delivery) current.kickoffDelivery = delivery;
+      else if (current.state === "waiting_ready") {
+        current.state = "paused";
+        current.pausedState = "waiting_ready";
+        current.stateDetail = failure;
+      }
+      persist();
+      return { flow: current };
+    });
   }
   return { flow };
 }

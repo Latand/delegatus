@@ -223,6 +223,10 @@ function candidateFor(
   const key = { engine: conversation.engine, sessionId: generation.id } as const;
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId(key)];
+  /* Captured survivors fence every replacement path, including recovery whose
+     old root is already dead. Only a successful termination retry can verify
+     and clear this evidence. */
+  if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
   if (entry?.host) return null;
   /* Structured cutover covers every registered transcript. Historical Codex
      and Claude sessions reach their pane-less host through this recovery path,

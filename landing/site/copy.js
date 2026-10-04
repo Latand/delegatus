@@ -10,8 +10,29 @@
     "1. Run `bun --version`. If Bun is missing or older than 1.4, install it with",
     "   `curl -fsSL https://bun.com/install | bash`, then use ~/.bun/bin/bun if",
     "   `bun` is not on PATH yet.",
-    "2. Install the CLI: `bun add -g delegatus-cli`",
-    "3. Start it in the background so it keeps running after this session:",
+    "   For every command below, include ~/.bun/bin and ~/.local/bin on PATH:",
+    "   `export BUN_INSTALL=\"$HOME/.bun\"`",
+    "   `export PATH=\"$HOME/.bun/bin:$HOME/.local/bin:$PATH\"`",
+  ];
+
+  const cliStep = {
+    claude: [
+      "2. Run `claude --version`. Claude Desktop requires a separate Claude Code CLI.",
+      "   If the command is missing, install it: `curl -fsSL https://claude.ai/install.sh | bash`",
+      "   Verify `claude --version` again. If it still fails, stop and show the error.",
+    ],
+    codex: [
+      "2. Run `codex --version`. On macOS, if it is missing, check the executable",
+      "   at /Applications/Codex.app/Contents/Resources/codex or the same path under ~/Applications.",
+      "   If found, add that Resources directory to PATH for this session and verify `codex --version`.",
+      "   Otherwise install the native CLI: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`",
+      "   Verify `codex --version` again. If it still fails, stop and show the error.",
+    ],
+  };
+
+  const delegatusSteps = [
+    "3. Install the CLI: `bun add -g delegatus-cli`",
+    "4. Start it in the background so it keeps running after this session:",
     "   `mkdir -p ~/.cache/delegatus && nohup ~/.bun/bin/delegatus --no-open > ~/.cache/delegatus/server.log 2>&1 &`",
     "   Wait up to 60 seconds for http://127.0.0.1:8898/ to answer. If it does",
     "   not, show me the last 30 lines of that log.",
@@ -19,19 +40,22 @@
 
   const promptTail = [
     "   (it becomes available in your next session).",
-    "5. Give me the link to open. The setup guide there connects my agents,",
+    "6. Give me the link to open. The setup guide there connects my agents,",
     "   picks a project and creates its orchestrator.",
     "",
     "On native Windows, stop after step 1 and tell me to run this inside WSL 2.",
   ];
 
   const mcpStep = {
-    claude: ["4. Register its MCP server for yourself:", "   `claude mcp add viewer -s user -- delegatus-mcp`"],
-    codex: ["4. Register its MCP server for yourself:", "   `codex mcp add viewer -- delegatus-mcp`"],
+    claude: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `claude mcp add viewer -s user -- \"$(command -v bun)\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
+    codex: ["5. Register its MCP server for yourself using absolute paths (desktop sessions may have a different PATH):", "   `codex mcp add viewer -- \"$(command -v bun)\" \"$HOME/.bun/bin/delegatus-mcp\"`"],
   };
 
   function prompt(agent, lang) {
-    const lines = [...promptHead, ...mcpStep[agent], ...promptTail];
+    const lines = [...promptHead, ...cliStep[agent], ...delegatusSteps, ...mcpStep[agent], ...promptTail];
+    lines.push("", lang === "uk"
+      ? "Наприкінці встановлення покажи користувачеві: Delegatus раз на добу надсилає випадковий id, версію, ОС, архітектуру й тип встановлення на delegatus.org. Вимкнути можна в Налаштуваннях, через DELEGATUS_TELEMETRY=0 або DO_NOT_TRACK=1."
+      : "At the end of the install, show the user: Delegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1.");
     if (lang === "uk") lines.push("", "Відповідай українською.");
     return lines.join("\n");
   }
@@ -39,7 +63,7 @@
   const strings = {
     en: {
       "nav.skip": "Skip to content",
-      "hero.promise": "Runs on your machine. Uses your agent accounts.",
+      "hero.promise": "Free and open source. Runs the official CLIs on your machine, with your own logins.",
       "demo.views": "Views",
       "demo.board": "Board",
       "demo.orchestrator": "Orchestrator",
@@ -62,7 +86,7 @@
       "run.c1": "Each task gets a worktree, a builder and a fresh read-only reviewer.",
       "run.c2": "Claude Code builds, Codex reviews, and they message each other.",
       "run.c3": "A failed review sends the work back to the builder, within a round budget.",
-      "run.c4": "Decisions come to you. Merging on a passed review is optional and off by default.",
+      "run.c4": "Decisions come to you, and you can pause any pipeline. Merging on a passed review is off by default.",
       "run.views": "Pipelines",
       "run.tab1": "Build, Review, Verify",
       "run.tab2": "A decision",
@@ -81,18 +105,18 @@
       "reach.tab2": "Decision",
       "reach.tab3": "Reports",
       "reach.phoneAlt": "Delegatus on a phone with invented data: the harbor-api board, with the task that needs a decision first.",
-      "foot.does": "The prompt installs Delegatus, connects its MCP server to your agent and starts it on this machine. Then you pick a project and create its orchestrator.",
+      "foot.does": "Give the prompt to your own Claude Code or Codex. It installs and starts Delegatus on this machine, connects itself to it and ends with a link to open. There you pick a project and create its orchestrator.",
       "foot.analytics": "This site counts visits with Cloudflare Web Analytics (no cookies), clicks on its copy buttons, demo starts and full-screen opens.",
-      "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code or Codex",
+      "foot.needs": "macOS or Linux (Windows through WSL 2) · Bun 1.4+ · Claude Code, Codex or both",
       "meta.title": "Delegatus: delegate everything",
       "meta.description":
-        "Tell one agent what you want shipped. It runs Claude Code and Codex builders and reviewers, checks the work and reports back.",
+        "Tell one agent what you want shipped. It runs Claude Code and Codex on a board to build and review it. Free and open source, on your machine.",
       "nav.docs": "Docs",
       "nav.docsShort": "Docs",
       "nav.lang": "Language",
       "hero.title": "Delegate everything.",
       "hero.sub":
-        "Tell one agent what you want shipped. It runs the builders and reviewers, checks the work and reports back.",
+        "One agent runs your board. Claude Code and Codex build and review. You see every agent and can step in.",
       "hero.replay": "Replay",
       "install.tabs": "Install through your agent",
       "install.copy": "Copy prompt",
@@ -113,12 +137,12 @@
       "open.c3": "Several Claude and Codex accounts, limits in view.",
       "reach.title": "It finds you when it needs you.",
       "reach.c1": "Your board on your phone, inside your tailnet.",
-      "foot.line": "Source on GitHub. Runs locally with your agent accounts.",
+      "foot.line": "Free and open source. Runs on your machine with your own Claude Code or Codex.",
       "foot.version": "version",
     },
     uk: {
       "nav.skip": "Перейти до змісту",
-      "hero.promise": "Працює на твоїй машині. На твоїх акаунтах агентів.",
+      "hero.promise": "Безкоштовний, відкритий код. Запускає офіційні CLI локально, під твоїми акаунтами.",
       "demo.views": "Вигляд",
       "demo.board": "Дошка",
       "demo.orchestrator": "Оркестратор",
@@ -141,7 +165,7 @@
       "run.c1": "Кожна задача отримує worktree, розробника і нового рев’юера, який лише читає.",
       "run.c2": "Claude Code пише, Codex перевіряє, і вони пишуть одне одному.",
       "run.c3": "Невдале рев’ю повертає роботу розробникові, у межах бюджету раундів.",
-      "run.c4": "Рішення приходять до тебе. Мердж після успішного рев’ю вмикається за бажанням і за замовчуванням вимкнений.",
+      "run.c4": "Рішення приходять до тебе, і будь-який пайплайн можна поставити на паузу. Мердж після успішного рев’ю за замовчуванням вимкнений.",
       "run.views": "Пайплайни",
       "run.tab1": "Build, Review, Verify",
       "run.tab2": "Рішення",
@@ -160,18 +184,18 @@
       "reach.tab2": "Рішення",
       "reach.tab3": "Звіти",
       "reach.phoneAlt": "Delegatus на телефоні з вигаданими даними: дошка harbor-api, задача, що чекає рішення, перша.",
-      "foot.does": "Промпт встановлює Delegatus, підключає його MCP-сервер до твого агента і запускає його на цій машині. Далі ти обираєш проєкт і створюєш його оркестратора.",
-      "foot.needs": "macOS або Linux (Windows через WSL 2) · Bun 1.4+ · Claude Code або Codex",
+      "foot.does": "Віддай промпт своєму Claude Code або Codex. Він встановить і запустить Delegatus на цій машині, підключиться до нього й наприкінці дасть посилання. Там ти обираєш проєкт і створюєш його оркестратора.",
+      "foot.needs": "macOS або Linux (Windows через WSL 2) · Bun 1.4+ · Claude Code, Codex або обидва",
       "meta.title": "Delegatus: делегуй усе",
       "meta.description":
-        "Скажи одному агенту, що треба зробити. Він запускає розробників і рев’юерів Claude Code і Codex, перевіряє роботу і звітує.",
+        "Скажи одному агенту, що треба зробити. Claude Code і Codex пишуть і перевіряють це на дошці. Безкоштовно, з відкритим кодом, на твоїй машині.",
       "nav.docs": "Документація",
       "nav.docsShort": "Довідка",
       "nav.lang": "Мова",
       "hero.title": "Делегуй усе.",
       "foot.analytics": "Сайт рахує відвідування через Cloudflare Web Analytics (без cookies), натискання кнопок копіювання, запуски демо та відкриття на весь екран.",
       "hero.sub":
-        "Скажи одному агенту, що треба зробити. Він запускає розробників і рев’юерів, перевіряє роботу і звітує.",
+        "Один агент веде дошку. Claude Code і Codex пишуть і рев’юють. Ти бачиш усіх агентів і можеш втрутитися.",
       "hero.replay": "Ще раз",
       "install.tabs": "Встановлення через твого агента",
       "install.copy": "Копіювати промпт",
@@ -192,7 +216,7 @@
       "open.c3": "Кілька акаунтів Claude і Codex, ліміти на виду.",
       "reach.title": "Він знайде тебе, коли ти потрібен.",
       "reach.c1": "Твоя дошка на телефоні, у твоїй мережі Tailscale.",
-      "foot.line": "Відкритий код. Працює на твоїй машині, на твоїх акаунтах.",
+      "foot.line": "Безкоштовний, з відкритим кодом. Працює на твоїй машині з твоїм Claude Code або Codex.",
       "foot.version": "версія",
     },
   };

@@ -26,6 +26,8 @@ import { useAgentCapabilities } from "./useAgentCapabilities";
 import { DeadHostBanner } from "./runtime/DeadHostBanner";
 import { SupersededBanner } from "./runtime/SupersededBanner";
 import { FlipRow } from "./FlipRow";
+import { conversationSpeech } from "./feed/conversationSpeech";
+import { SpeakButton } from "./feed/SpeakButton";
 import { LogFeed } from "./LogFeed";
 import { paneState, type PaneState } from "./paneState";
 import { CtxChip, GoalChip, PlanChip } from "./PlanChip";
@@ -38,6 +40,7 @@ import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
 import { EngineBadge } from "./EngineMark";
 import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, fileModelLabel, fmtAge } from "./utils";
+import { isLaunchedConversation } from "./launchedConversations";
 
 const noop = () => undefined;
 
@@ -180,9 +183,13 @@ interface Props {
       replaces the pane's card frame. Everything below the header — banners,
       feed, control strip and composer — stays the pane's own. */
   chrome?: { header: React.ReactNode; className: string; attributes?: Record<string, string> };
+  /** The phone's conversation screen: the related-task strip, its launch
+      placeholder and the background-task rows leave the column — they are rows
+      of the screen's `⋯` menu — so the feed starts directly under the bar. */
+  chromeInMenu?: boolean;
 }
 
-export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome }: Props) {
+export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -331,12 +338,13 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
               )}
               {neverStarted ? null : <ProcessStatusControls file={file} compact />}
               {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
+              <SpeakButton scope={file.path} header />
               {onToggleExpand ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
                   aria-label={expanded ? t("branch.collapseFull") : t("branch.expandFull", { title: cleanTitle(file.title, 60) })}
                   title={expanded ? t("branch.collapseFull") : t("branch.expandFull", { title: cleanTitle(file.title, 60) })}
-                  onClick={onToggleExpand}
+                  onClick={() => { conversationSpeech(file.path).beginTransfer(); onToggleExpand(); }}
                 >
                   {expanded ? <Minimize2 className="h-3 w-3" aria-hidden /> : <Maximize2 className="h-3 w-3" aria-hidden />}
                 </button>
@@ -452,8 +460,10 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             the dead-host banner via surface classification and swaps recovery
             for navigation to the live successor plus the explicit fork. */}
         {superseded ? <SupersededBanner file={file} /> : null}
-        {relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
-        {tasks.length ? (
+        {chromeInMenu ? null : relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
+        {/* A launch's task arrives a poll after its pane: the strip's row is held, so the feed does not move when it lands. */}
+        {!chromeInMenu && !relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
+        {tasks.length && !chromeInMenu ? (
           <FlipRow className="shrink-0 border-b border-border bg-sunken" enter="fade">
             {tasks.map((task) => (
               <div key={task.path} data-flip-key={task.path}>

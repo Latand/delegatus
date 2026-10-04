@@ -1,10 +1,10 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
-import { controllerCommitIdentityArgs } from "@/lib/git/controllerCommitIdentity";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -25,13 +25,62 @@ export interface ExecResult {
   signal?: NodeJS.Signals | null;
 }
 
-export type ExecPort = (command: string, args: string[], cwd: string) => ExecResult;
+/** Optional environment overrides apply to this child command only. */
+export interface ExecOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+  /** Latin-1 keeps Git's arbitrary path bytes intact for safety validation. */
+  stdoutEncoding?: "utf8" | "latin1";
+  /** Publication children retain their owner's kernel lock across a restart. */
+  inheritFd?: number;
+}
 
-export const realExec: ExecPort = (command, args, cwd) => {
-  const res = spawnSync(command, args, { cwd, encoding: "utf8" });
-  if (res.error) return { code: null, stdout: "", stderr: res.error.message };
-  return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "", ...(res.signal ? { signal: res.signal } : {}) };
-};
+export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
+
+/** Bounded execution shared by Viewer Git and forge calls. Cancellation waits
+    for close, including transport children, before ownership can be released. */
+export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new Promise((resolve) => {
+  if (options.signal?.aborted) { resolve({ code: null, stdout: "", stderr: "command cancelled" }); return; }
+  let stdout = "";
+  let stderr = "";
+  let bytes = 0;
+  let stopped: string | null = null;
+  const child = spawn(command, args, {
+    cwd, detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+  });
+  const stop = (reason: string) => {
+    if (stopped) return;
+    stopped = reason;
+    if (child.pid) {
+      try {
+        if (process.platform === "win32") child.kill("SIGKILL");
+        else process.kill(-child.pid, "SIGKILL");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") stderr += String(error); }
+    }
+  };
+  const abort = () => stop("command cancelled");
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timer = setTimeout(() => stop(`command timed out after ${timeoutMs}ms`), timeoutMs);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
+  const append = (chunk: string, stream: "stdout" | "stderr") => {
+    bytes += Buffer.byteLength(chunk, stream === "stdout" ? options.stdoutEncoding ?? "utf8" : "utf8");
+    if (bytes > (options.maxOutputBytes ?? 8 * 1024 * 1024)) { stop("command output exceeded its byte limit"); return; }
+    if (stream === "stdout") stdout += chunk;
+    else stderr += chunk;
+  };
+  child.stdout?.setEncoding(options.stdoutEncoding ?? "utf8").on("data", (chunk: string) => append(chunk, "stdout"));
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => append(chunk, "stderr"));
+  child.on("error", (error) => { stopped ??= error.message; });
+  child.on("close", (code, signal) => {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abort);
+    resolve({ code: stopped ? null : code, stdout, stderr: stopped ? `${stopped}${stderr ? `: ${stderr}` : ""}` : stderr, signal });
+  });
+});
 
 export type ProvisionResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
@@ -46,21 +95,21 @@ function failure(step: string, res: ExecResult): { ok: false; error: string } {
  * A retry after an interrupted run adopts an already-created worktree instead
  * of failing on "already exists".
  */
-export function provisionWorktree(wf: Workflow, exec: ExecPort): ProvisionResult {
-  const head = exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.repoDir);
+export async function provisionWorktree(wf: Workflow, exec: ExecPort): Promise<ProvisionResult> {
+  const head = (await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.repoDir));
   if (head.code !== 0) return failure("resolving the repo branch", head);
   const baseBranch = head.stdout.trim();
   if (!baseBranch || baseBranch === "HEAD") {
     return { ok: false, error: "the repo checkout is detached; a workflow needs a branch to target" };
   }
-  const add = exec("git", ["worktree", "add", "-b", wf.branch, wf.worktreeDir, "HEAD"], wf.repoDir);
+  const add = (await exec("git", ["worktree", "add", "-b", wf.branch, wf.worktreeDir, "HEAD"], wf.repoDir));
   if (add.code !== 0) {
     /* The worktree may already exist from a run interrupted mid-provisioning;
        adopt it when its checkout answers, otherwise surface the add error. */
-    const probe = exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.worktreeDir);
+    const probe = (await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.worktreeDir));
     if (probe.code !== 0 || probe.stdout.trim() !== wf.branch) return failure("git worktree add", add);
   }
-  const base = exec("git", ["rev-parse", "HEAD"], wf.worktreeDir);
+  const base = (await exec("git", ["rev-parse", "HEAD"], wf.worktreeDir));
   if (base.code !== 0) return failure("resolving the workflow base ref", base);
   const baseRef = base.stdout.trim();
   if (!baseRef) return { ok: false, error: "git returned an empty base ref" };
@@ -150,7 +199,7 @@ export function setupStatus(wf: Workflow, now: number = Date.now()): SetupStatus
   return { status: "failed", detail: "setup was interrupted before it finished" };
 }
 
-export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string };
+export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string; recoveryRequired?: boolean };
 
 /** First line of the task as the PR title, in the repo's usual short form. */
 export function prTitle(wf: Workflow): string {
@@ -163,48 +212,78 @@ function extractPrUrl(text: string): string | null {
 }
 
 /** Push the wf/ branch and open the PR against the captured base branch (W7). */
-export function finishPr(wf: Workflow, body: string, exec: ExecPort): FinishResult {
-  const push = exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir);
+export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Promise<FinishResult> {
+  const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir));
   if (push.code !== 0) return failure("git push", push);
-  const create = exec(
+  const create = (await exec(
     "gh",
     ["pr", "create", "--title", prTitle(wf), "--body", body, "--base", wf.baseBranch, "--head", wf.branch],
     wf.worktreeDir,
-  );
+  ));
   if (create.code === 0) return { ok: true, prUrl: extractPrUrl(create.stdout) };
   /* A retry after a half-finished round lands here: the PR already exists, so
      recover its URL instead of parking the workflow. */
   if (/already exists/i.test(create.stderr)) {
-    const view = exec("gh", ["pr", "view", wf.branch, "--json", "url", "--jq", ".url"], wf.worktreeDir);
+    const view = (await exec("gh", ["pr", "view", wf.branch, "--json", "url", "--jq", ".url"], wf.worktreeDir));
     if (view.code === 0 && view.stdout.trim()) return { ok: true, prUrl: view.stdout.trim() };
   }
   return failure("gh pr create", create);
 }
 
 /** Merge the wf/ branch into the base branch locally, without pushing (W7). */
-export function finishMerge(wf: Workflow, exec: ExecPort): FinishResult {
-  const head = exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.repoDir);
+export async function finishMerge(wf: Workflow, exec: ExecPort, cleanupExec: ExecPort = exec): Promise<FinishResult> {
+  const head = (await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], wf.repoDir));
   if (head.code !== 0) return failure("resolving the repo branch", head);
   const current = head.stdout.trim();
   if (current !== wf.baseBranch) {
     return { ok: false, error: `the repo checkout is on ${current}; check out ${wf.baseBranch} before merging` };
   }
-  const identity = controllerCommitIdentityArgs(exec, wf.repoDir);
-  const merge = exec("git", [...identity, "merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir);
+  const before = await exec("git", ["rev-parse", "HEAD"], wf.repoDir);
+  const dirty = await exec("git", ["status", "--porcelain"], wf.repoDir);
+  const existingMerge = await exec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir);
+  if (before.code !== 0 || dirty.code !== 0 || dirty.stdout.trim() || existingMerge.code !== 1) {
+    return { ok: false, error: "the repo checkout is dirty or already merging; inspect it before finishing this workflow" };
+  }
+  const originalHead = before.stdout.trim();
+  const target = await exec("git", ["rev-parse", `${wf.branch}^{commit}`], wf.repoDir);
+  if (target.code !== 0 || !/^[0-9a-f]{40}$/i.test(target.stdout.trim())) {
+    return { ok: false, error: "resolving the workflow branch head failed; inspect the repo before retrying" };
+  }
+  const expected = await exec("git", ["merge-tree", "--write-tree", originalHead, target.stdout.trim()], wf.repoDir);
+  const expectedTree = expected.code === 0 ? expected.stdout.trim().split("\n")[0] : "";
+  if (!/^[0-9a-f]{40}$/i.test(expectedTree)) {
+    return { ok: false, error: "the workflow merge could not be previewed safely; inspect the repo before retrying" };
+  }
+  const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`], wf.repoDir, controllerCommitIdentityEnv()));
   if (merge.code !== 0) {
-    /* Leave the checkout clean: an aborted merge is retryable after the user
-       resolves whatever blocked it. */
-    exec("git", ["merge", "--abort"], wf.repoDir);
+    /* A merge can fail after populating the index. Even a fresh ownership
+       snapshot cannot make `merge --abort` safe: an operator can stage a
+       tracked edit between the snapshot and Git's destructive reset. Leave
+       any state Git produced intact and ask for explicit recovery. */
+    const [headAfter, mergeHead, status] = await Promise.all([
+      cleanupExec("git", ["rev-parse", "HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+      cleanupExec("git", ["status", "--porcelain"], wf.repoDir, undefined, { timeoutMs: 5_000 }),
+    ]);
+    const safelyUnchanged = headAfter.code === 0 && headAfter.stdout.trim() === originalHead
+      && mergeHead.code === 1 && status.code === 0 && !status.stdout.trim();
+    if (!safelyUnchanged) {
+      return {
+        ok: false,
+        error: "git merge failed with repository changes or merge state still present; repository recovery is required before retrying",
+        recoveryRequired: true,
+      };
+    }
     return failure("git merge", merge);
   }
   return { ok: true, prUrl: null };
 }
 
-export function runFinish(wf: Workflow, prBody: string, exec: ExecPort): FinishResult {
+export async function runFinish(wf: Workflow, prBody: string, exec: ExecPort, cleanupExec: ExecPort = exec): Promise<FinishResult> {
   /* Review rounds cover uncommitted changes too, while push and merge only
      carry commits — finishing a dirty worktree would publish less than what
      was approved. Park until every approved change is committed. */
-  const status = exec("git", ["status", "--porcelain"], wf.worktreeDir);
+  const status = (await exec("git", ["status", "--porcelain"], wf.worktreeDir));
   if (status.code !== 0) return failure("checking the worktree state", status);
   const dirty = status.stdout.split("\n").filter((line) => line.trim());
   if (dirty.length) {
@@ -215,5 +294,5 @@ export function runFinish(wf: Workflow, prBody: string, exec: ExecPort): FinishR
       error: `the worktree has uncommitted changes (${names.join(", ")}${more}) — commit them, then retry the finish`,
     };
   }
-  return wf.template.finish === "merge" ? finishMerge(wf, exec) : finishPr(wf, prBody, exec);
+  return wf.template.finish === "merge" ? (await finishMerge(wf, exec, cleanupExec)) : (await finishPr(wf, prBody, exec));
 }

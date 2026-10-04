@@ -4,12 +4,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
-import { createPipelineWithDelivery, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+test("a one-stage merger pipeline accepts its role and persists the effective read-write profile", () => {
+  const effectiveRole = { roleId: "merger" as const, engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", access: "read-write" as const, promptScaffold: "Merge reviewed PRs" };
+  expect(isEffectiveRole(effectiveRole)).toBe(true);
+  const pipeline = buildPipeline({ id: "merger-fixture", task: "Merge batch", project: "fixture", repoDir: "/repo",
+    stages: [{ id: "merge", kind: "run", prompt: "Merge", role: { roleId: "merger", params: { prs: "12@abcdef1" } }, effectiveRole, next: null }],
+    srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z" });
+  expect(pipeline.stages[0]!.effectiveRole).toEqual(effectiveRole);
+});
 
 const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
 function deliveryFixture(id: string): Pipeline {
@@ -110,6 +119,49 @@ test("a process crash inside the claim transaction leaves no partial owner", asy
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   const recovered = await createPipelineWithDelivery(deliveryFixture("crashed"), deliveryTarget);
   expect(recovered.delivery).toMatchObject({ active: true, epoch: 1 });
+}));
+
+test.each([
+  { detail: "stage failed without a fail edge", status: "fail" as const },
+  { detail: "stage needs a decision", status: "needs_decision" as const },
+  { detail: "budget spent: 2 findings left", status: "fail" as const },
+  { detail: "provider wait", status: "fail" as const },
+])("a recoverable park keeps delivery: $detail", async ({ detail, status }) => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("park-owner"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.state = "needs_decision";
+    record.stateDetail = detail;
+    record.cursor!.state = "running";
+    record.runs[0]!.attempts.push({ n: 1, state: "needs_decision", effectiveRole: record.stages[0]!.effectiveRole,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: "2026-07-01T00:00:00.000Z", completedAt: "2026-07-01T00:01:00.000Z",
+      input: null, activatedBy: null, output: null, verdict: { status }, error: detail });
+    tx.put(record);
+  });
+  const parked = pipelineDeliveryLookup({ ...deliveryTarget, active: true })!;
+  expect(parked?.id).toBe(owner.id);
+  expect(parked.delivery).toMatchObject({ active: true, publish: "enabled", ownerId: owner.id, epoch: 1 });
+  expect(parked.delivery!.journal.map((item) => item.kind)).toEqual(["claim"]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("park-comparison"), deliveryTarget);
+  expect(comparison.delivery).toMatchObject({ disposition: "comparison", active: false, ownerId: owner.id, epoch: 1 });
+}));
+
+test("a competing lane's explicit takeover fences the parked owner", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("parked-owner"), deliveryTarget);
+  withDeliveryMutation((tx) => {
+    const record = tx.get(owner.id)!;
+    record.state = "needs_decision";
+    record.stateDetail = "budget spent: 1 findings left";
+    tx.put(record);
+  });
+  const comparison = await createPipelineWithDelivery(deliveryFixture("successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "select the successor", null);
+  expect(taken.pipeline?.delivery).toMatchObject({ active: true, ownerId: comparison.id, epoch: 2 });
+  const old = findPipelineRecord(owner.id)!;
+  expect(old).toMatchObject({ state: "needs_decision", delivery: { active: false, publish: "disabled", epoch: 1 } });
+  expect(deliveryOwnerError(old, pipelineDeliveryLookup({ ...deliveryTarget, active: true }))).toContain(comparison.id);
+  expect((await takeoverPipelineDelivery(owner.id, owner.id, 1, "stale retry", null)).status).toBe(409);
 }));
 
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
@@ -238,7 +290,7 @@ test.each(["max", "ultra"])("Astra %s pipelines persist creation and stage edits
   }
 });
 
-test("pipeline mutations preserve corrupt and future-schema registries", async () => {
+test("pipeline mutations refuse corrupt files and preserve individual rejected records", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipelines-corrupt-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -253,27 +305,31 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       { id: "build", kind: "run", prompt: "build", next: "verify", effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
       { id: "verify", kind: "run", prompt: "verify", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "medium", access: "read-write", promptScaffold: null } },
     ];
-    const rejectsWithoutRewrite = async (pipeline: unknown) => {
+    const preservesRejectedRecord = async (pipeline: unknown) => isolatedDelivery(async (root) => {
+      const filename = path.join(root, "pipelines.json");
       const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] });
-      fs.writeFileSync(file, bytes, "utf8");
-      await expect(withPipelineMutation((_pipelines, persist) => persist())).rejects.toThrow("malformed records");
-      expect(fs.readFileSync(file, "utf8")).toBe(bytes);
-    };
+      fs.writeFileSync(filename, bytes, "utf8");
+      await withPipelineMutation((records, persist) => { expect(records).toEqual([]); persist(); });
+      expect(fs.readFileSync(filename, "utf8")).toBe(bytes);
+      const db = new Database(path.join(root, "state.sqlite"));
+      try { expect(db.query("SELECT COUNT(*) AS count FROM state_rows WHERE collection='pipelines'").get()).toEqual({ count: 1 }); }
+      finally { db.close(); }
+    });
     const malformed = buildPipeline({ id: "badbad12", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" }) as unknown as Record<string, unknown>;
     malformed.state = "teleported";
-    await rejectsWithoutRewrite(malformed);
+    await preservesRejectedRecord(malformed);
 
     const incompatible = buildPipeline({ id: "badrole1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     incompatible.stages[0]!.effectiveRole.model = "fable";
-    await rejectsWithoutRewrite(incompatible);
+    await preservesRejectedRecord(incompatible);
 
     const unsafeWorktree = buildPipeline({ id: "badpath1", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     unsafeWorktree.worktreeDir = "/repo";
-    await rejectsWithoutRewrite(unsafeWorktree);
+    await preservesRejectedRecord(unsafeWorktree);
 
     const mismatchedRole = buildPipeline({ id: "badrole2", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     mismatchedRole.stages[0]!.role = { roleId: "builder" };
-    await rejectsWithoutRewrite(mismatchedRole);
+    await preservesRejectedRecord(mismatchedRole);
 
     const expandedVerdict = buildPipeline({ id: "badverdt", task: "task", project: "viewer", repoDir: "/repo", stages, srcPath: null, srcConversationId: null, now: "now" });
     expandedVerdict.runs[0]!.attempts.push({
@@ -294,7 +350,7 @@ test("pipeline mutations preserve corrupt and future-schema registries", async (
       verdict: { status: "pass", findings: Array.from({ length: 51 }, () => "finding") },
       error: null,
     });
-    await rejectsWithoutRewrite(expandedVerdict);
+    await preservesRejectedRecord(expandedVerdict);
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -815,14 +871,15 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
     const original = read().value_json;
     for (const corrupt of ["{broken", JSON.stringify({ ...pipeline, runs: null })]) {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
-      expect(() => loadPipelinesForStartup()).toThrow();
+      if (corrupt === "{broken") expect(() => loadPipelinesForStartup()).toThrow();
+      else expect(loadPipelinesForStartup()).toEqual([]);
       expect(read().value_json).toBe(corrupt);
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
       expect(loadPipelinesForStartup()).toHaveLength(1);
     }
     if (collection === "pipelines_archive") {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);
-      expect(loadArchivedPipelines()).toEqual([]);
+      expect(() => loadArchivedPipelines()).toThrow();
       expect(read().value_json).toBe("{broken");
     } else {
       db.query("INSERT INTO state_rows (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive',?,?,?,?,0)").run(pipeline.id, original, 0, 1);
@@ -845,7 +902,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("startup preserves malfo
   const archive = path.join(sandbox, filename);
   try {
     expect(loadPipelinesForStartup()).toEqual([]); // ENOENT is valid empty evidence.
-    for (const corrupt of ["null", "false", "[]", "{broken", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [{}] })]) {
+    for (const corrupt of ["null", "false", "[]", "{broken"]) {
       fs.writeFileSync(archive, corrupt);
       expect(await withPipelineStartupAdmission(async (available) => available)).toBeFalse();
       expect(fs.readFileSync(archive, "utf8")).toBe(corrupt);
@@ -944,4 +1001,73 @@ test("stored review budgets remain unchanged", async () => isolatedDelivery(() =
   record.stages[0]!.onFail = { to: "build", maxRounds: 5 };
   savePipelines([record]);
   expect(loadPipelines()[0]!.stages[0]!.onFail!.maxRounds).toBe(5);
+}));
+
+function providerStoreFixture(): Pipeline {
+  const lane = deliveryFixture("recover1");
+  lane.state = "running";
+  lane.cursor!.state = "running";
+  lane.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(lane.stages[0]!.effectiveRole),
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: null, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+    providerWait: { condition: { kind: "transient", scope: null, resetLabel: null, label: "auth refresh race" },
+      text: "retry in a minute", accountId: null, turnTs: 1, tries: 0,
+      startedAt: "2026-10-02T10:00:00Z", resumeAt: "2026-10-02T10:01:00Z", resetsAt: null, failedAccounts: [] },
+    providerRecoveries: [{ action: "wait", at: "2026-10-02T10:00:00Z",
+      condition: { kind: "transient", scope: null, resetLabel: null, label: "auth refresh race" }, summary: "waiting" }],
+  });
+  return lane;
+}
+
+test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
+  for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 }]) {
+    const lane = providerStoreFixture();
+    lane.runs[0]!.attempts[0]!.providerWait = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+  for (const bad of [{}, { tries: -1, startedAt: "2026-10-02T10:00:00Z" }, { tries: 1, startedAt: "invalid" }]) {
+    const lane = providerStoreFixture();
+    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+  const lane = providerStoreFixture();
+  lane.runs[0]!.attempts[0]!.providerRecoveries = [{ action: "unknown" }] as never;
+  expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+}));
+
+test("provider evidence timestamps accept finite fractional milliseconds and reject invalid values", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.providerWait!.turnTs = 1_790_923_281_585.1626;
+  attempt.usageLimitedAccounts = [{ accountId: "account-a", engine: "codex", resetsAt: null, limitedAt: attempt.providerWait!.turnTs }];
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.turnTs).toBe(attempt.providerWait!.turnTs);
+  for (const value of [-1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    attempt.providerWait!.turnTs = value;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    attempt.providerWait!.turnTs = 1;
+    attempt.usageLimitedAccounts![0]!.limitedAt = value;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    attempt.usageLimitedAccounts![0]!.limitedAt = 1;
+  }
+}));
+
+test("loaded provider recovery state does not alias the cached persisted record", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z" };
+  lane.runs[0]!.attempts[0]!.providerWait!.capacityProbes = 1;
+  savePipelines([lane]);
+  const first = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  first.providerWait!.condition.label = "mutated";
+  first.providerWait!.failedAccounts!.push("account-other");
+  first.providerRecoveryBudget!.tries = 3;
+  first.providerWait!.capacityProbes = 2;
+  first.providerRecoveries![0]!.condition.label = "mutated";
+  const second = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(second.providerWait!.condition.label).toBe("auth refresh race");
+  expect(second.providerWait!.failedAccounts).toEqual([]);
+  expect(second.providerRecoveryBudget!.tries).toBe(2);
+  expect(second.providerWait!.capacityProbes).toBe(1);
+  expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
 }));

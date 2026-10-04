@@ -8,7 +8,7 @@ import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
 import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
-import { latestAttempt, stageAttempts, stageChipState, stageFailEdgeRoundsUsed, type StageChipState } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, stageAttempts, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
 import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
@@ -16,8 +16,12 @@ import { workingSince } from "@/components/workingSince";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
-import { pastAttempts, stageViews, type PastAttempt, type StageView, type WorkingConversations } from "./pipelineGraph";
+import { pastAttempts, type PastAttempt, type WorkingConversations } from "./pipelineGraph";
+import { summarizePipeline, type KanbanLoop, type KanbanPipeline, type KanbanStageChip } from "./pipelineSummary";
 import { placeholderTitle } from "./placeholderTitle";
+
+export { summarizePipeline };
+export type { KanbanLoop, KanbanPipeline, KanbanStageChip };
 
 /**
  * The kanban board's projection (#1695 K1).
@@ -57,35 +61,6 @@ export interface KanbanMirror {
   file: FileEntry;
   primaryCardId: string;
   primaryTitle: string;
-}
-
-export interface KanbanStageChip {
-  stage: PipelineStage;
-  state: StageChipState;
-  /** Review rounds recorded for a review-loop stage. */
-  rounds: number;
-  /** Off the pass path: reached only through a fail edge. */
-  branch: boolean;
-  /** The stage settled and its conversation is working again (#1744). */
-  rework: boolean;
-}
-
-export interface KanbanLoop {
-  from: PipelineStage;
-  to: PipelineStage;
-  /** Times the fail edge fired, counted from attempt provenance. */
-  fired: number;
-  max: number;
-}
-
-export interface KanbanPipeline {
-  pipeline: Pipeline;
-  /** Each stage as the graph draws it (#1695 K5a), by stage id. */
-  views: Map<string, StageView>;
-  chips: KanbanStageChip[];
-  loops: KanbanLoop[];
-  /** Stages with no attempt yet. */
-  waiting: number;
 }
 
 export interface KanbanCard {
@@ -263,6 +238,15 @@ export interface KanbanModelInput {
       seat record names leaves the bands (#1841). */
   seat?: SeatRefs | null;
   query?: string;
+  /** The conversations with a reader open and unfolded in a card. A draft no
+      task holds stands in Assigned unless one of these is held by a card there:
+      a reader fills the column, so a draft above it would push the agent the
+      operator is reading out of the window. */
+  openReaders?: ReadonlySet<string>;
+  /** Whether this page launched the conversation from an agent draft. With a
+      reader open on another card in Assigned, the launched card stands under
+      that card, where the draft stood, and does not push it out of the window. */
+  launched?: (file: FileEntry) => boolean;
   /** Epoch seconds. */
   now: number;
 }
@@ -284,29 +268,6 @@ function parseMs(iso: string | undefined | null): number {
 function descriptionOf(text: string): string {
   const newline = text.search(/\r?\n/);
   return newline < 0 ? "" : text.slice(newline).trim();
-}
-
-function stageIndex(pipeline: Pipeline): Map<string, PipelineStage> {
-  return new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
-}
-
-/** Stage ids along the pass path from the first stage, in order. */
-function passPath(pipeline: Pipeline): string[] {
-  const byId = stageIndex(pipeline);
-  const targets = new Set(pipeline.stages.flatMap((stage) => (stage.next ? [stage.next] : [])));
-  const failTargets = new Set(pipeline.stages.flatMap((stage) => (stage.onFail?.to ? [stage.onFail.to] : [])));
-  const start = pipeline.stages.find((stage) => !targets.has(stage.id) && !failTargets.has(stage.id))
-    ?? pipeline.stages.find((stage) => !targets.has(stage.id))
-    ?? pipeline.stages[0];
-  const path: string[] = [];
-  const seen = new Set<string>();
-  let current: PipelineStage | null = start ?? null;
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id);
-    path.push(current.id);
-    current = current.next ? byId.get(current.next) ?? null : null;
-  }
-  return path;
 }
 
 /** The stage conversations working right now, by the row state the card's
@@ -338,50 +299,6 @@ export function workingStageConversations(pipelines: readonly Pipeline[], files:
   return workingStageConversationsOf(stagePaths, files, now);
 }
 
-/** `working`: the transcript paths and conversation ids whose board row is
-    working, so a settled stage whose conversation took more work reads so
-    (#1744). A surface without the files passes nothing. */
-export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map(), working?: WorkingConversations): KanbanPipeline {
-  const byId = stageIndex(pipeline);
-  const views = stageViews(pipeline, flowsById, working);
-  const main = passPath(pipeline);
-  const onMain = new Set(main);
-  /* Stages reached only through a fail edge are branches; any other stage the
-     pass walk did not visit still belongs to the chain, in declared order. */
-  const failOnly = new Set(
-    pipeline.stages.filter((stage) => !onMain.has(stage.id)
-      && pipeline.stages.some((source) => source.onFail?.to === stage.id)
-      && !pipeline.stages.some((source) => source.next === stage.id)).map((stage) => stage.id),
-  );
-  const ordered = [
-    ...main,
-    ...pipeline.stages.filter((stage) => !onMain.has(stage.id) && !failOnly.has(stage.id)).map((stage) => stage.id),
-    ...pipeline.stages.filter((stage) => failOnly.has(stage.id)).map((stage) => stage.id),
-  ];
-  const chips = ordered.map((id) => {
-    const stage = byId.get(id)!;
-    /* The embedded review flow's own round count, as the flow projection
-       records it on the attempt; a stage with no review flow has none. */
-    const rounds = stage.kind === "review-loop"
-      ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.historical ? 0 : attempt.reviewFlowSync?.roundCount ?? 0), 0)
-      : 0;
-    const view = views.get(id);
-    return { stage, state: view?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id), rework: view?.rework ?? false };
-  });
-  const loops: KanbanLoop[] = [];
-  for (const stage of pipeline.stages) {
-    const edge = stage.onFail;
-    if (!edge?.to) continue;
-    const to = byId.get(edge.to);
-    if (!to) continue;
-    /* The engine's spent budget: the target's own attempts this fail edge activated. */
-    const fired = stageFailEdgeRoundsUsed(pipeline, stage);
-    loops.push({ from: stage, to, fired, max: edge.maxRounds });
-  }
-  const waiting = pipeline.stages.filter((stage) => latestAttempt(pipeline, stage.id) === null).length;
-  return { pipeline, views, chips, loops, waiting };
-}
-
 function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string, { pipeline: Pipeline; stage: PipelineStage }>, now: number): KanbanMember {
   const row = mobileRowState(file, now);
   return {
@@ -409,6 +326,33 @@ function referenceIdentity(reference: { conversationId: string | null; path: str
  * the working cards keep their places while their agents stream. Then the
  * newest agent work, then the newest edit of the task, then the id.
  */
+/** A card no task owns that holds nothing but agent drafts. Its launch becomes
+    a task in Assigned, so the board draws it there from the first keystroke. */
+export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "members" | "mirrors">): boolean {
+  return !card.task && card.drafts.length > 0 && card.members.length === 0 && card.mirrors.length === 0;
+}
+
+/**
+ * A card launched from this page's draft, with its reader open, takes the
+ * place right under the last card the operator is reading in the column. The
+ * draft waited in Inbox beside that card; the launch writes a task that sorts
+ * above it, and the card being read would drop below the new card's reader and
+ * out of the window. Closing either reader lets the launched card sort as any
+ * other. Reorders `cards` in place.
+ */
+export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<string> | undefined, launched: ((file: FileEntry) => boolean) | undefined): void {
+  if (!reading?.size || !launched) return;
+  const held = (card: KanbanCard) => card.members.some((member) => reading.has(conversationIdentity(member.file)));
+  const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
+  let anchor = -1;
+  cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
+  if (anchor < 0) return;
+  const above = cards.slice(0, anchor + 1);
+  const moved = above.filter(landing);
+  if (!moved.length) return;
+  cards.splice(0, anchor + 1, ...above.filter((card) => !landing(card)), ...moved);
+}
+
 export function compareCards(a: KanbanCard, b: KanbanCard): number {
   if ((a.workingSinceMs === null) !== (b.workingSinceMs === null)) return a.workingSinceMs === null ? 1 : -1;
   if (a.workingSinceMs !== null && b.workingSinceMs !== null) return b.workingSinceMs - a.workingSinceMs || a.id.localeCompare(b.id);
@@ -700,7 +644,10 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const needsYou = reasons.length > 0;
     const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
-    const status: TaskStatus = overridden ?? task?.status ?? "inbox";
+    /* A card holding only an agent draft is where its launch will land: the task
+       the launch writes is Assigned, so the draft stands there and the launched
+       card takes the place the draft held, in the column it was drawn in. */
+    const status: TaskStatus = overridden ?? task?.status ?? (!members.length && band.members.some((member) => member.kind === "draft") ? "assigned" : "inbox");
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
@@ -786,6 +733,12 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     }];
   });
 
+  /* The draft's launch writes a task in Assigned and takes the draft's place there. Beside an agent being
+     read in Assigned the draft stays in Inbox instead, where it pushes nothing out of the window. */
+  const readInAssigned = cards.some((card) => card.task && !card.hide.hidden && card.status === "assigned"
+    && card.members.some((member) => input.openReaders?.has(conversationIdentity(member.file))));
+  if (readInAssigned) for (const card of cards) if (holdsOnlyDrafts(card)) card.status = "inbox";
+
   /* Search and the Overview's predicate narrow the same way and in the same
      place: what they reject leaves `shown`, and every count above is already
      taken over the whole inventory. */
@@ -798,6 +751,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const unlinked = cards.filter((card) => !card.task).sort(compareCards);
   const columns = Object.fromEntries(KANBAN_STATUSES.map((status) => {
     const inColumn = recorded.filter((card) => card.status === status).sort(status === "inbox" ? compareInboxCards : compareCards);
+    if (status === "assigned") landUnderReading(inColumn, input.openReaders, input.launched);
     return [status, {
       status,
       cards: inColumn,

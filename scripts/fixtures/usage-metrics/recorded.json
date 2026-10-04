@@ -1,0 +1,229 @@
+{
+  "observedAt": "2026-09-30T10:01:07.447Z",
+  "from": "2026-09-22",
+  "to": "2026-09-30",
+  "npm": {
+    "range": {
+      "start": "2026-09-22",
+      "end": "2026-09-28",
+      "downloads": [
+        {
+          "day": "2026-09-22",
+          "downloads": 113
+        },
+        {
+          "day": "2026-09-23",
+          "downloads": 185
+        },
+        {
+          "day": "2026-09-24",
+          "downloads": 161
+        },
+        {
+          "day": "2026-09-25",
+          "downloads": 166
+        },
+        {
+          "day": "2026-09-26",
+          "downloads": 32
+        },
+        {
+          "day": "2026-09-27",
+          "downloads": 14
+        },
+        {
+          "day": "2026-09-28",
+          "downloads": 129
+        }
+      ]
+    },
+    "versions": {
+      "downloads": {
+        "1.5.0": 162,
+        "0.0.0": 182,
+        "1.3.0": 184,
+        "1.4.0": 162,
+        "1.6.0": 110
+      },
+      "start": "2026-09-22",
+      "end": "2026-09-28"
+    },
+    "releases": {
+      "2026-09-22": [
+        "0.0.0"
+      ],
+      "2026-09-23": [
+        "1.3.0"
+      ],
+      "2026-09-24": [
+        "1.4.0"
+      ],
+      "2026-09-25": [
+        "1.5.0"
+      ],
+      "2026-09-28": [
+        "1.6.0"
+      ],
+      "2026-09-29": [
+        "1.7.0",
+        "1.7.1"
+      ]
+    }
+  },
+  "github": {
+    "views": {
+      "count": 464,
+      "uniques": 86,
+      "views": [
+        {
+          "timestamp": "2026-09-16T00:00:00Z",
+          "count": 4,
+          "uniques": 2
+        },
+        {
+          "timestamp": "2026-09-17T00:00:00Z",
+          "count": 3,
+          "uniques": 1
+        },
+        {
+          "timestamp": "2026-09-18T00:00:00Z",
+          "count": 8,
+          "uniques": 4
+        },
+        {
+          "timestamp": "2026-09-19T00:00:00Z",
+          "count": 59,
+          "uniques": 8
+        },
+        {
+          "timestamp": "2026-09-20T00:00:00Z",
+          "count": 52,
+          "uniques": 9
+        },
+        {
+          "timestamp": "2026-09-21T00:00:00Z",
+          "count": 43,
+          "uniques": 17
+        },
+        {
+          "timestamp": "2026-09-22T00:00:00Z",
+          "count": 18,
+          "uniques": 6
+        },
+        {
+          "timestamp": "2026-09-23T00:00:00Z",
+          "count": 52,
+          "uniques": 16
+        },
+        {
+          "timestamp": "2026-09-24T00:00:00Z",
+          "count": 39,
+          "uniques": 12
+        },
+        {
+          "timestamp": "2026-09-25T00:00:00Z",
+          "count": 35,
+          "uniques": 10
+        },
+        {
+          "timestamp": "2026-09-26T00:00:00Z",
+          "count": 32,
+          "uniques": 13
+        },
+        {
+          "timestamp": "2026-09-27T00:00:00Z",
+          "count": 47,
+          "uniques": 14
+        },
+        {
+          "timestamp": "2026-09-28T00:00:00Z",
+          "count": 56,
+          "uniques": 19
+        },
+        {
+          "timestamp": "2026-09-29T00:00:00Z",
+          "count": 16,
+          "uniques": 9
+        }
+      ]
+    },
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 39,
+        "uniques": 19
+      },
+      {
+        "referrer": "delegatus.org",
+        "count": 19,
+        "uniques": 16
+      },
+      {
+        "referrer": "Google",
+        "count": 14,
+        "uniques": 9
+      },
+      {
+        "referrer": "youtube.com",
+        "count": 14,
+        "uniques": 3
+      },
+      {
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "count": 6,
+        "uniques": 6
+      },
+      {
+        "referrer": "web.telegram.org",
+        "count": 3,
+        "uniques": 1
+      },
+      {
+        "referrer": "studio.youtube.com",
+        "count": 2,
+        "uniques": 1
+      },
+      {
+        "referrer": "t.co",
+        "count": 2,
+        "uniques": 1
+      },
+      {
+        "referrer": "perplexity.ai",
+        "count": 1,
+        "uniques": 1
+      }
+    ],
+    "stars": 20
+  },
+  "site": {
+    "days": [
+      {
+        "day": "2026-09-26",
+        "visits": 50,
+        "sampleInterval": 12
+      },
+      {
+        "day": "2026-09-27",
+        "visits": 40,
+        "sampleInterval": 10
+      },
+      {
+        "day": "2026-09-28",
+        "visits": 30,
+        "sampleInterval": 10
+      },
+      {
+        "day": "2026-09-29",
+        "visits": 10,
+        "sampleInterval": 15
+      },
+      {
+        "day": "2026-09-30",
+        "visits": 30,
+        "sampleInterval": 15
+      }
+    ]
+  },
+  "failures": []
+}

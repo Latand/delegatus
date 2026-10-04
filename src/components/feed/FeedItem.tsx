@@ -18,7 +18,7 @@ import { InboxImageCard } from "./InboxImage";
 import { md, mdBlocks, mdImages } from "./markdown";
 import { BUBBLE_MEASURE, READING_MEASURE } from "./measure";
 import { UserMessageRow } from "./UserMessageRow";
-import { useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
+import { NO_PROVENANCE, useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
 import { rawUserTextFor, tr, type Item } from "./parse";
 import { BlobCard } from "./cards/BlobCard";
 import { CmdGroupCard } from "./cards/CmdGroupCard";
@@ -133,16 +133,37 @@ export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", s
    (poll tick, camera state, files refresh) skips re-parsing markdown for
    every message that did not change. The provenance lookup arrives by context,
    so a resolved map re-renders exactly the memoized consumers. */
-export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, resumesAsk }: {
+interface FeedItemProps {
   item: Item;
-  speakText?: string;
+  speakText?: string; speakId?: string;
   /** Phone only: this seat row is the first after a parallel self's block, so
       its header also says which seat head it continues (null: the head has no
       text to quote). Absent: an ordinary row. */
   resumesAsk?: string | null;
-}) {
-  const { t } = useLocale();
+}
+
+/** The rows `resolveDeliveredItem` can turn into something else: a delivered
+    message, which the lookup names the sender of. Every other row reads
+    nothing from the lookup. */
+function readsProvenance(item: Item): boolean {
+  return item.kind === "user" || (item.kind === "tmsg" && Boolean(item.internal)) || (item.kind === "sysmsg" && Boolean(item.deliveredMessage));
+}
+
+/* Only a row that reads the lookup subscribes to it. The lookup changes identity
+   whenever the evidence for any message in the window does, which happens after
+   every older page; a row that read it anyway re-rendered, markdown and all,
+   for a change that could not touch it. */
+export const FeedItem = memo(function FeedItem(props: FeedItemProps) {
+  return readsProvenance(props.item) ? <ProvenanceFeedItem {...props} /> : <FeedItemBody {...props} provenance={NO_PROVENANCE} />;
+});
+
+function ProvenanceFeedItem(props: FeedItemProps) {
   const provenance = useMessageProvenance();
+  return <FeedItemBody {...props} provenance={provenance} />;
+}
+
+function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, provenance }: FeedItemProps & { provenance: ProvenanceLookup }) {
+  const { t } = useLocale();
   const isMobile = useIsMobile();
   /* Inside a deputy's block (docs/design/ghost-seat.md §6.2) the prose row is
      the seat's parallel self: outline mark, secondary ink. */
@@ -165,7 +186,10 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
   if (item.kind === "mem-citation") return <MemCitationCard item={item} />;
   if (item.kind === "prose") {
     const cls = item.engine === "codex" ? "bg-codex" : item.engine === "openclaw" ? "bg-openclaw" : "bg-claude";
-    const AvatarIcon = ({ className }: { className?: string }) => <EngineMark engine={item.engine} size={16} tone="inherit" className={className} />;
+    /* A function that returns the element, not a component declared in this
+       render: a new component type per render unmounts and remounts the mark
+       of every message row each time the feed paints. */
+    const avatarIcon = (className?: string) => <EngineMark engine={item.engine} size={16} tone="inherit" className={className} />;
     /* Inside the filled circle the mark takes the fill ink, not white — white
        on the dark theme's engine tints is 2.6:1 (#1743) — and its cut-outs
        take the circle's own colour, so they stay holes. */
@@ -188,7 +212,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
             className="mb-1 flex h-5 w-full min-w-0 items-center gap-1.5 text-label text-muted"
             title={resumesAsk ?? undefined}
           >
-            {deputyInk ? <DeputyMark engine={item.engine} /> : <AvatarIcon className="h-4 w-4 shrink-0 text-secondary" aria-hidden />}
+            {deputyInk ? <DeputyMark engine={item.engine} /> : avatarIcon("h-4 w-4 shrink-0 text-secondary")}
             {/* Inside a deputy's block the row is the parallel self's, and says so:
                 the bare engine name is what the seat's own rows carry. */}
             <span data-mobile-message-speaker className="shrink-0 font-semibold text-secondary">{deputyInk ? t("deputy.participant") : ENGINE_LABEL[item.engine]}</span>
@@ -201,7 +225,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
             <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
           </div>
           <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
-            {speakText ? <SpeakButton text={speakText} /> : null}
+            {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
             <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
           </div>
         </div>
@@ -211,7 +235,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
       <div className="group/msg my-3 flex gap-2.5">
         {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (
           <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
-            <AvatarIcon className="h-3.5 w-3.5" aria-hidden />
+            {avatarIcon("h-3.5 w-3.5")}
           </div>
         )}
         {/* `data-tts-message` / `data-tts-body`: the anchors the read-aloud
@@ -237,7 +261,7 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
           <div className="mb-0.5 flex min-h-6 items-center gap-1">
             {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
-              {speakText ? <SpeakButton text={speakText} /> : null}
+              {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
             </span>
           </div>
@@ -441,4 +465,4 @@ export const FeedItem = memo(function FeedItem({ item: sourceItem, speakText, re
   if (item.kind === "svc") return <div className="my-1 break-words text-[11.5px] text-muted">{item.text}</div>;
   if (item.kind === "note") return <div className="my-2 break-words text-[12.5px] text-muted">{md(item.text)}</div>;
   return <div className={`my-0.5 break-words text-[12.5px] ${item.err ? "text-danger" : "text-secondary"}`}>{item.text}</div>;
-});
+}

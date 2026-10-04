@@ -98,6 +98,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before #1783 round two, and absent is the
          safe reading: a seat remembered as having been shown nothing is
          offered its children again rather than held back from them. */
+      if (state.itemsShown !== undefined && (!Array.isArray(state.itemsShown) || !state.itemsShown.every(string))) return null;
       if (state.childrenShown !== undefined && (!Array.isArray(state.childrenShown) || !state.childrenShown.every(string))) return null;
       /* Absent on every row written before #1799, and absent is the safe
          reading for the same reason: a seat remembered as having been told
@@ -105,6 +106,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       if (state.announcedLanes !== undefined && (!Array.isArray(state.announcedLanes) || !state.announcedLanes.every(string))) return null;
       /* Absent on every row written before #2063; absent announces a settled
          deploy rather than holding it back. */
+      if (state.announcedMaintenance !== undefined && (!Array.isArray(state.announcedMaintenance) || !state.announcedMaintenance.every(string))) return null;
       if (state.announcedDeploys !== undefined && (!Array.isArray(state.announcedDeploys) || !state.announcedDeploys.every(string))) return null;
       /* Absent on every row written before #2030; absent shows the note again. */
       if (state.noteShown !== undefined && state.noteShown !== null && !string(state.noteShown)) return null;
@@ -117,10 +119,18 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || typeof wake.commit.proposal !== "boolean" || !string(wake.commit.fingerprint)
           || !integer(wake.commit.eventsThrough) || !Array.isArray(wake.commit.reasons)
           || !Array.isArray(wake.commit.children) || !wake.commit.children.every(string)
+          || (wake.commit.acknowledgmentLines !== undefined
+            && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
+          || (wake.commit.itemLines !== undefined
+            && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
+          || (wake.commit.itemsShown !== undefined
+            && (!Array.isArray(wake.commit.itemsShown) || !wake.commit.itemsShown.every(string)))
           || (wake.commit.shownChildren !== undefined
             && (!Array.isArray(wake.commit.shownChildren) || !wake.commit.shownChildren.every(string)))
           || (wake.commit.announcedLanes !== undefined
             && (!Array.isArray(wake.commit.announcedLanes) || !wake.commit.announcedLanes.every(string)))
+          || (wake.commit.announcedMaintenance !== undefined
+            && (!Array.isArray(wake.commit.announcedMaintenance) || !wake.commit.announcedMaintenance.every(string)))
           || (wake.commit.announcedDeploys !== undefined
             && (!Array.isArray(wake.commit.announcedDeploys) || !wake.commit.announcedDeploys.every(string)))
           || (wake.commit.noteShown !== undefined && wake.commit.noteShown !== null && !string(wake.commit.noteShown))

@@ -184,6 +184,7 @@ success              #177a37    #4fc36f    --color-ok
 success-soft         #e5f6ea    #14261a    #eef8f0, #f2faf4, #e5f6ea
 warning              #8a5f00    #e0ae45    #b3831d #b8860b #8a5a00 #7a5300 (text-safe on soft)
 warning-soft         #fff4dd    #2b2312    #fff7e6 #fff2d6 #fff9ed #fdf6ec
+caution              #b24a0a    #f08a4b    tool-call context tokens, 10 000–19 999 band (no soft fill)
 danger               #c62828    #f07171    --color-err
 danger-soft          #fdeeee    #2c1616    #fdf0f0 #fff5f5 #ffe0e0 #f7e8e8
 info (link/handoff)  #0d9488    #2dd4bf    the ad-hoc teal
@@ -192,7 +193,7 @@ engine-claude(+soft) #d97757/#faeee9   #e08a6d/#2b1c15   kept
 ```
 
 **Contrast floor (issue #700).** Every role above that carries small text —
-`text-muted`, `success`, `warning` — must clear 4.5:1 against every surface it
+`text-muted`, `success`, `warning`, `caution` — must clear 4.5:1 against every surface it
 renders on, including its own `-soft` fill. The earlier values did not
 (`text-muted` 3.05–3.37:1, `success` 3.94–4.42:1, `warning` 4.24–4.69:1), which
 is why state labels an operator reads to decide what needs attention were the
@@ -607,8 +608,7 @@ ctx chip all become Badge calls; ad-hoc `#fff2d6`/`#7a5300`-style pairs die.
   keep their structure; this pass is surfaces, type, and control placement.
 - No behavior changes to feed parsing, polling, chime, presence, or tmux
   actions — `ProcessStatusControls`' escalation logic, lazy tool-body
-  mounting and IntersectionObserver pausing all stay. Feed height estimates
-  were later removed to preserve reader anchors through history loads.
+  mounting, `feed-cv` virtualization, IntersectionObserver pausing all stay.
 - No i18n string rewrites except where a spec names one (menu items); casing
   fixes are CSS.
 

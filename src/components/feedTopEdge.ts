@@ -15,6 +15,8 @@
  * plus the box of a row-sized control there, so at least no line is sliced.
  */
 
+import { firstRowPastTop, readingRows } from "./feed/scrollMemory";
+
 /** How far the straddling ink reaches above the edge (`hidden`) and below it
     (`shown`), in CSS px. Null when no glyph crosses the edge. */
 export interface EdgeCut {
@@ -55,6 +57,23 @@ const ON_BOUNDARY: EdgeCut = { hidden: 0, shown: 0 };
 /* The padding and border a container keeps under its last row. */
 const FRAME_PX = 16;
 
+/* The rows an edge reading has to look at, in document order. Feed rows stack
+   top to bottom, so the one under the edge is found by bisection: a reading
+   costs a handful of layout reads however long the history above the reader
+   is, instead of one per row from the first. Measured from the top at every
+   rest, a history of thousands of rows held the phone for a second at a time.
+   Reading starts one feed row early, so a row between two feed rows (a live
+   turn, a deputy) that straddles the edge is still seen. Without feed rows the
+   whole list is read. */
+function rowsAtEdge(scroller: HTMLElement, edge: number): HTMLElement[] {
+  const rows = Array.from(scroller.querySelectorAll<HTMLElement>(ROW_SELECTOR));
+  const feed = readingRows(scroller);
+  const under = firstRowPastTop(feed, edge + SLIVER_PX);
+  const first = feed[Math.max(0, (under ? feed.indexOf(under) : feed.length) - 1)];
+  const start = first ? rows.indexOf(first) : 0;
+  return start > 0 ? rows.slice(start) : rows;
+}
+
 /** The first row crossing the top edge that fits; a zero cut when the edge
     already sits on a row boundary; null when it falls inside a row too tall
     to align, which leaves the edge to the ink. */
@@ -65,7 +84,7 @@ export function rowEdgeCut(scroller: HTMLElement): EdgeCut | null {
   const fit = scroller.clientHeight * ROW_FIT;
   /* Crossing rows too tall to align: the rows around the one that fits. */
   const around: number[] = [];
-  for (const row of scroller.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+  for (const row of rowsAtEdge(scroller, edge)) {
     const rect = row.getBoundingClientRect();
     if (rect.bottom <= edge + SLIVER_PX) continue;
     /* The next row starts at the edge or a row gap below it: the edge sits on
@@ -172,7 +191,7 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
      none, whatever the edge probes hit. */
   let span: Span = { top: -Infinity, bottom: Infinity };
   let roots: Element[] = [];
-  for (const row of scroller.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+  for (const row of rowsAtEdge(scroller, edge)) {
     const rect = row.getBoundingClientRect();
     if (rect.top < edge && rect.bottom > edge) {
       roots = [row];

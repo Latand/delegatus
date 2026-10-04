@@ -1,6 +1,6 @@
 import { effortMeter as meterOf } from "@/lib/agent/efforts";
 import { modelDisplayName } from "@/lib/agent/models";
-import { getLocale, translate } from "@/lib/i18n";
+import { getLocale, translate, type Locale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 export { cleanTitle, shortTitle } from "@/lib/title";
@@ -24,11 +24,17 @@ export function fmtAgeSeconds(s: number): string {
   return translate(locale, "time.agoDay", { n: Math.round(s / 86400) });
 }
 
+const TIME_FORMATS: Partial<Record<Locale, Intl.DateTimeFormat>> = {};
+
 export function hhmm(ts: unknown): string {
   if (typeof ts !== "string" && typeof ts !== "number") return "";
   const d = new Date(ts);
-  const bcp47 = getLocale() === "uk" ? "uk-UA" : "en-US";
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(bcp47, { hour12: false });
+  if (Number.isNaN(d.getTime())) return "";
+  const locale = getLocale();
+  const formatter = TIME_FORMATS[locale] ??= new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-US", {
+    hour: "numeric", minute: "numeric", second: "numeric", hour12: false,
+  });
+  return formatter.format(d);
 }
 
 /** Same activity encoding everywhere: green pulse, amber, red, gray. */

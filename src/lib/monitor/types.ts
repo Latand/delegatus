@@ -1,3 +1,4 @@
+import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import type { LifecycleEventType, LifecycleState, LifecycleTurnState } from "@/lib/lifecycle/vocabulary";
 
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
@@ -200,6 +201,7 @@ export type SeatTickWakeReasonKind =
   /** A deployment the seat itself started with deploy_exact_sha reached a
       terminal phase (#2063). The seat ended its turn so the promotion could
       replace its host, and this is the wake that brings it back, once. */
+  | "maintenance-settled"
   | "deploy-settled"
   /** A lane's stage or a spawned child holds a tool permission request nobody
       has answered (#2215). Unattended ones are denied at once, so one standing
@@ -214,6 +216,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "interval",
   "child-terminal",
   "own-lane-settled",
+  "maintenance-settled",
   "deploy-settled",
   "permission-request",
 ];
@@ -226,6 +229,8 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  /** Version credited only by delivery of this visible item. */
+  itemVersion?: string;
   outcomeId?: string;
   /** Every owed outcome this ONE line stands for (#1783). A child's outcome
       identity is a turn of a ledger generation, so a worker the seat spawned
@@ -253,7 +258,7 @@ export interface SeatTickItem {
       after the unstarted tasks while the record has not moved. */
   stallToken?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission";
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance";
   id: string;
   label: string;
   /** A settled child's readable transcript (#1881): the controller attaches
@@ -264,6 +269,7 @@ export interface SeatTickItem {
   finalMessage?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
+  maintenance?: { runId: string };
   deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 
@@ -470,11 +476,13 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /** Attempt identity observed with stage liveness; refreshed sources must match it. */
+  stageAttempt?: string | null;
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
-   * deploy or anything else, is owed work until it is resumed, so every wake
-   * lists it. `operator` is excluded from the seat's work altogether: the
+   * deploy or anything else, is owed work until it is resumed. Its first wake
+   * and each later deploy settlement list it. `operator` is excluded from the seat's work altogether: the
    * operator stopped it, and only the operator's resume starts it again.
    * `other` is anyone else, a predecessor seat among them, and is read as any
    * parked lane is.
@@ -822,6 +830,12 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  /** Versions of agenda items carried by this frozen delivery plan. */
+  itemsShown?: string[];
+  /** Complete redacted bullets used to verify visibility in the frozen text. */
+  itemLines?: { version: string; line: string }[];
+  /** Each settlement credit is bound to the complete frozen bullet that earns it. */
+  acknowledgmentLines?: { key: string; line: string }[];
   /** A proposal wake, which advances the 24-hour slot as well as the stamp. */
   proposal: boolean;
   reasons: SeatTickWakeReasonKind[];
@@ -838,6 +852,7 @@ export interface SeatTickWakeCommit {
   /** The settled deployments this wake announces (#2063), recorded by a
       landing and by nothing else, so a deploy whose wake never arrived is
       offered again. */
+  announcedMaintenance?: string[];
   announcedDeploys?: string[];
   /** The state tokens of every child line this wake carries (#1783 round two),
       recorded by a landing and by nothing else — a wake the layer never
@@ -967,6 +982,7 @@ export const SEAT_TICK_CHILDREN_SHOWN_LIMIT = 64;
 
 /** Settled deployment history has its own bounded announcement window. Lane
     announcements instead live for the lane's entire eligibility window. */
+export const SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT = 64;
 export const SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT = 64;
 
 /** Stall tokens one project's row remembers having reported to its seat. A
@@ -1040,6 +1056,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** Latest delivered versions, bounded to 2000 recent agenda items. */
+  itemsShown?: string[];
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
@@ -1154,6 +1172,7 @@ export interface SeatTickProjectState {
    * its reason has: announced once, it is never offered again. Absent reads as
    * empty.
    */
+  announcedMaintenance?: string[];
   announcedDeploys?: string[];
   /**
    * The revision of the monitor note the last landed wake carried to THIS
@@ -1252,6 +1271,8 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** Ephemeral provenance for the gates and lane associations of the PR read. */
+  pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
   /** Lanes the seat itself launched whose stage has settled (#1749). Empty for
       a seat that launched nothing and for lanes some other hand created: the
@@ -1259,6 +1280,7 @@ export interface SeatTickCheckInput {
   ownLanes: readonly SeatTickOwnLaneInput[];
   /** Deployments the seat started that settled and were not announced yet
       (#2063). Absent reads as none. */
+  settledMaintenance?: readonly MaintenanceRun[];
   settledDeploys?: readonly SeatTickDeployInput[];
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
@@ -1320,7 +1342,7 @@ export interface SeatTickCard {
       `tick-settings`, and stamped with when the SETTING was recorded rather
       than when the check ran, so a card that has not changed is not rewritten
       on every check. */
-  settings?: Pick<EffectiveSeatTickSettings, "reason" | "until" | "setBy" | "updatedAt">;
+  settings?: Pick<EffectiveSeatTickSettings, "enabled" | "wakeIntervalMs" | "reason" | "until" | "setBy" | "updatedAt">;
   /**
    * What distinguishes this OCCURRENCE of the condition from the last one, for
    * the create receipt (#1298).

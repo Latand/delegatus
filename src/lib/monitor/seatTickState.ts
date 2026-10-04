@@ -7,6 +7,7 @@ import { statePath } from "@/lib/configDir";
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
+  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
@@ -61,6 +62,15 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
     fingerprint: raw.fingerprint.slice(0, 200),
     eventsThrough: raw.eventsThrough,
+    ...(Array.isArray(raw.acknowledgmentLines) ? { acknowledgmentLines: raw.acknowledgmentLines.filter(
+      (entry): entry is { key: string; line: string } => !!entry && typeof entry === "object"
+        && typeof entry.key === "string" && typeof entry.line === "string",
+    ) } : {}),
+    ...(Array.isArray(raw.itemLines) ? { itemLines: raw.itemLines.filter(
+      (entry): entry is { version: string; line: string } => !!entry && typeof entry === "object"
+        && typeof entry.version === "string" && typeof entry.line === "string",
+    ) } : {}),
+    ...(Array.isArray(raw.itemsShown) ? { itemsShown: conversationIds(raw.itemsShown) } : {}),
     /* A plan written before the harvest existed names no child, and a landing
        credited from it harvests nothing — the safe direction. */
     children: conversationIds(raw.children),
@@ -74,6 +84,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Same direction for a settled deploy (#2063): a plan from before it
        existed announces none. */
+    announcedMaintenance: conversationIds(raw.announcedMaintenance),
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
@@ -253,6 +264,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
+    announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
@@ -338,6 +350,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     releasedWake: row.releasedWake ?? null,
     pullRequestGap: row.pullRequestGap,
     childrenGap: row.childrenGap,
+    announcedMaintenance: row.announcedMaintenance,
     harvestedChildren: row.harvestedChildren,
     ...(row.reportsOwed ? { reportsOwed: row.reportsOwed } : {}),
     ...(row.reportsOwedDropped ? { reportsOwedDropped: row.reportsOwedDropped } : {}),

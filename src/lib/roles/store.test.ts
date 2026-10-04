@@ -11,6 +11,58 @@ import { applyRoleMappingRetirements, ROLE_MAPPING_RETIREMENTS } from "./retirem
 import { applyRoleMappingPatch, loadRoleDefinitions, loadRoleOverrides, loadRoleRegistrySnapshot, mergeRoleDefinitions, parseRoleMappingPatch, saveRoleMapping, saveRoleOverrides } from "./store";
 import type { RoleConfig } from "./types";
 
+test("fresh installs and config:null resets restore every shipped role and variant", () => {
+  withStateDir("llv-shipped-roles-", () => {
+    const codex = (model: string, effort: string): RoleConfig => ({ engine: "codex", model, effort });
+    const claude = (model: string, effort: string): RoleConfig => ({ engine: "claude", model, effort });
+    const expected = {
+      builder: codex("gpt-6.1-sol", "high"),
+      reviewer: codex("gpt-6.1-sol", "xhigh"),
+      verifier: codex("gpt-6.1-sol", "high"),
+      architect: claude("opus", "xhigh"),
+      orchestrator: claude("opus", "high"),
+      cleaner: codex("gpt-6-luna", "medium"),
+      "prod-auditor": codex("gpt-6.1-sol", "xhigh"),
+      deployer: codex("gpt-6.1-sol", "medium"),
+      merger: codex("gpt-6.1-sol", "high"),
+      maintainer: codex("gpt-6.1-sol", "medium"),
+    };
+    const expectedVariants = {
+      builder: {
+        trivial: claude("claude-sonnet-5-5", "high"),
+        frontend: claude("claude-sonnet-5-5", "high"),
+        docs: claude("claude-sonnet-5-5", "high"),
+        "apply-fixes": codex("gpt-6-luna", "high"),
+        "frontend-fixes": claude("claude-sonnet-5-5", "high"),
+        "docs-fixes": claude("claude-sonnet-5-5", "high"),
+      },
+      reviewer: { trivial: codex("gpt-6-luna", "high") },
+    };
+    const check = () => {
+      const roles = loadRoleDefinitions();
+      expect(Object.fromEntries(roles.map(({ id, config }) => [id, config]))).toEqual(expected);
+      expect(Object.fromEntries(roles.filter((role) => role.variants).map(({ id, variants }) => [id, variants]))).toEqual(expectedVariants);
+    };
+    check();
+    const edited = Object.fromEntries(Object.keys(expected).map((id) => [id, {
+      config: codex("gpt-6-astra", "max"),
+      ...(id in expectedVariants ? { variants: Object.fromEntries(Object.keys(expectedVariants[id as keyof typeof expectedVariants]).map((variant) => [variant, codex("gpt-5.6-terra", "high")])) } : {}),
+    }]));
+    const write = parseRoleMappingPatch(edited);
+    if (typeof write === "string") throw new Error(write);
+    saveRoleMapping(write);
+    expect(loadRoleDefinitions().find((role) => role.id === "builder")!.config.model).toBe("gpt-6-astra");
+    const reset = parseRoleMappingPatch(Object.fromEntries(Object.keys(expected).map((id) => [id, {
+      config: null,
+      ...(id in expectedVariants ? { variants: Object.fromEntries(Object.keys(expectedVariants[id as keyof typeof expectedVariants]).map((variant) => [variant, null])) } : {}),
+    }])));
+    if (typeof reset === "string") throw new Error(reset);
+    saveRoleMapping(reset);
+    check();
+    expect(loadRoleOverrides().overrides).toEqual({});
+  });
+});
+
 test("role overrides persist with a schema version and merge only the selected role", () => {
   const previous = process.env.LLV_STATE_DIR;
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-store-"));
@@ -26,7 +78,7 @@ test("role overrides persist with a schema version and merge only the selected r
     const reviewer = loadRoleDefinitions().find((role) => role.id === "reviewer")!;
     expect(builder.config.model).toBe("gpt-custom-builder");
     expect(builder.promptScaffold).toBe("Custom {{mode}} scaffold");
-    expect(reviewer.config.model).toBe("gpt-6-astra");
+    expect(reviewer.config.model).toBe("gpt-6.1-sol");
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -154,7 +206,7 @@ test("a mapping patch drops rows equal to the shipped value and keeps scaffold o
   const next = applyRoleMappingPatch(
     { reviewer: { promptScaffold: "mine", config: { model: "gpt-5.6-sol" } }, cleaner: { config: { effort: "high" } } },
     {
-      reviewer: { config: { engine: "codex", model: "gpt-6-astra", effort: "xhigh" } },
+      reviewer: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" } },
       cleaner: { config: null },
       builder: { variants: { frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } },
     },
@@ -258,9 +310,9 @@ test("the boot pass drops rows equal to shipped, keeps the rest and every scaffo
   withStateDir("llv-role-normalize-", (_state, file) => {
     fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: {
       orchestrator: { config: { engine: "claude", model: "opus", effort: "high" } },
-      architect: { config: { engine: "claude", model: "opus", effort: "high" }, promptScaffold: "mine {{mode}}" },
+      architect: { config: { engine: "claude", model: "opus", effort: "xhigh" }, promptScaffold: "mine {{mode}}" },
       builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" }, variants: { "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" } } },
-      reviewer: { config: { model: "gpt-6-astra" } },
+      reviewer: { config: { model: "gpt-6.1-sol" } },
     } }));
     expect(applyRoleMappingRetirements([], () => "2026-09-27T08:00:00.000Z")).toEqual({ state: "written", normalized: ["orchestrator", "architect", "builder:apply-fixes", "reviewer"], reset: [] });
     expect(readFile(file)).toEqual({ schemaVersion: 1, overrides: {

@@ -11,11 +11,14 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureSeatMandateHandover, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { runtimeScope } from "@/lib/runtime/contracts";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -45,6 +48,110 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("runtime idle performance", () => {
+  browserTest("limits keep the phone stream joined without snapshot refetches", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-phone-perf-"));
+    const journal = new RuntimeJournal(path.join(directory, "journal.sqlite"));
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let stopFixture = () => {};
+    let browser: Awaited<ReturnType<typeof launchChromium>> | null = null;
+    const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+    try {
+      const scope = runtimeScope("session", "conversation_running");
+      for (let i = 0; i < 120; i++) {
+        const sessionScope = i === 0 ? scope : runtimeScope("session", `conversation-perf-${i}`);
+        journal.append({ scope: sessionScope, kind: "session-status", payload: { host: "hosted", turn: "running", activeTurnId: "perf-turn", artifactPath: i === 0 ? RUNNING_PATH : `/sessions/perf-${i}.jsonl` } });
+        journal.append({ scope: sessionScope, kind: "delta", payload: { turnId: "perf-turn", text: "Measured idle runtime state. ".repeat(170) } });
+      }
+      const limits = () => journal.append({ scope, kind: "limits", payload: { snapshot: { remaining: 80 } } });
+      limits();
+      const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+      let reads = 0;
+      interval = setInterval(() => {
+        const bytes = encode(limits());
+        for (const client of clients) client.enqueue(bytes);
+      }, 1000);
+      const snapshotBytes = Buffer.byteLength(JSON.stringify(journal.snapshot()));
+      expect(snapshotBytes).toBeGreaterThanOrEqual(1_200_000);
+      expect(snapshotBytes).toBeLessThanOrEqual(1_500_000);
+      const { base, stop } = await serveFixture({
+        "/api/runtime/snapshot": () => { reads++; return Response.json({ ...journal.snapshot(), structuredHostsEnabled: true }); },
+        "/api/runtime/stream": (request: Request) => {
+          let controller: ReadableStreamDefaultController<Uint8Array>;
+          const body = new ReadableStream<Uint8Array>({
+            start(next) {
+              controller = next;
+              clients.add(next);
+              const after = Number(new URL(request.url).searchParams.get("after"));
+              for (const event of journal.replay(after).events) next.enqueue(encode(event));
+            },
+            cancel() { clients.delete(controller); },
+          });
+          request.signal.addEventListener("abort", () => { clients.delete(controller); }, { once: true });
+          return new Response(body, { headers: { "content-type": "text/event-stream" } });
+        },
+      });
+      stopFixture = stop;
+      browser = await launchChromium();
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+      const page = await context.newPage();
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      await page.addInitScript(() => {
+        const tasks: Array<{ start: number; duration: number }> = [];
+        Object.assign(window, { runtimePerfTasks: tasks });
+        new PerformanceObserver(list => {
+          for (const entry of list.getEntries()) tasks.push({ start: entry.startTime, duration: entry.duration });
+        }).observe({ type: "longtask", buffered: true });
+      });
+      await page.goto(`${base}/?runtime=perf`);
+      await page.locator("[data-phone-card]").first().waitFor();
+      // Same TTI definition as the production audit: last long task before 2s quiet.
+      let interactiveMs: number | null = null;
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const reading = await page.evaluate(() => {
+          const tasks = (window as typeof window & { runtimePerfTasks: Array<{ start: number; duration: number }> }).runtimePerfTasks;
+          const last = Math.max(0, ...tasks.map(task => task.start + task.duration));
+          return { last, quiet: performance.now() - last >= 2000 };
+        });
+        if (reading.quiet) { interactiveMs = Math.round(reading.last); break; }
+        await page.waitForTimeout(250);
+      }
+      const before = reads;
+      const frames = await page.evaluate(async () => {
+        const start = performance.now();
+        let count = 0;
+        return new Promise<{ count: number; durationMs: number; fps: number }>(resolve => {
+          const frame = () => {
+            count++;
+            const durationMs = performance.now() - start;
+            if (durationMs >= 60_000) resolve({ count, durationMs: Math.round(durationMs), fps: Number((count * 1000 / durationMs).toFixed(1)) });
+            else requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        });
+      });
+      const result = { snapshotBytes, cpuThrottle: 4, viewport: "390x844", locale: "uk", interactiveMs, idleSnapshotFetches: reads - before, ...frames };
+      fs.mkdirSync("evidence/runtime-idle", { recursive: true });
+      const label = process.env.LLV_RUNTIME_PERF_LABEL === "before" ? "before" : "after";
+      fs.writeFileSync(`evidence/runtime-idle/${label}.json`, JSON.stringify(result, null, 2) + "\n");
+      console.log("runtime idle performance", JSON.stringify(result));
+      await context.close();
+      expect(result.idleSnapshotFetches).toBe(0);
+      expect(interactiveMs).not.toBeNull();
+    } finally {
+      await browser?.close();
+      stopFixture();
+      if (interval) clearInterval(interval);
+      clients.clear();
+      journal.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
 
 describe("self-update reload notice", () => {
   browserTest("a phone page open across a release switch offers a visible reload button", async () => {
@@ -253,7 +360,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         const read = () => page.evaluate(() => ({
           engine: document.querySelector('[data-onboarding-relay-engine][aria-checked="true"]')?.getAttribute("data-onboarding-relay-engine") ?? null,
           account: document.querySelector("[data-onboarding-relay-account]")?.getAttribute("data-onboarding-relay-account") ?? null,
-          pairDisabled: (document.querySelector("[data-external-relay-connect] input") as HTMLInputElement | null)?.disabled ?? null,
+          pairDisabled: (document.querySelector("[data-external-relay-connect-known]") as HTMLButtonElement | null)?.disabled ?? null,
           overflow: document.documentElement.scrollWidth > window.innerWidth,
           minControlHeight: Math.min(...Array.from(document.querySelectorAll<HTMLElement>("[data-onboarding-relay] button, [data-onboarding-relay] input"))
             .filter((control) => control.getClientRects().length > 0).map((control) => control.getBoundingClientRect().height)),
@@ -5211,6 +5318,1560 @@ browserTest("narrow card: a finished lane on the task screen stands its stages o
   fs.writeFileSync(path.join(evidence, `phone-${stamp}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
   expect(failures).toEqual([]);
 }, 300_000);
+
+describe("a new conversation's first message is a normal row on the phone", () => {
+  /*
+   * docs/design/first-bubble-no-raw-json.md on the phone: the cases and the
+   * per-step checks are the desktop block's (`kanbanBoard.browser.test.tsx`,
+   * "a new conversation's first message is a normal row") at 390 x 844 with
+   * touch, light and dark, English and Ukrainian, over the fixture's
+   * `?firstmessage=<p|s|f>`: p a plain spawn's prompt in the focus view, s a
+   * seat created from the sheet's draft with Confirm actually pressed, f a
+   * failed launch. Added here: the affordances a coarse pointer reaches (the
+   * failure's resend, the row's gutter control) are at least 44 px. The phone's
+   * focus view re-resolves a conversation when its path flips from `spawn:` to
+   * the transcript, so the plain case reads each state as a first paint of its
+   * own (`&step=<n>`); the in-page hand-off (same node, no empty frame) is the
+   * desktop block's and the DOM test's. The seat case stays in one page.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "first message is a normal row"
+   *
+   * Readings go to `evidence/first-message/phone.json`; frames to `.artifacts/first-message-phone/`.
+   */
+  const PLAIN_LINE = "Fix the failing export test.";
+  const MANDATE_LINE = "Keep the project moving.";
+  type Evidence = { advanceFirstMessage(): number };
+  const SHEET = '[data-testid="mobile-orchestrator-sheet"]';
+  /* Red as drawn: a `danger` utility with no hover/focus variant, inside the feed. */
+  const RED = "(root) => [...root.querySelectorAll('[data-log-feed-scroller] [class*=\"danger\"]')].filter((el) => [...el.classList].some((token) => /^(text|bg|border|ring|outline|fill|stroke)-danger/.test(token)))";
+  const ROOT = `(document.querySelector('${SHEET}') ?? document.body)`;
+
+  const watch = (page: Page) => page.evaluate(([red, rootOf]) => {
+    const reds = (0, eval)(red as string) as (root: Element) => Element[];
+    const sink = { envelope: false, danger: [] as string[], outboxMax: 0, userBubbleMax: 0, mandateMax: 0, lapses: [] as string[], timeline: [] as string[] };
+    (window as unknown as { __fm: typeof sink }).__fm = sink;
+    const scan = () => {
+      const root = (0, eval)(rootOf as string) as HTMLElement;
+      if (/structured launch recovery|"phase"|\{\s*"/.test(root.innerText)) sink.envelope = true;
+      for (const el of reds(root)) {
+        if (el.closest("[data-outbox-failure], [data-launch-chip]")) continue;
+        const mark = (el.outerHTML ?? "").slice(0, 160);
+        if (!sink.danger.includes(mark)) sink.danger.push(mark);
+      }
+      sink.outboxMax = Math.max(sink.outboxMax, root.querySelectorAll("[data-outbox-entry]").length);
+      sink.userBubbleMax = Math.max(sink.userBubbleMax, root.querySelectorAll("[data-user-bubble]").length);
+      sink.mandateMax = Math.max(sink.mandateMax, root.querySelectorAll("[data-mandate-card]").length);
+      /* The committed states in order, consecutive repeats folded: what the operator could have seen between two reads. */
+      const state = `outbox ${root.querySelectorAll("[data-outbox-entry]").length}, bubbles ${root.querySelectorAll("[data-user-bubble]").length}, rows ${root.querySelectorAll("[data-message-row]").length}, cards ${root.querySelectorAll("[data-mandate-card]").length}, chips ${root.querySelectorAll("[data-launch-chips]").length}`;
+      if (sink.timeline[sink.timeline.length - 1] !== state) sink.timeline.push(state);      /* After the first card: a state with no card means the first message is gone. */
+      if (sink.mandateMax >= 1 && !root.querySelector("[data-mandate-card]") && !sink.lapses.includes(state)) sink.lapses.push(state);
+    };
+    new MutationObserver(scan).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    scan();
+  }, [RED, ROOT] as const);
+
+  const readPane = (page: Page, line: string, mark: boolean) => page.evaluate(({ line, mark, red, rootOf }) => {
+    const reds = (0, eval)(red) as (root: Element) => Element[];
+    const root = (0, eval)(rootOf) as HTMLElement;
+    const visible = root.innerText;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-message-row]")].filter((row) => (row.textContent ?? "").includes(line));
+    const card = root.querySelector<HTMLElement>("[data-mandate-card]");
+    const first = rows[0] ?? card;
+    if (mark && first) first.setAttribute("data-fm-mark", "1");
+    const rect = first ? first.getBoundingClientRect() : null;
+    const controls = [...root.querySelectorAll<HTMLElement>("button, [role=button], input, textarea, select")]
+      .filter((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    /* What a thumb has to hit on the message itself: the gutter control and the failure's actions. */
+    const reach = [...root.querySelectorAll<HTMLElement>("[data-outbox-progress], [data-outbox-failure] button:not([data-outbox-reason]), [data-launch-retry]")]
+      .filter((el) => el.getClientRects().length > 0)
+      .map((el) => ({ label: el.getAttribute("aria-label") ?? el.getAttribute("data-outbox-progress") ?? (el.textContent ?? "").trim().slice(0, 30), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) }));
+    return {
+      envelope: /structured launch recovery|"phase"|\{\s*"/.test(visible),
+      danger: reds(root).filter((el) => !el.closest("[data-outbox-failure], [data-launch-chip]")).length,
+      rows: rows.length,
+      outboxEntries: root.querySelectorAll("[data-outbox-entry]").length,
+      userBubbles: [...root.querySelectorAll<HTMLElement>("[data-user-bubble]")].map((el) => `${el.parentElement?.closest("[data-message-row]") ? "row" : "bare"}: ${(el.textContent ?? "").slice(0, 40)}`),
+      mandateCards: root.querySelectorAll("[data-mandate-card]").length,
+      mandateOpenSections: root.querySelectorAll("[data-mandate-card] details[open]").length,
+      mandateHeight: card ? Math.round(card.getBoundingClientRect().height) : null,
+      rowState: rows[0]?.getAttribute("data-message-row") ?? null,
+      sameNode: first ? first.hasAttribute("data-fm-mark") : null,
+      rect: rect ? { top: Math.round(rect.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
+      failureLines: root.querySelectorAll("[data-outbox-failure]").length,
+      failureText: root.querySelector("[data-outbox-failure] [data-outbox-status]")?.textContent ?? null,
+      errorChips: [...root.querySelectorAll<HTMLElement>('[data-launch-chip="error"]')].map((el) => ({ text: el.textContent, title: el.getAttribute("title") })),
+      reach,
+      overflowX: document.documentElement.scrollWidth - innerWidth,
+      zeroWidthControls: controls.filter((el) => el.getBoundingClientRect().width < 1).map((el) => el.tagName + (el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : "")),
+      answered: (root.textContent ?? "").includes("Looking at the export test."),
+    };
+  }, { line, mark, red: RED, rootOf: ROOT });
+
+  browserTest("cases p, s and f hold one clean row at 390, light and dark, en and uk", async () => {
+    const out = path.resolve(".artifacts/first-message-phone");
+    const evidence = path.resolve("evidence/first-message");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const kind of ["p", "s", "f"] as const) {
+        const label = `${kind}-390-${scheme}-${lang}`;
+        const sentence = translate(lang, "spawnCard.failedDetail");
+        const line = kind === "s" ? MANDATE_LINE : PLAIN_LINE;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const pageErrors: string[] = [];
+          const openPage = async (url: string) => {
+            const opened = await context.newPage();
+            opened.on("pageerror", (error) => pageErrors.push(error.message));
+            await opened.goto(url);
+            await opened.waitForFunction(() => Boolean(document.querySelector("[data-feed-state]")), undefined, { timeout: 20_000 })
+              .catch(async (error) => { await opened.screenshot({ path: path.join(out, `${label}-stuck.png`) }); throw new Error(`${label}: ${error.message.split("\n")[0]}`); });
+            return opened;
+          };
+          let page: Page;
+          if (kind === "s") {
+            page = await context.newPage();
+            page.on("pageerror", (error) => pageErrors.push(error.message));
+            await page.goto(`${base}/?kanban=1&seatless=donly&firstmessage=s#p=atlas`);
+            await page.waitForSelector("[data-mobile2-seat-open]", { timeout: 20_000 });
+            await page.locator("[data-mobile2-seat-open]").first().click();
+            await page.waitForSelector('[data-orchestrator-sheet-mode="create"]', { timeout: 10_000 });
+            await watch(page);
+            await page.locator("[data-orchestrator-confirm]").first().click();
+            /* The sheet hands off to the focused pane, so the first paint is read wherever the window is. */
+            await page.waitForSelector("[data-mandate-card], [data-outbox-entry]", { state: "attached", timeout: 20_000 });
+          } else {
+            page = await openPage(`${base}/?firstmessage=${kind}&step=0#c=conversation_running`);
+            await watch(page);
+          }
+          const steps = kind === "f" ? ["failed"] : ["pending", "delivered", "transcript", "answered"];
+          const readings: Array<Record<string, unknown>> = [];
+          const timelines: string[][] = [];
+          /* The seat's mandate opened at Pending (a real tap on "Read the mandate") and its height there. */
+          let openedHeight: number | null = null;
+          for (const [index, step] of steps.entries()) {
+            if (index > 0 && kind === "s") {
+              await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.advanceFirstMessage());
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              else await page.waitForTimeout(1_800);
+            } else if (index > 0) {
+              /* The focus view re-resolves the conversation when its path flips, so each later state of the plain case is a first paint of its own. */
+              const seenSoFar = await page.evaluate(() => (window as unknown as { __fm: { timeline: string[] } }).__fm.timeline);
+              timelines.push(seenSoFar);
+              await page.close();
+              page = await openPage(`${base}/?firstmessage=${kind}&step=${index}#c=conversation_running`);
+              await watch(page);
+              if (step === "answered") await page.waitForFunction(() => (document.body.textContent ?? "").includes("Looking at the export test."), undefined, { timeout: 25_000 });
+              await page.waitForTimeout(600);
+            } else await page.waitForTimeout(600);
+            const read = await readPane(page, line, false);
+            await page.screenshot({ path: path.join(out, `${label}-${step}.png`) });
+            readings.push({ step, ...read });
+            const at = `${label} ${step}`;
+            if (kind === "s" && index === 0) {
+              await page.locator("[data-mandate-card] summary").first().click();
+              await page.waitForTimeout(300);
+              openedHeight = (await readPane(page, line, false)).mandateHeight;
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            } else if (kind === "s") {
+              if (read.mandateOpenSections !== 1) failures.push(`${at}: the mandate opened at pending is closed (${read.mandateOpenSections} open sections)`);
+              if (openedHeight !== null && read.mandateHeight !== null && Math.abs(read.mandateHeight - openedHeight) > 2) failures.push(`${at}: the opened mandate is ${read.mandateHeight}px high, ${openedHeight}px at pending`);
+              await page.screenshot({ path: path.join(out, `${label}-${step}-open.png`) });
+            }
+            if (read.envelope) failures.push(`${at}: the pane prints the recovery envelope`);
+            if (read.danger) failures.push(`${at}: ${read.danger} red elements outside the failure line`);
+            if (read.overflowX > 1) failures.push(`${at}: overflows by ${read.overflowX}px`);
+            if (read.zeroWidthControls.length) failures.push(`${at}: zero-width controls ${read.zeroWidthControls.join(", ")}`);
+            const small = read.reach.filter((control) => control.height < 44 || control.width < 44);
+            if (small.length) failures.push(`${at}: touch targets under 44 px ${JSON.stringify(small)}`);
+            if (kind === "f") {
+              if (read.rows !== 1 || read.failureLines !== 1) failures.push(`${at}: ${read.rows} rows and ${read.failureLines} failure lines`);
+              if (read.errorChips.length !== 1 || read.errorChips[0]!.text !== sentence) failures.push(`${at}: error chips ${JSON.stringify(read.errorChips)}`);
+              if (read.failureText?.includes("runtime host unavailable")) failures.push(`${at}: the failure line prints the raw reason`);
+              continue;
+            }
+            if (read.errorChips.length) failures.push(`${at}: an error chip ${JSON.stringify(read.errorChips)}`);
+            if (kind === "p") {
+              if (read.userBubbles.length !== 1) failures.push(`${at}: ${read.userBubbles.length} bubbles carry the prompt`);
+              if (index === 0 && read.rowState !== "pending") failures.push(`${at}: the pending row reads ${read.rowState}`);
+            } else if (read.mandateCards !== 1 || read.outboxEntries !== 0 || read.userBubbles.length) {
+              failures.push(`${at}: ${read.mandateCards} mandate cards, ${read.outboxEntries} launch bubbles and ${read.userBubbles.length} operator bubbles ${JSON.stringify(read.userBubbles)}`);
+            }
+          }
+          const seen = await page.evaluate(() => (window as unknown as { __fm: unknown }).__fm) as { envelope: boolean; danger: string[]; outboxMax: number; userBubbleMax: number; mandateMax: number; lapses: string[]; timeline: string[] };
+          if (seen.envelope) failures.push(`${label}: the envelope showed between steps`);
+          if (kind !== "f" && seen.danger.length) failures.push(`${label}: a red element showed between steps ${JSON.stringify(seen.danger)}`);
+          if (kind === "p" && seen.outboxMax > 1) failures.push(`${label}: ${seen.outboxMax} launch bubbles showed at once`);
+          if (kind === "s" && seen.outboxMax > 0) failures.push(`${label}: the mandate was seeded as the operator's bubble (${seen.outboxMax})`);
+          if (kind === "s" && seen.mandateMax > 1) failures.push(`${label}: ${seen.mandateMax} mandate cards showed at once`);
+          if (kind === "s" && seen.userBubbleMax > 0) failures.push(`${label}: the mandate showed as an operator bubble (${seen.userBubbleMax})`);
+          if (kind === "s" && seen.lapses.length) failures.push(`${label}: after the first card the window held no card: ${JSON.stringify(seen.lapses)}`);
+          frames[label] = { readings, seen, timelines, pageErrors };
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "phone.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});
+
+describe("fast TTS header", () => {
+  browserTest("phone header renders idle, loading and playing and shares row Stop", async () => {
+    const { captureFastTtsHeaders } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await captureFastTtsHeaders(browser, true); } finally { await browser.close(); }
+  }, 120_000);
+});
+
+/*
+ * The phone conversation's chrome (2026-10-02): the pinned message and the
+ * background tasks live behind the header's ⋯ menu, nothing sits under the bar,
+ * the seat's report button is back on the bar, and read-aloud sits beside each
+ * assistant message and nowhere in the header.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone chrome"
+ *
+ * Frames go to `$HOME/Pictures/delegatus-review/phone-chrome/`, readings to
+ * `evidence/phone-chrome/readings.json`.
+ */
+describe("phone chrome", () => {
+  browserTest("pinned message and background tasks in the ⋯ menu, read-aloud beside the message, at 390 in en and uk, light and dark", async () => {
+    const out = path.join(os.homedir(), "Pictures/delegatus-review/phone-chrome");
+    const evidence = path.resolve("evidence/phone-chrome");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const speech = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+    const { base, stop } = await serveFixture({ "/api/tts/backend": speech });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const scenes = [
+      { name: "tasks3", query: "chrome=3" },
+      { name: "pinned-only", query: "chrome=0" },
+      { name: "tasks8", query: "chrome=8" },
+      { name: "empty", query: "chrome=0&nopin" },
+    ] as const;
+    /** Every visible control inside `root` that a finger has to hit, under 44 px in either direction. */
+    const smallControls = (page: Page, root: string) => page.evaluate((selector) => {
+      const scope = document.querySelector(selector);
+      if (!scope) return ["missing"];
+      return [...scope.querySelectorAll<HTMLElement>("button, a[href], [role=menuitem]")].flatMap((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.width < 43.5 || rect.height < 43.5 ? [`${node.getAttribute("aria-label") ?? node.textContent?.trim().slice(0, 24)} ${Math.round(rect.width)}x${Math.round(rect.height)}`] : [];
+      });
+    }, root);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const scene of scenes) {
+        const key = `390-${lang}-${scheme}-${scene.name}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        const tasksOn = scene.name === "tasks3" || scene.name === "tasks8";
+        const pinnedOn = scene.name !== "empty";
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?${scene.query}&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-bar] [data-mobile2-open=menu]", { timeout: 20_000 });
+          await page.waitForSelector("[data-mobile-message=agent]", { timeout: 20_000 });
+          await pause(page, 900);
+          /* The bar: its height, its icons, and what sits between it and the feed. */
+          const frame = await page.evaluate(() => {
+            const bar = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+            const feed = document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect();
+            return {
+              barHeight: bar.height, barBottom: bar.bottom, feedTop: feed.top, gap: Math.round(feed.top - bar.bottom),
+              strips: document.querySelectorAll("[data-task-relations], [data-task-relations-slot], [data-flip-key]").length,
+              speechInBar: document.querySelectorAll("[data-mobile2-bar] [data-tts-trigger], [data-mobile2-bar] [data-tts-header]").length,
+              reports: !!document.querySelector('[data-mobile2-bar] [data-mobile2-open=reports]'),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              barBadge: document.querySelectorAll("[data-mobile2-bar] [data-mobile2-menu-badge], [data-mobile2-bar] [data-mobile2-notice-dot]").length,
+            };
+          });
+          if (frame.barHeight !== 52) fail(`the bar is ${frame.barHeight}px high`);
+          /* The pane's own card frame (its border and engine stripe) is the 5 px that is always there; a strip is 44 px or more. */
+          if (frame.gap > 8) fail(`${frame.gap}px sit between the bar and the feed`);
+          if (frame.strips) fail(`${frame.strips} strips remain under the bar`);
+          if (frame.speechInBar) fail("a speech control is on the bar");
+          if (!frame.reports) fail("the seat's report button is not on the bar");
+          if (frame.sideways > 0) fail(`the page scrolls sideways by ${frame.sideways}px`);
+          if (frame.barBadge) fail("the bar carries a badge or dot");
+          const barSmall = await smallControls(page, "[data-mobile2-bar]");
+          if (barSmall.length) fail(`bar controls under 44 px: ${barSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-conversation.png`) });
+          /* Read-aloud: in the message's own action row, at 44 px, with copy beside it. */
+          await page.waitForSelector("[data-mobile-message-actions] [data-tts-trigger]", { timeout: 10_000 });
+          const speak = await page.evaluate(() => {
+            const trigger = [...document.querySelectorAll<HTMLElement>("[data-mobile-message-actions] [data-tts-trigger]")].at(-1)!;
+            const rect = trigger.getBoundingClientRect();
+            const row = trigger.closest("[data-mobile-message-actions]")!;
+            return { width: rect.width, height: rect.height, copy: !!row.querySelector("button[aria-label]:not([data-tts-trigger])"), inMessage: !!trigger.closest("[data-mobile-message]"), header: trigger.hasAttribute("data-tts-header"), label: trigger.getAttribute("aria-label") };
+          });
+          if (speak.width < 44 || speak.height < 44) fail(`the read-aloud control is ${speak.width}x${speak.height}`);
+          if (!speak.copy || !speak.inMessage || speak.header) fail(`the read-aloud control sits wrong: ${JSON.stringify(speak)}`);
+          const messageSmall = await smallControls(page, "[data-mobile-message-actions]");
+          if (messageSmall.length) fail(`message controls under 44 px: ${messageSmall.join(", ")}`);
+          await page.locator("[data-mobile-message-actions]").last().scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-read-aloud.png`) });
+          /* The header menu, open. */
+          await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+          await page.waitForSelector("[data-mobile2-sheet=menu]");
+          await pause(page, 500);
+          const rowState = await page.evaluate(() => ({
+            pinned: !!document.querySelector('[data-mobile2-menu-row=pinned]'),
+            background: document.querySelector('[data-mobile2-menu-row=background]')?.textContent?.trim() ?? null,
+            order: [...document.querySelectorAll("[data-mobile2-menu-row]")].slice(0, 2).map((node) => node.getAttribute("data-mobile2-menu-row")),
+            sideways: document.documentElement.scrollWidth - innerWidth,
+          }));
+          if (rowState.pinned !== pinnedOn) fail(`pinned row ${rowState.pinned}, expected ${pinnedOn}`);
+          const tasksCount = scene.name === "tasks3" ? 3 : scene.name === "tasks8" ? 8 : 0;
+          const tasksLabel = translate(lang, "mobile2.chat.menuBackground", { count: tasksCount });
+          if ((rowState.background !== null) !== tasksOn || (tasksOn && !rowState.background!.includes(tasksLabel))) fail(`tasks row ${JSON.stringify(rowState.background)}, expected ${tasksOn ? tasksLabel : "none"}`);
+          if (rowState.sideways > 0) fail(`menu scrolls sideways by ${rowState.sideways}px`);
+          const menuSmall = await smallControls(page, "[data-mobile2-sheet=menu]");
+          if (menuSmall.length) fail(`menu controls under 44 px: ${menuSmall.join(", ")}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          const sheets: Record<string, unknown> = {};
+          if (pinnedOn && scene.name === "tasks3") {
+            await page.locator("[data-mobile2-menu-row=pinned]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]");
+            await pause(page, 500);
+            const pinned = await page.evaluate(() => ({ text: document.querySelector("[data-mobile2-pinned-item] p")?.textContent ?? "", open: document.querySelector("[data-mobile2-pinned-open]")?.textContent?.trim() ?? "", sideways: document.documentElement.scrollWidth - innerWidth }));
+            if (!pinned.text.includes("Never leave a lane without an owner.")) fail("the pinned sheet does not show the full text");
+            if (!pinned.open.includes(translate(lang, "mobile2.pinned.openCard"))) fail(`the pinned sheet's button reads ${pinned.open}`);
+            if (pinned.sideways > 0) fail(`pinned sheet scrolls sideways by ${pinned.sideways}px`);
+            const small = await smallControls(page, "[data-mobile2-sheet=pinned]");
+            if (small.length) fail(`pinned sheet controls under 44 px: ${small.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-pinned-sheet.png`) });
+            sheets.pinned = pinned;
+            await page.locator("[data-mobile2-sheet=pinned] [data-mobile2-close]").click();
+            await page.waitForSelector("[data-mobile2-sheet=pinned]", { state: "detached" });
+            await page.locator("[data-mobile2-bar] [data-mobile2-open=menu]").click();
+            await page.waitForSelector("[data-mobile2-sheet=menu]");
+          }
+          if (tasksOn) {
+            await page.locator("[data-mobile2-menu-row=background]").click();
+            await page.waitForSelector("[data-mobile2-sheet=background]");
+            await pause(page, 500);
+            const list = await page.evaluate(() => ({
+              rows: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task]").length,
+              standingStop: document.querySelectorAll("[data-mobile2-sheet=background] [data-mobile2-task-stop]").length,
+              hostWord: (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Stop host") || (document.querySelector("[data-mobile2-sheet=background]")?.textContent ?? "").includes("Зупинити хост"),
+              sideways: document.documentElement.scrollWidth - innerWidth,
+              sheetSideways: (() => { const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=background] [data-mobile2-sheet-body]"); return body ? body.scrollWidth - body.clientWidth : 0; })(),
+            }));
+            const expected = scene.name === "tasks3" ? 3 : 8;
+            if (list.rows !== expected) fail(`${list.rows} task rows, expected ${expected}`);
+            if (list.standingStop) fail("a Stop control is visible before a task's ⋯ is opened");
+            if (list.hostWord) fail("the tasks sheet says «host»");
+            if (list.sideways > 0 || list.sheetSideways > 0) fail(`tasks sheet scrolls sideways (${list.sideways}/${list.sheetSideways})`);
+            const listSmall = await smallControls(page, "[data-mobile2-sheet=background]");
+            if (listSmall.length) fail(`tasks sheet controls under 44 px: ${listSmall.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}-tasks-sheet.png`) });
+            sheets.tasks = list;
+            if (scene.name === "tasks3") {
+              await page.locator("[data-mobile2-task-menu]").first().click();
+              await page.waitForSelector("[data-mobile2-task-actions]");
+              await pause(page, 300);
+              const taskMenu = await page.evaluate(() => ({
+                head: document.querySelector("[data-mobile2-task-actions]")?.firstElementChild?.textContent?.trim() ?? "",
+                items: [...document.querySelectorAll("[data-mobile2-task-actions] [role=menuitem]")].map((node) => node.textContent?.trim()),
+                sideways: document.documentElement.scrollWidth - innerWidth,
+              }));
+              const wanted = [translate(lang, "task.stopTask"), translate(lang, "task.showOutput"), translate(lang, "task.copyCommand")];
+              if (!/^PID \d+$/.test(taskMenu.head)) fail(`the task menu header reads ${taskMenu.head}`);
+              if (JSON.stringify(taskMenu.items) !== JSON.stringify(wanted)) fail(`the task menu holds ${JSON.stringify(taskMenu.items)}`);
+              if (taskMenu.sideways > 0) fail(`task menu scrolls sideways by ${taskMenu.sideways}px`);
+              const small = await smallControls(page, "[data-mobile2-task-actions]");
+              if (small.length) fail(`task menu controls under 44 px: ${small.join(", ")}`);
+              await page.screenshot({ path: path.join(out, `${key}-task-menu.png`) });
+              sheets.taskMenu = taskMenu;
+            }
+          }
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings.push({ key, frame, speak, rowState, sheets, pageErrors });
+        } catch (error) {
+          failures.push(`${key}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("fast TTS live latency", () => {
+  const liveTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_TTS_LIVE_LATENCY === "1" ? test : test.skip;
+  liveTest("interleaves ten cold baseline and candidate tap-to-speech measurements", async () => {
+    const { measureFastTtsLatency } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await measureFastTtsLatency(browser); } finally { await browser.close(); }
+  }, 500_000);
+});
+
+/*
+ * Composer context mode (docs/design/composer-context-mode.md §9.2): the Codex
+ * composer's Context toggle, its auto switching with the turn, and the context
+ * row, on the real Viewer at 390 and 1440 in en and uk.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "composer context mode"
+ *
+ * Readings go to `evidence/composer-context-mode/readings.json`; frames to
+ * `.artifacts/composer-context-mode/`, which is not committed.
+ */
+type ContextEvidence = {
+  contextTurn: string;
+  injects: Array<{ text?: string }>;
+  sends: unknown[];
+  injectsEchoed: number;
+  setContextTurn(turn: "idle" | "running"): Promise<void>;
+  publishContextReceipt(status: string, reason?: string): Promise<void>;
+  echoInjects(): void;
+};
+const contextHook = (page: Page, call: "idle" | "running") => page.evaluate((turn) => (window as unknown as { evidence: ContextEvidence }).evidence.setContextTurn(turn), call);
+const composerMode = (page: Page) => page.evaluate(() => document.querySelector("[data-composer-mode]")?.getAttribute("data-composer-mode") ?? "normal");
+const toggleReading = (page: Page) => page.evaluate(() => {
+  const button = document.querySelector<HTMLElement>("[data-composer-context-toggle]");
+  const box = button?.getBoundingClientRect();
+  return button && box ? {
+    pressed: button.getAttribute("aria-pressed"), disabled: button.getAttribute("aria-disabled") === "true",
+    width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10,
+  } : null;
+});
+const waitForMode = async (page: Page, want: string, timeoutMs: number) => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await composerMode(page) === want) return Date.now() - started;
+    await page.waitForTimeout(25);
+  }
+  throw new Error(`the composer never reached mode ${want} within ${timeoutMs} ms`);
+};
+
+browserTest("composer context mode: the toggle, auto switching and the context row at 390 and 1440 in en and uk", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const out = path.resolve(".artifacts/composer-context-mode");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: Array<Record<string, unknown>> = [];
+  const combos = [
+    { width: 390, locale: "en", scheme: "dark" }, { width: 390, locale: "uk", scheme: "dark" }, { width: 390, locale: "en", scheme: "light" },
+    { width: 1440, locale: "en", scheme: "dark" }, { width: 1440, locale: "uk", scheme: "dark" },
+  ] as const;
+  try {
+    for (const { width, locale, scheme } of combos) {
+      const phone = width === 390;
+      const full = locale === "en" && scheme === "dark";
+      const tag = `${width}-${locale}-${scheme}`;
+      const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      try {
+        await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+        const page = await context.newPage();
+        const reading: Record<string, unknown> = { width, locale, scheme };
+        const text = (key: string) => translate(locale, key as never);
+
+        await page.goto(`${base}/?context-mode=1#c=conversation_running`);
+        const input = page.locator("textarea:visible").first();
+        await page.waitForSelector("[data-composer-context-toggle]");
+        await page.waitForTimeout(600);
+
+        /* 1: idle, off; the phone's target is 44 x 44. */
+        reading.idle = await toggleReading(page);
+        expect((reading.idle as { pressed: string }).pressed).toBe("false");
+        if (phone) expect(reading.idle).toMatchObject({ width: 44, height: 44 });
+        await page.screenshot({ path: path.join(out, `${tag}-1-idle.png`) });
+
+        /* 2: the turn starts; off at +300 ms, on by +700 ms, dashed box. */
+        const started = Date.now();
+        await contextHook(page, "running");
+        await page.waitForTimeout(Math.max(0, 300 - (Date.now() - started)));
+        expect(await composerMode(page)).toBe("normal");
+        await page.waitForTimeout(Math.max(0, 700 - (Date.now() - started)));
+        const onAt = Date.now() - started + await waitForMode(page, "context", 1_000);
+        reading.enterMs = onAt;
+        reading.running = { toggle: await toggleReading(page), borderStyle: await page.evaluate(() => getComputedStyle(document.querySelector("[data-composer-mode]")!).borderStyle) };
+        expect((reading.running as { borderStyle: string }).borderStyle).toBe("dashed");
+        expect((reading.running as { toggle: { pressed: string } }).toggle.pressed).toBe("true");
+        await page.screenshot({ path: path.join(out, `${tag}-2-running.png`) });
+
+        if (full) {
+          /* 3: a one-second idle flicker keeps the mode. */
+          await contextHook(page, "idle");
+          await page.waitForTimeout(1_000);
+          expect(await composerMode(page)).toBe("context");
+          await contextHook(page, "running");
+          await page.waitForTimeout(600);
+          expect(await composerMode(page)).toBe("context");
+          reading.flickerKeptContext = true;
+
+          /* 4: idle for real: still on at +2000 ms, off by +3000 ms. */
+          const idleAt = Date.now();
+          await contextHook(page, "idle");
+          await page.waitForTimeout(2_000 - (Date.now() - idleAt));
+          expect(await composerMode(page)).toBe("context");
+          reading.exitMs = Date.now() - idleAt + await waitForMode(page, "normal", 1_500);
+          expect(reading.exitMs as number).toBeLessThanOrEqual(3_100);
+
+          /* 5: a key is down when the turn starts; the switch waits out the typing quiet. */
+          await input.click();
+          await page.keyboard.press("a");
+          const keyAt = Date.now();
+          await contextHook(page, "running");
+          await page.waitForTimeout(1_000);
+          expect(await composerMode(page)).toBe("normal");
+          await waitForMode(page, "context", 2_000);
+          reading.typingGuardMs = Date.now() - keyAt;
+          expect(reading.typingGuardMs as number).toBeGreaterThanOrEqual(1_450);
+          await input.fill("");
+        }
+
+        /* 6: Enter in context mode files one context row within a frame and posts to inject only. */
+        const line = full ? "Add the release note to the plan." : `Add the ${locale} note to the plan.`;
+        await input.fill(line);
+        await input.press("Enter");
+        await page.waitForSelector('[data-message-intent="context"][data-outbox-state="delivering"]', { timeout: 500 });
+        const posted = await page.evaluate(() => {
+          const hook = (window as unknown as { evidence: ContextEvidence }).evidence;
+          return { injects: hook.injects.map((body) => body.text), sends: hook.sends.length };
+        });
+        expect(posted.injects).toEqual([line]);
+        expect(posted.sends).toBe(0);
+        reading.enter = { ...posted, chip: await page.locator("[data-message-context-chip]").first().innerText() };
+        await page.screenshot({ path: path.join(out, `${tag}-6-row.png`) });
+
+        /* 7: the record lands; one bubble carries the text, confirmed, still with the chip. */
+        await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.echoInjects());
+        await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("delivered"));
+        await page.waitForSelector('[data-message-row="confirmed"]', { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        reading.joined = await page.evaluate((needle) => ({
+          bubbles: [...document.querySelectorAll("[data-user-bubble]")].filter((element) => element.textContent?.includes(needle)).length,
+          confirmed: document.querySelectorAll('[data-message-row="confirmed"] [data-user-bubble]').length,
+          chips: document.querySelectorAll("[data-message-context-chip]").length,
+        }), line);
+        expect(reading.joined).toMatchObject({ bubbles: 1, chips: 1 });
+        await page.screenshot({ path: path.join(out, `${tag}-7-joined.png`) });
+
+        if (full) {
+          /* 8: a refused injection shows its reason and Edit, and no replay. */
+          await input.fill("Second note the host refuses.");
+          await input.press("Enter");
+          await page.waitForSelector('[data-outbox-state="delivering"]', { timeout: 500 });
+          await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("failed", "unsupported-injection"));
+          await page.waitForSelector("[data-outbox-edit]", { timeout: 5_000 });
+          reading.failed = await page.evaluate(() => ({
+            edit: document.querySelectorAll("[data-outbox-edit]").length,
+            replay: document.querySelectorAll("[data-outbox-retry], [data-outbox-operation-retry]").length,
+            text: document.querySelector("[data-outbox-edit]")?.closest("[data-outbox-entry]")?.textContent ?? "",
+          }));
+          expect(reading.failed).toMatchObject({ edit: 1, replay: 0 });
+          expect((reading.failed as { text: string }).text.length).toBeGreaterThan(0);
+          await page.screenshot({ path: path.join(out, `${tag}-8-failed.png`) });
+
+          /* 9: an unknown fate offers Check status only. */
+          await page.locator("[data-outbox-edit]").click();
+          await input.fill("Third note whose answer is lost.");
+          await input.press("Enter");
+          await page.waitForFunction(() => (window as unknown as { evidence: ContextEvidence }).evidence.injects.length === 3, undefined, { timeout: 2_000 });
+          await page.evaluate(() => (window as unknown as { evidence: ContextEvidence }).evidence.publishContextReceipt("uncertain"));
+          await page.locator("[data-outbox-progress]").first().click();
+          await page.waitForSelector("[data-outbox-check]", { timeout: 5_000 });
+          reading.uncertain = await page.evaluate(() => ({
+            check: document.querySelectorAll("[data-outbox-check]").length,
+            edit: document.querySelectorAll("[data-outbox-edit]").length,
+            replay: document.querySelectorAll("[data-outbox-retry], [data-outbox-operation-retry]").length,
+          }));
+          expect(reading.uncertain).toMatchObject({ edit: 0, replay: 0 });
+          expect((reading.uncertain as { check: number }).check).toBeGreaterThan(0);
+          await page.screenshot({ path: path.join(out, `${tag}-9-uncertain.png`) });
+        }
+
+        /* 11: geometry with the mode on. */
+        reading.geometry = await page.evaluate(() => {
+          const unit = document.querySelector<HTMLElement>('[data-testid="composer-input-unit"]');
+          const all = [...(unit?.querySelectorAll<HTMLElement>("button, [role=button], select, a") ?? [])]
+            .map((element) => ({ element, box: element.getBoundingClientRect() })).filter(({ box }) => box.width > 0 && box.height > 0);
+          /* The voice-call button is 32 px on the phone before this change and is not part of it; it is recorded in
+             `untouched` and left out of the 44 px reading. */
+          const controls = all.filter(({ element }) => element.getAttribute("data-testid") !== "voice-call-button");
+          const untouched = all.filter(({ element }) => element.getAttribute("data-testid") === "voice-call-button").map(({ box }) => `voice-call-button ${Math.round(box.width)}x${Math.round(box.height)}`);
+          const pill = document.querySelector<HTMLElement>("[data-runtime-pill]")?.getBoundingClientRect() ?? null;
+          const chip = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.getBoundingClientRect() ?? null;
+          const overlaps = controls.some(({ box: a }, i) => controls.some(({ box: b }, j) => i < j
+            && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
+          const row = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.parentElement?.closest<HTMLElement>("div") ?? null;
+          return {
+            pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            toolsRow: row ? { scrollWidth: row.scrollWidth, clientWidth: row.clientWidth } : null,
+            smallest: Math.round(Math.min(...controls.map(({ box }) => Math.min(box.width, box.height)))),
+            untouched,
+            small: controls.filter(({ box }) => Math.min(box.width, box.height) < 44).map(({ element, box }) => `${element.tagName.toLowerCase()}[${[...element.attributes].filter((a) => a.name.startsWith("data-") || a.name === "aria-label").map((a) => `${a.name}=${a.value}`).join(",")}] ${Math.round(box.width)}x${Math.round(box.height)}`),
+            pillWidth: pill ? Math.round(pill.width) : null,
+            sameLine: pill && chip ? Math.abs((pill.top + pill.height / 2) - (chip.top + chip.height / 2)) < 12 : null,
+            overlaps,
+          };
+        });
+        const geometry = reading.geometry as { pageOverflow: boolean; toolsRow: { scrollWidth: number; clientWidth: number } | null; smallest: number; pillWidth: number | null; sameLine: boolean | null; overlaps: boolean };
+        expect(geometry.pageOverflow).toBe(false);
+        expect(geometry.overlaps).toBe(false);
+        if (geometry.toolsRow) expect(geometry.toolsRow.scrollWidth).toBeLessThanOrEqual(geometry.toolsRow.clientWidth);
+        if (phone) {
+          expect(geometry.smallest).toBeGreaterThanOrEqual(44);
+          if (geometry.pillWidth !== null) expect(geometry.pillWidth).toBeGreaterThanOrEqual(60);
+        } else if (geometry.sameLine !== null) expect(geometry.sameLine).toBe(true);
+        readings.push(reading);
+
+        /* 10: a host that has not advertised injection: a disabled toggle that says why, as text. */
+        const bare = await context.newPage();
+        await bare.goto(`${base}/?context-mode=noinject#c=conversation_running`);
+        await bare.waitForSelector("[data-composer-context-toggle]");
+        await bare.waitForTimeout(600);
+        const before = await toggleReading(bare);
+        await bare.locator("[data-composer-context-toggle]").click({ force: true });
+        const reason = text("inject.unsupported");
+        await bare.getByText(reason).first().waitFor({ state: "visible", timeout: 2_000 });
+        const after = await toggleReading(bare);
+        readings.push({ width, locale, scheme, noInject: { before, after, reasonVisible: true, reason } });
+        expect(before).toMatchObject({ disabled: true, pressed: "false" });
+        expect(after).toMatchObject({ disabled: true, pressed: "false" });
+        await bare.screenshot({ path: path.join(out, `${tag}-10-noinject.png`) });
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  const evidenceDir = path.resolve("evidence/composer-context-mode");
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  fs.writeFileSync(path.join(evidenceDir, "readings.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+}, 400_000);
+
+/*
+ * A task another machine runs, on the phone (docs/design/synced-task-card.md
+ * §8): the board card keeps to one button and gains its lane line and a
+ * passive host line under the remote stripe; the task screen draws each remote
+ * lane in a frame with no control, the chain standing vertical in its 342 px,
+ * and a passive host pill where "+ Agent" was. `LLV_SYNCED_PHASE=before`
+ * against a checkout without the change renders the same scene and only takes
+ * pictures and the local card's readings; the default `after` also fails on
+ * every measurement. Pictures go to `SYNCED_TASK_OUT`, else the review folder.
+ */
+describe("synced task card on the phone", () => {
+  const PHASE = process.env.LLV_SYNCED_PHASE === "before" ? "before" : "after";
+  const SELF = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  const STAGE = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+  const KEY = `repo-${"a".repeat(32)}`;
+  const OUT_DIR = process.env.SYNCED_TASK_OUT ?? path.join(os.homedir(), "Pictures/delegatus-review/synced-task");
+  const lane = (k: string, taskId: string, state: string, g: Array<Record<string, unknown>>, at: number) => ({ k: `l:${k}`, p: KEY, tk: [taskId], s: state, at, g, peer: "Stage", install: STAGE, stale: false, asOf: Date.now() });
+  const feed = () => {
+    const now = Date.now();
+    return {
+      agents: [], self: SELF, hosts: { [STAGE]: { label: "Stage", linked: true } },
+      lanes: [
+        lane("5e0a41c2", "t-rem-run", "running", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "running", n: 2, r: 2, f: { to: "fix", max: 3, u: 1 }, e: "claude", m: "claude-opus-5" },
+          { id: "fix", ro: "builder", st: "pending", b: 1, e: "codex", m: "gpt-6.1-sol" },
+        ], now - 4 * 60_000),
+        lane("a1b2c3d4", "t-rem-wait", "needs_decision", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "needs_decision", n: 1, fc: 2, e: "claude", m: "claude-opus-5" },
+        ], now - 14 * 60_000),
+        lane("0badc0de", "t-rem-done", "completed", [
+          { id: "build", ro: "builder", st: "passed", n: 1, e: "codex", m: "gpt-6.1-sol" },
+          { id: "review", ro: "reviewer", st: "passed", n: 1, e: "claude", m: "claude-opus-5" },
+        ], now - 3 * 3_600_000),
+      ],
+    };
+  };
+  const readLocal = (page: Page) => page.locator('[data-phone-card="task:t-favicon"]').evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { width: Math.round(node.getBoundingClientRect().width), height: Math.round(node.getBoundingClientRect().height), backgroundImage: style.backgroundImage,
+      backgroundColor: style.backgroundColor, boxShadow: style.boxShadow, text: (node.textContent ?? "").replace(/\d+[smhd]\b/g, "N").replace(/\s+/g, " ").trim() };
+  });
+
+  browserTest("remote cards and the task screen read at a glance at 390, light and dark, en and uk", async () => {
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+    const { base, stop } = await serveFixture({ "/api/links/agents": feed() });
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    try {
+      for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const) {
+        const tag = `${scheme}-${lang}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${base}/?kanban=1&synced=1#p=${KEY}`);
+          await page.waitForSelector('[data-phone-card="task:t-rem-run"]', { timeout: 20_000 });
+          await pause(page, 800);
+          const local = await readLocal(page);
+          const localFile = path.join(OUT_DIR, `before-phone-local-card-${tag}.json`);
+          if (PHASE === "before") fs.writeFileSync(localFile, `${JSON.stringify(local, null, 2)}\n`);
+          else if (fs.existsSync(localFile)) expect(local).toEqual(JSON.parse(fs.readFileSync(localFile, "utf8")));
+          const cardSel = (id: string) => `[data-phone-card="task:${id}"]`;
+          await page.locator(cardSel("t-rem-run")).scrollIntoViewIfNeeded();
+          await pause(page, 300);
+          await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-board-${tag}.png`) });
+          for (const id of ["t-rem-run", "t-rem-wait", "t-rem-old"]) {
+            await page.locator(cardSel(id)).scrollIntoViewIfNeeded();
+            await page.locator(cardSel(id)).screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-card-${id.replace("t-rem-", "")}-${tag}.png`) });
+          }
+          if (PHASE === "after") {
+            for (const id of ["t-rem-run", "t-rem-wait", "t-rem-old"]) {
+              const read = await page.locator(cardSel(id)).evaluate((node) => {
+                const rect = node.getBoundingClientRect();
+                const host = node.querySelector<HTMLElement>("[data-phone-card-host]");
+                return {
+                  tag: node.tagName, nested: node.querySelectorAll("button, a, input").length, stripe: getComputedStyle(node).backgroundImage.includes("repeating-linear-gradient"),
+                  shadow: getComputedStyle(node).boxShadow, host: host?.textContent ?? null,
+                  hostClipped: Boolean(host && host.scrollWidth > host.clientWidth + 0.5 && getComputedStyle(host.querySelector("span:last-child")!).textOverflow !== "ellipsis"),
+                  inside: rect.left >= -0.5 && rect.right <= innerWidth + 0.5, pills: [...node.querySelectorAll<HTMLElement>(".pb-pill[data-stage]")].map((pill) => pill.dataset.stage),
+                };
+              });
+              const fail = (what: string) => failures.push(`${tag} ${id}: ${what}`);
+              if (read.tag !== "BUTTON" || read.nested) fail(`the card is not one button with nothing inside (${read.tag}, ${read.nested})`);
+              if (!read.stripe) fail("no pinstripe in its computed background");
+              if (!read.shadow.includes("inset")) fail(`no tinted line in its shadow: ${read.shadow}`);
+              if (read.host !== translate(lang, "kanban.remote.managedOn", { host: "Stage" })) fail(`host line reads ${read.host}`);
+              if (read.hostClipped || !read.inside) fail("the host line is clipped or the card leaves the screen");
+              if (id === "t-rem-old" && read.pills.length) fail("an older peer's card draws a scheme");
+              if (id !== "t-rem-old" && !read.pills.length) fail("no stage pills on a card whose peer sent lanes");
+            }
+          }
+          /* The finished card waits on the Done tab. */
+          await page.locator('[data-phone-kanban-tab="done"]').click();
+          await pause(page, 500);
+          await page.locator(cardSel("t-rem-done")).scrollIntoViewIfNeeded().catch(() => {});
+          await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-done-${tag}.png`) });
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await pause(page, 400);
+          for (const id of ["t-rem-run", "t-rem-wait"]) {
+            await page.locator(cardSel(id)).scrollIntoViewIfNeeded();
+            await page.locator(cardSel(id)).click();
+            await page.waitForSelector(`[data-phone-task-body="${id}"]`, { timeout: 10_000 });
+            await pause(page, 500);
+            await page.screenshot({ path: path.join(OUT_DIR, `${PHASE}-phone-390-task-${id.replace("t-rem-", "")}-${tag}.png`) });
+            if (PHASE === "after") {
+              const read = await page.evaluate(() => {
+                const bar = document.querySelector<HTMLElement>("[data-phone-task-bar]")!;
+                const pill = bar.querySelector<HTMLElement>("[data-phone-task-host]");
+                const status = bar.querySelector<HTMLElement>("[data-phone-task-status-pill]")!;
+                const frame = document.querySelector<HTMLElement>("[data-phone-task-remote-lanes] .phone-lane");
+                const tops = [...(frame?.querySelectorAll<HTMLElement>(".pb-pill[data-stage]") ?? [])].map((node) => Math.round(node.getBoundingClientRect().top));
+                const pillRect = pill?.getBoundingClientRect();
+                const statusRect = status.getBoundingClientRect();
+                return {
+                  pill: pill?.textContent ?? null, pillHeight: pillRect ? Math.round(pillRect.height) : 0, pillTag: pill?.tagName ?? null,
+                  add: Boolean(bar.querySelector("[data-phone-task-add-agent]")), barOverflow: bar.scrollWidth > bar.clientWidth + 0.5,
+                  pillOverlapsStatus: Boolean(pillRect && pillRect.left < statusRect.right && pillRect.right > statusRect.left),
+                  frameStripe: frame ? getComputedStyle(frame).backgroundImage.includes("repeating-linear-gradient") : false,
+                  frameControls: frame?.querySelectorAll("button, a, input").length ?? -1,
+                  vertical: tops.length > 1 && tops.every((top, index) => index === 0 || top > tops[index - 1]!), pills: tops.length,
+                  note: frame?.querySelector("[data-managed-on]")?.textContent ?? null, overflowX: document.documentElement.scrollWidth - innerWidth,
+                };
+              });
+              const fail = (what: string) => failures.push(`${tag} task ${id}: ${what}`);
+              if (read.pill !== translate(lang, "kanban.remote.managedOn", { host: "Stage" }) || read.pillTag !== "SPAN") fail(`host pill is ${read.pillTag} "${read.pill}"`);
+              if (read.pillHeight < 44) fail(`host pill is ${read.pillHeight} px tall`);
+              if (read.add) fail("+ Agent is still offered");
+              if (read.barOverflow || read.pillOverlapsStatus) fail("the bottom bar overflows or its two pills overlap");
+              if (!read.frameStripe) fail("the remote lane frame has no stripe");
+              if (read.frameControls !== 0) fail(`${read.frameControls} controls inside the remote lane`);
+              if (!read.vertical) fail("the chain does not stand vertical in the 342 px lane");
+              if (id === "t-rem-wait" && !read.note?.includes(translate(lang, "pipelineBlock.remote.decisionTail", { host: "Stage" }))) fail(`the waiting lane says "${read.note}"`);
+              if (read.overflowX > 0.5) fail("the page overflows sideways");
+            }
+            await page.goBack();
+            await page.waitForSelector(cardSel(id), { timeout: 10_000 });
+            await pause(page, 400);
+          }
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 400_000);
+});
+
+/*
+ * Tool call context tokens (docs/design/tool-call-tokens.md): the feed's real
+ * tool rows, drawn from one parsed conversation that holds a call in each of
+ * the four bands, a pair sharing a measured round, a call with nothing to
+ * count, and the worst-case row of §11 — an error chip, 59 s and ~99.9k —
+ * at 390 and 1440 px, light and dark, in both languages.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     CONTEXT_TOKENS_PNG_DIR=docs/design/tool-call-tokens \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "tool call context tokens"
+ */
+describe("tool call context tokens", () => {
+  const measureRows = `(() => {
+    const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+    const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
+    const rows = [...document.querySelectorAll('[data-tool-row], [data-testid="mcp-call-card"] summary')].map((row) => {
+      const caption = row.querySelector("[data-context-tokens]");
+      const title = row.querySelector("span.flex-1");
+      const value = caption && caption.querySelector("span:not([aria-hidden])");
+      const cap = caption ? box(caption) : null;
+      const r = box(row);
+      return {
+        label: (row.textContent || "").trim().slice(0, 70),
+        row: r,
+        caption: cap,
+        band: caption ? Number(caption.getAttribute("data-context-band")) : null,
+        basis: caption ? caption.getAttribute("data-context-basis") : null,
+        text: caption ? caption.textContent : null,
+        title: caption ? caption.getAttribute("title") : null,
+        color: value ? getComputedStyle(value).color : null,
+        weight: value ? Number(getComputedStyle(value).fontWeight) : null,
+        titleWidth: title ? box(title).width : null,
+        pushedOut: [...row.children].filter((child) => box(child).right > r.right + 0.5).map((child) => (child.textContent || "").trim().slice(0, 20) + " +" + Math.round(box(child).right - r.right) + "px"),
+        oneLine: cap ? cap.height < lineHeight * 1.6 : null,
+        inside: cap ? cap.left >= r.left - 0.5 && cap.right <= r.right + 0.5 && cap.top >= r.top - 1 && cap.bottom <= r.bottom + 1 : null,
+      };
+    });
+    return { rows, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth };
+  })()`;
+
+  type Reading = {
+    label: string; row: { height: number }; caption: { height: number } | null; band: number | null; basis: string | null;
+    text: string | null; title: string | null; color: string | null; weight: number | null; titleWidth: number | null;
+    oneLine: boolean | null; inside: boolean | null; pushedOut: string[];
+  };
+
+  browserTest("every band, the shared pair and the worst-case row hold their geometry in both themes and languages", async () => {
+    const { openFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const pngDir = path.resolve(process.env.CONTEXT_TOKENS_PNG_DIR ?? ".artifacts/context-tokens");
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT, "src/components/feed/__fixtures__/contextTokens.fixture.tsx");
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [390, 1440]) {
+        for (const scheme of SCHEMES) {
+          for (const lang of ["en", "uk"] as const) {
+            const tag = `${width}px ${scheme} ${lang}`;
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 1500 }, scheme, lang, "no-preference", width < 500, width < 500 ? 2 : 1);
+            try {
+              await page.locator("[data-context-tokens-feed]").waitFor();
+              const read = await page.evaluate(measureRows) as { rows: Reading[]; scrollWidth: number; clientWidth: number };
+              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth }));
+              const captions = read.rows.filter((row) => row.caption);
+              if (!read.rows.some((row) => row.label.includes("Listing pipelines") && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
+              const bare = read.rows.find((row) => !row.caption && row.label.includes("ls tmp"));
+              if (!bare) failures.push(`${tag}: the uncaptioned baseline row is missing`);
+              const bands = new Set(captions.map((row) => row.band));
+              for (const band of [0, 1, 2, 3]) if (!bands.has(band)) failures.push(`${tag}: no row in band ${band}`);
+              for (const row of captions) {
+                const at = `${tag} "${row.label}"`;
+                if (!row.oneLine) failures.push(`${at}: the caption wraps`);
+                if (!row.inside) failures.push(`${at}: the caption leaves its row`);
+                if (row.pushedOut.length) failures.push(`${at}: ${row.pushedOut.join(", ")} is pushed past the row's edge`);
+                if (bare && Math.abs(row.row.height - bare.row.height) > 1) failures.push(`${at}: row is ${row.row.height}px, baseline ${bare.row.height}px`);
+                if (width === 390 && (row.titleWidth ?? 0) < 96) failures.push(`${at}: the title keeps only ${row.titleWidth}px`);
+                if (!row.title || !/\d/.test(row.title)) failures.push(`${at}: no hover title`);
+                if ((row.basis === "measured") === (row.text ?? "").includes("~")) failures.push(`${at}: basis ${row.basis} but caption "${row.text}"`);
+              }
+              /* Each band reads heavier than the one below: the colours differ and the weight never drops. */
+              const byBand = [0, 1, 2, 3].map((band) => captions.find((row) => row.band === band));
+              for (let band = 1; band < 4; band += 1) {
+                const low = byBand[band - 1]; const high = byBand[band];
+                if (low && high && low.color === high.color) failures.push(`${tag}: bands ${band - 1} and ${band} share the colour ${high.color}`);
+                if (low && high && (high.weight ?? 0) < (low.weight ?? 0)) failures.push(`${tag}: band ${band} is lighter than band ${band - 1}`);
+              }
+              if ((byBand[3]?.weight ?? 0) < 600) failures.push(`${tag}: band 3 is not semibold`);
+              const worst = captions.find((row) => row.text?.includes("99.9k"));
+              if (!worst) failures.push(`${tag}: the worst-case row is missing`);
+              const unit = lang === "uk" ? "токен" : "token";
+              if (!captions.every((row) => (row.title ?? "").includes(unit))) failures.push(`${tag}: a hover title is not in ${lang}`);
+              if (read.scrollWidth > read.clientWidth + 0.5) failures.push(`${tag}: the page overflows sideways`);
+              if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+              await page.locator("[data-context-tokens-feed]").screenshot({ path: path.join(pngDir, `tool-call-tokens-${width}-${scheme}-${lang}.png`) });
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/tool-call-tokens", { recursive: true });
+    fs.writeFileSync("evidence/tool-call-tokens/rows.json", `${JSON.stringify({ readings }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 120_000);
+});
+
+browserTest("task chip: the phone task screen's Ask button attaches the task and opens the orchestrator's conversation", async () => {
+  /* The phone's card is one button (#699), so the task chip's button sits where the phone keeps the card's
+     actions: the opened task's bottom bar, beside «+ Agent». Pressing it attaches the task as a chip and opens
+     the seat's conversation over the task screen, with the chip above the composer and the input empty. */
+  const OUT_CHIP = path.resolve(".artifacts/task-chip-phone");
+  const EVIDENCE_CHIP = path.resolve("evidence/task-chip-to-orchestrator");
+  fs.mkdirSync(OUT_CHIP, { recursive: true });
+  fs.mkdirSync(EVIDENCE_CHIP, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const readings: Record<string, unknown>[] = [];
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      const key = `390-${lang}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 600);
+        const cardSelector = '[data-phone-card-kind="task"]';
+        await page.locator(cardSelector).first().click();
+        await page.waitForSelector("[data-phone-task-ask-orchestrator]", { timeout: 10_000 });
+        await pause(page, 400);
+        const bar = await page.evaluate(() => {
+          const ask = document.querySelector<HTMLElement>("[data-phone-task-ask-orchestrator]")!;
+          const bar = ask.closest<HTMLElement>("[data-phone-task-bar]")!;
+          const box = ask.getBoundingClientRect();
+          const barBox = bar.getBoundingClientRect();
+          const text = (node: Element) => node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          return {
+            label: ask.getAttribute("aria-label"), text: text(ask), height: Math.round(box.height), width: Math.round(box.width),
+            inside: box.left >= barBox.left - 1 && box.right <= barBox.right + 1,
+            overflow: bar.scrollWidth - bar.clientWidth,
+            siblings: [...bar.querySelectorAll("button")].map((button) => ({ text: text(button), right: Math.round(button.getBoundingClientRect().right) })),
+          };
+        });
+        await page.screenshot({ path: path.join(OUT_CHIP, `task-bar-${lang}.png`) });
+        await page.click("[data-phone-task-ask-orchestrator]");
+        const opened = await page.waitForSelector("[data-task-chip]", { timeout: 10_000 }).then(() => true, () => false);
+        await pause(page, 500);
+        const chip = opened ? await page.evaluate(() => {
+          const node = document.querySelector<HTMLElement>("[data-task-chip]")!;
+          const box = node.getBoundingClientRect();
+          const textarea = [...document.querySelectorAll<HTMLTextAreaElement>("textarea")].find((area) => area.getBoundingClientRect().height > 0);
+          return { text: node.textContent?.replace(/\s+/g, " ").trim() ?? "", inView: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth, removeHeight: Math.round(node.querySelector<HTMLElement>("[data-task-chip-remove]")!.getBoundingClientRect().height), draft: textarea?.value ?? null };
+        }) : null;
+        await page.screenshot({ path: path.join(OUT_CHIP, `chip-composer-${lang}.png`) });
+        readings.push({ key, bar, opened, chip });
+        if (bar.text !== translate(lang, "taskChip.ask")) fail(`the button says ${JSON.stringify(bar.text)}`);
+        if (bar.height < 44) fail(`the button is ${bar.height} px tall, under the 44 px target`);
+        if (!bar.inside || bar.overflow > 0) fail(`the bar's row overflows ${JSON.stringify(bar)}`);
+        if (!opened) fail("no chip reached a composer after the press");
+        else if (!chip!.inView || chip!.draft !== "") fail(`the chip ${JSON.stringify(chip)}`);
+        if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(EVIDENCE_CHIP, "phone.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 180_000);
+
+describe("agent memory isolation", () => {
+  browserTest("memory Needs-you row names the stage and limit in en and uk", async () => {
+    const out = path.resolve(".artifacts/agent-memory-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${locale}&memory=1&open=1`);
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const row = page.locator("[data-needs-you-row]").filter({ hasText: locale === "en" ? "Killed: out of memory" : "Зупинено: нестача пам’яті" });
+          await row.waitFor({ timeout: 15000 });
+          expect(await row.innerText()).toContain(locale === "en" ? "build · limit 15 GB" : "build · ліміт 15 ГБ");
+          await row.scrollIntoViewIfNeeded();
+          const geometry = await row.evaluate((element) => ({ width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, overflow: document.documentElement.scrollWidth > innerWidth }));
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.overflow).toBeFalse();
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}.png`) });
+          cases.push({ locale, ...geometry, errors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/agent-memory", { recursive: true });
+      fs.writeFileSync("evidence/agent-memory/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 90000);
+});
+browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium().catch((error) => { stop(); throw error; });
+  const out = path.resolve(".artifacts/stage-open-agent");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const state of ["running", "passed", "failed", "needs_decision"]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390, colorScheme: "dark" });
+      try {
+        await context.addInitScript((locale) => localStorage.setItem("llv_lang", locale), lang);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?kanban=1&stage-agent=${state}#p=atlas`);
+        if (width === 390) {
+          await page.locator('[data-phone-card="task:t-data"]').waitFor();
+          await page.locator('[data-phone-card="task:t-data"]').click();
+          if (state === "passed") await page.locator('[data-phone-task-ended]').click();
+          await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click();
+        } else {
+          await page.locator('.card[data-id="task:t-data"]').waitFor();
+          await page.locator('.card[data-id="task:t-data"] [data-open-stages="lane-decision"]').click();
+        }
+        const stage = page.locator(width === 390 ? '[data-mobile2-pipeline="lane-decision"] .pb-stage[data-stage="design"]' : '[data-stages-sheet] .pane[data-stage="design"]');
+        const open = stage.locator('[data-open-conversation="design"]');
+        await open.waitFor();
+        expect(await open.innerText()).toBe(lang === "uk" ? "Відкрити агента" : "Open agent");
+        const box = await open.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThan(50);
+        if (width === 390) expect(box!.height).toBeGreaterThanOrEqual(44);
+        const question = stage.locator('[data-stage-question="design"]');
+        if (state === "needs_decision") {
+          expect(await question.innerText()).toContain("Яке компонування обрати?");
+          const geometry = await question.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth, whiteSpace: getComputedStyle(element).whiteSpace }));
+          expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+          expect(geometry.whiteSpace).toBe("pre-wrap");
+          if (width === 1440) {
+            expect(await question.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+            await question.focus();
+            await page.keyboard.press("End");
+            await page.waitForFunction(() => {
+              const element = document.querySelector('[data-stage-question="design"]');
+              return !!element && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+            }, undefined, { timeout: 5_000 });
+            const buttonReachable = await open.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+            });
+            expect(buttonReachable).toBe(true);
+          }
+        } else expect(await question.count()).toBe(0);
+        await stage.screenshot({ path: path.join(out, `${width}-${lang}-${state}.png`) });
+        if (width === 390) {
+          await stage.locator('details summary').click();
+          expect(await stage.locator('[data-open-attempt="1"]').isVisible()).toBe(true);
+          await stage.locator('[data-open-attempt="1"]').click();
+          await page.locator('[data-mobile2-conversation]').waitFor();
+          await page.goBack();
+          await open.waitFor();
+        } else {
+          await stage.locator('[data-attempt="1"]').click();
+          expect(await stage.locator('[data-kanban-reader]').count()).toBe(1);
+        }
+        if (width === 1440) expect(await stage.locator('[data-attempt="1"]').isVisible()).toBe(true);
+        await open.click();
+        if (width === 1440) {
+          await page.locator('[data-stages-sheet]').waitFor({ state: "detached", timeout: 5_000 });
+        }
+        const reader = page.locator(width === 390 ? '[data-mobile2-conversation="conversation_kanban-1"]' : '[data-kanban-reader="conversation_kanban-1"]').filter({ has: page.locator('textarea') });
+        await reader.waitFor();
+        expect(await reader.isVisible()).toBe(true);
+        expect(await reader.evaluate((element) => element.closest('[data-stages-sheet]') === null)).toBe(true);
+        const composer = reader.locator('textarea').first();
+        expect(await composer.isEnabled()).toBe(true);
+        await composer.scrollIntoViewIfNeeded();
+        const visibleComposer = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const x = rect.x + rect.width / 2;
+          const y = rect.y + rect.height / 2;
+          return x > 0 && x < innerWidth && y > 0 && y < innerHeight
+            && element.contains(document.elementFromPoint(x, y));
+        });
+        expect(visibleComposer).toBe(true);
+        await composer.fill("Use the compact layout.");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${state}-reader.png`) });
+        await composer.press("Enter");
+        await page.waitForFunction(() => (window as unknown as { evidence: { sends: Array<{ text?: string; path?: string; conversationId?: string }> } }).evidence.sends.some((send) => send.text === "Use the compact layout." && (send.path === "/repo/kanban-1.jsonl" || send.conversationId === "conversation_kanban-1")));
+        readings.push({ width, lang, state, buttonHeight: box!.height, readerOutsideSheet: true, visibleComposer, composerEnabled: true, sends: await page.evaluate(() => (window as unknown as { evidence: { sends: unknown[] } }).evidence.sends.length) });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2));
+    fs.mkdirSync("evidence/stage-open-agent", { recursive: true });
+    fs.writeFileSync("evidence/stage-open-agent/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 180_000);
+
+describe("seat hand-over with evidence answered last", () => {
+  browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try { await captureSeatMandateHandover(browser, base, true); }
+    finally { await browser.close(); stop(); }
+  }, 180_000);
+});
+
+describe("state writes disk-full alert", () => {
+  browserTest("phone alert stays clear of header and composer at 390px", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/self-update-reload/state-writes");
+    fs.mkdirSync(out, { recursive: true });
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          const page = await context.newPage();
+          await page.goto(`${base}/?state-disk-full=1`);
+          const alert = page.locator("[data-state-writes-alert]");
+          await alert.waitFor();
+          expect(await alert.count()).toBe(1);
+          const geometry = await alert.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const overlaps = [...document.querySelectorAll('header, [data-mobile2-bar], textarea')].filter((other) => {
+              const b = other.getBoundingClientRect();
+              return b.width && b.height && box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+            }).length;
+            return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, height: box.height, overlaps, clipped: el.scrollHeight > el.clientHeight };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0);
+          expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.bottom).toBeLessThanOrEqual(844);
+          expect(geometry.overlaps).toBe(0);
+          expect(geometry.clipped).toBe(false);
+          await page.screenshot({ path: path.join(out, `phone-${scheme}-${locale}.png`) });
+          readings.push({ scheme, locale, geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/state-lease-recovery", { recursive: true });
+      fs.writeFileSync("evidence/state-lease-recovery/phone.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+});
+
+/*
+ * Whole-card drag on the phone (operator, 2026-10-02): hold 0.35 s and the card
+ * lifts with a dock of the four columns at the bottom; a release over a column
+ * moves it, a release in place opens today's menu, and scrolling and swiping
+ * between columns keep working. The board is the kanban scene with 44 more tasks
+ * (`&cards=44`), measured under CPU throttling x4 from a recorded trace
+ * (`kanban/dragFrameMeter.ts`). `LLV_DRAG_LABEL` names the record written to
+ * `evidence/whole-card-drag/<label>-phone.json`.
+ */
+describe("whole-card drag on the phone", () => {
+  const LABEL = process.env.LLV_DRAG_LABEL ?? "run";
+  const DRAG_OUT = path.resolve(".artifacts/whole-card-drag");
+  const open = async (browser: Awaited<ReturnType<typeof launchChromium>>, base: string, record?: { dir: string }) => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+      ...(record ? { recordVideo: { dir: record.dir, size: { width: 390, height: 844 } } } : {}),
+    });
+    await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+    await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+    await pause(page, 800);
+    return { context, page, pageErrors, cdp: await context.newCDPSession(page) };
+  };
+  /** The first task card on screen in Assigned, and a point on it clear of its controls. */
+  const grabPoint = async (page: Page, key?: string): Promise<Point> => {
+    const card = key ? page.locator(`[data-phone-kanban-column="assigned"] [data-phone-card="${key}"]`) : page.locator('[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]').first();
+    await card.scrollIntoViewIfNeeded();
+    await pause(page, 300);
+    const box = (await card.boundingBox())!;
+    return [box.x + box.width / 2, box.y + 18];
+  };
+
+  browserTest("a 3 s drag under 4x CPU throttling holds the display rate on a 48-card board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
+           the ablation that shows what they cost a drag. */
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        const from = await grabPoint(page);
+        /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
+           the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
+        let tile!: Rect;
+        const lift = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone-lift`, async () => {
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 700);
+          tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+          expect(tile, "the dock is drawn after the hold").not.toBeNull();
+          return 0;
+        });
+        const reading = await recordDrag(page, cdp, DRAG_OUT, `${LABEL}-phone`, () =>
+          playPath(cdp, [from, [from[0] + 60, from[1] - 140], [from[0] - 40, from[1] - 260], [tile.x + tile.width / 2, tile.y + tile.height / 2]], 3000, 16, true));
+        expect(await page.locator("[data-phone-lift-ghost]").count(), "the card is lifted").toBe(1);
+        expect(await page.locator('[data-phone-dock-tile="blocked"][data-over]').count(), "the finger is over Blocked").toBe(1);
+        await page.screenshot({ path: path.join(DRAG_OUT, `${LABEL}-phone-mid-drag.png`) });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 600);
+        expect(await page.locator("[data-phone-dock]").count(), "the dock goes with the finger").toBe(0);
+        fs.mkdirSync("evidence/whole-card-drag", { recursive: true });
+        fs.writeFileSync(`evidence/whole-card-drag/${LABEL}-phone.json`, `${JSON.stringify({ board: "phone kanban scene plus 44 tasks with long titles and lanes", viewport: "390x844 touch", cpuThrottling: 4, path: "hold 0.35 s, then 3 s with one move per 16 ms", lift: { ...lift, trace: undefined }, drag: { ...reading, trace: undefined } }, null, 2)}\n`);
+        console.log(JSON.stringify({ lift, drag: reading }));
+        expect(pageErrors).toEqual([]);
+        if (process.env.LLV_DRAG_ANIMATIONS !== "running") {
+          expect(reading.frameMs.p95, "p95 frame time at x4").toBeLessThanOrEqual(16.7 + 0.5);
+          expect(reading.longTasks.count, "tasks over 50 ms at x4").toBe(0);
+        }
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  /* LLV_DRAG_VIDEO=<dir> records the hold, the lift, the drag and the drop as a video, with a dot where the finger is. */
+  const VIDEO = process.env.LLV_DRAG_VIDEO;
+  (VIDEO ? browserTest : test.skip)("records a phone drag to a video", async () => {
+    fs.mkdirSync(VIDEO!, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+        recordVideo: { dir: VIDEO!, size: { width: 390, height: 844 } },
+      });
+      await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+      await context.addInitScript(() => {
+        const dot = document.createElement("div");
+        dot.style.cssText = "position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(220,60,40,.55);border:2px solid #fff;z-index:99999;pointer-events:none;display:none";
+        const place = (event: PointerEvent) => { dot.style.display = "block"; dot.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`; };
+        addEventListener("pointermove", place, true); addEventListener("pointerdown", place, true);
+        addEventListener("pointerup", () => { dot.style.display = "none"; }, true);
+        document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dot));
+      });
+      const page = await context.newPage();
+      await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+      await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+      await pause(page, 1000);
+      const cdp = await context.newCDPSession(page);
+      const from = await grabPoint(page);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+      await pause(page, 900);
+      const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+      const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+      for (const [x, y] of [...along(from, [from[0] + 30, from[1] - 120], 20), ...along([from[0] + 30, from[1] - 120], [from[0] - 20, from[1] - 220], 20), ...along([from[0] - 20, from[1] - 220], target, 30)]) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+        await pause(page, 24);
+      }
+      await pause(page, 600);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await pause(page, 1500);
+      const video = page.video()!;
+      await context.close();
+      await video.saveAs(path.join(VIDEO!, "phone-drag.webm"));
+      await video.delete();
+    } finally { await browser.close(); stop(); }
+  }, 120_000);
+
+  browserTest("with the finger on a dock tile, the ghost is above the dock and the tile's label is uncovered, at 390 and 320", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      for (const width of [390, 320]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 640 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&cards=44#p=atlas`);
+          await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+          await pause(page, 800);
+          const cdp = await context.newCDPSession(page);
+          const from = await grabPoint(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await pause(page, 520);
+          for (const status of ["blocked", "done", "inbox"]) {
+            const tile = (await rectOf(page, `[data-phone-dock-tile="${status}"]`))!;
+            const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+            for (const [x, y] of along(from, target, 8)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+            await pause(page, 120);
+            const ghost = (await rectOf(page, "[data-phone-lift-ghost]"))!;
+            const dock = (await rectOf(page, "[data-phone-dock]"))!;
+            const label = (await page.evaluate((sel) => {
+              const tileEl = document.querySelector(sel)!;
+              const text = [...tileEl.querySelectorAll("*")].find((node) => node.children.length === 0 && (node.textContent ?? "").trim() !== "") ?? tileEl;
+              const box = text.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height };
+            }, `[data-phone-dock-tile="${status}"]`));
+            expect(ghost.y + ghost.height, `${width}px ${status}: the ghost's bottom edge is above the dock`).toBeLessThanOrEqual(dock.y + 0.5);
+            expect(label.y, `${width}px ${status}: the label is below the ghost`).toBeGreaterThanOrEqual(ghost.y + ghost.height - 0.5);
+            expect(ghost.x, `${width}px: the ghost stays on the screen`).toBeGreaterThanOrEqual(-0.5);
+            expect(ghost.x + ghost.width, `${width}px: the ghost stays on the screen`).toBeLessThanOrEqual(width + 0.5);
+            expect(await page.locator(`[data-phone-dock-tile="${status}"][data-over]`).count(), `${width}px: the finger is over ${status}`).toBe(1);
+          }
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+
+  browserTest("a release over a column moves the task, in place opens the menu, elsewhere does nothing; scrolling and the pager still work", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    try {
+      const { context, page, pageErrors, cdp } = await open(browser, base);
+      try {
+        const card = '[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-bulk-"]';
+        const where = (selector: string) => page.evaluate((sel) => document.querySelector(sel)?.closest("[data-phone-kanban-column]")?.getAttribute("data-phone-kanban-column") ?? null, selector);
+        const first = await page.locator(card).first().getAttribute("data-phone-card");
+        const id = `[data-phone-card="${first}"]`;
+        const from = await grabPoint(page);
+
+        /* Held and released where it was: today's menu, nothing moved. */
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+        await pause(page, 520);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "the menu waits for the release").toBe(0);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await page.locator('[data-mobile2-sheet="card"]').count()).toBe(1);
+        expect(await where(id)).toBe("assigned");
+        await touch(cdp, [[195, 40]]);
+        await pause(page, 500);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a tap outside closes the menu").toBe(0);
+
+        /* Lifted and let go over nothing: back where it was. */
+        const at = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at[0], y: at[1] }] });
+        await pause(page, 520);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: at[0] + 10, y: at[1] - 200 }] });
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 400);
+        expect(await where(id)).toBe("assigned");
+        expect(await page.locator("[data-mobile2-sheet]").count()).toBe(0);
+
+        /* Lifted and let go over Blocked: it moves, with the usual receipt. */
+        const again = await grabPoint(page, first!);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: again[0], y: again[1] }] });
+        await pause(page, 520);
+        const tile = (await rectOf(page, '[data-phone-dock-tile="blocked"]'))!;
+        const target: Point = [tile.x + tile.width / 2, tile.y + tile.height / 2];
+        for (const [x, y] of along(again, target, 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        await pause(page, 100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await pause(page, 500);
+        expect(await where(id)).toBe("blocked");
+        expect(await page.locator("[data-mobile2-receipt]").count()).toBe(1);
+        expect(await page.locator("[data-mobile2-sheet]").count(), "a drop opens no menu").toBe(0);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map((patch) => [patch.id, patch.body.status])).toEqual([[first!.replace("task:", ""), "blocked"]]);
+
+        /* The column scrolls under a finger that moves at once, and no dock appears. */
+        const scroller = '[data-phone-kanban-column="assigned"]';
+        const before = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await touch(cdp, along([195, 600], [198, 300], 14), 16);
+        await pause(page, 500);
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a vertical drag scrolls the column").toBeGreaterThan(before + 40);
+        expect(await page.locator("[data-phone-dock]").count()).toBe(0);
+
+        /* The pager swipes between columns. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        await touch(cdp, along([330, 500], [60, 506], 14), 16);
+        await pause(page, 700);
+        expect(await page.evaluate(() => document.querySelector("[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")), "a swipe left changes the column").toBe("blocked");
+
+        /* A finger held on a card and then moved scrolls nothing: the card is the thing in hand. */
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await pause(page, 500);
+        const held = await grabPoint(page);
+        const top = await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: held[0], y: held[1] }] });
+        await pause(page, 520);
+        for (const [x, y] of along(held, [held[0], held[1] - 220], 10)) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] }); await pause(page, 16); }
+        expect(await page.evaluate((sel) => document.querySelector(sel)!.scrollTop, scroller), "a lifted card does not scroll the column").toBe(top);
+        expect(await page.locator("[data-phone-lift-ghost]").count()).toBe(1);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 180_000);
+});
+
+/*
+ * Launching an agent from the phone's draft screen: the screen is the new
+ * agent's conversation from the first frame and stays so while the scan swaps
+ * the launch window for the transcript, and one Back leaves it. The running
+ * conversation in the fixture is live and outranks the new agent, so a
+ * fallback in the focus view would paint it.
+ */
+describe("launching an agent on the phone", () => {
+  browserTest("the new agent holds the screen from send to transcript, and one Back reaches the board", async () => {
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const out = path.resolve(".artifacts/phone-launch-focus");
+    fs.mkdirSync(out, { recursive: true });
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      try {
+        await context.addInitScript(() => localStorage.setItem("llv_lang", "en"));
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.goto(`${base}/?launch=1#p=atlas`);
+        await page.locator("[data-mobile2-open=\"menu\"]").waitFor({ timeout: 15_000 });
+        await page.locator("[data-mobile2-open=\"menu\"]").tap();
+        await page.getByText("New agent", { exact: true }).tap();
+        const prompt = page.locator("textarea").first();
+        await prompt.waitFor({ timeout: 10_000 });
+        await prompt.fill("Ship the fix");
+        await page.evaluate(() => {
+          const sampled: string[] = [];
+          (window as unknown as { titles: string[] }).titles = sampled;
+          const tick = () => {
+            const title = document.querySelector("[data-mobile2-title-text]")?.textContent ?? "";
+            if (sampled.at(-1) !== title) sampled.push(title);
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+        await page.locator("form").first().evaluate((form) => (form as HTMLFormElement).requestSubmit());
+        await page.waitForFunction(() => (window as unknown as { evidence: { spawns: unknown[] } }).evidence.spawns.length === 1, null, { timeout: 10_000 });
+        await pause(page, 1_000);
+        await page.screenshot({ path: path.join(out, "launched-window.png") });
+        await page.evaluate(() => {
+          (window as unknown as { evidence: { materializeLaunch(): void } }).evidence.materializeLaunch();
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await page.waitForFunction(() => (window as unknown as { titles: string[] }).titles.includes("Launched agent"), null, { timeout: 15_000 }).catch(async (error) => {
+          await page.screenshot({ path: path.join(out, "stuck.png") });
+          throw new Error(`${error.message}; page errors ${JSON.stringify(pageErrors)}; titles ${JSON.stringify(await page.evaluate(() => (window as unknown as { titles: string[] }).titles))}`);
+        });
+        await pause(page, 1_000);
+        await page.screenshot({ path: path.join(out, "transcript.png") });
+        const titles = await page.evaluate(() => (window as unknown as { titles: string[] }).titles);
+        expect(titles.filter((title) => title.includes("Rebuild the board status projection"))).toEqual([]);
+        expect(titles.at(-1)).toBe("Launched agent");
+        await page.locator("[data-mobile2-back]").tap();
+        await page.locator('[data-mobile2-screen="board"]').waitFor({ timeout: 5_000 });
+        expect(await page.locator('[data-mobile2-screen="chat"]').count()).toBe(0);
+        fs.mkdirSync("evidence/phone-launch-focus", { recursive: true });
+        fs.writeFileSync("evidence/phone-launch-focus/titles.json", `${JSON.stringify({ viewport: "390x844", titles }, null, 2)}\n`);
+      } finally { await context.close(); }
+    } finally { await browser.close(); stop(); }
+  }, 90_000);
+});
+
+describe("older history on the phone", () => {
+  /*
+   * A real touch drag toward the start of an 800-line conversation, on a
+   * phone at 4x CPU slowdown. The audit that found the desktop walk slow could
+   * not say anything about the phone, because its synthetic touch gestures did
+   * not move the feed; `Input.dispatchTouchEvent` does, and this case drives
+   * it. The feed pages in earlier history as the reader nears the top, every
+   * row the reader had on screen keeps its DOM node, and the walk ends at the
+   * first line. The readings go to `.artifacts/phone-older-history/walk.json`.
+   */
+  const HISTORY_OUT = path.resolve(".artifacts/phone-older-history");
+
+  browserTest("a touch drag brings the earlier pages in without remounting what the reader has", async () => {
+    fs.mkdirSync(HISTORY_OUT, { recursive: true });
+    const { base, stop } = await serveEvidenceFixture(HISTORY_OUT, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await launchChromium();
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+        await page.goto(`${base.replace(/\/$/, "")}/?case=long-history&turns=200&window=120&page=100`);
+        await page.waitForFunction(() => document.querySelectorAll("[data-feed-key]").length > 20);
+        await pause(page, 600);
+        const marked = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("[data-feed-key]"));
+          for (const row of rows) row.setAttribute("data-first-window", "1");
+          const state: number[] = [];
+          (window as unknown as { __frames: number[] }).__frames = state;
+          let last = performance.now();
+          const tick = (now: number) => { state.push(now - last); last = now; requestAnimationFrame(tick); };
+          requestAnimationFrame(tick);
+          return rows.length;
+        });
+        const rect = await rectOf(page, "[data-log-feed-scroller]");
+        if (!rect) throw new Error("no feed");
+        const x = rect.x + rect.width / 2;
+        const read = () => page.evaluate(() => {
+          const feed = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+          const earlier = [...feed.querySelectorAll("button")].some((button) => /earlier|loading/i.test(button.textContent ?? ""));
+          return {
+            top: Math.round(feed.scrollTop),
+            rows: feed.querySelectorAll("[data-feed-key]").length,
+            kept: feed.querySelectorAll("[data-first-window]").length,
+            loads: (window as unknown as { llvHistory: { loads: () => number } }).llvHistory.loads(),
+            atStart: !earlier,
+          };
+        });
+        const first = await read();
+        let gestures = 0;
+        let last = first;
+        const startedAt = Date.now();
+        for (; gestures < 400; gestures += 1) {
+          await touch(cdp, along([x, rect.y + rect.height * 0.15], [x, rect.y + rect.height * 0.85], 10));
+          await pause(page, 120);
+          last = await read();
+          if (last.atStart && last.top < 5) break;
+        }
+        const reachedStartMs = Date.now() - startedAt;
+        const frames = await page.evaluate(() => (window as unknown as { __frames: number[] }).__frames.slice(1));
+        const walk = {
+          gestures, reachedStartMs, loads: last.loads, rows: last.rows, kept: last.kept, marked,
+          frames: frames.length, over100: frames.filter((ms) => ms > 100).length, maxFrameMs: Math.round(Math.max(0, ...frames)),
+        };
+        fs.writeFileSync(path.join(HISTORY_OUT, "walk.json"), JSON.stringify(walk, null, 2));
+        await page.screenshot({ path: path.join(HISTORY_OUT, "at-start-390.png") });
+        expect(pageErrors).toEqual([]);
+        /* The drag moved the feed (the audit's gestures did not), earlier
+           pages arrived, the walk ended at the first line, and every row
+           that was on screen at the start is still the same node. */
+        expect(last.top).toBeLessThan(first.top);
+        expect(last.loads).toBeGreaterThanOrEqual(1);
+        expect(last.atStart).toBe(true);
+        expect(last.kept).toBe(marked);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 300_000);
+});
 
 browserTest("long conversation scroll: history and late layout preserve the reader", async () => {
   const { base, stop } = await serveFixture();

@@ -1,3 +1,4 @@
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
@@ -9,15 +10,18 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { describe, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpServerEnv } from "@/lib/agent/spawnPolicy";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import {
   claudeCliAuthStatus,
   ClaudeStreamBrokerHost,
+  type ClaudeDeliveryConfirmation,
   FileClaudeDeliveryLedger,
   NATIVE_MULTI_AGENT_DENY_FLAG,
   type ClaudeDeliveryLedger,
@@ -44,6 +48,10 @@ function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
   return {
+    GIT_AUTHOR_NAME: "Delegatus",
+    GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
+    GIT_COMMITTER_NAME: "Delegatus",
+    GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
     XDG_CONFIG_HOME: config,
     LLV_STATE_DIR: path.join(config, "agent-log-viewer", "state"),
     GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
@@ -79,6 +87,7 @@ class FailingEventStore implements RuntimeEventStore {
 
 class RecordingDeliveryLedger implements ClaudeDeliveryLedger {
   readonly order: string[] = [];
+  readonly refusedConfirmations = new Set<string>();
   private readonly states = new Map<string, ClaudeDeliveryState[]>();
 
   load(sessionId: string): ClaudeDeliveryState[] {
@@ -92,13 +101,17 @@ class RecordingDeliveryLedger implements ClaudeDeliveryLedger {
     this.states.set(sessionId, states);
   }
 
-  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null): void {
+  confirmDelivered(sessionId: string, entryId: string, engineMessageId: string | null, confirmation: "operation-bound" | "inferred" = "operation-bound"): ClaudeDeliveryConfirmation {
     this.order.push(`confirmed:${entryId}`);
+    if (this.refusedConfirmations.has(entryId)) return "refused";
     const state = this.states.get(sessionId)?.find((candidate) => candidate.entry.id === entryId);
     if (state) {
       state.delivered = true;
       state.engineMessageId = engineMessageId;
+      state.confirmation = confirmation;
+      return "accepted";
     }
+    return "refused";
   }
 }
 
@@ -162,6 +175,81 @@ function fakeSpawn(
     return child as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("ledger replay retains the first UUID allocation and accepts its legacy upgrade and a later distinct echo", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-allocation-replay-"));
+  try {
+    const sessionId = "allocation-replay";
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    ledger.recordQueued(sessionId, { id: "first", text: "same instruction" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "second", text: "same instruction" }, "turn-started");
+    const filename = path.join(directory, `${sessionId}.jsonl`);
+    const delivered = (entryId: string, engineMessageId: string) => JSON.stringify({
+      kind: "delivered", entryId, engineMessageId, deliveredAt: new Date().toISOString(),
+    }) + "\n";
+    // Legacy confirmation can be upgraded for the same owner and UUID.
+    fs.appendFileSync(filename, delivered("first", "first-user"));
+    expect(ledger.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("accepted");
+    // A conflicting append may already exist from overlapping old writers.
+    fs.appendFileSync(filename, delivered("second", "first-user") + delivered("first", "other-user")
+      + delivered("first", "first-user"));
+    const reopened = new FileClaudeDeliveryLedger(directory);
+    expect(reopened.load(sessionId).map((state) => ({
+      id: state.entry.id, delivered: state.delivered, uuid: state.engineMessageId, confirmation: state.confirmation,
+    }))).toEqual([
+      { id: "first", delivered: true, uuid: "first-user", confirmation: "inferred" },
+      { id: "second", delivered: false, uuid: undefined, confirmation: undefined },
+    ]);
+    expect(reopened.confirmDelivered(sessionId, "first", "first-user", "inferred")).toBe("already-confirmed");
+    expect(reopened.confirmDelivered(sessionId, "second", "first-user")).toBe("refused");
+    expect(reopened.confirmDelivered(sessionId, "second", "second-user")).toBe("accepted");
+    expect(new FileClaudeDeliveryLedger(directory).load(sessionId).map((state) => state.engineMessageId))
+      .toEqual(["first-user", "second-user"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  { sandbox: "full", readOnly: false },
+  { sandbox: "full", readOnly: true },
+  { sandbox: "restricted", readOnly: false },
+  { sandbox: "restricted", readOnly: true },
+  { sandbox: null, readOnly: true },
+] as const)("Claude startup resume keeps sandbox=$sandbox and readOnly=$readOnly", async ({ sandbox, readOnly }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-resume-access-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const key = { engine: "claude" as const, sessionId };
+  registry.upsert({ key, artifactPath: path.join(directory, `${sessionId}.jsonl`), cwd: directory, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: directory, sandbox, readOnly, permissionMode: sandbox === null ? "plan" : "bypassPermissions" }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  try {
+    const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+    const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+    const options = claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    });
+    try {
+      const args = captured.args!;
+      expect(args).toContain("--resume");
+      expect(args.includes("--restricted")).toBe(sandbox === "restricted");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe(sandbox === null ? "plan" : "bypassPermissions");
+      const denied = args[args.indexOf("--disallowedTools") + 1];
+      expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
+    } finally { await host.release(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("provider host gives Claude a private relay alias for fresh and adopted sessions", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-host-"));
@@ -519,6 +607,48 @@ describe("ClaudeStreamBrokerHost", () => {
     await host.release();
   });
 
+  test("invalid Claude publication settings release the owned stage scratch before rejecting", async () => {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-identity-scratch-"));
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    let cleanups = 0;
+    try {
+      await expect(ClaudeStreamBrokerHost.start({
+        cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_EMAIL: "invalid" },
+        releaseCleanup: () => { cleanups++; fs.rmSync(scratch, { recursive: true, force: true }); },
+        eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+        spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+      })).rejects.toThrow("Invalid agent publication identity");
+      expect(captured.options).toBeUndefined();
+      expect(cleanups).toBe(1);
+      expect(fs.existsSync(scratch)).toBe(false);
+    } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+  });
+
+  test.each([false, true])("Claude launches carry publication settings through the child allowlist (account settings: %s)", async (accountSettings) => {
+    const captured: { options?: SpawnOptionsWithoutStdio; args?: string[] } = {};
+    const email = ["no-reply", "build.example.invalid"].join("@");
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-settings-"));
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      claudeConfigDir: accountSettings ? configDir : undefined,
+      eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    });
+    try {
+      expect(captured.options?.env).toMatchObject({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+      const settingsArg = captured.args![captured.args!.indexOf("--settings") + 1]!;
+      const settings = JSON.parse(accountSettings ? fs.readFileSync(settingsArg, "utf8") : settingsArg);
+      expect(settings.env).toEqual({
+        GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
+        GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+      });
+    } finally { await host.release(); fs.rmSync(configDir, { recursive: true, force: true }); }
+  });
+
   test("forwards GitHub config only for read-only scratch hosts", async () => {
     for (const forwardGitHubConfig of [false, true]) {
       const child = new FakeClaude(new RecordingDeliveryLedger());
@@ -866,7 +996,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcpPath = adoptedCapture.args![adoptedCapture.args!.indexOf("--mcp-config") + 1]!;
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
-    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept" });
+    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...controllerCommitIdentityEnv() });
     expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     expect(adoptedSettings).toEqual(freshSettings);
     expect(freshCapture.args).toContain("--strict-mcp-config");
@@ -920,6 +1050,62 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "user", session_id: host.identity.sessionId, uuid: "ordinary", message: { role: "user", content: [{ type: "text", text: "match me" }] } });
     expect(await sent).toEqual({ outcome: "turn-started", turnId: "replay-only" });
     await host.release();
+  });
+
+  test("a replayed canonical UUID cannot settle an identical later send", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-reused-uuid-"));
+    const sessionId = "reused-uuid-session";
+    const ledger = new FileClaudeDeliveryLedger(directory);
+    ledger.recordQueued(sessionId, { id: "send-A", text: "same text" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "send-B", text: "same text" }, "queued-next-turn");
+    expect(ledger.confirmDelivered(sessionId, "send-A", "canonical-A", "inferred")).toBe("accepted");
+
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "same text", uuid: "canonical-A", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    try {
+      const sendB = host.send({ id: "send-B", text: "same text" });
+      let outcome: unknown;
+      void sendB.then((value) => { outcome = value; }, (error) => { outcome = error; });
+      child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "canonical-A", message: { role: "user", content: [{ type: "text", text: "same text" }] } });
+      await Promise.resolve();
+      expect(outcome).toBeUndefined();
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "send-B")?.delivered).toBeFalse();
+
+      child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "canonical-B", message: { role: "user", content: [{ type: "text", text: "same text" }] } });
+      expect(await sendB).toEqual({ outcome: "queued-next-turn", turnId: "send-B" });
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "send-B")).toMatchObject({ delivered: true, engineMessageId: "canonical-B" });
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("adoption leaves a delivery pending when its canonical confirmation is refused", async () => {
+    const sessionId = "refused-adoption-session";
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, { id: "refused", text: "seen in transcript" }, "turn-started");
+    ledger.refusedConfirmations.add("refused");
+    const child = new FakeClaude(ledger);
+    const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "seen in transcript", uuid: "claimed-elsewhere", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    try {
+      expect(ledger.load(sessionId).find((state) => state.entry.id === "refused")?.delivered).toBeFalse();
+    } finally {
+      await host.release();
+    }
   });
 
   test("confirms image delivery when the provider transcodes the direct user echo", async () => {
@@ -1084,6 +1270,28 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(confirmedChild.inputs).toHaveLength(0);
     expect(confirmedLedger.order).toContain("confirmed:confirmed");
     await confirmed.release();
+  });
+
+  test("adoption leaves a same-text turn unassigned until one operation has bound evidence", async () => {
+    const sessionId = "ambiguous-adoption-session";
+    const ledger = new RecordingDeliveryLedger();
+    ledger.recordQueued(sessionId, { id: "ambiguous-A", text: "same text" }, "turn-started");
+    ledger.recordQueued(sessionId, { id: "ambiguous-B", text: "same text" }, "turn-started");
+    ledger.confirmDelivered(sessionId, "ambiguous-B", "only-canonical-user", "operation-bound");
+    const child = new FakeClaude(ledger);
+    const adopted = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      readTranscript: () => [{ text: "same text", uuid: "only-canonical-user", timestamp: new Date().toISOString() }],
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    expect(ledger.load(sessionId).map(({ delivered }) => delivered)).toEqual([false, true]);
+    expect(await adopted.send({ id: "ambiguous-B", text: "same text" })).toEqual({ outcome: "turn-started", turnId: "ambiguous-B" });
+    expect(child.inputs).toHaveLength(0);
+    expect(ledger.load(sessionId).find((state) => state.entry.id === "ambiguous-A")?.delivered).toBeFalse();
+    await adopted.release();
   });
 
   test("restart transcript reconciliation confirms a provider-transcoded image delivery", async () => {
@@ -1284,6 +1492,40 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(await host.send({ id: "managed-entry", text: "managed prompt" })).toEqual({ outcome: "turn-started", turnId: "managed-entry" });
     expect(child.inputs).toHaveLength(0);
     await host.release();
+  });
+
+  test.each(["given", "real"])("resume through a symlink reconciles a transcript encoded from the %s cwd", async (form) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-symlink-resume-"));
+    let host: ClaudeStreamBrokerHost | undefined;
+    try {
+      const real = path.join(directory, "disk", "repository-pipeline");
+      const link = path.join(directory, "Projects");
+      fs.mkdirSync(real, { recursive: true });
+      fs.symlinkSync(path.dirname(real), link, "junction");
+      const cwd = path.join(link, "repository-pipeline");
+      const projects = path.join(directory, "home", ".claude", "projects");
+      const sessionId = "symlink-resume-session";
+      const recorded = form === "real" ? fs.realpathSync.native(cwd) : cwd;
+      const transcript = path.join(projects, recorded.replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript, JSON.stringify({
+        type: "user", cwd: recorded, uuid: "delivered-user", timestamp: "2026-09-30T18:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "already delivered" }] },
+      }) + "\n");
+      const ledger = new RecordingDeliveryLedger();
+      ledger.recordQueued(sessionId, { id: "pending-entry", text: "already delivered" }, "turn-started");
+      const child = new FakeClaude(ledger);
+      host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+        cwd, claudeProjectsDir: projects, deliveryLedger: ledger, eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(child, {}),
+      });
+      expect(ledger.load(sessionId).filter((delivery) => delivery.delivered)).toHaveLength(1);
+      expect(child.inputs).toHaveLength(0);
+    } finally {
+      await host?.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("adopts a resume successor whose transcript carries a tool-result user turn with a pending delivery", async () => {
@@ -2565,4 +2807,81 @@ test("delayed replay echo during provider retry preserves unrelated Claude work 
   expect(child.inputs.filter(input => input.type === "user")).toHaveLength(1);
   expect(ledger.load("delayed-echo-session")[0]?.delivered).toBeTrue();
   await host.release();
+});
+
+ test("Claude host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const captured: { args?: string[] } = {};
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, captured) });
+  try {
+    expect(captured.args).toContain("MemoryMax=16106127360");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("production memory wrapping preserves the provider-home revision guard before spawn", async () => {
+  const memory = fakeAgentMemory();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-provider-guard-"));
+  let wrapped = false;
+  const originalWrap = memory.cell.wrapSpawn.bind(memory.cell);
+  memory.cell.wrapSpawn = (...args) => { wrapped = true; return originalWrap(...args); };
+  try {
+    await expect(ClaudeStreamBrokerHost.start({ cwd: home, claudeConfigDir: home, providerAccount: true,
+      env: { NODE_ENV: "test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9876", ANTHROPIC_AUTH_TOKEN: "fixture-memory-provider", ANTHROPIC_MODEL: "model-large" },
+      memoryCell: memory.cell })).rejects.toThrow();
+    expect(wrapped).toBe(false);
+  } finally { memory.dispose(); fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("forced scope retains Claude admission error during initial delivery", async () => {
+  const memory = fakeAgentMemory({ mode: "scope", admissionFailure: true });
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const store = new MemoryEventStore();
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", eventStore: store, deliveryLedger: new RecordingDeliveryLedger(), readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), readTranscript: () => [],
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, {}), processIdentity: () => "fixture-start", signalProcess: () => { throw new Error("ESRCH"); } });
+  try {
+    const delivery = host.send({ id: "initial", text: "begin" });
+    child.stderr.write("Failed to create bus connection: Connection refused");
+    child.emit("exit", 1, null); child.emit("close", 1, null);
+    await expect(delivery).rejects.toThrow("Failed to create bus connection: Connection refused");
+    expect((await host.health()).status).toBe("dead");
+  } finally { await host.release(); memory.dispose(); }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Claude fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(),
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, {}), processIdentity: memory.processIdentity,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog"
+      ? platform === "linux" ? [child.pid + 2, child.pid + 1] : [child.pid + 2, child.pid + 1, child.pid]
+      : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });

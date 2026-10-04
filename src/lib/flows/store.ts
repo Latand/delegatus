@@ -6,6 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { initializeStateCollections, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { resolveRole } from "@/lib/roles/registry";
@@ -44,11 +45,11 @@ export function seededPresetsFromRoles(): FlowPreset[] {
   const reviewer = flowRole(definitions, "reviewer");
   const architect = flowRole(definitions, "architect");
   const presets: FlowPreset[] = [
-    { name: "Astra medium → Astra xhigh", implementer: builder, reviewer },
-    { name: "Terra low → Astra xhigh", implementer: fixer, reviewer },
-    { name: "Astra medium → Opus 5", implementer: builder, reviewer: architect },
-    { name: "Opus 5 → Astra xhigh", implementer: architect, reviewer },
-    { name: "Sonnet → Astra xhigh", implementer: { engine: "claude", model: "sonnet", effort: "high" }, reviewer },
+    { name: "Builder → Reviewer", implementer: builder, reviewer },
+    { name: "Fix round → Reviewer", implementer: fixer, reviewer },
+    { name: "Builder → Architect", implementer: builder, reviewer: architect },
+    { name: "Architect → Reviewer", implementer: architect, reviewer },
+    { name: "Sonnet → Reviewer", implementer: { engine: "claude", model: "sonnet", effort: "high" }, reviewer },
   ];
   return presets.map((preset) => ({ ...preset, managed: "role-registry" }));
 }
@@ -63,10 +64,10 @@ export const FLOWS_SCHEMA_VERSION = 3;
 type FlowFile = { schemaVersion?: unknown; flows?: unknown };
 type PresetFile = { presets?: unknown };
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8");
+  fs.writeFileSync(tmp, stringifyRegistryDocument(value), "utf8");
   fs.renameSync(tmp, filePath);
 }
 
@@ -78,7 +79,7 @@ function readJson(filePath: string): unknown {
   }
 }
 
-function readFlowStateJson(): unknown | null {
+function readFlowStateJson(): { raw: unknown; source: string } | null {
   let source: string;
   try {
     source = fs.readFileSync(flowsFile(), "utf8");
@@ -87,7 +88,7 @@ function readFlowStateJson(): unknown | null {
     throw new Error("could not read legacy flow state", { cause: error });
   }
   try {
-    return JSON.parse(source) as unknown;
+    return { raw: JSON.parse(source) as unknown, source };
   } catch (error) {
     throw new Error("legacy flow state contains malformed JSON", { cause: error });
   }
@@ -138,7 +139,10 @@ function reviveCachedFlows(flows: Flow[]): Flow[] {
   return flows.map((flow) => ({
     ...flow,
     hostClaim: flow.hostClaim ? { ...flow.hostClaim } : null,
-    rounds: flow.rounds.map((round) => ({ ...round })),
+    rounds: flow.rounds.map((round) => ({
+      ...round,
+      providerLimitWait: round.providerLimitWait ? { ...round.providerLimitWait } : undefined,
+    })),
   }));
 }
 
@@ -173,14 +177,15 @@ function flowControllerActive(flow: Flow): boolean {
   ].includes(flow.state);
 }
 
-export function flowStateCollectionSeed(): StateCollectionSeed<Flow> {
+export function flowStateCollectionSeed(): StateCollectionSeed<unknown> {
   return {
     collection: "flows",
     schemaVersion: FLOWS_SCHEMA_VERSION,
     migrationId: "flows-json-v1",
     loadRecords: parseFlowsFromDisk,
-    key: (flow: Flow) => flow.id,
-    controllerActive: flowControllerActive,
+    key: registryRecordKey,
+    recordJson: preservedRecordJson,
+    controllerActive: (flow) => !isStoredFlow(flow) || flowControllerActive(flow),
   };
 }
 
@@ -196,63 +201,81 @@ function normalizeRelayHold(hold: Round["relayHold"]): Round["relayHold"] {
   return hold ? { ...hold, resetKnown: hold.resetKnown ?? true } : null;
 }
 
-function parseFlowsFromDisk(): Flow[] {
-  const raw = readFlowStateJson();
+/** The shared history validator is deliberately permissive. A live store also
+    validates the fields its decoder dereferences before admitting the row. */
+function isStoredFlow(value: unknown): value is Flow {
+  try {
+    return isFlow(value) && typeof value.project === "string"
+      && Boolean(value.roles && isRoleConfig(value.roles.implementer) && isRoleConfig(value.roles.reviewer))
+      && value.rounds.every((round) => round !== null && typeof round === "object" && !Array.isArray(round));
+  } catch { return false; }
+}
+
+function parseFlowsFromDisk(): unknown[] {
+  const document = readFlowStateJson();
+  if (document === null) return [];
+  const raw = document.raw;
   if (raw === null) return [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("legacy flow state must be an object");
   }
   const file = raw as FlowFile;
-  if (!Array.isArray(file.flows) || !file.flows.every(isFlow)) {
+  if (!Array.isArray(file.flows)) {
     throw new Error("legacy flow state contains malformed records");
   }
   const flows = file.flows;
-  return flows.map((flow) => ({
-    ...flow,
-    project: canonicalProject(flow.project),
-    revision: flow.revision ?? 0,
-    targetSha: flow.targetSha ?? null,
-    implementerConversationId: flow.implementerConversationId ?? null,
-    reviewerFallback: flow.reviewerFallback === undefined && flow.roles.reviewer.engine === "codex"
-      ? configuredReviewerFallback()
-      : flow.reviewerFallback ?? null,
-    pausedState: flow.pausedState ?? null,
-    kickoffDelivery: flow.kickoffDelivery ?? null,
-    hostClaim: flow.hostClaim ?? null,
-    rounds: flow.rounds.map((round) => ({
-      ...round,
-      reviewerConversationId: round.reviewerConversationId ?? null,
-      /* A null snapshot is meaningful (issue #117 retry resets it so the launch
-         re-picks a fresh account/role), so it is preserved rather than backfilled;
-         reviewerRoleFor falls back to flow.roles.reviewer for a null/absent value. */
-      reviewerRole: round.reviewerRole ?? null,
-      attemptedAccounts: round.attemptedAccounts ?? [],
-      autoRetryCount: round.autoRetryCount ?? 0,
-      sessionId: round.sessionId ?? null,
-      reviewerPid: round.reviewerPid ?? null,
-      reviewerIdentity: round.reviewerIdentity ?? null,
-      reviewHeadSha: round.reviewHeadSha ?? null,
-      spawnStartedAt: round.spawnStartedAt ?? null,
-      launchId: round.launchId ?? null,
-      launchLeaseUntil: round.launchLeaseUntil ?? null,
-      relayStartedAt: round.relayStartedAt ?? null,
-      relayRetryCount: round.relayRetryCount ?? 0,
-      relayDeliveryAttempt: round.relayDeliveryAttempt ?? 0,
-      relayDeliveryTransport: round.relayDeliveryTransport ?? null,
-      relayRetryAt: round.relayRetryAt ?? null,
-      relayRetryRequiresIdempotency: round.relayRetryRequiresIdempotency ?? false,
-      relayDelivery: round.relayDelivery ?? null,
-      relayPendingSettlement: round.relayPendingSettlement ?? null,
-      relayHold: normalizeRelayHold(round.relayHold),
-      terminalAt: round.terminalAt ?? null,
-      error: round.error ?? null,
-    })),
-  }));
+  const records = flows.map((value) => {
+    if (!isStoredFlow(value)) { reportRegistryRecord("flows", value); return value; }
+    const flow = value;
+    return {
+      ...flow,
+      project: canonicalProject(flow.project),
+      revision: flow.revision ?? 0,
+      targetSha: flow.targetSha ?? null,
+      implementerConversationId: flow.implementerConversationId ?? null,
+      reviewerFallback: flow.reviewerFallback === undefined && flow.roles.reviewer.engine === "codex"
+        ? configuredReviewerFallback()
+        : flow.reviewerFallback ?? null,
+      pausedState: flow.pausedState ?? null,
+      kickoffDelivery: flow.kickoffDelivery ?? null,
+      hostClaim: flow.hostClaim ?? null,
+      rounds: flow.rounds.map((round) => ({
+        ...round,
+        reviewerConversationId: round.reviewerConversationId ?? null,
+        /* A null snapshot is meaningful (issue #117 retry resets it so the launch
+           re-picks a fresh account/role), so it is preserved rather than backfilled;
+           reviewerRoleFor falls back to flow.roles.reviewer for a null/absent value. */
+        reviewerRole: round.reviewerRole ?? null,
+        attemptedAccounts: round.attemptedAccounts ?? [],
+        autoRetryCount: round.autoRetryCount ?? 0,
+        sessionId: round.sessionId ?? null,
+        reviewerPid: round.reviewerPid ?? null,
+        reviewerIdentity: round.reviewerIdentity ?? null,
+        reviewHeadSha: round.reviewHeadSha ?? null,
+        spawnStartedAt: round.spawnStartedAt ?? null,
+        launchId: round.launchId ?? null,
+        launchLeaseUntil: round.launchLeaseUntil ?? null,
+        relayStartedAt: round.relayStartedAt ?? null,
+        relayRetryCount: round.relayRetryCount ?? 0,
+        relayDeliveryAttempt: round.relayDeliveryAttempt ?? 0,
+        relayDeliveryTransport: round.relayDeliveryTransport ?? null,
+        relayRetryAt: round.relayRetryAt ?? null,
+        relayRetryRequiresIdempotency: round.relayRetryRequiresIdempotency ?? false,
+        relayDelivery: round.relayDelivery ?? null,
+        relayPendingSettlement: round.relayPendingSettlement ?? null,
+        relayHold: normalizeRelayHold(round.relayHold),
+        terminalAt: round.terminalAt ?? null,
+        error: round.error ?? null,
+      })),
+    };
+  });
+  rememberRecordBytes(records, jsonArrayRecordBytes(document.source, "flows"), isStoredFlow);
+  return records;
 }
 
 export function planFlowStateMigration(): { records: number; keys: string[] } {
   const records = parseFlowsFromDisk();
-  return { records: records.length, keys: records.map((flow) => flow.id) };
+  return { records: records.length, keys: records.map(registryRecordKey) };
 }
 
 
@@ -266,10 +289,15 @@ function flowStore(): SqliteStateCollection<Flow> {
     schemaVersion: FLOWS_SCHEMA_VERSION,
     busyMessage: "flow state is busy",
     key: (flow) => flow.id,
-    decode: (value) => decodeFlow(value, { project: canonicalProject, reviewerFallback: configuredReviewerFallback }),
+    decode: (value) => {
+      if (!isStoredFlow(value)) { reportRegistryRecord("flows", value); return null; }
+      return decodeFlow(value, { project: canonicalProject, reviewerFallback: configuredReviewerFallback });
+    },
     clone: (flow) => reviveCachedFlows([flow])[0]!,
     controllerActive: flowControllerActive,
     strictDecode: true,
+    preserveRejectedRecords: true,
+    validate: (flow) => { if (!isStoredFlow(flow)) throw new Error("refusing to persist a malformed flow record"); },
     decodeError: (error) => new Error("flow SQLite state contains a malformed row", { cause: error }),
   });
   flowStores.set(filename, store);

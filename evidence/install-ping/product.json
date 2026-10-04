@@ -1,0 +1,37 @@
+{
+  "frames": {
+    "en-390": {
+      "background": "rgb(244, 241, 236)",
+      "overflow": 0,
+      "left": 16,
+      "right": 374,
+      "bottom": 573.25,
+      "text": "SettingsCloseDelegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1.Anonymous install ping"
+    },
+    "uk-390": {
+      "background": "rgb(244, 241, 236)",
+      "overflow": 0,
+      "left": 16,
+      "right": 374,
+      "bottom": 583.8125,
+      "text": "НалаштуванняЗакритиDelegatus раз на добу надсилає випадковий id, версію, ОС, архітектуру й тип встановлення на delegatus.org. Вимкнути можна в Налаштуваннях, через DELEGATUS_TELEMETRY=0 або DO_NOT_TRACK=1.Анонімний пінг встановлення"
+    },
+    "en-1440": {
+      "background": "rgb(244, 241, 236)",
+      "overflow": 0,
+      "left": 464,
+      "right": 976,
+      "bottom": 562.6875,
+      "text": "SettingsCloseDelegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1.Anonymous install ping"
+    },
+    "uk-1440": {
+      "background": "rgb(244, 241, 236)",
+      "overflow": 0,
+      "left": 464,
+      "right": 976,
+      "bottom": 562.6875,
+      "text": "НалаштуванняЗакритиDelegatus раз на добу надсилає випадковий id, версію, ОС, архітектуру й тип встановлення на delegatus.org. Вимкнути можна в Налаштуваннях, через DELEGATUS_TELEMETRY=0 або DO_NOT_TRACK=1.Анонімний пінг встановлення"
+    }
+  },
+  "failures": []
+}

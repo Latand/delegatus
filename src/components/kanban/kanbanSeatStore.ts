@@ -240,6 +240,8 @@ export interface SeatToggleSignal {
   tone: "working" | "needs" | "failed" | "accent" | "quiet";
   label: string;
   unread: boolean;
+  /** A live, settled seat holds the project: its header carries the tick chip. */
+  live: boolean;
 }
 
 const signals = new Map<string, SeatToggleSignal>();
@@ -251,7 +253,7 @@ export function publishSeatSignal(project: string, signal: SeatToggleSignal | nu
     if (!previous) return;
     signals.delete(project);
   } else {
-    if (previous && previous.tone === signal.tone && previous.label === signal.label && previous.unread === signal.unread) return;
+    if (previous && previous.tone === signal.tone && previous.label === signal.label && previous.unread === signal.unread && previous.live === signal.live) return;
     signals.set(project, signal);
   }
   for (const listener of signalListeners) listener();

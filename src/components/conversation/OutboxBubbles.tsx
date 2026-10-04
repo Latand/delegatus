@@ -14,12 +14,12 @@ import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import { DELIVERY_WAIT_TICK_MS } from "@/components/runtime/deliveryWait";
 import { type TFunction, useLocale } from "@/lib/i18n";
 
-import { appendComposerDraft } from "@/components/TmuxComposer";
+import { appendComposerDraft, restoreOutboxDraft } from "@/components/TmuxComposer";
 
 import { messageRowModel, messageRowOperationId, type MessageRowSession, type MessageRowSwitchHold } from "./messageRow";
 import { publishRenderedMessageRows } from "./renderedRows";
 import { useMessageRowRecovery } from "./rowRecovery";
-import { cancelOutbox, clearParkedOutbox, retryOutbox, type OutboxEntry } from "./outbox";
+import { cancelOutbox, clearParkedOutbox, editContextOutbox, retryOutbox, type OutboxEntry } from "./outbox";
 
 /**
  * The conversation's own host and turn axes (issue #1213).
@@ -99,6 +99,8 @@ export interface MessageRowActions {
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onClear?: (id: string) => void;
+  /** Takes a PROVEN-failed injection's words back to the composer's draft. */
+  onEdit?: (id: string) => void;
   onCheck?: (entry: OutboxEntry) => void;
   /** Replay the ADMITTED operation from the journal's own recorded request. */
   onRetryOperation?: (entry: OutboxEntry) => void;
@@ -214,7 +216,16 @@ export function ConversationMessageRow({
         >
           {t("outbox.action.retry")}
         </button>
-      ) : row.failure.action === "retry-operation" ? null : row.failure.action === "check" ? (
+      ) : row.failure.action === "retry-operation" ? null : row.failure.action === "edit" ? (
+        <button
+          type="button"
+          data-outbox-edit={entry!.id}
+          onClick={() => actions?.onEdit?.(entry!.id)}
+          className={`${ROW_ACTION} hover:text-accent`}
+        >
+          {t("outbox.action.edit")}
+        </button>
+      ) : row.failure.action === "check" ? (
         <button
           type="button"
           data-outbox-check={entry!.id}
@@ -315,6 +326,7 @@ export function ConversationMessageRow({
     <UserMessageRow
       text={text}
       sender={sender}
+      tone={entry?.intent === "context" ? "context" : undefined}
       selectedContext={selectedContext}
       bubbleFooter={attachments ? (
         /* What the submission actually carried, in ONE presentation from the
@@ -345,6 +357,7 @@ export function ConversationMessageRow({
            still in flight. */
         ...(entry && row ? { "data-outbox-entry": entry.id, "data-outbox-state": entry.state } : {}),
         "data-message-row": row?.phase ?? "confirmed",
+        ...(entry?.intent === "context" ? { "data-message-intent": "context" } : {}),
         ...(row?.wait ? { "data-outbox-wait": row.wait } : {}),
       }}
     />
@@ -401,6 +414,7 @@ export function OutboxBubblesView({
   onCancel,
   onRetry,
   onClear,
+  onEdit,
   onCheck,
   onRetryOperation,
   onDiscard,
@@ -419,6 +433,7 @@ export function OutboxBubblesView({
       view is also mounted by render-only surfaces with no composer behind
       them, and a surface that cannot take the message back does not offer to. */
   onClear?: (id: string) => void;
+  onEdit?: (id: string) => void;
   /** Re-reads delivery evidence under the message's ORIGINAL identity. Never
       a second send: an unconfirmed outcome is settled by asking, not by
       replaying. */
@@ -449,7 +464,7 @@ export function OutboxBubblesView({
           nowMs={nowMs}
           switchHold={switchHold}
           session={session}
-          actions={{ onCancel, onRetry, onClear, onCheck, onRetryOperation, onDiscard }}
+          actions={{ onCancel, onRetry, onClear, onEdit, onCheck, onRetryOperation, onDiscard }}
         />
       ))}
     </div>
@@ -478,14 +493,29 @@ export function useOutboxRowActions(cardId: string, entries: readonly OutboxEntr
        still hold, so this can never be the way a second copy is sent. */
     onClear: (id) => {
       const entry = entries.find((candidate) => candidate.id === id);
+      if (entry?.selectedContext?.tasks?.length) {
+        recovery?.takeBack?.(id);
+        return;
+      }
       const cleared = clearParkedOutbox(cardId, id);
       if (cleared) {
-        if (cleared.text.trim()) appendComposerDraft(cardId, cleared.text);
+        restoreOutboxDraft(cardId, cleared);
         return;
       }
       if (!entry || entry.deliveryUncertain || entry.operationId || entry.deliveryReceipt) return;
       cancelOutbox(cardId, id);
-      if (entry.text.trim()) appendComposerDraft(cardId, entry.text);
+      restoreOutboxDraft(cardId, entry);
+    },
+    /* An injection that provably failed: the row goes and its words are
+       appended to the draft. Sending them again mints a new key, which is a
+       fresh injection. */
+    onEdit: (id) => {
+      if (entries.find((entry) => entry.id === id)?.selectedContext?.tasks?.length) {
+        recovery?.editContext?.(id);
+        return;
+      }
+      const edited = editContextOutbox(cardId, id);
+      if (edited?.text.trim()) appendComposerDraft(cardId, edited.text);
     },
     /* Check status asks the runtime again under the same idempotency key — the
        row's own id, which exists whether or not an operation id ever came
@@ -538,6 +568,7 @@ export function OutboxBubbles({
       onCancel={actions.onCancel}
       onRetry={actions.onRetry}
       onClear={actions.onClear}
+      onEdit={actions.onEdit}
       onCheck={actions.onCheck}
       onRetryOperation={actions.onRetryOperation}
       onDiscard={actions.onDiscard}

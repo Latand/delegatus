@@ -1,10 +1,14 @@
 "use client";
 
+import { SpeakButton } from "../feed/SpeakButton";
+
 import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { EngineBadge } from "@/components/EngineMark";
+import { reasoningTierLabel } from "@/components/RuntimePill";
+import { modelDisplayName } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -93,6 +97,11 @@ export function IncumbentHeader({
     ? catalog?.[engine ?? "claude"]?.accounts.find((candidate) => candidate.id === accountId)?.label ?? accountId
     : null;
   const context: IncumbentContext | null = designated?.context ?? boardContext(file);
+  /* The composer's pill names the model by its catalogue label and the tier by
+     the locale's word; the header reads the same two, so one seat is not
+     «opus · high» above «Opus 5.5 · High». */
+  const modelName = model ? modelDisplayName(engine ?? "claude", model) : null;
+  const effortName = effort ? reasoningTierLabel(t, effort) : null;
 
   return (
     <div
@@ -121,10 +130,10 @@ export function IncumbentHeader({
           <span
             data-orchestrator-model={model}
             className="min-w-0 shrink truncate text-ui font-semibold text-primary"
-            title={effort ? `${model} · ${effort}` : model}
+            title={effortName ? `${modelName} · ${effortName}` : (modelName ?? model)}
           >
-            {model}
-            {effort ? <span className="font-normal text-muted"> · {effort}</span> : null}
+            {modelName}
+            {effortName ? <span className="font-normal text-muted"> · {effortName}</span> : null}
           </span>
         ) : (
           <span className="text-ui text-muted">{t("orchPanel.incumbentUnknown")}</span>
@@ -154,6 +163,7 @@ export function IncumbentHeader({
             meter and the stale-mandate chip were drawn over this group and
             Stop host. */}
         <span className="ml-auto flex shrink-0 items-center gap-2" data-orchestrator-controls>
+          {file ? <SpeakButton scope={file.path} header /> : null}
           <SeatReportsChip project={project} projectName={projectName} />
           <SeatTickChip project={project} projectName={projectName} />
           <button

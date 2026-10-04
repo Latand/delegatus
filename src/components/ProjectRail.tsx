@@ -23,6 +23,7 @@ import { LanguageToggle } from "./LanguageToggle";
 import { openOnboarding } from "./onboarding/useOnboarding";
 import { startInterfaceWalk } from "./onboarding/walkStop";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
+import { openTelemetrySettings } from "./telemetry/TelemetrySettings";
 import { openLinkedSettings } from "./links/openLinkedSettings";
 import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { LimitsFooter } from "./LimitsFooter";
@@ -473,6 +474,7 @@ function RailHeaderMenu() {
           >
             {t("onboarding.menu.voice")}
           </button>
+          <button type="button" data-rail-menu-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken" onClick={() => { setOpen(false); openTelemetrySettings(); }}>{t("telemetry.settings")}</button>
           {/* #2007: how this install updates itself. */}
           <button type="button" data-rail-menu-linked-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openLinkedSettings(); }}>
             {t("links.title")}

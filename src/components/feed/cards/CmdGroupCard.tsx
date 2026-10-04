@@ -12,6 +12,7 @@ import { tr, type CmdGroupItem, type ToolEvent } from "../parse";
 import { elapsedDurationMs, formatDuration } from "../duration";
 import { coalesceFollowUps, groupNestedCalls } from "../toolBlocks";
 import { StatusIcon } from "./shared";
+import { ContextTokensCaption } from "./ContextTokensCaption";
 import { MobileRunRow, PollRow, ToolBlockRow, ToolLine, isPendingQuestionCall, mobileClock } from "./ToolCard";
 
 /* The ordered list of readable blocks an opened run shows — one per top-level
@@ -46,7 +47,7 @@ function ReadableBlocks({ calls }: { calls: readonly ToolEvent[] }) {
               <div className="ml-4 border-l border-border pl-2">
                 {children.map((child, ci) =>
                   child.kind === "polls" ? (
-                    <PollRow key={`poll:${ci}`} events={child.events} session={child.session} elapsedMs={child.elapsedMs} />
+                    <PollRow key={`poll:${ci}`} events={child.events} session={child.session} elapsedMs={child.elapsedMs} contextTokens={child.contextTokens} />
                   ) : (
                     <ToolBlockRow key={`${child.event.id}:${ci}`} event={child.event} nested />
                   ),
@@ -231,6 +232,7 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
           ) : null}
         </span>
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
+        <ContextTokensCaption value={item.contextTokens} scope="calls" lead={Boolean(duration)} />
         {range ? <span className="shrink-0 text-caption tabular-nums text-muted">{range}</span> : null}
       </summary>
       {/* An ordered list of readable blocks. Each call renders inline via

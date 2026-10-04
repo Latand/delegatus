@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
+import { effortScale } from "@/lib/agent/efforts";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { loadRoleRegistrySnapshot, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, ROLE_OVERRIDES_SCHEMA_VERSION, saveRoleMapping } from "@/lib/roles/store";
 import type { RoleRegistrySnapshot } from "@/lib/roles/types";
@@ -16,6 +18,12 @@ function catalog(snapshot: RoleRegistrySnapshot) {
     schemaVersion: ROLE_OVERRIDES_SCHEMA_VERSION,
     revision: snapshot.revision,
     health: snapshot.health,
+    /* The launch catalogue and per-model reasoning ladders also drive the
+       maintainer picker. Role runtimes stay in the same registry row. */
+    launchChoices: (["claude", "codex"] as const).map(engine => ({
+      engine,
+      models: ENGINE_MODELS[engine].map(model => ({ ...model, efforts: effortScale(engine, model.id)! })),
+    })),
     /* promptPreview duplicates promptScaffold under the name the draft pane
        reads; `shipped` is the runtime and prompt text before this install's
        mapping, so the mapping editor can tell "default" from "changed". */
@@ -62,6 +70,14 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
   }
   const patch = parseRoleMappingPatch((body as { overrides?: unknown }).overrides);
   if (typeof patch === "string") return NextResponse.json({ error: patch }, { status: 400 });
+  for (const override of Object.values(patch)) {
+    for (const config of [override.config, ...Object.values(override.variants ?? {})]) {
+      if (!config) continue;
+      if (config.engine !== "claude" && config.engine !== "codex") return NextResponse.json({ error: "role engine must be claude or codex" }, { status: 400 });
+      const model = validateLaunchModel(config.engine, config.model);
+      if ("error" in model) return NextResponse.json({ error: model.error }, { status: 400 });
+    }
+  }
   try {
     const current = loadRoleRegistrySnapshot();
     if (expectedRevision !== undefined && expectedRevision !== current.revision) {

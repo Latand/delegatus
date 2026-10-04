@@ -36,6 +36,7 @@ import {
   isSpawnDeniedRole,
   readSpawnAdmissionFence,
   recordSpawnAdmissionRejection,
+  spawnTaskProjectError,
   type SpawnAdmissionFenceResult,
 } from "@/lib/agent/spawnAdmission";
 import { spawnRejectionResponse, spawnReplayStatus, spawnResponseForReceipt, type SpawnResponse } from "@/lib/agent/spawnResponse";
@@ -50,6 +51,7 @@ import { publishFilesRevision } from "@/lib/runtime/filesRevision";
 import { runtimeEventsEnabled } from "@/lib/runtime/flags";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
+import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
 import { queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
@@ -407,7 +409,7 @@ export async function executeSpawnRequest(
   let launchTier = tierResolution.tier;
 
   const userPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const prompt = roleSpawnPrompt(role.value, userPrompt);
+  let prompt = roleSpawnPrompt(role.value, userPrompt);
   const { images, error: imageError } = collectImagePayloads(body);
   if (imageError) {
     return NextResponse.json({ error: imageError.error }, { status: imageError.status });
@@ -444,14 +446,6 @@ export async function executeSpawnRequest(
       hasImages: images.length > 0,
     }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
     if (gap) return NextResponse.json({ error: gap }, { status: 409 });
-    /* The scaffold-composed prompt rides structured first-message delivery.
-       Enforce its UTF-8 envelope before the durable receipt, blob storage,
-       deferred launch, and 202 response. */
-    try {
-      assertStructuredTextEnvelope(prompt);
-    } catch (error) {
-      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
-    }
   }
 
   const registry = registryForCaller ?? dependencies.registry();
@@ -524,12 +518,13 @@ export async function executeSpawnRequest(
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
-
   /* Who started this agent (sign-in-and-team §7.2): in team mode a person
      needs a member session, and the audit names them once the launch exists. */
   const spawnActor = teamActor(req);
   const anonymousSpawn = refuseAnonymous(spawnActor);
   if (anonymousSpawn) return anonymousSpawn;
+  const taskError = spawnTaskProjectError(body.taskId, cwd);
+  if (taskError) return NextResponse.json({ error: taskError }, { status: 400 });
   const recordsDirectOperatorActivity = directOperatorActivityAuthority(req).ok;
   if (recordsDirectOperatorActivity && !clientAttemptId) {
     return NextResponse.json({ error: "clientAttemptId is required for direct operator spawn" }, { status: 400 });
@@ -540,6 +535,16 @@ export async function executeSpawnRequest(
       return NextResponse.json({ error: "project could not be resolved for direct operator spawn" }, { status: 400 });
     }
     dependencies.recordOperatorRequest?.(req, { kind: "spawn", idempotencyKey: `spawn:${clientAttemptId!}`, project });
+  }
+  if (transport === "structured") {
+    try {
+      /* Materialization changes files and the index, so admit the caller and
+         task first. Compose before receipts, digests, or deferred delivery. */
+      prompt = await composeStructuredFirstMessage(prompt, cwd);
+      assertStructuredTextEnvelope(prompt);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 413 });
+    }
   }
 
   /* Saved paths stay visible to the catch. A pane-bound receipt keeps them:
@@ -847,7 +852,7 @@ export async function executeSpawnRequest(
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
       if (error instanceof ProjectAccountRefusedError) {
-        return NextResponse.json({ error: error.message }, { status: 409 });
+        return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
       }
       /* A Copilot launch with no account set up, or naming one that is gone. */
       if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {

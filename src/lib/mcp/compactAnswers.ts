@@ -26,6 +26,23 @@ const ERROR_CHARS = 300;
 const TITLE_CHARS = 80;
 const SUMMARY_CHARS = 2_000;
 
+export function pipelineCheckFields(pipeline: Pipeline) {
+  const result = pipeline.delivery?.operation?.result;
+  return {
+    ...(pipeline.remoteAction ? { remoteCheck: { id: pipeline.remoteAction.id, action: pipeline.remoteAction.action,
+      state: pipeline.remoteAction.state, ...(pipeline.remoteAction.error ? { error: clampChars(pipeline.remoteAction.error, ERROR_CHARS) } : {}) } } : {}),
+    ...(pipeline.publicationAdmission ? { publicationAdmission: { id: pipeline.publicationAdmission.id, state: pipeline.publicationAdmission.state,
+      ...(pipeline.publicationAdmission.error ? { error: clampChars(pipeline.publicationAdmission.error, ERROR_CHARS) } : {}) } } : {}),
+    ...(pipeline.delivery?.operation ? { publicationCheck: { id: pipeline.delivery.operation.id,
+      state: pipeline.delivery.operation.state, sha: pipeline.delivery.operation.sha,
+      ...(result ? { result: result.ok ? { ok: true, remote: result.remote, sha: result.sha,
+        ...(result.detail ? { detail: clampChars(result.detail, ERROR_CHARS) } : {}),
+        ...(result.uncertain === undefined ? {} : { uncertain: result.uncertain }) }
+        : { ok: false, error: clampChars(result.error, ERROR_CHARS) } } : {}) } } : {}),
+    ...(pipeline.stateDetail === "accepted head verification and publication pending" ? { gitCheck: { state: "pending" as const } } : {}),
+  };
+}
+
 /**
  * What a pipeline write answers: where the lane stands after the write and the
  * digests a guarded graph edit names next — what `create_pipeline` answers.
@@ -38,6 +55,7 @@ export function pipelineAcknowledgement(pipeline: Pipeline) {
     stateDetail: clampChars(pipeline.stateDetail, ACK_DETAIL_CHARS),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...pipelineCheckFields(pipeline),
     taskIds: [...(pipeline.taskIds ?? [])],
     ...finishesTaskFields(pipeline),
     branch: pipeline.branch,
@@ -80,18 +98,18 @@ function stageRuntime(stage: PipelineStage, pipeline: Pipeline) {
 
 /**
  * What a `pipeline_action` answers: where the lane stands after the action, and
- * the digests the next guarded edit names. The same shape `pause` has always
- * answered with, now for every action.
+ * the digests when an edit or full answer asks for them. Routine actions
+ * keep the revision while get_pipeline remains the guarded read.
  */
-export function pipelineActionAcknowledgement(pipeline: Pipeline) {
+export function pipelineActionAcknowledgement(pipeline: Pipeline, includeDigests = false) {
   return {
     pipelineId: pipeline.id,
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     closedAt: pipeline.closedAt ?? null,
+    ...pipelineCheckFields(pipeline),
     ...finishesTaskFields(pipeline),
-    stageDigests: stageDigests(pipeline.stages ?? []),
-    graphDigest: graphDigest(pipeline.stages ?? []),
+    ...(includeDigests ? { stageDigests: stageDigests(pipeline.stages ?? []), graphDigest: graphDigest(pipeline.stages ?? []) } : {}),
   };
 }
 
@@ -126,6 +144,7 @@ export function stageReportAcknowledgement(report: PipelineStageReport) {
       severityCounts,
     },
     provenance: {
+      ...(report.provenance.state ? { state: report.provenance.state, pullRequestState: report.provenance.pullRequestState } : {}),
       head: report.provenance.head,
       branch: report.provenance.branch,
       dirty: report.provenance.uncommitted === null ? null : report.provenance.uncommitted.length > 0,
@@ -170,6 +189,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
   const verdict = selected?.verdict ?? reportedVerdict;
   return {
     pipelineId: pipeline.id,
+    ...pipelineCheckFields(pipeline),
     state: pipeline.state,
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stage: {

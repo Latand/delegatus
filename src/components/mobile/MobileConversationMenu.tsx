@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldVertical, GitFork, Info, ListTree, PencilLine, RotateCw, Search, Square, SquareTerminal, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldVertical, GitFork, Info, Layers, ListTree, PencilLine, RotateCw, Search, ScrollText, Square, SquareTerminal, StickyNote, TriangleAlert, X } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
@@ -49,6 +49,13 @@ export function MobileConversationMenu({
   crowned,
   hostTaskCount,
   onOpenSeat,
+  hasPinned = false,
+  backgroundCount = 0,
+  onOpenPinned,
+  onOpenBackground,
+  onReports,
+  onAttention,
+  attentionCount = 0,
   onOpenPipeline,
   onRename,
   onToggleCrown,
@@ -77,6 +84,15 @@ export function MobileConversationMenu({
       only place §4.2 puts this row — and, with the pinned row gone from the
       conversation screen, the only route the seat has left here. */
   onOpenSeat?: () => void;
+  /** The conversation has a pinned message (a related board task): a row opens it. */
+  hasPinned?: boolean;
+  /** Background tasks this conversation started; the row shows only above zero. */
+  backgroundCount?: number;
+  onOpenPinned?: () => void;
+  onOpenBackground?: () => void;
+  onReports?: () => void;
+  onAttention?: () => void;
+  attentionCount?: number;
   onOpenPipeline?: () => void;
   onRename: () => void;
   onToggleCrown?: () => void;
@@ -139,6 +155,8 @@ export function MobileConversationMenu({
   };
   const showPipelineRow = Boolean(onOpenPipeline) && (stage !== null || pipelineCount > 0);
   const showSubagents = subagents.length > 0 && onOpenSubagent !== undefined;
+  const showPinned = hasPinned && onOpenPinned !== undefined;
+  const showBackground = backgroundCount > 0 && onOpenBackground !== undefined;
   return (
     <>
       <MobileSheet name="menu" title={title} onClose={onClose}>
@@ -156,6 +174,28 @@ export function MobileConversationMenu({
           {ctxLeft === null ? null : <MobileMeter left={ctxLeft} label={t("mobile2.meter.left", { left: ctxLeft })} className="ml-auto w-16 shrink-0" />}
         </div>
         <div role="menu" aria-label={title} className="flex flex-col">
+          {/* What used to be two strips under the header: the pinned message
+              and the background tasks. Each opens its own sheet, and neither
+              marks the header button — the menu is where they live. */}
+          {showPinned ? (
+            <MobileSheetRow
+              icon={<StickyNote className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.chat.menuPinned")}
+              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+              onSelect={onOpenPinned}
+              attrs={{ "data-mobile2-menu-row": "pinned" }}
+            />
+          ) : null}
+          {showBackground ? (
+            <MobileSheetRow
+              icon={<Layers className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.chat.menuBackground", { count: backgroundCount })}
+              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+              onSelect={onOpenBackground}
+              attrs={{ "data-mobile2-menu-row": "background" }}
+            />
+          ) : null}
+          {showPinned || showBackground ? <MobileSheetDivider /> : null}
           {/* The seat row (§4.2, §4.5): the seat's own conversation is where an
               operator asks what the orchestrator is holding, and the phone's
               pinned row — which used to carry the ⚙ — is gone with the strip,
@@ -212,6 +252,8 @@ export function MobileConversationMenu({
             </>
           ) : null}
           {onOpenSeat || showPipelineRow || showSubagents ? <MobileSheetDivider /> : null}
+          {onAttention ? <MobileSheetRow icon={<TriangleAlert className="h-[18px] w-[18px]" aria-hidden />} label={t("mobile2.bar.attention", { count: attentionCount })} onSelect={act(onAttention)} attrs={{ "data-mobile2-menu-row": "attention" }} /> : null}
+          {onReports ? <MobileSheetRow icon={<ScrollText className="h-[18px] w-[18px]" aria-hidden />} label={t("reportLog.show")} onSelect={act(onReports)} attrs={{ "data-mobile2-menu-row": "reports" }} /> : null}
           <MobileSheetRow
             icon={<PencilLine className="h-[18px] w-[18px]" aria-hidden />}
             label={t("mobile2.chat.menuRename")}

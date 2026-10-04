@@ -262,7 +262,7 @@ test("repeated identical attempts share one grouped row with counts and final st
   /* #1362: settled failures read as one compact notice — status word, terse
      cause, attempt counter — never as a count of pills. */
   expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
-    .toBe(`${translate("uk", "composer.receiptFailed")} — ${translate("uk", "receipt.human.deadHost")}`);
+    .toBe(`${translate("uk", "composer.deliveryNotDelivered")} — ${translate("uk", "receipt.human.deadHost")}`);
   expect(summary.querySelector("[data-delivery-notice-count]")?.textContent).toContain("×3");
 
   // One logical send consumes one row: the text appears once with an attempt
@@ -703,7 +703,7 @@ test("expanded active attempts retain localized lifecycle status and aggregate c
     /* #1362: the settled failure IS the notice beside the pending count — the
        red issue badge no longer counts it a second time. */
     expect(summary.querySelector("[data-delivery-notice-cause]")?.textContent)
-      .toBe(`${translate(locale, "composer.receiptFailed")} — ${translate(locale, "receipt.human.deadHost")}`);
+      .toBe(`${translate(locale, "composer.deliveryNotDelivered")} — ${translate(locale, "receipt.human.deadHost")}`);
     expect(summary.querySelector("[data-receipt-problem-count]")).toBeNull();
     const details = host.querySelector("[data-runtime-receipt-details]")!;
     expect(details.querySelector('[data-receipt-status="pending"]')?.textContent)
@@ -714,7 +714,7 @@ test("expanded active attempts retain localized lifecycle status and aggregate c
     expect(details.querySelector('[data-receipt-status="queued"]')?.textContent)
       .toBe(translate(locale, "runtime.receipt.awaitingTurnPos", { position: 3, waited: waited(4) }));
     const unknown = details.querySelector(`[data-operation="${locale}-uncertain"]`)!;
-    expect(unknown.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
+    expect(unknown.textContent).toContain(translate(locale, "composer.deliveryChecking"));
     expect(unknown.querySelector("[data-receipt-uncertain-retry]")).not.toBeNull();
     expect(unknown.querySelector("[data-receipt-edit]")).toBeNull();
     expect(details.querySelector('[data-receipt-status="delivering"]')?.textContent)
@@ -1447,7 +1447,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     const entry = readOutbox(conversationId).find((e) => e.text === prompt)!;
     expect(entry.state).toBe("delivering");
     expect(entry.deliveryUncertain).toBe(true);
-    expect(host.textContent).toContain("runtime host request timed out");
+    expect(host.textContent).toContain(translate(locale, "composer.deliveryCheckingDetail"));
 
     await settle(() => appendComposerDraft(conversationId, "later draft"));
     await settle(() => retryOutbox(conversationId, entry.id));
@@ -1465,7 +1465,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     expect(admitted.deliveryUncertain).toBe(true);
     expect(admitted.deliveryReceipt).toMatchObject({ operationId: "op-timeout-terminal-0001",
       idempotencyKey: entry.id, status: "queued", revision: 2 });
-    expect(host.textContent).toContain("runtime host request timed out");
+    expect(host.textContent).toContain(translate(locale, "composer.deliveryCheckingDetail"));
     expect(host.textContent).not.toContain(translate(locale, "common.failedSend"));
     /* One pending recovery row retains the payload and announces uncertainty. */
     const stack = host.querySelector("details[data-runtime-receipt-stack]") as HTMLDetailsElement;
@@ -1483,7 +1483,7 @@ async function runTimeoutThenQueuedAdmission(locale: "en" | "uk", viewportWidth:
     expect(status.getAttribute("role")).toBe("status");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain(translate(locale, "runtime.receipt.statusPending", { count: 1 }));
-    expect(status.textContent).toContain(translate(locale, "orchPanel.errorUnknownTitle"));
+    expect(status.textContent).toContain(translate(locale, "composer.deliveryChecking"));
     /* Mobile keeps the 44px summary row; desktop keeps the compact stack. */
     expect(summary.className.split(/\s+/)).toContain("min-h-11");
   } finally {

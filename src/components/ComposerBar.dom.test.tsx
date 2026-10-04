@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -539,4 +540,65 @@ test("Send options has a visible keyboard and pointer opener without submitting"
   expect(selected).toBe(1);
   expect(document.querySelector('[role="menu"]')).toBeNull();
   flushSync(() => root.unmount());
+});
+
+test("a checked send-menu action is a checkbox that leaves the menu open, and a plain one still closes it", () => {
+  let auto = true;
+  let plain = 0;
+  function MenuHarness() {
+    const composer = useComposer({ initialText: () => "context", persistText: () => {}, submit: () => {} });
+    return <ComposerBar composer={composer} placeholder="Prompt" textareaAriaLabel="Prompt"
+      imageAriaLabel="Attach" leftSlot={null} sendLabelIdle="Send" sendLabelRecording="Stop"
+      sendIdleClassName="bg-accent" sendMenuLabel="Send options"
+      sendMenuActions={[
+        { id: "auto", label: "Switch with the agent's turn", checked: auto, onSelect: () => { auto = !auto; } },
+        { id: "plain", label: "Add to context", onSelect: () => { plain++; } },
+      ]} />;
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  flushSync(() => root.render(<MenuHarness />));
+  flushSync(() => container.querySelector<HTMLButtonElement>('button[aria-label="Send options"]')!.click());
+
+  const box = document.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]')!;
+  expect(box).not.toBeNull();
+  expect(box.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+  flushSync(() => box.click());
+  expect(auto).toBe(false);
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+  flushSync(() => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  expect(plain).toBe(1);
+  expect(document.querySelector('[role="menu"]')).toBeNull();
+  flushSync(() => root.unmount());
+});
+
+const CustomGlyph = ((props: { className?: string }) => <svg data-glyph="custom" className={props.className} />) as unknown as LucideIcon;
+
+test("the send control takes its glyph from sendIcon, and the input box carries the mode", () => {
+  function ModeHarness({ mode }: { mode?: "context" }) {
+    const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => {} });
+    return <ComposerBar composer={composer} placeholder="Prompt" textareaAriaLabel="Prompt"
+      imageAriaLabel="Attach" leftSlot={null} sendLabelIdle="Send" sendLabelRecording="Stop"
+      sendIdleClassName="bg-accent" sendMenuLabel="Send options" mode={mode}
+      sendIcon={mode === "context" ? CustomGlyph : undefined} />;
+  }
+  for (const mobile of [false, true]) {
+    mobileViewport = mobile;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    flushSync(() => root.render(<ModeHarness />));
+    expect(container.querySelector("[data-composer-mode]")).toBeNull();
+    expect(container.querySelector('[data-glyph="custom"]')).toBeNull();
+    flushSync(() => root.render(<ModeHarness mode="context" />));
+    const box = container.querySelector("[data-composer-mode]")!;
+    expect(box.getAttribute("data-composer-mode")).toBe("context");
+    expect(box.className).toContain("border-dashed");
+    expect(container.querySelector('[data-glyph="custom"]')).not.toBeNull();
+    flushSync(() => root.unmount());
+    container.remove();
+  }
 });

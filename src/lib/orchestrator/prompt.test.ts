@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
@@ -75,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 32, and a v31 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(32);
+test("the default mandate is at version 39, and a v38 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(39);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -106,7 +108,14 @@ test("the default mandate is at version 32, and a v31 seat reads as stale", () =
      risk-based review budgets and the default of three rounds. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
-  expect(orchestratorMandateStale(32)).toBe(false);
+  expect(orchestratorMandateStale(32)).toBe(true);
+  expect(orchestratorMandateStale(33)).toBe(true);
+  expect(orchestratorMandateStale(34)).toBe(true);
+  expect(orchestratorMandateStale(35)).toBe(true);
+  expect(orchestratorMandateStale(36)).toBe(true);
+  expect(orchestratorMandateStale(37)).toBe(true);
+  expect(orchestratorMandateStale(38)).toBe(true);
+  expect(orchestratorMandateStale(39)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -145,6 +154,13 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   30: "9743e8688175e3e08fd07d54df961ff363b8798b049d50ff11973e7bf2624e69",
   31: "e1583b032cf61e67f50b486172f974ae2a2ae03649cc666b0738b010247c106d",
   32: "032c79825baef89c4f62fca96d0eeb5ac9f3f5a68aea62f316ce19d408d42e74",
+  33: "651f90a57a1921b41e14a536a4178a7e47b45028ca9224dbfbd9f8fd9ec0d821",
+  34: "a8097e56de1afa912ce3a2f88aea81821aafe80a79d49c000979c3b9bb2ecde3",
+  35: "3a35d3334e259e60d3388454068ab6ce1836fbcf8f87b05c7207e8caf626929b",
+  36: "851761d46924e3c16328ea1e31f1c768ae15d1aecb48b6ab9ee1b25c2aac9749",
+  37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
+  38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
+  39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -158,7 +174,10 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Never merge red");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("needs-review → independent git show --remerge-diff review, then next batch");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("culprit → lane finding");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
@@ -420,6 +439,12 @@ test("the mandate names every attention target and uses the tool schema for shap
 /* #1026 — a fresh seat composed its first pipeline through seven sequential
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
+test("the mandate names explicit graph insertion and verified terminal exhaustion (#2247)", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('fail parks with "budget spent: N findings left"');
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
+});
+
 test("the mandate carries the pipeline stage shape a first pipeline needs", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('kind: "run"');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("role: {roleId, params?}");
@@ -458,12 +483,9 @@ test("no retired task-binding claim survives in the ownership directive", () => 
   /* A reviewer spawn that names a parent joins the parent's card beside the
      reviewed work's (membership.test.ts), so reviewer spawns pass taskId too. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("A review flow or a reviewer spawn inherits");
-  /* A spawn's explicit target carries its own project and a single foreign id
-     is admitted (pinned in membership.test.ts), so the mandate must not promise
-     a refusal there — a manager acting on that promise binds an agent to
-     another project's card and is told nothing. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .not.toContain("or a task in another project, refuses the launch before any agent starts");
+    .toContain("create_pipeline and spawn_agent both refuse a task belonging to another project");
+  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("takes the id as given");
   /* No invented id shape: the mandate must never teach a format the board does
      not mint. */
   expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');
@@ -589,6 +611,37 @@ function roleTableLines(mandate: string): string[] {
   return mandate.slice(start).split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| role ") && !line.startsWith("| ---"));
 }
 
+test("successive mandate renders read saved rows, variants and revision from the current registry", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mandate-roles-"));
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const render = (mandate: string) => orchestratorMandateForDelivery(mandate, loadRoleDefinitionsOrDefaults());
+    const first = render("Bespoke mandate");
+    const firstRevision = loadRoleRegistrySnapshot().revision;
+    saveRoleMapping({
+      builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "medium" }, variants: { frontend: { engine: "claude", model: "opus", effort: "high" } } },
+      reviewer: { variants: { trivial: { engine: "codex", model: "gpt-5.6-luna", effort: "medium" } } },
+    });
+    const nextRevision = loadRoleRegistrySnapshot().revision;
+    const second = render(first);
+    expect(nextRevision).not.toBe(firstRevision);
+    expect(second).toContain("| builder | codex | gpt-6-sol | medium |");
+    expect(second).toContain("domain=frontend: claude/opus/high");
+    expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
+    expect(second).toContain(`Registry revision: ${nextRevision}. Registry health: healthy.`);
+    expect(second).not.toContain(firstRevision);
+    expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
+    expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
+    saveRoleMapping({ builder: { config: null, variants: { frontend: null } }, reviewer: { variants: { trivial: null } } });
+    expect(render(second)).toBe(first);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
 test("the delivered mandate renders the role table from the registry it is handed", () => {
   const registry: RoleDefinition[] = ROLE_DEFAULTS.map((role) => role.id === "prod-auditor"
     ? { ...role, config: { engine: "claude", model: "sonnet", effort: "low" } }
@@ -598,14 +651,14 @@ test("the delivered mandate renders the role table from the registry it is hande
 
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
-  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6-astra | medium | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6-astra | high | read-only |");
+  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6.1-sol | high | read-write |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only |");
 });
 
 test("the role table carries the runtime guidance beside it", () => {
   const delivered = orchestratorMandateForDelivery("Bespoke mandate");
   const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
-  expect(section).toContain("omits engine, model and effort");
+  expect(section).toContain("Omitting engine, model and effort");
   expect(section).toContain("on the stage");
   expect(section).toMatch(/low or medium/);
   expect(section).toContain("NEXT attempt");
@@ -613,7 +666,7 @@ test("the role table carries the runtime guidance beside it", () => {
   /* The standing model rules (model landscape 2026-09) ride in the role rows;
      the builder's description names no model (agent-prompt-contract.md
      §2.10 B), since runtime advice belongs to the table's notes. */
-  expect(section).toContain("| builder | codex | gpt-6-astra | medium | read-write | Writes product code for a scoped brief.");
+  expect(section).toContain("| builder | codex | gpt-6.1-sol | high | read-write | Writes product code for a scoped brief.");
   expect(section).toContain("High per lane for risky backend diffs.");
   expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
 });
@@ -674,8 +727,9 @@ test("the role table keeps the delivered default inside the structured envelope"
      personality; its scaffold gave 200 back. v31 takes 700 more for the
      board maintenance report section, paid for by the open-task list the
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
-     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 4_100);
+     §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
+     The scheduled maintainer row uses another 200 bytes of that room. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_900);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -695,22 +749,23 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(builderRow).toContain("size=trivial, domain=frontend, domain=docs, domain=frontend mode=apply-fixes, domain=docs mode=apply-fixes: claude/claude-sonnet-5-5/high; mode=apply-fixes: codex/gpt-6-luna/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
-  expect(table).toContain("- Size each lane first. trivial (a few lines of UI, copy, one flag or label; your brief states the exact change and its acceptance): builder and reviewer size=trivial, one review round.");
-  expect(table).toContain("design (options, architecture, proposals, issues from design work): an architect stage first");
+  expect(table).toContain("- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round.");
+  expect(table).toContain("normal: rows, effort low or medium");
+  expect(table).toContain("design (options, architecture, proposals, design issues): architect first");
   /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
   expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
   expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.");
   /* §3 (a): the fix stage's params select its row. */
-  expect(table).toContain("- Fix stages: builder mode=apply-fixes with the implementer's domain and size, on the builder row they select.");
-  /* Review of #2301: a fix round takes what names its place, an OVER-BUILT cut
-     included, and the seat is told that the rest parks the lane. */
-  expect(table).toContain("OVER-BUILT cuts included");
-  expect(table).toContain("which parks the lane: re-plan it.");
+  expect(table).toContain("- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks.");
+  expect(table).toContain("Never self-grade; fix discoveries and note out-of-spec");
+  expect(table).toContain("Fail only with blocked:true and blockedReason");
+  /* Fixers repair discoveries within the spec; reviewers grade the result. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
-  expect(table).toContain("a runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage, not in role. override-stage binds from the NEXT attempt.");
-  expect(table).toContain("quote it with the size you chose and why");
+  expect(table).toContain("runtimeLine (spawn_agent: runtime)");
+  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.");
+  expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
   expect(table).not.toContain("\n\n");
@@ -820,4 +875,9 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
   const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
   expect(reviewLoop).toContain('"roundLimit": 3');
   expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
+});
+
+test("the versioned mandate asks for a current status note in the operator's language", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
 });

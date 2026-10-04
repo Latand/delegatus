@@ -1,0 +1,105 @@
+{
+  "mergeBase": "4baabbec88d86b5a9a69d178e2be9881d12fa7fe",
+  "implementationCommit": "018f3b3e1fff78bdc021d42753a418cae25a8474",
+  "legacySubject": "c18ab3551f756a9b5cc521b099a3433553217c87",
+  "runtime": "Bun 1.4.0",
+  "isolation": "Private state/config/homes and ephemeral listeners. Historical source is archived without a branch; existing HTTP harness and TCP meter are reused. Heavy gates hold the shared lock. Running installs were untouched.",
+  "regressionSourceSha256": "47f4aa684d349731baf3e60699851b5cdaf81251c770c938bf6cd0360d8e183f",
+  "baseProductionSourcesVerifiedUnchanged": true,
+  "identicalRegressionSourceOnBaseAndHead": true,
+  "regressions": [
+    {
+      "name": "Fresh v3 link",
+      "confirmedCause": "Pre-confirmation pushes omit membership; a cursor flag set only at save suppresses the fresh confirmation replay.",
+      "change": "Replay pushes at every negotiated upgrade. Replay previously consumed pulls while retaining the fresh confirming scan page.",
+      "test": "boardSync.test.ts: fresh v3 linking replays pre-confirmation membership and persists it across restart",
+      "base": "fail: hidden membership missing after restart",
+      "head": "pass: hidden membership, fields, task count and visibility persist after both process restarts"
+    },
+    {
+      "name": "Automatic hide during rolling upgrade",
+      "confirmedCause": "Arrival defaults and legacy repair wrote hidden without provenance, which replay treated as a local choice.",
+      "change": "Persist local boardAutoHidden provenance, clear it on every explicit board PATCH, restore owner membership within admission, and leave capacity defaults retryable without changing task stamps.",
+      "test": "boardSync.test.ts: actual c18ab355 upgrade in both client/server roles; automatic membership recovery at capacity",
+      "base": "fail in both roles: shown done task remains hidden; also fails after a band is freed",
+      "head": "pass: both-direction legacy create/edit, membership recovery, explicit hidden/shown choices, restart, field/stamp/count preservation, full-capacity refusal and later admission"
+    }
+  ],
+  "checks": {
+    "httpRegressions": {
+      "base": {
+        "pass": 0,
+        "fail": 4
+      },
+      "head": {
+        "pass": 4,
+        "fail": 0
+      }
+    },
+    "httpNegotiationTitleAndPagination": {
+      "pass": 10,
+      "fail": 0
+    },
+    "focused": {
+      "pass": 142,
+      "skip": 1,
+      "fail": 0,
+      "files": 8,
+      "skipReason": "Existing rollback-store test skips because the base already contains taskSyncWrite. M3 memory benchmark runs separately."
+    },
+    "productionMcpBoardVisibility": {
+      "pass": 5,
+      "fail": 0,
+      "files": 1
+    },
+    "typescript": "pass: tsc --noEmit; also passed Next build type checking",
+    "eslint": {
+      "errors": 0,
+      "warnings": 4,
+      "scope": "All eight changed source/test files"
+    },
+    "privacy": "pass: generic and required known-value/commit gates",
+    "build": "pass: bun run build, including MCP bundle",
+    "viewerRuntime": {
+      "ok": true,
+      "modulesProbed": 22,
+      "modulesLoaded": 22,
+      "rootHttpStatus": 200
+    },
+    "runtimeHost": {
+      "ok": true,
+      "succession": true,
+      "listenerAnswers": 27,
+      "listenerPolls": 27,
+      "socketAnswers": 27,
+      "socketPolls": 27
+    },
+    "diffWhitespace": "pass"
+  },
+  "commands": [
+    "TMPDIR=/var/tmp flock /var/tmp/llv-heavy-gate.lock bun test src/lib/links/boardSync.test.ts -t \"fresh v3 linking|automatic hiding recovers|automatic membership recovery\"",
+    "TMPDIR=/var/tmp flock /var/tmp/llv-heavy-gate.lock bun test src/lib/links/boardSync.test.ts src/lib/links/taskSync.test.ts src/lib/links/runtimeState.test.ts src/lib/links/pairing.test.ts src/lib/tasks/boardTaskLimit.test.ts src/lib/tasks/boardVisibility.test.ts src/lib/tasks/taskCreate.test.ts src/lib/tasks/tasks.test.ts -t \"^(?!M3)\"",
+    "TMPDIR=/var/tmp bun test src/lib/mcp/taskBoardVisibility.integration.test.ts",
+    "flock /var/tmp/llv-heavy-gate.lock bunx tsc --noEmit",
+    "flock /var/tmp/llv-heavy-gate.lock bun run build",
+    "flock /var/tmp/llv-heavy-gate.lock bun scripts/verify-viewer-runtime.ts",
+    "flock /var/tmp/llv-heavy-gate.lock bun scripts/verify-runtime-host.ts",
+    "bun run privacy:check"
+  ],
+  "environmentNotes": [
+    "The initial scratch run hit the tmpfs per-user quota; valid red/green evidence uses /var/tmp.",
+    "Combining the MCP board test with task-store unit files fails its import-time sandbox assertion on unchanged base as well. Running it alone passes all five production-MCP cases.",
+    "Unmarked hidden preferences from prior versions remain protected because their origin was not recorded.",
+    "Tests need the c18ab355 git object and tar. No usage-metrics or TTS files were changed."
+  ],
+  "sourceSha256": {
+    "src/lib/links/boardSync.test.ts": "47f4aa684d349731baf3e60699851b5cdaf81251c770c938bf6cd0360d8e183f",
+    "src/lib/links/taskApply.ts": "00ac5e4f9842773848ebd202d747d2a13f529a9b7458073bf89c2e1f2604af28",
+    "src/lib/links/taskExchange.ts": "623853d6c86345e27bf13162e65335922575a0d73b5c4215337391cda387f907",
+    "src/lib/links/taskRepair.ts": "9614bbe8d014e18319a4896c55602943adb22abaab334aa2409fdb4e00c95818",
+    "src/lib/links/taskSync.test.ts": "c058a93a54df9fa4d919804b6b0ce689e56a0455cbf073d0a4117612a4e83a03",
+    "src/lib/links/wireMeter.ts": "ee9a6d3848d05d28885d9ce504d1b2a05d78449cdd39cbf7493ae87b63875321",
+    "src/lib/tasks/commands.ts": "693aeeafea238d6e3b80bc927034bc3f83c97975f3db59eb07aaff543e0428ff",
+    "src/lib/tasks/types.ts": "fed4b10989446cba56651a658e184e5ba90ab2b7a6aee42c9889def5346f730e"
+  }
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronLeft, Ellipsis, Search, TriangleAlert } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { reachLineText, useServerReach, type ServerReach } from "@/hooks/serverReach";
@@ -39,17 +39,21 @@ export const BAR_PAD_PX = 4;
     10 px pill padding each side, a 13 px glyph, a 4 px gap and one digit. */
 export const ATTENTION_PX = 52;
 export const TITLE_MIN_PX = 190;
+const viewportWidth = () => typeof window === "undefined" ? 390 : window.innerWidth;
+const serverWidth = () => 390;
+const subscribeWidth = (listener: () => void) => { window.addEventListener("resize", listener); return () => window.removeEventListener("resize", listener); };
 
 export interface BarTargets {
   back: boolean;
   attention: boolean;
   search: boolean;
   menu: boolean;
+  actions?: number;
 }
 
 /** The title cell's width at `viewport` px with these targets present. */
 export function titleCellWidth(viewport: number, targets: BarTargets): number {
-  const fixed = [targets.back ? TARGET_PX : 0, targets.attention ? ATTENTION_PX : 0, targets.search ? TARGET_PX : 0, targets.menu ? TARGET_PX : 0];
+  const fixed = [...Array.from({ length: targets.actions ?? 0 }, () => TARGET_PX), targets.back ? TARGET_PX : 0, targets.attention ? ATTENTION_PX : 0, targets.search ? TARGET_PX : 0, targets.menu ? TARGET_PX : 0];
   const present = fixed.filter((w) => w > 0);
   const gaps = present.length * BAR_GAP_PX;
   return viewport - 2 * BAR_PAD_PX - present.reduce((sum, w) => sum + w, 0) - gaps;
@@ -240,6 +244,8 @@ export function MobileShell({
   const attentionCount = effectiveHost?.attentionCount ?? 0;
   const noticeDot = effectiveHost?.noticeDot === true;
   const attention = attentionCount > 0 || noticeDot;
+  const barWidth = useSyncExternalStore(subscribeWidth, viewportWidth, serverWidth);
+  const foldAttention = screen === "chat" && !!barAction && attention && titleCellWidth(barWidth, { back, attention: true, search: !!onOpenSearch, menu, actions: 1 }) < TITLE_MIN_PX;
   /* The interface walk's third stop points at the badge, which is hidden at
      zero: while it shows, the slot is drawn empty-outlined (#2166 §3.8). */
   const walkSlot = useWalkStop() === 3 && !attention && screen === "board";
@@ -296,7 +302,7 @@ export function MobileShell({
               {title}
             </div>
           )}
-          {attention ? (
+          {attention && !foldAttention ? (
             <button
               type="button"
               data-mobile2-open="attention"
@@ -306,13 +312,13 @@ export function MobileShell({
               aria-label={[attentionCount ? t("mobile2.bar.attention", { count: attentionCount }) : null, noticeDot ? t("notices.dot") : null].filter(Boolean).join(", ")}
               aria-haspopup="dialog"
               aria-expanded={state.sheet === "attention"}
-              className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex h-11 w-[52px] shrink-0 items-center justify-center px-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               onClick={() => nav.openSheet("attention")}
             >
               {attentionCount ? (
-                <span className="relative inline-flex h-7 items-center gap-1 rounded-full border border-warning/45 bg-warning-soft px-2.5 text-ui font-bold tabular-nums text-warning">
+                <span className={`relative inline-flex h-7 max-w-full items-center gap-1 rounded-full border border-warning/45 bg-warning-soft ${attentionCount > 99 ? "px-0.5" : attentionCount > 9 ? "px-1.5" : "px-2.5"} text-ui font-bold tabular-nums text-warning`}>
                   <TriangleAlert className="h-[13px] w-[13px]" aria-hidden />
-                  {attentionCount}
+                  {attentionCount > 99 ? "99+" : attentionCount}
                   {noticeDot ? <span data-mobile2-notice-dot aria-hidden className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-canvas" /> : null}
                 </span>
               ) : (
@@ -320,7 +326,7 @@ export function MobileShell({
               )}
             </button>
           ) : walkSlot ? (
-            <span data-walk-anchor="needs" className="flex h-11 min-w-11 shrink-0 items-center justify-center px-[3px]">
+            <span data-walk-anchor="needs" className="flex h-11 w-[52px] shrink-0 items-center justify-center px-[3px]">
               <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full border border-dashed border-strong px-2 text-ui font-bold tabular-nums text-muted">0</span>
             </span>
           ) : null}
@@ -334,7 +340,7 @@ export function MobileShell({
             <button
               type="button"
               data-mobile2-open="menu"
-              aria-label={t("mobile2.bar.more")}
+              aria-label={foldAttention ? `${t("mobile2.bar.more")}, ${t("mobile2.bar.attention", { count: attentionCount })}` : t("mobile2.bar.more")}
               aria-haspopup="dialog"
               aria-expanded={state.sheet === "menu"}
               className={ICON_BUTTON}

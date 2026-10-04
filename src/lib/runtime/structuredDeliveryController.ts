@@ -15,6 +15,7 @@ import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
+import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
@@ -28,7 +29,7 @@ import {
   interruptionObligationStore,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
-import { reapSeveredStructuredHost } from "./registry";
+import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
 import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
@@ -94,6 +95,7 @@ interface ControllerState {
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
+  detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -111,6 +113,7 @@ const state: ControllerState = controllerStore.__llvStructuredDeliveryController
   republishActiveHost: null,
   releaseActiveHost: null,
   terminateActiveHost: null,
+  detachRetiredActiveHost: null,
   completeActive: null,
   stopActive: () => {},
   lastDrainError: null,
@@ -403,7 +406,8 @@ async function reconcileTerminalDeliveries(
   client: RuntimeHostClient,
   isCurrent: () => boolean,
 ): Promise<void> {
-  const unsettledDeliveries = Object.values(registry.readOnlySnapshot().heldDeliveries)
+  const snapshot = registry.readOnlySnapshot();
+  const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
   const pendingAcknowledgements: string[] = [];
@@ -418,6 +422,18 @@ async function reconcileTerminalDeliveries(
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
     const outcomes = (await Promise.all(page.map(async (delivery) => {
       try {
+        if (delivery.error !== "delivery-discarded"
+          && await confirmedSend(snapshot, delivery.command.operationId, true)) {
+          return {
+            conversationId: delivery.conversationId,
+            operationId: delivery.command.operationId,
+            state: "delivered" as const,
+            error: null,
+            disposition: "delivered" as const,
+            receiptOperationId: delivery.command.operationId,
+            route: null,
+          };
+        }
         const result = await client.operationStatus(delivery.command.operationId, { currentRetryLeaf: true });
         if (!result) return null;
         const outcome = terminalDeliveryOutcome(registry, result, {
@@ -679,6 +695,43 @@ export async function bindStructuredDeliveryQueue(
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
     },
+    succession: (conversationId, binding, admittedAt) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      if (!conversation || conversation.engine !== "codex") return { status: "refused", reason: "native queue conversation is unavailable" };
+      const migration = conversation.migration;
+      const generations = conversation.generations;
+      const sourceIndex = generations.findIndex(generation => generation.id === binding.threadId && generation.accountId === binding.accountId);
+      const migrationSourceIndex = generations.findLastIndex(generation => generation.id === migration?.sourceGenerationId
+        && (migration?.phase !== "committed" || generation.archivedAt !== null));
+      if (!migration || sourceIndex < 0 || migrationSourceIndex < sourceIndex) return null;
+      const source = generations[sourceIndex]!;
+      const current = generations.at(-1);
+      // Terminal migration residue applies only to entries already admitted
+      // when this migration began, regardless of who requested the switch.
+      // A reused intent can predate this conversation's migration.
+      const terminal = migration.phase === "rolled-back" || migration.phase === "failed-recoverable";
+      if (terminal && current === source && !conversation.switchHold && admittedAt !== undefined) {
+        const startedAt = migration.startedAt ?? registry.readOnlySnapshot().migrationIntents[migration.intentId]?.createdAt;
+        if (Date.parse(admittedAt) > Date.parse(startedAt ?? "")) return null;
+      }
+      // Each committed edge archives its predecessor at the successor's birth.
+      // Keep that evidence when a newer migration replaces the previous receipt.
+      for (let index = sourceIndex; index < migrationSourceIndex; index++) {
+        if (!generations[index]!.archivedAt || generations[index]!.archivedAt !== generations[index + 1]!.createdAt) {
+          return { status: "refused", reason: "runtime switch successor chain is unproven" };
+        }
+      }
+      if (conversation.switchHold) return { status: "refused", reason: `account switch failed: ${conversation.switchHold.reason}` };
+      if (conversation.reconfigure?.status === "cancelled" || migration.phase === "rolled-back") return { status: "refused", reason: "runtime switch cancelled" };
+      if (conversation.reconfigure?.status === "failed" || migration.phase === "failed-recoverable") {
+        return { status: "refused", reason: `runtime switch failed: ${conversation.reconfigure?.error ?? migration.error ?? "successor is unavailable"}` };
+      }
+      if (migration.phase !== "committed" || conversation.reconfigure?.status === "applying") return { status: "pending" };
+      if (!source.archivedAt || !current || current.id !== migration.providerReceipt?.nativeId || current.accountId !== migration.targetId) {
+        return { status: "refused", reason: "runtime switch successor is unproven" };
+      }
+      return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
+    },
   });
   const queue = new StructuredDeliveryQueue(
     {
@@ -695,6 +748,7 @@ export async function bindStructuredDeliveryQueue(
         });
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      bindDeliveryGeneration: (operationId, generationId) => registry.bindDeliveryOperationGeneration(operationId, generationId),
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
@@ -803,30 +857,72 @@ export async function bindStructuredDeliveryQueue(
     },
     hostResolver(registry, hosts),
     async (conversationId, expectedKey) => {
-      if (await state.terminateActiveHost?.(expectedKey)) return true;
-      /* No registration in this process owns the host, so nothing here can end
-         it through its own lifecycle. When the evidence also says the turn is
-         severed, the recorded process is reaped on its start identity so the
-         row below can retire — without that, a kill on an unclaimed host is
-         refused forever and blocks every message behind it (#1282). */
-      const reaped = await reapSeveredStructuredHost(
-        registry,
-        conversationId as `conversation_${string}`,
-        expectedKey,
-        dependencies.liveness ?? {},
-      );
-      if (reaped) {
-        console.error("[structured delivery] reaped a severed structured host nothing owned", {
-          key: sessionKeyId(expectedKey),
-          reaped: reaped.reaped,
-          reason: reaped.reason,
+      const settleKilledLaunches = async () => {
+        const reason = "structured launch host was intentionally terminated";
+        for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
+          if (receipt.transport !== "structured" || receipt.conversationId !== conversationId
+            || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(expectedKey)
+            || receipt.state === "completed" || receipt.state === "conflicted"
+            || (receipt.state === "failed" && receipt.error !== reason)) continue;
+          // The registry and runtime journal settle separately. A retry must
+          // finish the journal write even if the registry already recorded kill.
+          const failure = registry.failStructuredSpawn(receipt.launchId, reason);
+          if (failure.receipt?.state !== "failed" || failure.receipt.error !== reason) continue;
+          const operation = await client.operationStatus(receipt.launchId);
+          if (operation?.receipt.status === "pending" || operation?.receipt.status === "queued" || operation?.receipt.status === "delivering") {
+            await client.transitionOperation(receipt.launchId, "failed", { reason });
+          }
+        }
+      };
+      const retainedSurvivors = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredTerminationSurvivors ?? [];
+      let terminated = retainedSurvivors.length === 0
+        ? registry.terminateInactiveStructuredHost(conversationId as `conversation_${string}`, expectedKey)
+        : false;
+      if (!terminated) {
+        // An explicit kill does not depend on idle/severed-turn evidence. A
+        // launch host can be alive without a transport owned by this process.
+        // Use the recorded process fence and the existing tree termination
+        // ladder, then let the durable kill boundary cancel its queued prompt.
+        const read = () => structuredHostKillRefFromRegistry(expectedKey, {
+          snapshot: () => registry.readOnlySnapshot(), conversationId: conversationId as ViewerConversationId,
         });
+        const built = read();
+        if (!built.ok || built.ref.conversationId !== conversationId) return false;
+        const ref = built.ref;
+        const authorize = (): { status: 409; error: string } | null => {
+          const current = read();
+          const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
+          if (!current.ok || entry?.host || current.ref.conversationId !== conversationId
+            || current.ref.pid !== ref.pid || current.ref.startIdentity !== ref.startIdentity
+            || current.ref.bootEpoch !== ref.bootEpoch) {
+            return { status: 409, error: "structured kill target changed before termination" };
+          }
+          if (branchSharesRootHost(registry, registry.conversation(conversationId as ViewerConversationId))) {
+            return { status: 409, error: BRANCH_SHARED_HOST_ERROR };
+          }
+          return null;
+        };
+        const refusal = authorize();
+        if (refusal) throw new Error(refusal.error);
+        const outcome = await terminateStructuredHostTree(ref, {
+          retainedSurvivors,
+          authorize,
+          persistCapturedTree: identities => registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities),
+          retireRegistryEntry: (key, expected, confirmed) => registry.terminateStructuredHost(key, expected, confirmed),
+        });
+        if (!outcome.ok) {
+          if (outcome.terminationStarted && outcome.survivors.length > 0) {
+            registry.recordStructuredTerminationSurvivors(expectedKey, ref, outcome.survivors);
+          }
+          throw new Error(outcome.error);
+        }
+        /* terminateStructuredHostTree already retires the exact row after it
+           verifies every captured process identity has exited. */
+        terminated = "current";
       }
-      const terminated = registry.terminateInactiveStructuredHost(
-        conversationId as `conversation_${string}`,
-        expectedKey,
-      );
       if (!terminated) return false;
+      await state.detachRetiredActiveHost?.(expectedKey);
+      await settleKilledLaunches();
       if (terminated === "current") await refreshCurrentProjection(conversationId);
       return true;
     },
@@ -1316,6 +1412,17 @@ export async function bindStructuredDeliveryQueue(
     await detachRegistration(id, registered);
     return true;
   };
+  state.detachRetiredActiveHost = async (key) => {
+    const id = sessionKeyId(key);
+    const entry = registry.readOnlySnapshot().entries[id];
+    if (!entry || entry.status !== "dead" || entry.structuredHost !== null) return false;
+    const registration = registrations.get(id);
+    if (!registration) return false;
+    const taken = takeRegistration(id, registration.host);
+    if (!taken) return false;
+    await detachRegistration(id, taken);
+    return true;
+  };
   state.activeQueue = queue;
   state.activeRegistry = registry;
   setStructuredDeliveryKick(() => {
@@ -1345,6 +1452,7 @@ export async function bindStructuredDeliveryQueue(
       state.republishActiveHost = null;
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
+      state.detachRetiredActiveHost = null;
       state.completeActive = null;
       setStructuredDeliveryKick(null);
     }

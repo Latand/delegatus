@@ -116,6 +116,8 @@ function operatorEnvironment(temporary: string): Record<string, string | undefin
     HOME: OPERATOR_HOME,
     XDG_CONFIG_HOME: path.join(OPERATOR_HOME, ".config"),
     TMPDIR: temporary,
+    // Keep Bun's compiler cache outside the home whose state writes we audit.
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(temporary, "bun-cache"),
     LLV_STATE_DIR: undefined,
     LLV_AGENT_REGISTRY_SQLITE: undefined,
     [STATE_OWNER_ENV]: undefined,

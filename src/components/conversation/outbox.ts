@@ -39,6 +39,11 @@ export interface OutboxEntry {
   /** Idempotency key of this submission — also the bubble's stable identity. */
   id: string;
   text: string;
+  /** An idle parallel ask keeps its original draft until normal admission. */
+  idleParallelDraft?: string;
+  idleParallelTextSettled?: boolean;
+  idleParallelImageIds?: string[];
+  idleParallelChips?: { project: string; snapshot: { id: string; revision: string }[] };
   /** How many images rode with this submission (previews stay local). */
   images: number;
   /** How many non-image attachments rode with it (#1224). Counted apart from
@@ -116,6 +121,11 @@ export interface OutboxEntry {
       retires it; an earlier transcript echo retires it through the ordinary
       occurrence path. */
   launchOwned?: true;
+  /** An injection into the thread's context (#1560), never a send. The composer's
+      queue never dispatches, replays, retries or releases it. */
+  intent?: "context";
+  /** The turn axis when it was submitted, for the row's wording before a receipt. */
+  contextTurn?: "running" | "idle";
   /** The canonical text this bubble's transcript echo will carry (issue #615),
       when it differs from the displayed {@link text}. A role launch DISPLAYS the
       operator's raw draft but the transcript echoes the delivered scaffold-plus-
@@ -475,11 +485,9 @@ export function readOperationShared(
       /* Cancelled by its holders (unmount, hidden tab, inactive composer): not
          a failed read, and due again as soon as someone asks. */
       if (current.cancelled) read.startedAt = Number.NEGATIVE_INFINITY;
-      /* Only an arrival or a discard ends the row. An unknown-fate answer
-         (uncertain, or failed with verify-first) is absorbing on the server
-         until the operator retries or discards, so asking again at the
-         interval learns nothing: it backs off to the ceiling like a failure. */
-      else read.failures = receipt && receiptHasAbsorbingOutcome(receipt) ? 0 : read.failures + 1;
+      // Readable uncertainty can acquire a late canonical echo. Recheck it at
+      // the normal 30-second interval; only failed reads back off to five minutes.
+      else read.failures = receipt ? 0 : read.failures + 1;
       read.inFlight = null;
       return receipt;
     });
@@ -710,6 +718,17 @@ function persistedQueue(cardId: string): readonly OutboxEntry[] {
          survives a refresh exactly as it was (never re-dispatched, never
          re-queued) until its transcript echo or live adoption retires it. */
       if (entry.launchOwned) return counted;
+      /* An injection is never replayed: the engine does not deduplicate, so a
+         second write is a second insertion. A row that never learned what its
+         request became keeps its words and reads unconfirmed; one that did keeps
+         its state and the receipt stream carries on settling it. */
+      if (entry.intent === "context") {
+        const unsettled = entry.state === "queued" || entry.state === "delivering";
+        if (unsettled && !entry.deliveryUncertain && !entry.operationId && !entry.deliveryReceipt) {
+          return { ...counted, state: "delivering" as const, deliveryUncertain: true as const };
+        }
+        return { ...counted, state: unsettled ? ("delivering" as const) : entry.state };
+      }
       /* Receipt metadata cannot reconstruct the original runtime/context or
          attachment bytes. Recovery remains on the server-owned operation. */
       if (entry.originalOperationOnly || entry.deliveryReceipt || entry.acceptedHeld) return { ...counted, originalOperationOnly: true };
@@ -1018,6 +1037,9 @@ function occurrenceTombstone(entry: OutboxEntry): PersistedOccurrenceTombstone |
 export function outboxEntryUnresolved(entry: OutboxEntry): boolean {
   if (entry.launchOwned) return false;
   if (entry.retiredEchoId || entry.adoptedAt !== undefined || entry.responseStartedAt !== undefined) return false;
+  /* An injection cannot be retried or discarded, so an unconfirmed or failed
+     one is terminal: holding a slot for it would only ever block the next send. */
+  if (entry.intent === "context") return (entry.state === "queued" || entry.state === "delivering") && !entry.deliveryUncertain;
   if (entry.state === "queued" || entry.state === "delivering") return true;
   /* A failed row is actionable (retry/cancel or original-operation recovery)
      unless its operation was explicitly discarded: that outcome is absorbing,
@@ -1116,6 +1138,51 @@ export function enqueueOutbox(cardId: string, entry: Omit<OutboxEntry, "state">)
   };
   writeBounded(cardId, [...current, queued]);
   return queued;
+}
+
+/**
+ * The optimistic row of an injection into the thread's context (#1560).
+ *
+ * Written directly in `delivering`, never `queued`: the request leaves this
+ * browser in the same tick, and the serial dispatcher only ever takes `queued`.
+ * `null` when every slot holds an unresolved operation.
+ */
+export function enqueueContextOutbox(
+  cardId: string,
+  entry: Omit<OutboxEntry, "state" | "intent">,
+): OutboxEntry | null {
+  const current = readOutbox(cardId).filter((item) => item.id !== entry.id);
+  if (!outboxCanAdmit(current)) return null;
+  const key = echoKey(entry.echoText ?? entry.text);
+  const baselineIds = entry.echoBaselineIds
+    ?? readEchoLedger(cardId).filter((echo) => echo.key === key).map((echo) => echo.id);
+  const row: OutboxEntry = {
+    ...entry,
+    echoBaseline: entry.echoBaseline ?? baselineIds.length,
+    ...(baselineIds.length ? { echoBaselineIds: baselineIds } : {}),
+    state: "delivering",
+    intent: "context",
+  };
+  writeBounded(cardId, [...current, row]);
+  return row;
+}
+
+/** Remove an injection's row without an occurrence tombstone: the request was
+    refused before anything durable existed, so no row may claim it was sent. */
+export function withdrawContextOutbox(cardId: string, id: string): void {
+  const queue = readOutbox(cardId);
+  const next = queue.filter((entry) => entry.id !== id || entry.intent !== "context");
+  if (next.length !== queue.length) write(cardId, next);
+}
+
+/** Take a PROVEN-failed injection's row away so its words can go back to the
+    draft. Sending them again mints a new key, which is a fresh injection. */
+export function editContextOutbox(cardId: string, id: string): OutboxEntry | null {
+  const queue = readOutbox(cardId);
+  const entry = queue.find((item) => item.id === id);
+  if (!entry || entry.intent !== "context" || entry.state !== "failed" || entry.deliveryUncertain) return null;
+  write(cardId, queue.filter((item) => item.id !== id));
+  return entry;
 }
 
 /**
@@ -1453,7 +1520,7 @@ export function releaseHeldOutbox(cardId: string, except?: ReadonlySet<string>):
   const queue = readOutbox(cardId);
   const released: string[] = [];
   const next = queue.map((entry) => {
-    if (entry.deliveryUncertain || !entry.heldForSwitch || entry.state !== "delivering") return entry;
+    if (entry.intent === "context" || entry.deliveryUncertain || !entry.heldForSwitch || entry.state !== "delivering") return entry;
     if (entry.retiredEchoId || entry.responseStartedAt !== undefined) return entry;
     if (except?.has(entry.id)) return entry;
     released.push(entry.id);
@@ -1513,7 +1580,7 @@ export function clearParkedOutbox(cardId: string, id: string): OutboxEntry | nul
 export function retryOutbox(cardId: string, id: string): void {
   const queue = readOutbox(cardId);
   const entry = queue.find((item) => item.id === id);
-  if (!entry || entry.deliveryUncertain || entry.deliveryReceipt?.reason === "delivery-discarded" || entry.state !== "failed" || entry.needsReattach || entry.originalOperationOnly) return;
+  if (!entry || entry.intent === "context" || entry.deliveryUncertain || entry.deliveryReceipt?.reason === "delivery-discarded" || entry.state !== "failed" || entry.needsReattach || entry.originalOperationOnly) return;
   write(cardId, queue.map((item) => (item.id === id ? { ...item, state: "queued", error: undefined } : item)));
 }
 
@@ -2120,7 +2187,7 @@ export function outboxHistory(queue: readonly OutboxEntry[]): string[] {
     settle it, and the entry would hold the wire for the rest of the
     conversation's life (#1538 left this unbounded). */
 function holdsLocalWireFence(entry: OutboxEntry): boolean {
-  return entry.state === "delivering" && !entry.launchOwned && !entry.deliveryUncertain;
+  return entry.state === "delivering" && !entry.launchOwned && entry.intent !== "context" && !entry.deliveryUncertain;
 }
 
 /** The next entry the serial dispatcher may send: nothing while one of the
@@ -2129,7 +2196,7 @@ function holdsLocalWireFence(entry: OutboxEntry): boolean {
     composer, so it neither dispatches nor blocks the drain (round-1 P1#2/#4). */
 export function nextDispatch(queue: readonly OutboxEntry[]): OutboxEntry | null {
   if (queue.some(holdsLocalWireFence)) return null;
-  return queue.find((entry) => entry.state === "queued" && !entry.originalOperationOnly && !entry.preparing) ?? null;
+  return queue.find((entry) => entry.state === "queued" && entry.intent !== "context" && !entry.originalOperationOnly && !entry.preparing) ?? null;
 }
 
 /** Atomically claim one queued entry before any asynchronous wire work starts. */
@@ -2137,7 +2204,7 @@ export function claimOutboxDispatch(cardId: string, id: string): OutboxEntry | n
   const queue = readOutbox(cardId);
   if (queue.some(holdsLocalWireFence)) return null;
   const entry = queue.find((candidate) => candidate.id === id);
-  if (!entry || entry.state !== "queued" || entry.originalOperationOnly || entry.preparing) return null;
+  if (!entry || entry.state !== "queued" || entry.intent === "context" || entry.originalOperationOnly || entry.preparing) return null;
   /* The wire fence belongs to one attempt. A replay starts unfenced so that a
      refresh between this claim and the request still replays it. */
   const claimed: OutboxEntry = { ...entry, state: "delivering" };

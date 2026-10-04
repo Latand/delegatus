@@ -1,0 +1,23 @@
+{
+  "request": {
+    "model": "tts-rt-v2",
+    "voice": "Adrian",
+    "language": "en",
+    "audio_format": "pcm_s16le",
+    "sample_rate": 24000,
+    "speed": 0.7,
+    "text": "Read slowly. Twenty three. 12345. This is the final sentence."
+  },
+  "status": 200,
+  "contentType": "audio/pcm",
+  "bytes": 577536,
+  "reads": 64,
+  "firstBytesMs": 646.429585,
+  "completionMs": 10066.768639,
+  "durationSeconds": 12.032,
+  "complete": true,
+  "error": null,
+  "previousDenseNumericProbe": "60 second timeout; incomplete result discarded",
+  "scope": "direct real provider slow/numeric PCM probe; physical output and transcription unmeasured",
+  "docs": "https://soniox.com/docs/api-reference/tts/generate_tts"
+}

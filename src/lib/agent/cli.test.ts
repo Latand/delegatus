@@ -2,24 +2,29 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 
 import { resolveAttachCommand } from "./attachCommand";
+import { viewerMcpServerEnv } from "./spawnPolicy";
 import type { FileEntry } from "@/lib/types";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-account-test-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
 const OLD_HOME = process.env.LLV_CODEX_HOME;
 const OLD_CLAUDE_HOME = process.env.LLV_CLAUDE_HOME;
+const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
-const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, withSpawnCapability } = await import("./cli");
+const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, withSpawnCapability, prepareAgentPublicationSpec } = await import("./cli");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
 
 afterAll(() => {
+  restorePolicyReader();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CODEX_HOME;
@@ -45,6 +50,32 @@ test("fresh Codex commands fix CODEX_HOME in the typed shell command", () => {
   expect(spec.command).toContain("codex");
   expect(spec.command).toContain("'--disable' 'multi_agent'");
   expect(spec.launchProfile?.allowSubagents).toBe(false);
+});
+
+test("plain Codex launch flags preserve restrictive shell policy and pin the Git identity", async () => {
+  let probes = 0;
+  const restore = setCodexShellPolicyReaderForTest(() => {
+    probes += 1;
+    return { include_only: ["PATH", "HOME"], set: { GIT_AUTHOR_EMAIL: "unsafe" } };
+  });
+  const binary = path.join(SANDBOX, "publication-codex-list");
+  fs.writeFileSync(binary, '#!/bin/sh\nprintf "[]"\n', { mode: 0o700 });
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  try {
+    const unprepared = freshSpecFor("codex", SANDBOX, { codexHome: path.join(SANDBOX, "legacy") });
+    expect(probes).toBe(0);
+    const spec = await prepareAgentPublicationSpec(unprepared);
+    expect(probes).toBe(1);
+    for (const [key, value] of Object.entries(controllerCommitIdentityEnv())) {
+      expect(spec.command).toContain(`shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
+    }
+    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", ...Object.keys(controllerCommitIdentityEnv())])}`);
+  } finally {
+    restore();
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousBinary;
+  }
 });
 
 test("Telegram grants load the connector token only into granted CLI processes", () => {
@@ -370,7 +401,7 @@ test("fresh tmux Claude uses its exclusive native MCP file", () => {
      server the allowlist names but the bound excludes is not copied (#739). */
   expect(spec.command).toContain(`'--strict-mcp-config' '--mcp-config' '${mcpConfigPath}'`);
   expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({ mcpServers: {
-    viewer: { type: "stdio", command: "viewer-mcp" },
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
   } });
   expect(spec.launchProfile?.mcpServers).toEqual(["viewer"]);
 });
@@ -398,7 +429,7 @@ test("a resume rebuilds its command from the re-bounded grant, not the stored li
 
   expect(resumed?.launchProfile?.mcpServers).toEqual(["viewer"]);
   expect(JSON.parse(fs.readFileSync(mcpConfigPath, "utf8"))).toEqual({ mcpServers: {
-    viewer: { type: "stdio", command: "viewer-mcp" },
+    viewer: { type: "stdio", command: "viewer-mcp", env: viewerMcpServerEnv() },
   } });
 });
 
@@ -424,10 +455,26 @@ test("Viewer spawn capability is scoped into the launched agent command", () => 
   expect(spec.launchProfile?.cwd).toBe(SANDBOX);
 });
 
+test.each([false, true])("plain spawned commands inherit the public-safe Git identity (configured: %s)", (configured) => {
+  const email = [configured ? "no-reply" : "noreply", configured ? "build.example.invalid" : "delegatus.invalid"].join("@");
+  const name = configured ? "Build Agent's Tools" : "Delegatus";
+  const spec = withSpawnCapability({
+    engine: "claude", cwd: SANDBOX, windowName: "fixture",
+    command: "printf '%s\\n' \"$GIT_AUTHOR_NAME\" \"$GIT_AUTHOR_EMAIL\" \"$GIT_COMMITTER_NAME\" \"$GIT_COMMITTER_EMAIL\"",
+  }, "A".repeat(43), { NODE_ENV: "test", ...(configured ? { DELEGATUS_PUBLICATION_NAME: name, DELEGATUS_PUBLICATION_EMAIL: email } : {}) });
+  const result = Bun.spawnSync(["sh", "-c", spec.command], {
+    env: { PATH: process.env.PATH, GIT_AUTHOR_NAME: "Inherited", GIT_AUTHOR_EMAIL: ["personal", "example.invalid"].join("@") },
+    stdout: "pipe", stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString().trim()).toBe([name, email, name, email].join("\n"));
+});
+
 test("Claude commands do not gain Codex environment assignments", () => {
   const spec = freshSpecFor("claude", "/repo", { codexHome: path.join(SANDBOX, "unused") });
 
   expect(spec.command).not.toContain("CODEX_HOME=");
+  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: controllerCommitIdentityEnv() })}'`);
 });
 
 test("fresh read-only Claude commands accept a non-interactive permission mode", () => {

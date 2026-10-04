@@ -57,9 +57,13 @@ export type MessageRowPhase = "pending" | "confirmed" | "failed";
  *                        attachment bytes were memory-only, or nothing was ever
  *                        admitted), so the words go back to the composer;
  * - `check`            — nothing can be replayed and only the server can say
- *                        what happened; re-read under the original identity.
+ *                        what happened; re-read under the original identity;
+ * - `edit`             — an injection into the thread's context that provably
+ *                        did not happen: it has no replay (the engine does not
+ *                        deduplicate), so the words go back to the draft and a
+ *                        new injection mints a new key.
  */
-export type MessageRowAction = "retry" | "retry-operation" | "return" | "check";
+export type MessageRowAction = "retry" | "retry-operation" | "return" | "check" | "edit";
 
 /** Receipt reasons that mean "the queue is retrying this by itself" — the
     delivery is still moving, and the row's disclosure says so in words rather
@@ -128,6 +132,8 @@ const FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/\bsign[- ]?in\b|\bsign in again\b|\bunauthorized\b|\b401\b|\blog ?out and\b|\brefresh token\b|\bcredentials?\b|\bexpired token\b/i, "outbox.failure.signInExpired"],
   [/\bnot resumable\b|\bnothing (left )?to resume\b|\bno session\b|\broot conversation\b/i, "outbox.failure.notResumable"],
   [/\bruntime host is unavailable\b|\bno host\b|\bdead host\b/i, "outbox.failure.hostGone"],
+  [/\bblocking attention\b/i, "receipt.human.injectAttention"],
+  [/\bunsupported[- ]injection\b|\bdoes not support history injection\b/i, "receipt.human.injectUnsupported"],
 ];
 
 /**
@@ -182,7 +188,7 @@ export function transportLine(
      the transport genuinely does not know, and the disclosure says exactly
      that. The row above it still reads "waiting for confirmation": unknown is
      not delivered and it is not lost. */
-  if (entry.deliveryUncertain) return { label: t("orchPanel.errorUnknownTitle"), wait: "uncertain" };
+  if (entry.deliveryUncertain) return { label: t("composer.deliveryChecking"), wait: "uncertain" };
   /* The queue is re-attempting this delivery on its own because the agent was
      busy. That used to be a separate optimistic row beside the composer; it is
      evidence about THIS message, so it reads on this message's disclosure in
@@ -260,6 +266,58 @@ function operationRetryable(entry: OutboxEntry): boolean {
     && entry.deliveryReceipt?.status !== "rejected";
 }
 
+/**
+ * An injection's row (#1560). Same three phases, with three differences that
+ * follow from the engine not deduplicating: a failure offers Edit and never a
+ * replay, nothing can be discarded or cancelled, and the words say what
+ * context means (joins the running turn at its next step, or waits for the
+ * next request).
+ */
+function contextRowModel(t: TFunction, entry: OutboxEntry): MessageRowModel {
+  const receiptState = entry.deliveryReceipt ? outboxStateForReceiptStatus(entry.deliveryReceipt.status) : null;
+  const receiptUnknown = entry.deliveryReceipt ? receiptHasUnknownFate(entry.deliveryReceipt) : false;
+  const unverifiedLocalFailure = entry.state === "failed" && Boolean(messageRowOperationId(entry))
+    && (!receiptState || receiptState === "delivering" || receiptUnknown);
+  const uncertain = Boolean(entry.deliveryUncertain) || receiptUnknown || unverifiedLocalFailure;
+  const phase: MessageRowPhase = entry.state === "delivered" || receiptState === "delivered"
+    ? "confirmed"
+    : uncertain
+      ? "pending"
+      : entry.state === "failed"
+        ? "failed"
+        : "pending";
+  const transport = phase === "confirmed"
+    ? t("outbox.context.inContext")
+    : uncertain
+      ? t("outbox.context.unconfirmed")
+      : phase === "failed"
+        ? entry.error ?? t("outbox.failed")
+        : !messageRowOperationId(entry)
+          ? t("inject.submitting")
+          : t(entry.contextTurn === "running" ? "outbox.context.waitingStep" : "outbox.context.stored");
+  const raw = phase === "failed" ? entry.deliveryReceipt?.reason ?? entry.error ?? null : null;
+  const reasonKey = failureReasonKey(raw);
+  const failure = phase === "failed"
+    ? {
+      reason: reasonKey ? t(reasonKey) : t("outbox.failure.generic"),
+      detail: raw && (!reasonKey || t(reasonKey) !== raw.trim()) ? raw.trim() : null,
+      action: "edit" as MessageRowAction,
+    }
+    : null;
+  const pendingUncertain = phase === "pending" && uncertain;
+  return {
+    phase,
+    status: failure ? failure.reason : transport,
+    transport,
+    wait: pendingUncertain ? "uncertain" : null,
+    failure,
+    uncertain: pendingUncertain,
+    discardable: false,
+    recovery: pendingUncertain ? "check" : null,
+    cancellable: false,
+  };
+}
+
 /** The whole rendering of one message row, in the operator's own language. */
 export function messageRowModel(
   t: TFunction,
@@ -267,6 +325,7 @@ export function messageRowModel(
   options: { switchHold?: MessageRowSwitchHold | null; nowMs?: number; session?: MessageRowSession | null } = {},
 ): MessageRowModel {
   const { switchHold = null, nowMs = 0, session = null } = options;
+  if (entry.intent === "context") return contextRowModel(t, entry);
   const transport = transportLine(t, entry, switchHold, nowMs, session);
   /* An unconfirmed outcome is NOT a failure: the message may well have
      arrived, and the one thing the row must never do is tell the operator it

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -219,6 +219,23 @@ test("an exhausted account carries its reset and the account to open", async () 
   expect(run.rows[0]!.failure).toMatchObject({ accountId: "acct-a", params: { engine: "Claude", time: new Date(1_900_000_000_000).toISOString() } });
 });
 
+test("Stop during asynchronous repository preparation prevents the first agent launch", async () => {
+  const ports = fakePorts({}); let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let spawned = 0;
+  const cleaned: { repoDir: string | null } = { repoDir: null };
+  ports.prepareRepo = async () => { entered(); await held; return { repoDir: "/scratch", baseRef: "abc" }; };
+  ports.spawnSeat = async () => { spawned++; return { error: "a stopped check must not launch", code: null, reason: null }; };
+  ports.cleanup = async (input) => { cleaned.repoDir = input.repoDir; return []; };
+  const run = startHealthCheck(ports)!;
+  try {
+    await checking; stopHealthCheck(run.id); release(); await settleHealthCheckForTests();
+    expect(spawned).toBe(0); expect(cleaned.repoDir).toBe("/scratch");
+    expect(currentHealthRun(run.id)?.state).toBe("stopped");
+  } finally { release(); await settleHealthCheckForTests(); }
+});
+
 test("one run at a time: a second start answers the running one, and Stop still cleans up", async () => {
   const log: string[] = [];
   const ports = fakePorts({ pipeline: () => pipelineWith("running", "running") }, log);
@@ -229,7 +246,7 @@ test("one run at a time: a second start answers the running one, and Stop still 
   const run = currentHealthRun(first.id)!;
   expect(run.state).toBe("stopped");
   expect(run.rows.every((row) => row.state !== "running")).toBe(true);
-  expect(log).toEqual([`cleanup health01 ${SEAT}`, "result stopped"]);
+  expect(log).toEqual(["cleanup - -", "result stopped"]);
 });
 
 test("a run that outlives its 5-minute bound fails the row it was on", async () => {
@@ -308,10 +325,34 @@ function cleanupPorts(over: Partial<Parameters<typeof cleanupHealthRun>[1]> = {}
   };
 }
 
+test("health-check scratch commit uses the controller identity despite inherited personal identities", () => {
+  const repo = path.join(sandbox, "identity-repo");
+  const email = ["configured", "example.invalid"].join("@");
+  const home = fs.mkdtempSync(path.join(sandbox, "identity-home-"));
+  const globalConfig = path.join(home, ".gitconfig");
+  fs.writeFileSync(globalConfig, `[user]\n\tname = Configured Test\n\temail = ${email}\n`);
+  const env = {
+    ...process.env,
+    HOME: home, XDG_CONFIG_HOME: path.join(home, "config"),
+    GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0",
+    GIT_AUTHOR_NAME: "Environment Author", GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: "Environment Committer", GIT_COMMITTER_EMAIL: email,
+    HEALTH_IDENTITY_REPO: repo,
+  };
+  const prepare = spawnSync(process.execPath, ["-e",
+    `import { prepareHealthRepo } from ${JSON.stringify(path.resolve("src/lib/onboarding/healthCheck.ts"))}; await prepareHealthRepo(process.env.HEALTH_IDENTITY_REPO);`,
+  ], { env, encoding: "utf8" });
+  expect(prepare.status).toBe(0);
+  const identity = spawnSync("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], { cwd: repo, encoding: "utf8" });
+  const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
+  expect(identity.stdout.trim()).toBe(["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"));
+  expect(fs.readFileSync(globalConfig, "utf8")).toContain(email);
+});
+
 test("cleanup removes the stage worktree and its branch from the scratch repository", async () => {
   const repo = path.join(sandbox, "viewer-health-check");
-  const { baseRef } = prepareHealthRepo(repo);
-  expect(prepareHealthRepo(repo).baseRef).toBe(baseRef);
+  const { baseRef } = await prepareHealthRepo(repo);
+  expect((await prepareHealthRepo(repo)).baseRef).toBe(baseRef);
   const worktree = path.join(sandbox, "viewer-health-check-pipeline-health01");
   execFileSync("git", ["worktree", "add", "-b", "pipeline/health01", worktree], { cwd: repo, stdio: "ignore" });
   const { calls, ports } = cleanupPorts({

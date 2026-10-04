@@ -4,20 +4,27 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadTasksForList } from "@/lib/tasks/store";
-import { findPipelineRecord } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForList } from "@/lib/pipelines/store";
+import type { Pipeline } from "@/lib/pipelines/types";
 import type { Engine, FileEntry } from "@/lib/types";
-import { linkedContext } from "./linked";
+import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } from "./laneFeed";
+import { linkedContext, runsHere } from "./linked";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
-type Change = AgentRow | { k: string; gone: true };
-type Versioned = { row: AgentRow; version: number };
+type Change = AgentRow | LaneRow | { k: string; gone: true };
+type Versioned = { row: AgentRow | LaneRow; version: number };
 type Marker = { k: string; version: number; at: number };
 export type Cursor = { epoch: string; version: number };
 type Part = { after: Cursor | null; rows?: Change[]; reset?: true; more?: true; cursor: Cursor };
 const PROJECT = /^repo-[0-9a-f]{32}$/;
 const AGENT_ENGINES: ReadonlySet<Engine> = new Set(["claude", "codex", "copilot", "openclaw"]);
 const feeds = sharedLinkState("agentFeed.feeds", () => new Map<string, AgentFeed>());
-const received = sharedLinkState("agentFeed.received", () => new Map<string, { rows: Map<string, AgentRow>; at: number; reset?: { cursor: Cursor; rows: Map<string, AgentRow> } }>());
+type Received = { rows: Map<string, AgentRow>; lanes: Map<string, LaneRow>; at: number; reset?: { cursor: Cursor; rows: Map<string, AgentRow>; lanes: Map<string, LaneRow> } };
+const received = sharedLinkState("agentFeed.received", () => new Map<string, Received>());
+/** A page stops at 50 entries, which every receiver enforces, and before an
+    entry that would take the part past this many encoded bytes. */
+const PAGE_ENTRIES = 50;
+const PAGE_BYTES = 80_000;
 
 function safeId(value: unknown): string | null { return typeof value === "string" && /^[a-zA-Z0-9._-]{1,64}$/.test(value) ? value : null; }
 function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>): AgentRow | null {
@@ -64,22 +71,35 @@ export class AgentFeed {
   private markers: Marker[] = [];
   private version = 0;
   private scanned: readonly FileEntry[] | null = null;
+  private seenTasks: readonly unknown[] | null = null;
+  private seenPipelines: readonly Pipeline[] | null = null;
+  private owned = false;
   private projectsKey = "";
-  private resetSnapshot: { key: string; rows: AgentRow[]; cursor: Cursor } | null = null;
+  private resetSnapshot: { key: string; rows: Array<AgentRow | LaneRow>; cursor: Cursor } | null = null;
   private floor = 0;
   private expiresAt = Infinity;
   constructor(readonly id: string, private readonly source: () => readonly FileEntry[] | null = lastScannedFiles,
-    private readonly tasks: () => ReturnType<typeof loadTasksForList> = loadTasksForList) {}
+    private readonly tasks: () => ReturnType<typeof loadTasksForList> = loadTasksForList,
+    private readonly pipelines: () => readonly Pipeline[] = loadPipelinesForList,
+    /** Which tasks this machine runs, fixed for one refresh: one context read, not one per task. */
+    private readonly ownership: () => Parameters<typeof laneRowsFor>[3] = () => { const context = linkedContext(); return (task) => runsHere(task, context); }) {}
 
   refresh(projects: ReadonlySet<string>): void {
     const files = this.source();
+    const tasks = this.tasks();
     const projectsKey = [...projects].sort().join("|");
-    if (files === this.scanned && projectsKey === this.projectsKey && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
+    /* The pipeline registry is read only while a task that runs here could
+       have a lane to publish: its array is cached until the registry moves. */
+    const owns = this.ownership();
+    if (tasks !== this.seenTasks || projectsKey !== this.projectsKey) this.owned = projects.size > 0 && tasks.some((task) => projects.has(task.project) && owns(task));
+    const pipelines = this.owned ? this.pipelines() : null;
+    if (files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
     if (projectsKey !== this.projectsKey) this.resetSnapshot = null;
     this.scanned = files;
+    this.seenTasks = tasks;
+    this.seenPipelines = pipelines;
     this.projectsKey = projectsKey;
     this.expiresAt = Infinity;
-    const tasks = files ? this.tasks() : [];
     const next = new Map<string, AgentRow>();
     for (const file of files ?? []) {
       const row = rowFor(file, tasks, projects);
@@ -90,7 +110,7 @@ export class AgentFeed {
     }
     const selected = [...next.values()].sort((a, b) => b.at - a.at || a.k.localeCompare(b.k));
     const perProject = new Map<string, number>();
-    const wanted = new Map<string, AgentRow>();
+    const wanted = new Map<string, AgentRow | LaneRow>();
     for (const row of selected) {
       if (wanted.size === 200) break;
       const count = perProject.get(row.p) ?? 0;
@@ -98,7 +118,8 @@ export class AgentFeed {
       perProject.set(row.p, count + 1);
       wanted.set(row.k, row);
     }
-    for (const [key, held] of this.rows) if (!wanted.has(key)) {
+    if (pipelines) for (const lane of laneRowsFor(() => pipelines, tasks, projects, owns)) wanted.set(lane.k, lane);
+    for (const [key] of this.rows) if (!wanted.has(key)) {
       this.rows.delete(key);
       this.markers.push({ k: key, version: ++this.version, at: Date.now() });
     }
@@ -117,6 +138,19 @@ export class AgentFeed {
 
   sizes() { return { rows: this.rows.size, markers: this.markers.length }; }
 
+  /** The longest run of entries from `start` that keeps to one page: at most
+      50 entries and, past the first, at most 80 KB encoded. */
+  private static cut<T>(items: readonly T[], start: number): T[] {
+    const taken: T[] = [];
+    let size = 0;
+    for (const item of items.slice(start, start + PAGE_ENTRIES)) {
+      size += Buffer.byteLength(JSON.stringify(item)) + 1;
+      if (taken.length && size > PAGE_BYTES) break;
+      taken.push(item);
+    }
+    return taken;
+  }
+
   page(after: Cursor | null, projects: ReadonlySet<string>, offset = 0): Part {
     this.refresh(projects);
     const reset = !after || after.epoch !== this.epoch || after.version < this.floor || after.version > this.version;
@@ -124,11 +158,11 @@ export class AgentFeed {
       const key = after ? `${after.epoch}:${after.version}` : "initial";
       const changedSnapshot = !this.resetSnapshot || this.resetSnapshot.key !== key;
       if (changedSnapshot) this.resetSnapshot = {
-        key, rows: [...this.rows.values()].sort((a, b) => b.row.at - a.row.at).map((item) => item.row), cursor: { epoch: this.epoch, version: this.version },
+        key, rows: [...this.rows.values()].sort((a, b) => Number(isLaneKey(a.row.k)) - Number(isLaneKey(b.row.k)) || b.row.at - a.row.at).map((item) => item.row), cursor: { epoch: this.epoch, version: this.version },
       };
       const snapshot = this.resetSnapshot!;
       const start = changedSnapshot ? 0 : offset;
-      const rows = snapshot.rows.slice(start, start + 50);
+      const rows = AgentFeed.cut(snapshot.rows, start);
       const more = start + rows.length < snapshot.rows.length;
       if (!more) this.resetSnapshot = null;
       return { after, rows, ...(start === 0 ? { reset: true as const } : {}), ...(more ? { more: true as const } : {}), cursor: snapshot.cursor };
@@ -137,7 +171,7 @@ export class AgentFeed {
     const changes = [...this.rows.values()].filter((item) => item.version > after.version).map((item) => ({ version: item.version, row: item.row as Change }))
       .concat(this.markers.filter((item) => item.version > after.version).map((item) => ({ version: item.version, row: { k: item.k, gone: true } as Change })))
       .sort((a, b) => a.version - b.version);
-    const page = changes.slice(0, 50);
+    const page = AgentFeed.cut(changes, 0);
     return { after, ...(page.length ? { rows: page.map((item) => item.row) } : {}), ...(changes.length > page.length ? { more: true as const } : {}),
       cursor: { epoch: this.epoch, version: page.at(-1)?.version ?? this.version } };
   }
@@ -165,6 +199,7 @@ export function agentPart(id: string, after: Cursor | null, projects: ReadonlySe
 }
 export function dropAgents(id: string): void { feeds.delete(id); received.delete(id); cursors.delete(id); }
 export function receivedAgentRows(id: string): readonly AgentRow[] { return [...(received.get(id)?.rows.values() ?? [])]; }
+export function receivedLaneRows(id: string): readonly LaneRow[] { return [...(received.get(id)?.lanes.values() ?? [])]; }
 export function touchAgents(id: string): void { const state = received.get(id); if (state) state.at = Date.now(); }
 export function remoteAgents(project: string, taskId?: string): Array<AgentRow & { peer: string; stale: boolean; asOf: number }> {
   const context = linkedContext();
@@ -175,18 +210,38 @@ export function remoteAgents(project: string, taskId?: string): Array<AgentRow &
       .map((row) => ({ ...row, peer: link.label, stale: Date.now() - state.at > 900_000, asOf: state.at }));
   });
 }
+/** The lanes of one project that linked peers published, each with the peer
+    that sent it (docs/design/synced-task-card.md §4). A lane only ever draws on
+    a task its sender owns; the caller checks that against the task's machine. */
+export function remoteLanes(project?: string): Array<LaneRow & { peer: string; install: string; stale: boolean; asOf: number }> {
+  const context = linkedContext();
+  return context.links.flatMap((link) => {
+    const state = received.get(link.key);
+    if (!state) return [];
+    return [...state.lanes.values()].filter((row) => link.projects.has(row.p) && (project === undefined || row.p === project))
+      .map((row) => ({ ...row, peer: link.label, install: link.install, stale: Date.now() - state.at > 900_000, asOf: state.at }));
+  });
+}
+
 export function acceptAgents(id: string, part: unknown, projects: ReadonlySet<string>): boolean {
   if (!part || typeof part !== "object" || Array.isArray(part)) return false;
   const wire = part as Partial<Part>;
   const cursor = decodeCursor(wire.cursor);
-  if (!cursor || !Array.isArray(wire.rows) && wire.rows !== undefined || (wire.rows?.length ?? 0) > 50) return false;
-  const held = received.get(id) ?? { rows: new Map<string, AgentRow>(), at: 0 };
+  if (!cursor || !Array.isArray(wire.rows) && wire.rows !== undefined || (wire.rows?.length ?? 0) > PAGE_ENTRIES) return false;
+  const held = received.get(id) ?? { rows: new Map<string, AgentRow>(), lanes: new Map<string, LaneRow>(), at: 0 };
   if (!wire.reset && held.reset && (held.reset.cursor.epoch !== cursor.epoch || held.reset.cursor.version !== cursor.version)) return false;
-  if (wire.reset) held.reset = { cursor, rows: new Map() };
+  if (wire.reset) held.reset = { cursor, rows: new Map(), lanes: new Map() };
   const target = held.reset?.rows ?? held.rows;
+  const lanes = held.reset?.lanes ?? held.lanes;
   for (const value of wire.rows ?? []) {
-    if (value && typeof value === "object" && "gone" in value && (value as { gone?: unknown }).gone === true && /^a:[0-9a-f]{16}$/.test((value as { k?: string }).k ?? "")) target.delete((value as { k: string }).k);
-    else {
+    const gone = value && typeof value === "object" && "gone" in value && (value as { gone?: unknown }).gone === true;
+    const key = (value as { k?: string } | null)?.k ?? "";
+    if (gone && /^a:[0-9a-f]{16}$/.test(key)) target.delete(key);
+    else if (gone && isLaneKey(key)) lanes.delete(key);
+    else if (isLaneKey(key)) {
+      const lane = decodeLaneRow(value, projects);
+      if (lane) lanes.set(lane.k, lane);
+    } else {
       const row = decodeAgentRow(value, projects);
       if (row) target.set(row.k, row);
     }
@@ -202,8 +257,14 @@ export function acceptAgents(id: string, part: unknown, projects: ReadonlySet<st
     target.clear();
     for (const row of kept) target.set(row.k, row);
   }
-  if (!wire.more && held.reset) { held.rows = held.reset.rows; delete held.reset; }
+  if (lanes.size > MAX_LANE_ROWS) {
+    const kept = [...lanes.values()].sort((a, b) => b.at - a.at || a.k.localeCompare(b.k)).slice(0, MAX_LANE_ROWS);
+    lanes.clear();
+    for (const row of kept) lanes.set(row.k, row);
+  }
+  if (!wire.more && held.reset) { held.rows = held.reset.rows; held.lanes = held.reset.lanes; delete held.reset; }
   for (const [key, row] of held.rows) if (!projects.has(row.p)) held.rows.delete(key);
+  for (const [key, row] of held.lanes) if (!projects.has(row.p)) held.lanes.delete(key);
   held.at = Date.now();
   received.set(id, held);
   return true;

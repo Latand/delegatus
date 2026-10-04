@@ -180,7 +180,7 @@ describe("/api/tts — soniox (#1020)", () => {
     });
   });
 
-  test("reports an upstream refusal as a 502 without leaking the key", async () => {
+  test("preserves a permanent upstream refusal without leaking the key", async () => {
     process.env.LLV_TTS_BACKEND = "soniox";
     process.env.XDG_CONFIG_HOME = "/nonexistent/tts-route-soniox";
     setEnv("SONIOX_API_KEY", SONIOX_KEY);
@@ -191,7 +191,7 @@ describe("/api/tts — soniox (#1020)", () => {
 
     const response = await POST(request(JSON.stringify({ text: "Hello" })));
     const raw = await response.text();
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(401);
     expect(JSON.parse(raw)).toEqual({ error: "soniox TTS failed (HTTP 401)" });
     expect(raw).not.toContain(SONIOX_KEY);
   });
@@ -285,4 +285,71 @@ describe("/api/tts — elevenlabs character alignment (#1022)", () => {
     }
     setEnv("ELEVENLABS_API_KEY", undefined);
   });
+});
+
+describe("Soniox fast route", () => {
+  test("streams PCM before EOF with authoritative geometry and language", async () => {
+    process.env.LLV_TTS_BACKEND = "soniox"; setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    let finish!: () => void;
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = mock(async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 0])); finish = () => c.close(); } }), { headers: { "content-type": "audio/pcm" } });
+    }) as unknown as typeof fetch;
+    const response = await POST(request(JSON.stringify({ text: "First sentence.", mode: "soniox-pcm" })));
+    expect(sent).toMatchObject({ audio_format: "pcm_s16le", sample_rate: 24000, language: "en" });
+    expect(response.headers.get("x-tts-encoding")).toBe("pcm_s16le");
+    expect(response.headers.get("x-tts-channels")).toBe("1");
+    expect(response.headers.get("x-tts-language")).toBe("en");
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1, 0]));
+    finish(); expect((await reader.read()).done).toBe(true);
+  });
+  test("rejects byte overflow and stale mode before a paid call", async () => {
+    process.env.LLV_TTS_BACKEND = "soniox"; setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    const fetchMock = mock(async () => new Response()); globalThis.fetch = fetchMock as unknown as typeof fetch;
+    expect((await POST(request(JSON.stringify({ text: "я".repeat(2501), mode: "soniox-pcm" })))).status).toBe(413);
+    process.env.LLV_TTS_BACKEND = "openai"; setEnv("OPENAI_API_KEY", "test-key");
+    expect((await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })))).status).toBe(409);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  test("preserves sanitized 429 retry delay and rejects a wrong PCM content type", async () => {
+    process.env.LLV_TTS_BACKEND = "soniox"; setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    globalThis.fetch = mock(async () => new Response("private upstream details", { status: 429, headers: { "retry-after": "2", "x-private": "private" } })) as unknown as typeof fetch;
+    const busy = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })));
+    expect(busy.status).toBe(429); expect(busy.headers.get("retry-after")).toBe("2");
+    expect(busy.headers.get("x-private")).toBeNull(); expect(await busy.text()).not.toContain("private");
+    globalThis.fetch = mock(async () => new Response(new Uint8Array([1, 0]), { headers: { "content-type": "audio/mpeg" } })) as unknown as typeof fetch;
+    expect((await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })))).status).toBe(502);
+  });
+  test("mid-body abort cancels the reader and releases admission once", async () => {
+    process.env.LLV_TTS_BACKEND = "soniox"; setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    const canceled = mock(() => undefined);
+    globalThis.fetch = mock(async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 0])); }, cancel: canceled }), { headers: { "content-type": "audio/pcm" } })) as unknown as typeof fetch;
+    const abort = new AbortController();
+    const response = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" }), abort.signal));
+    const reader = response.body!.getReader(); await reader.read(); abort.abort();
+    expect((await reader.read()).done).toBe(true); expect(canceled).toHaveBeenCalledTimes(1);
+    const replies = await Promise.all(Array.from({ length: 3 }, () => POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })))));
+    expect(replies.map((r) => r.status)).toEqual([200, 200, 200]);
+    await Promise.all(replies.map((r) => r.body!.cancel()));
+  });
+});
+
+test("Soniox rolling admission rejects the 101st start and reopens after one minute", async () => {
+  process.env.LLV_TTS_BACKEND = "soniox"; setEnv("SONIOX_API_KEY", SONIOX_KEY);
+  const originalNow = Date.now; let now = originalNow() + 60_001; Date.now = () => now;
+  let calls = 0;
+  globalThis.fetch = mock(async () => { calls++; return new Response(new Uint8Array([1, 0]), { headers: { "content-type": "audio/pcm" } }); }) as unknown as typeof fetch;
+  try {
+    for (let i = 0; i < 100; i++) {
+      const response = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })));
+      expect(response.status).toBe(200); await response.arrayBuffer();
+    }
+    const busy = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })));
+    expect(busy.status).toBe(429); expect(busy.headers.get("retry-after")).toBe("60"); expect(calls).toBe(100);
+    now += 60_001;
+    const next = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })));
+    expect(next.status).toBe(200); await next.arrayBuffer(); expect(calls).toBe(101);
+  } finally { Date.now = originalNow; }
 });

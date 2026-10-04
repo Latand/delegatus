@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
-import { translate, type Locale } from "@/lib/i18n";
+import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
 

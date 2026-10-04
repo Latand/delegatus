@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Flag } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -8,11 +8,12 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { GroupResurfaceReason } from "@/lib/tasks/groupHide";
-import type { TaskColor, TaskStatus } from "@/lib/tasks/types";
+import type { TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import { EngineMark } from "@/components/EngineMark";
 import { cleanTitle, fmtAge } from "@/components/utils";
+import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { laneMergeUnsettled, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
@@ -21,9 +22,15 @@ import type { NeedReason } from "@/components/attention/needReason";
 
 import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 
+import { isSeatTickNotice, requestSeatTickPanel } from "@/components/orchestrator/openSeatTick";
+import { useSeatSignal } from "./kanbanSeatStore";
+import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
+import { askOrchestratorAboutTask } from "./askOrchestrator";
+import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -35,6 +42,8 @@ import type { PipelinePorts } from "./pipelinePorts";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { StageDraftPanel } from "./StageDraft";
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
+import { HostChip, RemoteLanes } from "./RemoteLanes";
+import type { RemoteCard } from "./remoteFeed";
 import type { StageDrafts } from "./stageDrafts";
 import type { PipelineActionKind } from "./stagesModel";
 
@@ -75,17 +84,7 @@ function pipelineEndedAtMs(pipeline: Pipeline): number {
 
 const LockGlyph = () => <svg {...svgProps}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
 
-/** The hue each colour name is drawn with; the name is what the board says. */
-export const TASK_COLOR_HEX: Record<TaskColor, string> = {
-  coral: "#e07a5f",
-  amber: "#d9a400",
-  lime: "#7cb342",
-  teal: "#1a9e8f",
-  sky: "#3d7fd6",
-  violet: "#8a63d2",
-  pink: "#d64f8a",
-  slate: "#7b8a99",
-};
+export { TASK_COLOR_HEX };
 
 export function resurfaceText(t: TFunction, reason: GroupResurfaceReason): string {
   return t(`kanban.resurfaced.${reason.kind}`);
@@ -171,6 +170,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, onOpen }: { mem
 
 export interface KanbanCardProps {
   remoteAgents?: readonly RemoteAgentView[];
+  /** The task runs on another linked machine: the card takes the remote
+      look, draws that machine's lanes, and says where to manage it. */
+  remote?: RemoteCard | null;
   card: KanbanCardModel;
   status: TaskStatus;
   pending: boolean;
@@ -227,6 +229,8 @@ export interface KanbanCardProps {
   onStagePanelMenu: (panelKey: string, anchor: HTMLElement) => void;
   /** «+ Agent» in the footer: a draft on this card, seeded with the task's text (K9a). */
   onAddAgent?: (card: KanbanCardModel) => void;
+  /** «Ask» attached this task's chip: the board confirms it where the press was. */
+  onAsked?: (project: string, chip: TaskChip) => void;
   /** Cross-project Overview (#1820): display name per project key. Cards from
       several projects share the columns there, so each one says which project
       it belongs to. Absent on a project's own board, where every card on
@@ -355,6 +359,26 @@ function UnstartedLaunches({ card, title, nowMs, onOpen, onDismiss }: {
   );
 }
 
+/** The tick notice's «Tick settings» button. It is offered while a live seat
+    holds the project, because that seat's chip is what answers; a folded seat
+    unfolds to show it, and a project with no live seat has no chip to open. */
+function SeatTickNoticeButton({ project }: { project: string }) {
+  const { t } = useLocale();
+  const live = useSeatSignal(project)?.live ?? false;
+  if (!live) return null;
+  return (
+    <button
+      type="button"
+      className="btn quiet"
+      data-open-seat-tick={project}
+      onClick={() => requestSeatTickPanel(project)}
+    >
+      <span>{t("kanban.tickNotice.open")}</span>
+      <ChevronRight />
+    </button>
+  );
+}
+
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
   /* The card holding the orchestrator's conversation stays on the board. */
@@ -382,7 +406,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
   const reasons = card.needsYou ? reasonsText(t, card.reasons) : "";
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
-  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : ""]
+  const remote = card.task ? props.remote ?? null : null;
+  const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
     .filter(Boolean)
     .join(", ");
   /* The card's one status hue is its edge (§3.4): amber while it owes the
@@ -424,7 +449,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {card.working ? <span className="foot-meta working num" data-foot-working={card.working}>{t("kanban.activityWorking", { count: card.working })}</span> : null}
       {card.conversations
         ? <span className="foot-meta num" data-foot-conversations={card.conversations}>{t("kanban.activityConversations", { count: card.conversations })}</span>
-        : card.pipelines.length === 0 ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
+        : card.pipelines.length === 0 && !remote ? <span className="foot-meta" data-foot-none="">{t("kanban.activityNoAgent")}</span> : null}
     </>
   );
   /* Several pipelines on one card: the running ones stay on top, and once the
@@ -478,8 +503,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
     <article
-      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}`}
+      className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}${remote ? " remote remote-surface" : ""}`}
       data-id={card.id}
+      data-remote={remote ? remote.install : undefined}
       data-kanban-card={card.id}
       data-pending={pending ? "1" : "0"}
       data-collapsed={collapsed ? "1" : "0"}
@@ -597,6 +623,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         </div>
       </div>
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
+      <TaskStatusNote note={card.task?.note} nowMs={nowMs} />
       {/* #2059: the task's own links and every pipeline's, deduplicated, and
           still there when the card is collapsed and its pipelines are not. */}
       {card.task ? (
@@ -629,6 +656,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
+      {!collapsed ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} full /> : null}
+      {/* The standing tick notice opens the panel that holds the setting it
+          describes. */}
+      {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}
       {collapsed ? null : <FinishWaitLine taskId={card.task?.id ?? null} pipelines={card.pipelines} />}
 
       {/* The agent's context, folded away: one row while closed, the whole text
@@ -723,6 +754,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               {completedOpen ? foldedPipelines.map(pipelineRow) : null}
             </div>
           ) : null}
+          {remote ? <RemoteLanes remote={remote} title={title} nowMs={nowMs} /> : null}
         </>
       ) : null}
 
@@ -775,9 +807,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
 
       {!collapsed ? <CardDrafts ids={card.drafts} /> : null}
 
-      {!collapsed && card.past.length ? (
+      {!collapsed && (card.past.length || card.notLoadedRefs.length) ? (
         <PastAttempts
           rows={card.past}
+          elsewhere={card.notLoadedRefs}
           names={new Map(card.pipelines.map((summary) => [summary.pipeline.id, stageNames(t, summary.pipeline)] as const))}
           nowMs={nowMs}
           onOpen={props.onOpenAttempt}
@@ -788,18 +821,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         <UnstartedLaunches card={card} title={title} nowMs={nowMs} onOpen={props.onOpenMember} onDismiss={props.onDismissLaunch} />
       ) : null}
 
-      {!collapsed && (card.mirrors.length || card.notLoadedRefs.length || card.otherSurfaces) ? (
+      {!collapsed && (card.mirrors.length || card.otherSurfaces) ? (
         <div className="refs">
           {card.mirrors.map((mirror) => (
             <button key={mirror.key} type="button" className="ref" onClick={() => props.onFocusCard(mirror.primaryCardId)}>
               {t("kanban.alsoOn", { title: cleanTitle(mirror.file.title ?? "", 48) || t("kanban.untitledConversation"), card: mirror.primaryTitle })}
-            </button>
-          ))}
-          {/* Each conversation the card lists opens on its own, loaded here or
-              not; a stage's opens from its pipeline's chips and Past attempts. */}
-          {card.notLoadedRefs.map((ref) => (
-            <button key={ref.key} type="button" className="ref quiet" data-not-loaded={ref.key} onClick={() => props.onOpenAttempt({ path: ref.path, conversationId: ref.conversationId })}>
-              {t("kanban.notLoadedOpen")}
             </button>
           ))}
           {card.otherSurfaces ? (
@@ -830,7 +856,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             pipelines={card.pipelines.map((summary) => summary.pipeline)}
             files={card.members.map((member) => member.file)}
           />
-          {props.onAddAgent ? (
+          {/* The orchestrator's composer takes a reference to this task as a chip
+              (never text in the input). Not on the Overview, where cards of
+              several projects stand and no seat is on screen to take it. */}
+          {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
+          {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
             <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
               <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
             </button>
@@ -846,6 +876,38 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     </article>
   );
 });
+
+/** The card's one «Ask» button. It stays pressed while the task is attached to
+    the orchestrator's composer, so the card itself says it took, even when the
+    seat is scrolled out of sight above the column. */
+function AskOrchestratorButton({ onAsked, cardId, project, taskId, title, color, icon }: {
+  onAsked?: (project: string, chip: TaskChip) => void;
+  cardId: string;
+  project: string;
+  taskId: string;
+  title: string;
+  color: KanbanCardModel["color"];
+  icon: string | null;
+}) {
+  const { t } = useLocale();
+  const attached = useTaskChipAttached(project, taskId);
+  /* The wire carries a bounded list: a card not yet attached cannot join a full one. */
+  const full = useTaskChipsFull(project) && !attached;
+  return (
+    <button
+      type="button"
+      className={`add ask${attached ? " on" : ""}`}
+      data-ask-orchestrator={cardId}
+      aria-pressed={attached}
+      aria-label={t("taskChip.askAria", { title })}
+      title={t(attached ? "taskChip.askOnHint" : full ? "taskChip.full" : "taskChip.askHint")}
+      disabled={full}
+      onClick={(event) => askOrchestratorAboutTask(event.currentTarget.closest<HTMLElement>(".card"), project, { id: taskId, title: taskChipTitle(title), color, icon }, attached, (chip) => onAsked?.(project, chip))}
+    >
+      <Bot aria-hidden /> {t("taskChip.ask")}
+    </button>
+  );
+}
 
 /** #2187 §5.3: the task's move to Done waits on other open pipelines, said
     once, muted, under the description. */

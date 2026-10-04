@@ -103,6 +103,9 @@
   --color-success-soft: #e5f6ea;
   --color-warning: #8a5f00;
   --color-warning-soft: #fff4dd;
+  /* Tool-call context weight, band 10 000–19 999 tokens (docs/design/tool-call-tokens.md):
+     between `--color-warning` and `--color-danger`, with no soft fill. */
+  --color-caution: #b24a0a;
   /* Crown favorites accent (issue #224): a true gold/yellow, distinct from the
      browny `--color-warning`, so a crowned card reads as regal, not as a
      warning. Tuned for contrast on the light `--surface-card`. */
@@ -112,6 +115,11 @@
   --color-danger-soft: #fdeeee;
   --color-info: #0d9488; /* link / handoff teal */
   --color-info-soft: #e5f5f3;
+  /* The pinstripe of a task another machine runs (docs/design/synced-task-card.md
+     §5.2). It resolves through --color-info, which the dark blocks below
+     override, so it serves both schemes. 6% is the ceiling: muted text stays
+     at 4.5:1 over its darkest pixel. */
+  --remote-stripe: color-mix(in srgb, var(--color-info) 6%, transparent);
 
   /* Engine identity tints (kept; model-family shifts live in utils.ts). */
   --color-codex: #2f6fd0;
@@ -241,6 +249,7 @@
     --color-success-soft: #14261a;
     --color-warning: #e0ae45;
     --color-warning-soft: #2b2312;
+    --color-caution: #f08a4b;
     --color-crown: #f5c542;
     --color-crown-soft: #2e2611;
     --color-danger: #f07171;
@@ -326,6 +335,7 @@
   --color-success-soft: #14261a;
   --color-warning: #e0ae45;
   --color-warning-soft: #2b2312;
+  --color-caution: #f08a4b;
   --color-crown: #f5c542;
   --color-crown-soft: #2e2611;
   --color-danger: #f07171;

@@ -1,0 +1,2424 @@
+{
+  "reference": "c49d27a33391f70b9d87b4c8f1a62a8b98058e8d",
+  "answer": "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.",
+  "provider": {
+    "backend": "soniox",
+    "model": "tts-rt-v2",
+    "voice": "Adrian",
+    "language": "en",
+    "rate": 24000
+  },
+  "chunks": [
+    {
+      "index": 0,
+      "text": "The first sentence should start speaking immediately.",
+      "start": 0,
+      "end": 53
+    },
+    {
+      "index": 1,
+      "text": "The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately.",
+      "start": 54,
+      "end": 222
+    },
+    {
+      "index": 2,
+      "text": "Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.",
+      "start": 223,
+      "end": 329
+    }
+  ],
+  "responseFormats": {
+    "base": "mp3",
+    "candidate": "pcm_s16le"
+  },
+  "browser": "151.0.7922.71",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "route": "ephemeral loopback / production handler / real provider",
+  "measurement": "tap to first unmuted browser sample above 0.001, sampled every 2 ms; physical device unmeasured",
+  "results": [
+    {
+      "trial": 1,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 179.80000001192093,
+      "onset": 19120.69999998808,
+      "latency": 18940.899999976158,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 1,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 157.5,
+      "onset": 654.3000000119209,
+      "latency": 496.80000001192093,
+      "timeline": [
+        {
+          "start": 0.4466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.5466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.6466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.7466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.8466666666666667,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 2,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 155.10000002384186,
+      "onset": 18566.100000023842,
+      "latency": 18411,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 2,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 164.5999999642372,
+      "onset": 758,
+      "latency": 593.4000000357628,
+      "timeline": [
+        {
+          "start": 0.5746666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.6746666666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 0.7746666666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 0.8746666666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 0.9746666666666666,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 3,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 157,
+      "onset": 18919.799999952316,
+      "latency": 18762.799999952316,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 3,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 137.0999999642372,
+      "onset": 718.2999999523163,
+      "latency": 581.1999999880791,
+      "timeline": [
+        {
+          "start": 0.532,
+          "duration": 0.1
+        },
+        {
+          "start": 0.632,
+          "duration": 0.1
+        },
+        {
+          "start": 0.732,
+          "duration": 0.1
+        },
+        {
+          "start": 0.832,
+          "duration": 0.1
+        },
+        {
+          "start": 0.9319999999999999,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 4,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 139.0999999642372,
+      "onset": 17355,
+      "latency": 17215.900000035763,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 4,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 172.29999995231628,
+      "onset": 750.6999999880791,
+      "latency": 578.4000000357628,
+      "timeline": [
+        {
+          "start": 0.532,
+          "duration": 0.1
+        },
+        {
+          "start": 0.632,
+          "duration": 0.1
+        },
+        {
+          "start": 0.732,
+          "duration": 0.1
+        },
+        {
+          "start": 0.832,
+          "duration": 0.1
+        },
+        {
+          "start": 0.9319999999999999,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 5,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 161.69999998807907,
+      "onset": 17077.5,
+      "latency": 16915.80000001192,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 5,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 143.60000002384186,
+      "onset": 510.4000000357628,
+      "latency": 366.80000001192093,
+      "timeline": [
+        {
+          "start": 0.3186666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.41866666666666674,
+          "duration": 0.1
+        },
+        {
+          "start": 0.5186666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.6186666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.7186666666666667,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 6,
+      "revision": "base",
+      "cache": "cold page",
+      "tap": 132.69999998807907,
+      "onset": 17900.19999998808,
+      "latency": 17767.5,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 6,
+      "revision": "candidate",
+      "cache": "cold page",
+      "tap": 148.10000002384186,
+      "onset": 513.7000000476837,
+      "latency": 365.60000002384186,
+      "timeline": [
+        {
+          "start": 0.36133333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 0.4613333333333334,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 7,
+      "revision": "base",
+      "cache": "cold page",
+      "failure": "no browser speech signal within 45000 ms",
+      "timeoutMs": 45000,
+      "responseStatus": "not captured in this interrupted attempt"
+    },
+    {
+      "trial": 7,
+      "revision": "candidate",
+      "cache": "cold page",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 205.80000001192093,
+      "onset": 919.6999999880791,
+      "latency": 713.8999999761581,
+      "timeline": [
+        {
+          "start": 0.66,
+          "duration": 0.1
+        },
+        {
+          "start": 0.76,
+          "duration": 0.1
+        },
+        {
+          "start": 0.86,
+          "duration": 0.1
+        },
+        {
+          "start": 0.96,
+          "duration": 0.1
+        },
+        {
+          "start": 1.06,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 8,
+      "revision": "base",
+      "cache": "cold page",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 130.0999999642372,
+      "onset": 19311.399999976158,
+      "latency": 19181.30000001192,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 8,
+      "revision": "candidate",
+      "cache": "cold page",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 163.60000002384186,
+      "onset": 661.3999999761581,
+      "latency": 497.7999999523163,
+      "timeline": [
+        {
+          "start": 0.4466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.5466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.6466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.7466666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 0.8466666666666667,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 9,
+      "revision": "base",
+      "cache": "cold page",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 149,
+      "onset": 17576.69999998808,
+      "latency": 17427.69999998808,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 9,
+      "revision": "candidate",
+      "cache": "cold page",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 161.89999997615814,
+      "onset": 527.5999999642372,
+      "latency": 365.69999998807907,
+      "timeline": [
+        {
+          "start": 0.36133333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 0.4613333333333334,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 10,
+      "revision": "base",
+      "cache": "cold page",
+      "failure": "no browser speech signal within 45000 ms",
+      "responseStatuses": [
+        200
+      ],
+      "tap": 130.5,
+      "onset": 0,
+      "latency": -130.5,
+      "timeline": [],
+      "audio": [
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 48000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 10,
+      "revision": "candidate",
+      "cache": "cold page",
+      "responseStatuses": [
+        200,
+        200,
+        200
+      ],
+      "tap": 164.80000001192093,
+      "onset": 617.0999999642372,
+      "latency": 452.2999999523163,
+      "timeline": [
+        {
+          "start": 0.404,
+          "duration": 0.1
+        },
+        {
+          "start": 0.504,
+          "duration": 0.1
+        },
+        {
+          "start": 0.604,
+          "duration": 0.1
+        },
+        {
+          "start": 0.704,
+          "duration": 0.1
+        },
+        {
+          "start": 0.8039999999999999,
+          "duration": 0.1
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 10,
+      "revision": "candidate",
+      "cache": "complete cold read",
+      "tap": 164.80000001192093,
+      "onset": 617.0999999642372,
+      "latency": 452.2999999523163,
+      "timeline": [
+        {
+          "start": 0.404,
+          "duration": 0.1
+        },
+        {
+          "start": 0.504,
+          "duration": 0.1
+        },
+        {
+          "start": 0.604,
+          "duration": 0.1
+        },
+        {
+          "start": 0.704,
+          "duration": 0.1
+        },
+        {
+          "start": 0.8039999999999999,
+          "duration": 0.1
+        },
+        {
+          "start": 0.9039999999999999,
+          "duration": 0.1
+        },
+        {
+          "start": 1.004,
+          "duration": 0.1
+        },
+        {
+          "start": 1.104,
+          "duration": 0.1
+        },
+        {
+          "start": 1.2040000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 1.3040000000000003,
+          "duration": 0.1
+        },
+        {
+          "start": 1.4040000000000004,
+          "duration": 0.1
+        },
+        {
+          "start": 1.5040000000000004,
+          "duration": 0.1
+        },
+        {
+          "start": 1.6040000000000005,
+          "duration": 0.1
+        },
+        {
+          "start": 1.7040000000000006,
+          "duration": 0.1
+        },
+        {
+          "start": 1.8040000000000007,
+          "duration": 0.1
+        },
+        {
+          "start": 1.9040000000000008,
+          "duration": 0.1
+        },
+        {
+          "start": 2.004000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.104000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.204000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.304000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.4040000000000012,
+          "duration": 0.1
+        },
+        {
+          "start": 2.5040000000000013,
+          "duration": 0.1
+        },
+        {
+          "start": 2.6040000000000014,
+          "duration": 0.1
+        },
+        {
+          "start": 2.7040000000000015,
+          "duration": 0.1
+        },
+        {
+          "start": 2.8040000000000016,
+          "duration": 0.1
+        },
+        {
+          "start": 2.9040000000000017,
+          "duration": 0.1
+        },
+        {
+          "start": 3.004000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.104000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.204000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.304000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.404000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.5040000000000022,
+          "duration": 0.05733333333333333
+        },
+        {
+          "start": 3.5613333333333355,
+          "duration": 0.1
+        },
+        {
+          "start": 3.6613333333333355,
+          "duration": 0.1
+        },
+        {
+          "start": 3.7613333333333356,
+          "duration": 0.1
+        },
+        {
+          "start": 3.8613333333333357,
+          "duration": 0.1
+        },
+        {
+          "start": 3.961333333333336,
+          "duration": 0.1
+        },
+        {
+          "start": 4.0613333333333355,
+          "duration": 0.1
+        },
+        {
+          "start": 4.161333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 4.261333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 4.361333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.461333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.561333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.661333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.761333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.861333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.961333333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 5.061333333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 5.1613333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 5.261333333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 5.361333333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 5.4613333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 5.56133333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 5.66133333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 5.761333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 5.861333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 5.961333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 6.061333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.161333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.261333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.361333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.461333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.561333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.661333333333326,
+          "duration": 0.1
+        },
+        {
+          "start": 6.761333333333326,
+          "duration": 0.1
+        },
+        {
+          "start": 6.8613333333333255,
+          "duration": 0.1
+        },
+        {
+          "start": 6.961333333333325,
+          "duration": 0.1
+        },
+        {
+          "start": 7.061333333333325,
+          "duration": 0.1
+        },
+        {
+          "start": 7.1613333333333244,
+          "duration": 0.1
+        },
+        {
+          "start": 7.261333333333324,
+          "duration": 0.1
+        },
+        {
+          "start": 7.361333333333324,
+          "duration": 0.1
+        },
+        {
+          "start": 7.461333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.561333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.661333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.761333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 7.861333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 7.961333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 8.061333333333321,
+          "duration": 0.1
+        },
+        {
+          "start": 8.161333333333321,
+          "duration": 0.1
+        },
+        {
+          "start": 8.26133333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.36133333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.46133333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.56133333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.66133333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.761333333333319,
+          "duration": 0.1
+        },
+        {
+          "start": 8.861333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 8.961333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 9.061333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 9.161333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.261333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.361333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.461333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.561333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.661333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.761333333333315,
+          "duration": 0.1
+        },
+        {
+          "start": 9.861333333333315,
+          "duration": 0.1
+        },
+        {
+          "start": 9.961333333333314,
+          "duration": 0.1
+        },
+        {
+          "start": 10.061333333333314,
+          "duration": 0.1
+        },
+        {
+          "start": 10.161333333333314,
+          "duration": 0.1
+        },
+        {
+          "start": 10.261333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.361333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.461333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.561333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.661333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.761333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.861333333333311,
+          "duration": 0.1
+        },
+        {
+          "start": 10.961333333333311,
+          "duration": 0.1
+        },
+        {
+          "start": 11.06133333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.16133333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.26133333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.36133333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.46133333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.561333333333309,
+          "duration": 0.1
+        },
+        {
+          "start": 11.661333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.761333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.861333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.961333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.061333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.161333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.261333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.361333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.461333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.561333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.661333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.761333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.861333333333304,
+          "duration": 0.1
+        },
+        {
+          "start": 12.961333333333304,
+          "duration": 0.1
+        },
+        {
+          "start": 13.061333333333303,
+          "duration": 0.1
+        },
+        {
+          "start": 13.161333333333303,
+          "duration": 0.1
+        },
+        {
+          "start": 13.261333333333303,
+          "duration": 0.1
+        },
+        {
+          "start": 13.361333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.461333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.561333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.661333333333301,
+          "duration": 0.1
+        },
+        {
+          "start": 13.761333333333301,
+          "duration": 0.1
+        },
+        {
+          "start": 13.8613333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 13.9613333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.0613333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.1613333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.2613333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.361333333333299,
+          "duration": 0.1
+        },
+        {
+          "start": 14.461333333333299,
+          "duration": 0.1
+        },
+        {
+          "start": 14.561333333333298,
+          "duration": 0.1
+        },
+        {
+          "start": 14.661333333333298,
+          "duration": 0.1
+        },
+        {
+          "start": 14.761333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 14.861333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 14.961333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 15.061333333333296,
+          "duration": 0.1
+        },
+        {
+          "start": 15.161333333333296,
+          "duration": 0.1
+        },
+        {
+          "start": 15.261333333333296,
+          "duration": 0.1
+        },
+        {
+          "start": 15.361333333333295,
+          "duration": 0.1
+        },
+        {
+          "start": 15.461333333333295,
+          "duration": 0.1
+        },
+        {
+          "start": 15.561333333333295,
+          "duration": 0.1
+        },
+        {
+          "start": 15.661333333333294,
+          "duration": 0.017333333333333333
+        },
+        {
+          "start": 15.678666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.778666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.878666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.978666666666626,
+          "duration": 0.1
+        },
+        {
+          "start": 16.078666666666628,
+          "duration": 0.1
+        },
+        {
+          "start": 16.17866666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 16.27866666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 16.378666666666632,
+          "duration": 0.1
+        },
+        {
+          "start": 16.478666666666633,
+          "duration": 0.1
+        },
+        {
+          "start": 16.578666666666635,
+          "duration": 0.1
+        },
+        {
+          "start": 16.678666666666636,
+          "duration": 0.1
+        },
+        {
+          "start": 16.778666666666638,
+          "duration": 0.1
+        },
+        {
+          "start": 16.87866666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 16.97866666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 17.078666666666642,
+          "duration": 0.1
+        },
+        {
+          "start": 17.178666666666643,
+          "duration": 0.1
+        },
+        {
+          "start": 17.278666666666645,
+          "duration": 0.1
+        },
+        {
+          "start": 17.378666666666646,
+          "duration": 0.1
+        },
+        {
+          "start": 17.478666666666648,
+          "duration": 0.1
+        },
+        {
+          "start": 17.57866666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 17.67866666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 17.778666666666652,
+          "duration": 0.1
+        },
+        {
+          "start": 17.878666666666653,
+          "duration": 0.1
+        },
+        {
+          "start": 17.978666666666655,
+          "duration": 0.1
+        },
+        {
+          "start": 18.078666666666656,
+          "duration": 0.1
+        },
+        {
+          "start": 18.178666666666658,
+          "duration": 0.1
+        },
+        {
+          "start": 18.27866666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.37866666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.478666666666662,
+          "duration": 0.1
+        },
+        {
+          "start": 18.578666666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 18.678666666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 18.778666666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.878666666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 18.97866666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.07866666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.178666666666672,
+          "duration": 0.1
+        },
+        {
+          "start": 19.278666666666673,
+          "duration": 0.1
+        },
+        {
+          "start": 19.378666666666675,
+          "duration": 0.1
+        },
+        {
+          "start": 19.478666666666676,
+          "duration": 0.1
+        },
+        {
+          "start": 19.578666666666678,
+          "duration": 0.1
+        },
+        {
+          "start": 19.67866666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 19.77866666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 19.878666666666682,
+          "duration": 0.1
+        },
+        {
+          "start": 19.978666666666683,
+          "duration": 0.1
+        },
+        {
+          "start": 20.078666666666685,
+          "duration": 0.1
+        },
+        {
+          "start": 20.178666666666686,
+          "duration": 0.1
+        },
+        {
+          "start": 20.278666666666687,
+          "duration": 0.1
+        },
+        {
+          "start": 20.37866666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.47866666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.57866666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.678666666666693,
+          "duration": 0.1
+        },
+        {
+          "start": 20.778666666666695,
+          "duration": 0.1
+        },
+        {
+          "start": 20.878666666666696,
+          "duration": 0.1
+        },
+        {
+          "start": 20.978666666666697,
+          "duration": 0.1
+        },
+        {
+          "start": 21.0786666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.1786666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.2786666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.378666666666703,
+          "duration": 0.1
+        },
+        {
+          "start": 21.478666666666705,
+          "duration": 0.1
+        },
+        {
+          "start": 21.578666666666706,
+          "duration": 0.1
+        },
+        {
+          "start": 21.678666666666707,
+          "duration": 0.1
+        },
+        {
+          "start": 21.77866666666671,
+          "duration": 0.1
+        },
+        {
+          "start": 21.87866666666671,
+          "duration": 0.1
+        },
+        {
+          "start": 21.97866666666671,
+          "duration": 0.1
+        },
+        {
+          "start": 22.078666666666713,
+          "duration": 0.08533333333333333
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    },
+    {
+      "trial": 10,
+      "revision": "candidate",
+      "cache": "cached replay",
+      "newRequests": 0,
+      "tap": 22327.69999998808,
+      "onset": 22393.099999964237,
+      "latency": 65.39999997615814,
+      "timeline": [
+        {
+          "start": 0.02,
+          "duration": 0.1
+        },
+        {
+          "start": 0.12000000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 0.22000000000000003,
+          "duration": 0.1
+        },
+        {
+          "start": 0.32000000000000006,
+          "duration": 0.1
+        },
+        {
+          "start": 0.42000000000000004,
+          "duration": 0.1
+        },
+        {
+          "start": 0.52,
+          "duration": 0.1
+        },
+        {
+          "start": 0.62,
+          "duration": 0.1
+        },
+        {
+          "start": 0.72,
+          "duration": 0.1
+        },
+        {
+          "start": 0.82,
+          "duration": 0.1
+        },
+        {
+          "start": 0.9199999999999999,
+          "duration": 0.1
+        },
+        {
+          "start": 1.02,
+          "duration": 0.1
+        },
+        {
+          "start": 1.12,
+          "duration": 0.1
+        },
+        {
+          "start": 1.2200000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 1.3200000000000003,
+          "duration": 0.1
+        },
+        {
+          "start": 1.4200000000000004,
+          "duration": 0.1
+        },
+        {
+          "start": 1.5200000000000005,
+          "duration": 0.1
+        },
+        {
+          "start": 1.6200000000000006,
+          "duration": 0.1
+        },
+        {
+          "start": 1.7200000000000006,
+          "duration": 0.1
+        },
+        {
+          "start": 1.8200000000000007,
+          "duration": 0.1
+        },
+        {
+          "start": 1.9200000000000008,
+          "duration": 0.1
+        },
+        {
+          "start": 2.020000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.120000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.220000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.320000000000001,
+          "duration": 0.1
+        },
+        {
+          "start": 2.4200000000000013,
+          "duration": 0.1
+        },
+        {
+          "start": 2.5200000000000014,
+          "duration": 0.1
+        },
+        {
+          "start": 2.6200000000000014,
+          "duration": 0.1
+        },
+        {
+          "start": 2.7200000000000015,
+          "duration": 0.1
+        },
+        {
+          "start": 2.8200000000000016,
+          "duration": 0.1
+        },
+        {
+          "start": 2.9200000000000017,
+          "duration": 0.1
+        },
+        {
+          "start": 3.020000000000002,
+          "duration": 0.1
+        },
+        {
+          "start": 3.120000000000002,
+          "duration": 0.05733333333333333
+        },
+        {
+          "start": 3.177333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 3.277333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 3.3773333333333353,
+          "duration": 0.1
+        },
+        {
+          "start": 3.4773333333333354,
+          "duration": 0.1
+        },
+        {
+          "start": 3.5773333333333355,
+          "duration": 0.1
+        },
+        {
+          "start": 3.6773333333333356,
+          "duration": 0.1
+        },
+        {
+          "start": 3.7773333333333357,
+          "duration": 0.1
+        },
+        {
+          "start": 3.8773333333333357,
+          "duration": 0.1
+        },
+        {
+          "start": 3.977333333333336,
+          "duration": 0.1
+        },
+        {
+          "start": 4.0773333333333355,
+          "duration": 0.1
+        },
+        {
+          "start": 4.177333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 4.277333333333335,
+          "duration": 0.1
+        },
+        {
+          "start": 4.377333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.477333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.577333333333334,
+          "duration": 0.1
+        },
+        {
+          "start": 4.677333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.777333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.877333333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 4.977333333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 5.077333333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 5.177333333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 5.277333333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 5.377333333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 5.4773333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 5.57733333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 5.67733333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 5.777333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 5.877333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 5.977333333333329,
+          "duration": 0.1
+        },
+        {
+          "start": 6.077333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.177333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.277333333333328,
+          "duration": 0.1
+        },
+        {
+          "start": 6.377333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.477333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.577333333333327,
+          "duration": 0.1
+        },
+        {
+          "start": 6.677333333333326,
+          "duration": 0.1
+        },
+        {
+          "start": 6.777333333333326,
+          "duration": 0.1
+        },
+        {
+          "start": 6.8773333333333255,
+          "duration": 0.1
+        },
+        {
+          "start": 6.977333333333325,
+          "duration": 0.1
+        },
+        {
+          "start": 7.077333333333325,
+          "duration": 0.1
+        },
+        {
+          "start": 7.1773333333333245,
+          "duration": 0.1
+        },
+        {
+          "start": 7.277333333333324,
+          "duration": 0.1
+        },
+        {
+          "start": 7.377333333333324,
+          "duration": 0.1
+        },
+        {
+          "start": 7.477333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.577333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.677333333333323,
+          "duration": 0.1
+        },
+        {
+          "start": 7.777333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 7.877333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 7.977333333333322,
+          "duration": 0.1
+        },
+        {
+          "start": 8.077333333333321,
+          "duration": 0.1
+        },
+        {
+          "start": 8.177333333333321,
+          "duration": 0.1
+        },
+        {
+          "start": 8.27733333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.37733333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.47733333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.57733333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.67733333333332,
+          "duration": 0.1
+        },
+        {
+          "start": 8.777333333333319,
+          "duration": 0.1
+        },
+        {
+          "start": 8.877333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 8.977333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 9.077333333333318,
+          "duration": 0.1
+        },
+        {
+          "start": 9.177333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.277333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.377333333333317,
+          "duration": 0.1
+        },
+        {
+          "start": 9.477333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.577333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.677333333333316,
+          "duration": 0.1
+        },
+        {
+          "start": 9.777333333333315,
+          "duration": 0.1
+        },
+        {
+          "start": 9.877333333333315,
+          "duration": 0.1
+        },
+        {
+          "start": 9.977333333333315,
+          "duration": 0.1
+        },
+        {
+          "start": 10.077333333333314,
+          "duration": 0.1
+        },
+        {
+          "start": 10.177333333333314,
+          "duration": 0.1
+        },
+        {
+          "start": 10.277333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.377333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.477333333333313,
+          "duration": 0.1
+        },
+        {
+          "start": 10.577333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.677333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.777333333333312,
+          "duration": 0.1
+        },
+        {
+          "start": 10.877333333333311,
+          "duration": 0.1
+        },
+        {
+          "start": 10.977333333333311,
+          "duration": 0.1
+        },
+        {
+          "start": 11.07733333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.17733333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.27733333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.37733333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.47733333333331,
+          "duration": 0.1
+        },
+        {
+          "start": 11.577333333333309,
+          "duration": 0.1
+        },
+        {
+          "start": 11.677333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.777333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.877333333333308,
+          "duration": 0.1
+        },
+        {
+          "start": 11.977333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.077333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.177333333333307,
+          "duration": 0.1
+        },
+        {
+          "start": 12.277333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.377333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.477333333333306,
+          "duration": 0.1
+        },
+        {
+          "start": 12.577333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.677333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.777333333333305,
+          "duration": 0.1
+        },
+        {
+          "start": 12.877333333333304,
+          "duration": 0.1
+        },
+        {
+          "start": 12.977333333333304,
+          "duration": 0.1
+        },
+        {
+          "start": 13.077333333333304,
+          "duration": 0.1
+        },
+        {
+          "start": 13.177333333333303,
+          "duration": 0.1
+        },
+        {
+          "start": 13.277333333333303,
+          "duration": 0.1
+        },
+        {
+          "start": 13.377333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.477333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.577333333333302,
+          "duration": 0.1
+        },
+        {
+          "start": 13.677333333333301,
+          "duration": 0.1
+        },
+        {
+          "start": 13.777333333333301,
+          "duration": 0.1
+        },
+        {
+          "start": 13.8773333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 13.9773333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.0773333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.1773333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.2773333333333,
+          "duration": 0.1
+        },
+        {
+          "start": 14.377333333333299,
+          "duration": 0.1
+        },
+        {
+          "start": 14.477333333333299,
+          "duration": 0.1
+        },
+        {
+          "start": 14.577333333333298,
+          "duration": 0.1
+        },
+        {
+          "start": 14.677333333333298,
+          "duration": 0.1
+        },
+        {
+          "start": 14.777333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 14.877333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 14.977333333333297,
+          "duration": 0.1
+        },
+        {
+          "start": 15.077333333333296,
+          "duration": 0.1
+        },
+        {
+          "start": 15.177333333333296,
+          "duration": 0.1
+        },
+        {
+          "start": 15.277333333333296,
+          "duration": 0.017333333333333333
+        },
+        {
+          "start": 15.294666666666629,
+          "duration": 0.1
+        },
+        {
+          "start": 15.394666666666629,
+          "duration": 0.1
+        },
+        {
+          "start": 15.494666666666628,
+          "duration": 0.1
+        },
+        {
+          "start": 15.594666666666628,
+          "duration": 0.1
+        },
+        {
+          "start": 15.694666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.794666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.894666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 15.994666666666626,
+          "duration": 0.1
+        },
+        {
+          "start": 16.094666666666626,
+          "duration": 0.1
+        },
+        {
+          "start": 16.194666666666627,
+          "duration": 0.1
+        },
+        {
+          "start": 16.29466666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 16.39466666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 16.49466666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 16.594666666666633,
+          "duration": 0.1
+        },
+        {
+          "start": 16.694666666666635,
+          "duration": 0.1
+        },
+        {
+          "start": 16.794666666666636,
+          "duration": 0.1
+        },
+        {
+          "start": 16.894666666666637,
+          "duration": 0.1
+        },
+        {
+          "start": 16.99466666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 17.09466666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 17.19466666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 17.294666666666643,
+          "duration": 0.1
+        },
+        {
+          "start": 17.394666666666645,
+          "duration": 0.1
+        },
+        {
+          "start": 17.494666666666646,
+          "duration": 0.1
+        },
+        {
+          "start": 17.594666666666647,
+          "duration": 0.1
+        },
+        {
+          "start": 17.69466666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 17.79466666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 17.89466666666665,
+          "duration": 0.1
+        },
+        {
+          "start": 17.994666666666653,
+          "duration": 0.1
+        },
+        {
+          "start": 18.094666666666654,
+          "duration": 0.1
+        },
+        {
+          "start": 18.194666666666656,
+          "duration": 0.1
+        },
+        {
+          "start": 18.294666666666657,
+          "duration": 0.1
+        },
+        {
+          "start": 18.39466666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.49466666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.59466666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.694666666666663,
+          "duration": 0.1
+        },
+        {
+          "start": 18.794666666666664,
+          "duration": 0.1
+        },
+        {
+          "start": 18.894666666666666,
+          "duration": 0.1
+        },
+        {
+          "start": 18.994666666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.09466666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.19466666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.29466666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 19.394666666666673,
+          "duration": 0.1
+        },
+        {
+          "start": 19.494666666666674,
+          "duration": 0.1
+        },
+        {
+          "start": 19.594666666666676,
+          "duration": 0.1
+        },
+        {
+          "start": 19.694666666666677,
+          "duration": 0.1
+        },
+        {
+          "start": 19.79466666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 19.89466666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 19.99466666666668,
+          "duration": 0.1
+        },
+        {
+          "start": 20.094666666666683,
+          "duration": 0.1
+        },
+        {
+          "start": 20.194666666666684,
+          "duration": 0.1
+        },
+        {
+          "start": 20.294666666666686,
+          "duration": 0.1
+        },
+        {
+          "start": 20.394666666666687,
+          "duration": 0.1
+        },
+        {
+          "start": 20.49466666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.59466666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.69466666666669,
+          "duration": 0.1
+        },
+        {
+          "start": 20.794666666666693,
+          "duration": 0.1
+        },
+        {
+          "start": 20.894666666666694,
+          "duration": 0.1
+        },
+        {
+          "start": 20.994666666666696,
+          "duration": 0.1
+        },
+        {
+          "start": 21.094666666666697,
+          "duration": 0.1
+        },
+        {
+          "start": 21.1946666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.2946666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.3946666666667,
+          "duration": 0.1
+        },
+        {
+          "start": 21.494666666666703,
+          "duration": 0.1
+        },
+        {
+          "start": 21.594666666666704,
+          "duration": 0.1
+        },
+        {
+          "start": 21.694666666666706,
+          "duration": 0.08533333333333333
+        }
+      ],
+      "audio": [
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        },
+        {
+          "rate": 24000,
+          "baseLatency": 0.042666666666666665,
+          "outputLatency": 0.128
+        }
+      ],
+      "timer": 1
+    }
+  ]
+}

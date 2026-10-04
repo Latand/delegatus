@@ -1,7 +1,7 @@
 "use client";
 
-import { RotateCw, Square, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, RotateCw, Square, Volume2 } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { translate, useLocale } from "@/lib/i18n";
@@ -23,6 +23,9 @@ import {
   type VoiceKey,
 } from "./ttsSession";
 
+import { conversationSpeech, SpeechScope, type SpeechSnapshot } from "./conversationSpeech";
+import { PcmSession, pcmVoice, pcmChunksCached } from "./ttsPcmSession";
+
 let activeStop: (() => void) | null = null;
 
 let backendInfo: BackendInfo | null = null;
@@ -31,6 +34,17 @@ const backendListeners = new Set<(value: BackendInfo) => void>();
 const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAACAgICA";
 /* Controls that must not swallow a seek click: the message body carries links,
    copy chips and disclosure triangles of its own. */
+const noSubscribe = () => () => undefined;
+const emptySnapshot = () => null;
+
+/* A row's own button reads three primitives of the conversation's speech
+   state instead of the snapshot: whether it is the one speaking, the phase,
+   and the notice. The visible answer (`target`) changes about six times a
+   second while the feed scrolls, and a button subscribed to the whole snapshot
+   re-rendered every row of the expanded history on each change. */
+const notMine = () => false;
+const idlePhase = (): "idle" | "loading" | "playing" => "idle";
+const noNotice = () => null;
 const INTERACTIVE = "a, button, input, textarea, select, summary, [role='button'], [contenteditable]";
 
 function loadBackendInfo(force = false): Promise<BackendInfo> {
@@ -42,6 +56,7 @@ function loadBackendInfo(force = false): Promise<BackendInfo> {
       return response.json() as Promise<BackendInfo>;
     })
     .then((value) => {
+      if (!value || !Array.isArray(value.options) || !value.options.some((option) => option?.id === value.backend)) throw new Error("invalid speech configuration");
       storeBackendInfo(value);
       return value;
     })
@@ -73,17 +88,13 @@ function claimActive(stop: () => void): void {
   activeStop = stop;
 }
 
-function messageKey(info: BackendInfo, text: string): string {
-  const option = info.options.find((candidate) => candidate.id === info.backend)!;
-  return voiceKey(option, text);
-}
 
 /**
  * Two audio elements, both carrying the user gesture forward on a muted silent
  * clip so the real chunks can start later without tripping autoplay policy.
  * Two, because playback alternates between them: the next chunk is already
- * loaded on the idle one when the playing one ends, which is what makes a
- * chunk hand-off inaudible. Named for what it unlocks; the old name tripped the
+ * loaded on the idle one when the playing one ends. Soniox instead uses the
+ * PCM session and its common sample clock. Named for what it unlocks; the old name tripped the
  * publication gate's credential pattern, which reads `authorization:` as a
  * secret assignment.
  */
@@ -97,20 +108,40 @@ function unlockedElements(): { elements: HTMLAudioElement[]; playbackUnlock: Pro
   return { elements, playbackUnlock: Promise.all(unlocks.map((unlock) => Promise.resolve(unlock).catch(() => undefined))) };
 }
 
-export function SpeakButton({ text }: { text: string }) {
+export function SpeakButton({ text: suppliedText = "", scope: explicitScope, header = false, menuRequest = 0, answerId }: { text?: string; scope?: string; header?: boolean; menuRequest?: number; answerId?: string }) {
+  const inheritedScope = useContext(SpeechScope);
+  const scope = explicitScope ?? inheritedScope;
+  const speech = useMemo(() => scope ? conversationSpeech(scope) : null, [scope]);
+  /* The header shows the visible answer and so reads the whole snapshot; a row
+     reads the three row selectors and is not re-rendered by a change of `target`. */
+  const snapshot = useSyncExternalStore(header && speech ? speech.subscribe : noSubscribe, header && speech ? speech.getSnapshot : emptySnapshot, emptySnapshot);
+  const subscribeRow = !header && speech ? speech.subscribe : noSubscribe;
+  const rowOwns = (now: SpeechSnapshot) => answerId ? now.activeId === answerId : now.activeText === suppliedText;
+  const rowMine = useSyncExternalStore(subscribeRow, !header && speech ? () => rowOwns(speech.getSnapshot()) : notMine, notMine);
+  const rowPhase = useSyncExternalStore(subscribeRow, !header && speech ? () => { const now = speech.getSnapshot(); return rowOwns(now) ? now.phase : "idle"; } : idlePhase, idlePhase);
+  const rowError = useSyncExternalStore(subscribeRow, !header && speech ? () => speech.getSnapshot().error : noNotice, noNotice);
+  const speechError = header ? snapshot?.error ?? null : rowError;
+  const text = header ? snapshot?.target?.text ?? "" : suppliedText;
   const { locale, t } = useLocale();
   const isMobile = useIsMobile();
   const [info, setInfo] = useState<BackendInfo | null>(backendInfo);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"idle" | "loading" | "playing">("idle");
+  const [localPhase, setLocalPhase] = useState<"idle" | "loading" | "playing">("idle");
   const [announcement, setAnnouncement] = useState("");
   const [progress, setProgress] = useState({ elapsed: 0, total: 0, chunk: 0, chunks: 0 });
   /* Only a re-render trigger: whether a replay is free is answered by the tts
      cache module, so a completed message keeps its replay control across
      mounts — and loses it when its chunks are evicted. */
   const [, setSpokenTick] = useState(0);
-  const chunks = useMemo(() => chunkSpeech(text), [text]);
+  const phase = speech && (header || rowMine) ? (header ? snapshot?.phase ?? "idle" : rowPhase) : localPhase;
+  const setPhase = (phase: "idle" | "loading" | "playing") => {
+    if (mounted.current) setLocalPhase(phase);
+    speech?.update({ phase, activeText: phase === "idle" ? null : frozenText.current, activeId: phase === "idle" ? null : frozenId.current });
+  };
+  const frozenText = useRef("");
+  const frozenId = useRef<string | null>(null);
+  const chunks = useMemo(() => chunkSpeech(text, info?.backend === "soniox" ? { backend: "soniox", language: info.options.find((o) => o.id === "soniox")?.language } : undefined), [text, info]);
   const generation = useRef(0);
   const mounted = useRef(true);
   const ownedStop = useRef<(() => void) | null>(null);
@@ -129,9 +160,9 @@ export function SpeakButton({ text }: { text: string }) {
       backendListeners.delete(syncInfo);
       mounted.current = false;
       generation.current += 1;
-      if (activeStop === ownedStop.current) stopActive();
+      if (!speech && activeStop === ownedStop.current) stopActive();
     };
-  }, [locale]); // t closes over locale; the function identity itself changes every render
+  }, [locale, speech]); // t closes over locale; the function identity itself changes every render
 
   const closeMenu = useCallback((restoreFocus?: boolean) => {
     setMenuOpen(false);
@@ -144,32 +175,59 @@ export function SpeakButton({ text }: { text: string }) {
      listeners on every render. */
   const dismissError = useCallback(() => setError(null), []);
 
-  if (!info || !text) return null;
+  useEffect(() => {
+    if (!menuRequest) return;
+    let current = true;
+    queueMicrotask(() => { if (current) setMenuOpen(true); });
+    void loadBackendInfo(true).catch(() => undefined);
+    return () => { current = false; };
+  }, [menuRequest]);
+
+  if (!info) return header ? <span className="inline-flex shrink-0"><button type="button" data-tts-header disabled aria-label={t("tts.readVisible")} title={error ?? t("tts.loadingConfig")} className={`inline-flex shrink-0 items-center justify-center rounded-md text-muted opacity-40 ${isMobile ? "h-11 w-11" : "h-6 w-6"}`}><Volume2 className={isMobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden /></button></span> : null;
+  if (!text && !header && phase === "idle") return null;
   const option = info.options.find((candidate) => candidate.id === info.backend);
   if (!option) return null;
-  const key = messageKey(info, text);
+  const fast = option.id === "soniox";
+  const requestedVoice = fast ? pcmVoice(option) : option;
+  const key = voiceKey(requestedVoice, text);
   /* "Replay aloud (free)" has to be TRUE when it is shown, so it takes both: a
      message read to the end, and every one of its chunks still in the cache.
      Anything else — stopped after the first of twenty-five chunks, or evicted
      since — is a paid synthesis, and says so in the control's tooltip and in
      the right-click menu. Asked again at click time, because another card's
      long answer can evict these chunks without re-rendering this one. */
-  const freeReplay = () => hasBeenSpoken(key) && chunksCached(chunks.map((chunk) => voiceKey(option, chunk.text)));
+  const freeReplay = () => hasBeenSpoken(key) && (fast ? pcmChunksCached : chunksCached)(chunks.map((chunk) => voiceKey(requestedVoice, chunk.text)));
   const replayable = freeReplay();
   const tooLong = text.length > MAX_TTS_MESSAGE_LENGTH;
 
   /**
    * Runs one message end to end: chunks it, keeps a couple of syntheses ahead
-   * of the voice, highlights the word being spoken in the rendered markdown and
+   * of the voice, highlights the chunk (PCM) or word (legacy audio) in rendered markdown and
    * lets a click in that text jump the audio there.
    */
-  const begin = (elements: HTMLAudioElement[], playbackUnlock: Promise<unknown>, fromChar = 0) => {
+  const begin = (elements: HTMLAudioElement[], playbackUnlock: Promise<unknown>, context?: AudioContext, fromChar = 0) => {
     if (!chunks.length) return;
     stopActive();
-    const currentGeneration = ++generation.current;
-    const alive = () => mounted.current && generation.current === currentGeneration;
-    const roots = triggerRef.current ? karaokeRoots(triggerRef.current) : [];
-    const karaoke: Karaoke | null = roots.length ? createKaraoke(roots, text) : null;
+    frozenText.current = text;
+    const currentGeneration = speech ? speech.nextGeneration() : ++generation.current;
+    const alive = () => speech ? speech.isGeneration(currentGeneration) : mounted.current && generation.current === currentGeneration;
+    const target = (speech ? speech.getSnapshot() : snapshot)?.target;
+    const answerTarget = target?.text === text && (header || !answerId || target.id === answerId) ? target : null;
+    const feed = triggerRef.current?.closest("[data-log-feed-scroller]");
+    const rowId = answerId ?? triggerRef.current?.closest("[data-tts-message]")?.getAttribute("data-tts-message");
+    frozenId.current = header ? answerTarget?.id ?? null : rowId ?? answerTarget?.id ?? null;
+    const resolveRoots = speech && (answerTarget?.id || rowId) ? () => speech.rootsFor(answerTarget?.id ?? rowId!) : answerTarget?.roots ?? (() => feed && rowId
+      ? Array.from(feed.querySelectorAll<HTMLElement>("[data-tts-message]")).filter((node) => node.getAttribute("data-tts-message") === rowId).flatMap((node) => Array.from(node.querySelectorAll<HTMLElement>("[data-tts-body]")))
+      : triggerRef.current ? karaokeRoots(triggerRef.current) : []);
+    let roots = resolveRoots();
+    let karaoke: Karaoke | null = roots.length ? createKaraoke(roots, text) : null;
+    const refreshRoots = () => {
+      const next = resolveRoots();
+      if (next.length === roots.length && next.every((root, index) => root === roots[index])) return;
+      for (const root of roots) { root.removeEventListener("click", onSeekClick); delete root.dataset.ttsSeekable; }
+      karaoke?.destroy(); roots = next; karaoke = roots.length ? createKaraoke(roots, text) : null;
+      for (const root of roots) { root.addEventListener("click", onSeekClick); root.dataset.ttsSeekable = ""; }
+    };
 
     /* Who the route says it actually billed, once it has answered. The page's
        copy of the configuration is a page-load-old singleton, so a tab open
@@ -183,6 +241,7 @@ export function SpeakButton({ text }: { text: string }) {
       if (stopped) return;
       stopped = true;
       session.stop();
+      speech?.releaseStop(stop);
       karaoke?.destroy();
       for (const root of roots) {
         root.removeEventListener("click", onSeekClick);
@@ -206,18 +265,16 @@ export function SpeakButton({ text }: { text: string }) {
       session.seekToChar(charIndex);
     }
 
-    const session = new TtsSession({
+    const callbacks = {
       chunks,
-      key: (chunkText, voice) => voiceKey(voice ?? option, chunkText),
-      synthesize: synthesizeChunk,
-      elements,
-      onPhase: (next) => {
+      onPhase: (next: "loading" | "playing") => {
         if (!alive()) return;
         setPhase(next);
+        if (fast && next === "loading") karaoke?.clear();
         setAnnouncement(next === "loading" ? t("tts.generating") : t("tts.playing"));
       },
-      onVoice: (voice) => {
-        if (voice.id === option.id && voice.model === option.model && voice.voice === option.voice) return;
+      onVoice: (voice: VoiceKey) => {
+        if (voice.id === option.id && voice.model === option.model && voice.voice === option.voice && (voice.language ?? "") === (option.language ?? "")) return;
         billed = voice;
         if (alive()) {
           const notice = t("tts.backendChanged", { provider: voice.id });
@@ -229,12 +286,14 @@ export function SpeakButton({ text }: { text: string }) {
            — off the play path, which is where that wait belongs. */
         void loadBackendInfo(true).catch(() => undefined);
       },
-      onPosition: ({ chunkIndex, charIndex, elapsed, total }) => {
-        const word = wordSpanAt(text, charIndex);
+      onPosition: ({ chunkIndex, charIndex, elapsed, total }: { chunkIndex: number; charIndex: number; elapsed: number; total: number }) => {
+        refreshRoots();
+        const word = fast ? chunks[chunkIndex] : wordSpanAt(text, charIndex);
         if (word) karaoke?.highlight(word.start, word.end);
         if (alive()) setProgress({ elapsed, total, chunk: chunkIndex + 1, chunks: chunks.length });
       },
-      onError: (cause) => {
+      onError: (cause: unknown) => {
+        if (cause instanceof TtsRequestError && cause.status === 409) void loadBackendInfo(true).catch(() => undefined);
         /* The provider's own words when it refused; otherwise the failure is
            the browser's (blocked or dead audio) or the network's. */
         const message = cause instanceof TtsRequestError
@@ -243,8 +302,8 @@ export function SpeakButton({ text }: { text: string }) {
             ? t("tts.playError")
             : t("tts.requestFailed");
         if (alive()) {
-          setError(message);
-          setAnnouncement(message);
+          if (mounted.current) { setError(message); setAnnouncement(message); }
+          speech?.update({ error: message });
         }
         stop(false);
       },
@@ -258,8 +317,12 @@ export function SpeakButton({ text }: { text: string }) {
         }
         stop(false);
       },
+    };
+    const session = context ? new PcmSession({ ...callbacks, voice: requestedVoice, context }) : new TtsSession({
+      ...callbacks, key: (chunkText, voice) => voiceKey(voice ?? option, chunkText), synthesize: synthesizeChunk, elements,
     });
 
+    if (speech) { speech.claimStop(stop); speech.update({ error: null }); }
     ownedStop.current = stop;
     claimActive(stop);
     setPhase("loading");
@@ -272,7 +335,7 @@ export function SpeakButton({ text }: { text: string }) {
     void playbackUnlock.then(() => {
       if (!alive() || stopped) return;
       session.start(fromChar);
-    });
+    }).catch((cause) => { if (alive() && !stopped) callbacks.onError(new TtsPlaybackError(cause)); });
   };
 
   const refuse = (message: string) => {
@@ -290,7 +353,11 @@ export function SpeakButton({ text }: { text: string }) {
    */
   const toggle = () => {
     closeMenu(false);
-    if (ownedStop.current) {
+    if (speech?.stop && (header || rowMine)) {
+      speech.stop();
+      return;
+    }
+    if (!speech && ownedStop.current) {
       ownedStop.current();
       return;
     }
@@ -310,9 +377,18 @@ export function SpeakButton({ text }: { text: string }) {
     const soldAsFree = replayable && !freeReplay();
     /* The user gesture is spent here, synchronously: the elements have to be
        unlocked in the click itself, before anything awaits. */
-    const { elements, playbackUnlock } = unlockedElements();
-    setError(null);
-    begin(elements, playbackUnlock);
+    if (fast) {
+      stopActive();
+      try {
+        const context = new AudioContext({ sampleRate: 24000 });
+        const playbackUnlock = context.resume().then(() => { if (context.state !== "running") throw new TtsPlaybackError(); });
+        begin([], playbackUnlock, context);
+      } catch { refuse(t("tts.playError")); }
+    } else {
+      const { elements, playbackUnlock } = unlockedElements();
+      setError(null);
+      begin(elements, playbackUnlock);
+    }
     if (soldAsFree) setError(t("tts.replayExpired"));
   };
 
@@ -348,27 +424,28 @@ export function SpeakButton({ text }: { text: string }) {
   };
 
   const active = phase !== "idle";
-  const Icon = active ? Square : replayable ? RotateCw : Volume2;
+  const Icon = phase === "loading" ? Loader2 : active ? Square : !header && replayable ? RotateCw : Volume2;
   /* The tooltip is where the paid/free truth lives now, next to the hint that
      the menu is a right-click away — the same split MicButton uses. It runs the
      click's own order of refusals, so it says what the click will actually do:
      a provider with no key cannot read anything, paid or otherwise, and
      promising a paid read there was the last place this control oversold
      itself (#1030). */
-  const title = active
+  const actionTitle = !text && !active ? t("tts.noVisibleAnswer") : active
     ? t("tts.stop")
     : tooLong
       ? t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })
       : !option.available
         ? t("tts.missingKey", { provider: option.id, path: option.keyPath })
         : t("tts.triggerTitle", { action: replayable ? t("tts.replayFree") : t("tts.readPaid") });
+  const title = header ? `${actionTitle} · ${t("tts.loadedSnapshot")}${text || snapshot?.activeText ? ` · ${(active ? snapshot?.activeText ?? text : text).slice(0, 100)}` : ""}` : actionTitle;
   return (
-    <span className="relative">
-      <button ref={triggerRef} data-tts-trigger type="button" onClick={toggle} onContextMenu={(event) => { event.preventDefault(); toggleMenu(); }} aria-haspopup="menu" aria-expanded={menuOpen} className={`inline-flex items-center justify-center rounded-md text-muted transition-opacity hover:bg-sunken hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${isMobile ? "h-11 w-11" : "p-1"} opacity-70 hover:opacity-100 group-hover/msg:opacity-100`} aria-label={active ? t("tts.stop") : replayable ? t("tts.replay") : t("tts.read")} title={title}>
-        <Icon className="h-3.5 w-3.5" aria-hidden />
+    <span className="relative inline-flex shrink-0">
+      <button ref={triggerRef} data-tts-trigger data-tts-header={header || undefined} data-tts-phase={phase} aria-busy={phase === "loading"} aria-pressed={active} disabled={header && !active && (!text || !option.available || tooLong)} type="button" onClick={toggle} onContextMenu={(event) => { event.preventDefault(); toggleMenu(); }} aria-haspopup="menu" aria-expanded={menuOpen} className={`inline-flex items-center justify-center rounded-md transition-opacity hover:bg-sunken ${active ? "hover:text-accent" : "hover:text-primary"} focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${isMobile ? "h-11 w-11" : header ? "h-6 w-6" : "p-1"} ${active ? "text-accent" : "text-muted"} disabled:opacity-40 opacity-70 hover:opacity-100 group-hover/msg:opacity-100`} aria-label={active ? t("tts.stop") : header ? t("tts.readVisible") : replayable ? t("tts.replay") : t("tts.read")} title={title}>
+        <Icon className={`${isMobile && header ? "h-5 w-5" : "h-3.5 w-3.5"} ${phase === "loading" ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
       </button>
-      <span role="status" aria-live="polite" className="sr-only">{announcement}</span>
-      {phase === "playing" && progress.total > 0 ? (
+      <span role="status" aria-live="polite" className="sr-only">{speech && active ? t(phase === "loading" ? "tts.generating" : "tts.playing") : announcement}</span>
+      {!header && phase === "playing" && progress.total > 0 ? (
         <span className="text-[10px] tabular-nums text-muted">
           {Math.floor(progress.elapsed)} / {Math.ceil(progress.total)}s
           {progress.chunks > 1 ? <span className="ml-1" title={t("tts.partOf", { index: progress.chunk, count: progress.chunks })}>{progress.chunk}/{progress.chunks}</span> : null}
@@ -380,7 +457,7 @@ export function SpeakButton({ text }: { text: string }) {
           info={info}
           option={option}
           chars={text.length}
-          notice={error}
+          notice={error ?? speechError}
           freeReplay={freeReplay}
           active={active}
           tooLong={tooLong}
@@ -388,7 +465,7 @@ export function SpeakButton({ text }: { text: string }) {
           onClose={closeMenu}
         />
       ) : null}
-      {error && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={dismissError}>{error}</SpeakAlert> : null}
+      {(error ?? speechError) && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={() => { dismissError(); speech?.update({ error: null }); }}>{error ?? speechError}</SpeakAlert> : null}
     </span>
   );
 }

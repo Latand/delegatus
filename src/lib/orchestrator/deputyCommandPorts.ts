@@ -2,8 +2,6 @@ import path from "node:path";
 
 import { forkClaudeHistory, HistorySecurityError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { agentRegistry } from "@/lib/agent/registry";
-import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy, seatTurnProgressing } from "@/lib/monitor/seatTick";
-import { defaultSeatTickSources, seatInput } from "@/lib/monitor/seatTickSources";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -13,6 +11,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { deputyDeliveryOrigin, type DeputyCommandPorts } from "./deputyCommand";
 import { startDeputySweep } from "./deputySweep";
+import { readDeputySeatBusy } from "./deputySeatBusy";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "./seats";
 
 /** A busy seat's transcript grows between the validation and the read; a
@@ -27,10 +26,7 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
   return {
     now: () => new Date(),
     activeSeat: (project) => orchestratorSeatFor(project).active,
-    seatBusy: async (project) => {
-      const seat = await seatInput(canonicalOrchestratorProject(project), seatTickPolicy() ?? DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSources());
-      return seat ? seatTurnProgressing(seat) : false;
-    },
+    seatBusy: async (project) => (await readDeputySeatBusy(project)).busy,
     seatGeneration: (seatConversationId) => {
       const conversation = registry.conversation(seatConversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);

@@ -173,6 +173,8 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
   ]);
   await Promise.all([
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
+    copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
+    copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
     options.unevaluableAddress === undefined
       ? copyFile(path.resolve("bin/server-runtime.mjs"), path.join(bin, "server-runtime.mjs"))
       : writeFile(path.join(bin, "server-runtime.mjs"), unevaluableProbeModule(options.unevaluableAddress)),
@@ -183,6 +185,8 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
     copyFile(path.resolve("bin/internalService.mjs"), path.join(bin, "internalService.mjs")),
     copyFile(path.resolve("bin/skillLinks.mjs"), path.join(bin, "skillLinks.mjs")),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
+    copyFile(path.resolve("bin/viewerGateKey.mjs"), path.join(bin, "viewerGateKey.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
 const hostnameIndex = process.argv.indexOf("--hostname");
@@ -463,6 +467,8 @@ test("a start prints the banner first, hides Next's startup lines and still prin
 
   await output.waitFor("fixture failure that must reach the terminal", 10_000);
   const text = output.text();
+  expect(text).toContain("DELEGATUS_TELEMETRY=0");
+  expect(text).toContain("DO_NOT_TRACK=1");
   expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
   expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);

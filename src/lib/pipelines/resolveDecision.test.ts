@@ -12,6 +12,7 @@ const { createPipelineFromRequest, reportStageCompletion, tickPipelines, patchPi
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const { createMcpToolService, FileMcpReceiptStore } = await import("@/lib/mcp/server");
 type McpReceiptStore = import("@/lib/mcp/server").McpReceiptStore;
 type ViewerMcpDomainDependencies = import("@/lib/mcp/bindings").ViewerMcpDomainDependencies;
@@ -45,7 +46,7 @@ function harness() {
   let duringProvenance: (() => void) | null = null;
   let clock = 1_000_000;
   const ports: PipelinePorts = {
-    exec: (command, rawArgs) => {
+    exec: async (command, rawArgs) => {
       execCalls.push([command, ...rawArgs].join(" "));
       if (command === "timeout") {
         const race = duringProvenance;
@@ -53,9 +54,11 @@ function harness() {
         race?.();
         const bounded = rawArgs.slice(rawArgs.findIndex((argument) => argument === "git" || argument === "gh"));
         if (bounded[0] === "gh") return { code: 0, stdout: worktree.pullRequest, stderr: "" };
-        return ports.exec("git", bounded.slice(1), "");
+        return (await ports.exec("git", bounded.slice(1), ""));
       }
       const args = rawArgs;
+      if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "https://forge.example/repo.git\n", stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\trefs/heads/${loadPipelines()[0]?.branch}\n`, stderr: "" };
       if (args[0] === "status" && args[1] === "--porcelain") return { code: 0, stdout: worktree.status, stderr: "" };
       if (args[0] === "ls-files") return { code: 0, stdout: worktree.knownPaths, stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
@@ -84,7 +87,10 @@ function harness() {
     monotonicNow: () => Date.now(),
     worktreePresent: () => true,
     conversationAgentActive: async () => null,
-    durableTurnEvidence: async () => null,
+    durableTurnEvidence: async (_engine, pathname) => {
+      const message = messages.get(pathname);
+      return message ? { turn: "terminal", message, lastRecordAt: message.ts } : null;
+    },
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
     lastMessage: (item) => messages.get(item.path) ?? null,
     pathForConversation: (id) => {
@@ -125,7 +131,7 @@ const stage = (id: string, next: string | null, extra: Record<string, unknown> =
 
 async function started(ports: PipelinePorts, stages: unknown[]): Promise<string> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Graph slice 2", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
+  const created = await createPipelineFromRequest({ task: "Graph slice 2", publication: "internal", spec: "AC", repoDir: "/repo", stages: stages as never, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   await tickPipelines([], ports); // provision
   await tickPipelines([], ports); // spawn the entry stage
@@ -390,4 +396,30 @@ test("a second question appends another answer and retains the original input an
   expect(h.prompts[2]).toContain("Use Markdown.");
   expect(h.prompts[2]).toContain("Include the appendix?");
   expect(h.prompts[2]).toContain("Include it.");
+});
+
+test("a rotated seat's successor preserves the answer and resumes its predecessor's parked lane", async () => {
+  const h = await parked();
+  const original = structuredClone(attemptsOf("build")[0]);
+  const project = current().project;
+  const now = "2026-10-02T14:28:00.000Z";
+  try {
+    for (const conversationId of ["conversation_creator", "conversation_successor"]) {
+      const clientRequestId = `rotate-${conversationId}`;
+      expect(beginOrchestratorSeatIntent({ project, clientRequestId, mode: "spawn", mandate: "Run the project", now }).kind).toBe("begun");
+      expect(completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null, now }).kind).toBe("activated");
+    }
+    expect((await patchPipeline(h.id, h.request, h.ports, manager)).status).toBe(403);
+    const answered = await patchPipeline(h.id, h.request, h.ports, agent("conversation_successor"));
+    expect(answered.error).toBeUndefined();
+    expect(answered.decisionAnswer?.actor).toEqual(agent("conversation_successor"));
+    expect(attemptsOf("build")[0]).toEqual(original);
+    expect(attemptsOf("build")).toHaveLength(2);
+    await tickPipelines([], h.ports);
+    expect(h.prompts[1]).toContain(h.request.answer);
+    expect(current().decisionAnswers).toHaveLength(1);
+    expect((await patchPipeline(h.id, h.request, h.ports, agent("conversation_successor"))).replayed).toBe(true);
+  } finally {
+    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
+  }
 });
