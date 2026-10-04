@@ -14,21 +14,24 @@ test("hooks stay in the shared home across a container-to-host launch and sandbo
     const containerTemp = path.join(root, "container-only-temp");
     fs.mkdirSync(sharedHome);
     fs.mkdirSync(containerTemp);
-    const source = { HOME: sharedHome, TMPDIR: containerTemp, NODE_ENV: "test" };
+    const source: NodeJS.ProcessEnv = { HOME: sharedHome, TMPDIR: containerTemp, NODE_ENV: "test" };
     const env = withAgentConfigSandbox({ ...source }, source);
-    const hooks = env.GIT_CONFIG_VALUE_0!;
+    /* The guard is the last entry; the App's push credential entries precede it. */
+    const last = Number(env.GIT_CONFIG_COUNT) - 1;
+    expect(env[`GIT_CONFIG_KEY_${last}`]).toBe("core.hooksPath");
+    const hooks = env[`GIT_CONFIG_VALUE_${last}`]!;
     expect(hooks.startsWith(sharedHome + path.sep)).toBe(true);
     expect(fs.statSync(path.join(hooks, "reference-transaction")).isFile()).toBe(true);
     const reapplied = agentPublicationIdentityEnv(env);
-    expect(reapplied.GIT_CONFIG_COUNT).toBe("1");
-    expect(reapplied.GIT_CONFIG_VALUE_0).toBe(hooks);
+    expect(reapplied.GIT_CONFIG_COUNT).toBe(env.GIT_CONFIG_COUNT);
+    expect(reapplied[`GIT_CONFIG_VALUE_${last}`]).toBe(hooks);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 function fixture(engine?: "claude" | "codex", worktree = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "history-guard-test-"));
   let cwd = root;
-  const source = { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent") };
+  const source: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent") };
   const machine = { ...source, ...controllerCommitIdentityEnv() };
   const env = { ...source, ...agentPublicationIdentityEnv(source) };
   if (engine) {

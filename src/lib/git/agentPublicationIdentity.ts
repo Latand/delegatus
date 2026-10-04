@@ -1,10 +1,11 @@
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
-import { agentHistoryGuardEnv } from "./agentHistoryGuard";
+import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard";
+import { agentForgeWriteEnv } from "./agentForgeCredentials";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
     identity. Invalid settings refuse the launch without logging their values. */
-export function agentPublicationIdentityEnv(source: NodeJS.ProcessEnv): Partial<NodeJS.ProcessEnv> {
+export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<string, string | undefined> {
   const defaults = controllerCommitIdentityEnv();
   const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
   const name = configuredName.trim();
@@ -15,14 +16,18 @@ export function agentPublicationIdentityEnv(source: NodeJS.ProcessEnv): Partial<
     || email.toLowerCase() === ["noreply", "github.com"].join("@")) {
     throw new Error("Invalid agent publication identity: use a machine name and a no-reply role mailbox");
   }
+  /* GitHub writes go out as the App. Its Git entries come first: the history
+     guard appends its own after them and has to stay the last one. */
+  const forge = agentForgeWriteEnv(source);
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
-    ...agentHistoryGuardEnv(source, name, email),
+    ...forge,
+    ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
   };
 }
 
-export function agentCodexPublicationPolicy(policy: unknown, source: NodeJS.ProcessEnv): Record<string, unknown> {
+export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source);
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
@@ -47,7 +52,7 @@ export function agentCodexPublicationPolicy(policy: unknown, source: NodeJS.Proc
   return override;
 }
 
-export function agentCodexPublicationArgs(policy: unknown, source: NodeJS.ProcessEnv): string[] {
+export function agentCodexPublicationArgs(policy: unknown, source: AgentEnvironment): string[] {
   return Object.entries(agentCodexPublicationPolicy(policy, source)).flatMap(([field, value]) =>
     Array.isArray(value) ? ["-c", `shell_environment_policy.${field}=${JSON.stringify(value)}`]
       : Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>

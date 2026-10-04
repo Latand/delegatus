@@ -644,7 +644,10 @@ describe("CodexAppServerHost", () => {
         "-c", permissionProfileConfig,
         "app-server", "--enable", "realtime_conversation",
       ]);
-      expect(captured.options?.env?.GH_CONFIG_DIR).toBe("/shared/config/gh");
+      /* The forwarded configuration is what reads use; the agent's own
+         variable names a directory with no account in it. */
+      expect(captured.options?.env?.LLV_AGENT_FORGE_READ_CONFIG_DIR).toBe("/shared/config/gh");
+      expect(captured.options?.env?.GH_CONFIG_DIR).toBe(path.join(captured.options!.env!.LLV_AGENT_FORGE_DIR!, "gh-config"));
       const method = threadId ? "thread/resume" : "thread/start";
       const params = server.requests.find((request) => request.method === method)?.params as Record<string, unknown>;
       expect(params).toMatchObject({ permissions: permissionProfile });
@@ -664,7 +667,7 @@ describe("CodexAppServerHost", () => {
     /* The agent no longer inherits XDG_CONFIG_HOME, which is where `gh` found
        its configuration, so the boundary pins it instead of forwarding it
        (#1905). A source value still wins where the caller forwards one. */
-    expect(readWriteCapture.options?.env?.GH_CONFIG_DIR).toBe(path.join(os.homedir(), ".config", "gh"));
+    expect(readWriteCapture.options?.env?.LLV_AGENT_FORGE_READ_CONFIG_DIR).toBe(path.join(os.homedir(), ".config", "gh"));
     await readWriteHost.release();
   });
 
@@ -1611,7 +1614,7 @@ describe("CodexAppServerHost", () => {
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
         shell_environment_policy: { set: git, ...(keyedFilters
           ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git)] }) },
+          : { include_only: [...new Set(["PATH", "HOME", ...Object.keys(git)])] }) },
       } });
     } finally { await host.release(); }
   });
@@ -1638,21 +1641,22 @@ describe("CodexAppServerHost", () => {
     /* The allowlisted env, plus the provenance stamp the resources rail needs
        to tell this host from any other process wearing the same argv (#1199),
        plus the agent's own config and state root (#1905): the commands it runs
-       resolve those, never the operator's, and `gh` is pinned to the
+       resolve those, never the operator's, and `gh` reads are pinned to the
        operator's configuration because it used to read XDG_CONFIG_HOME. */
     const sandboxConfig = path.join(os.tmpdir(), "llv-spawn-sandbox", "codex-home", "config");
+    const identity = agentPublicationIdentityEnv({ PATH: process.env.PATH });
     expect(captured.options?.env).toEqual({
       NODE_ENV: "test",
-      PATH: process.env.PATH,
       CODEX_HOME: "/codex-home",
-      ...agentPublicationIdentityEnv({}),
+      ...identity,
       GIT_AUTHOR_NAME: "Delegatus",
       GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       GIT_COMMITTER_NAME: "Delegatus",
       GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
-      GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      LLV_AGENT_FORGE_READ_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      GH_CONFIG_DIR: path.join(identity.LLV_AGENT_FORGE_DIR!, "gh-config"),
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(host.identity).toEqual({ threadId: "thread-149", path: "/sessions/thread-149.jsonl" });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { procBackend } from "@/lib/proc";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
@@ -1624,7 +1625,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   }
   // Full repository hooks exceed the generic command budget. Publication
   // remains finite and the ownership watcher can cancel it throughout.
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, undefined, { timeoutMs: 900_000 }));
+  /* A push to GitHub goes out as the Delegatus GitHub App or is refused; it
+     never uses the credentials of whoever started the Viewer. */
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 900_000 }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

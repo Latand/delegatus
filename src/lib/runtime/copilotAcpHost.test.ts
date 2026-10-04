@@ -193,7 +193,8 @@ describe("CopilotAcpHost", () => {
       viewerMcpServer: { command: "bun", args: ["/pkg/bin/mcp-server.mjs"], env: { LLV_STATE_DIR: "/state" } },
       env: {
         PATH: "/usr/bin",
-        HOME: "/srv/fixture",
+        /* The launch writes its Git hooks and the App helper under the home's cache. */
+        HOME: fs.mkdtempSync(path.join(os.tmpdir(), "copilot-fixture-home-")),
         GH_TOKEN: "gh-token-must-not-pass",
         GITHUB_TOKEN: "github-token-must-not-pass",
         COPILOT_GITHUB_TOKEN: "copilot-token-must-not-pass",

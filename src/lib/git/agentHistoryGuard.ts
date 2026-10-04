@@ -10,6 +10,8 @@ const hooks = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commi
   "fsmonitor-watchman", "p4-changelist", "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit",
   "post-index-change"];
 const roots = new Map<string, string>();
+/** An environment as a launch reads it: any variables, none of them required. */
+export type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 /** Git's transaction hook can refuse an amend even with --no-verify or
@@ -17,13 +19,13 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: NodeJS.ProcessEnv, name: string, email: string): NodeJS.ProcessEnv {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
   if (count > 0 && source[`GIT_CONFIG_KEY_${count - 1}`] === "core.hooksPath"
     && source[`GIT_CONFIG_VALUE_${count - 1}`] === source.LLV_AGENT_GIT_GUARD_DIR) count--;
-  const env: NodeJS.ProcessEnv = {};
+  const env: Record<string, string | undefined> = {};
   for (let i = 0; i < count; i++) {
     for (const field of ["KEY", "VALUE"]) {
       const key = `GIT_CONFIG_${field}_${i}`;

@@ -15,7 +15,7 @@ test.each([
   try {
     let cwd = path.join(root, "repo");
     fs.mkdirSync(cwd);
-    const source = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, TMPDIR: root,
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: root, TMPDIR: root,
       GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent") };
     const run = (args: string[], env: NodeJS.ProcessEnv = source) => Bun.spawnSync(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
     const ok = (args: string[], env?: NodeJS.ProcessEnv) => {

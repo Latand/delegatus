@@ -35,7 +35,7 @@ test("headless launch asynchronously retains publication fields through restrict
     expect(probes).toBe(0);
     const prepared = await prepareHeadlessPublication(built, process.env.LLV_STATE_DIR!);
     expect(probes).toBe(1);
-    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])}`);
+    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
   } finally { restore(); }
 });
 

@@ -71,6 +71,52 @@ the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
 
+## GitHub writes from launched agents and from the engine
+
+A write to GitHub made by a launched agent or by the pipeline engine goes out
+as the Delegatus GitHub App, with a short-lived installation token asked for
+that one repository and for exactly `contents: write`, `pull_requests: write`
+and `metadata: read`. No write falls back to a person's credentials: when the
+App credential is missing, locked, suspended or refused, the write stops with a
+message that starts `Delegatus refused this GitHub write` and nothing is sent.
+
+- **`gh` in an agent's shell** is a shim (`bin/forge-app-token.mjs gh`). A read
+  (`pr view`, `pr checks`, a `GET` through `gh api`, a GraphQL query) runs with
+  the `gh` configuration reads always used. Everything else is a write: the
+  shim mints a token, starts `gh` with it as `GH_TOKEN`, and revokes it when
+  `gh` exits. A command the shim does not recognise as a read is a write, so a
+  new `gh` command cannot reach a personal token by being new. `gh auth token`,
+  `login`, `refresh` and `setup-git` are refused. The agent's own
+  `GH_CONFIG_DIR` names an empty directory.
+- **`git push` to GitHub** is rewritten, in the agent's environment only, to a
+  push URL that one credential helper answers, with every other helper cleared
+  for that URL. SSH remotes on github.com are rewritten the same way. Fetches
+  keep the remote and the credentials they had.
+- **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
+  through `AutoMergePorts.write`, which is `forgeAppWriter`; `run` only reads.
+  A refusal blocks the merge with the refusal as its reason. The push that
+  publishes a lane's branch (`src/lib/pipelines/git.ts`) and the push and
+  `gh pr create` that finish a workflow (`src/lib/workflows/provision.ts`) run
+  with `engineForgeWriteEnv()`, the same push rewrite and `gh` shim.
+- **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
+  installation endpoint. Run from a launched agent, that check and the merge
+  both go through the shim.
+
+The App's registration and its verified installation id live in the operator's
+encrypted Secret Service collection, as one item with the attributes
+`service=delegatus-github-app` and `repository=<owner/name>`; the helper reads
+it with `secret-tool`. Nothing about the App is stored in this repository, in
+state files or in logs, and a token exists only in the memory and environment
+of the process that asked for it. `bun bin/forge-app-token.mjs token` prints one
+on captured stdout and refuses a terminal.
+
+A repository with no credential item has no App, so agent writes to it are
+refused. The App holds no `issues`, `actions` or `workflows` permission:
+`gh issue create`, `gh run rerun` and a push that edits `.github/workflows` are
+refused by GitHub itself. Nothing here changes git or `gh` configuration on
+disk, so a person's own terminal behaves as before. The shims are POSIX shell;
+on Windows a launched agent keeps the environment it had.
+
 ## Local hooks
 
 Enable once in each clone (linked worktrees inherit the setting):

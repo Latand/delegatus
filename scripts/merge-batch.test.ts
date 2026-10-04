@@ -454,7 +454,7 @@ test.each([
     repo = join(f.root, "linked");
     git(f.repo, ["worktree", "add", "-b", "merger", repo]);
   }
-  const source = { ...process.env, HOME: f.root, TMPDIR: f.root, NODE_ENV: "test" };
+  const source: NodeJS.ProcessEnv = { ...process.env, HOME: f.root, TMPDIR: f.root, NODE_ENV: "test" };
   const env = withAgentConfigSandbox({ ...source }, source);
   if (engine === "claude") {
     const home = join(f.root, "claude");

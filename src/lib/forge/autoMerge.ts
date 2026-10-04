@@ -2,6 +2,7 @@ import os from "node:os";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
+import { ForgeAppWriteRefused, forgeAppWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
 import { withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
@@ -50,6 +51,10 @@ export { MERGE_REASONS };
 export interface AutoMergePorts {
   now: () => number;
   run: GithubRunner;
+  /** Every write to GitHub (the branch update and the merge) goes through
+      this, as the Delegatus GitHub App. `run` only reads. A write it cannot
+      authenticate as the App throws and nothing is sent. */
+  write: ForgeAppWriter;
   loadPipelines: () => readonly Pipeline[];
   /** Applies `change` to the live record under the pipeline lock and persists
       it when `change` answers true. False when the record is gone or unchanged. */
@@ -491,12 +496,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     });
     if (!recorded) return;
     try {
-      await ports.run(["api", "-X", "PUT", `repos/${merge.repository}/pulls/${merge.prNumber}/update-branch`, "-f", `expected_head_sha=${tip}`]);
+      await ports.write(["api", "-X", "PUT", `repos/${merge.repository}/pulls/${merge.prNumber}/update-branch`, "-f", `expected_head_sha=${tip}`], merge.repository);
     } catch (error) {
       const message = githubMessage(error);
       const current = ports.loadPipelines().find((pipeline) => pipeline.id === read.id);
       if (current?.merge) {
-        await commit(ports, current, (live) => block(live, /expected head sha/i.test(message) ? MERGE_REASONS.headChanged : `GitHub refused to update the branch: ${message}`, ports.now()));
+        const reason = error instanceof ForgeAppWriteRefused ? error.message
+          : /expected head sha/i.test(message) ? MERGE_REASONS.headChanged : `GitHub refused to update the branch: ${message}`;
+        await commit(ports, current, (live) => block(live, reason, ports.now()));
       }
     }
     return;
@@ -514,9 +521,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
-    await ports.run(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid]);
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository);
   } catch (error) {
-    failure = githubMessage(error);
+    /* No App credential: the refusal is the whole reason, in its own words. */
+    failure = error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
   }
   let after: PullRequestView | null = null;
   try {
@@ -537,7 +545,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       live.nextReadAt = null;
       return;
     }
-    if (failure) block(live, `GitHub refused the merge: ${failure}`, ports.now());
+    if (failure) block(live, failure, ports.now());
     /* Otherwise the merge was accepted and the PR does not read merged yet:
        the next read in `merging` settles it. */
   });
@@ -706,6 +714,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   return {
     now: Date.now,
     run: githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
+    write: forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS),
     mutate: (pipelineId, change) => withPipelineMutation((pipelines, persist) => {
       const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
       if (!pipeline || !change(pipeline)) return false;
