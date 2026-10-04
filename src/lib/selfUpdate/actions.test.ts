@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { installAction, runInstallAction } from "./actions";
 const record = { launcher: { pid: 12, startIdentity: "7" }, checkout: "/srv/checkout", releasePointer: "/state/release.json" };
@@ -120,4 +121,56 @@ test("credential preflight refuses a launcher changed during its awaited readine
   const action = installAction(decision as never, { cgroup: () => "", env: {}, ready: async () => { entered(); await wait; return true; } });
   await arrival; decision.record.launcher.startIdentity = "successor"; release();
   expect(await action).toEqual({ id: "secure-handoff", button: false });
+});
+
+
+if (process.platform === "linux") for (const change of ["gate-expired", "new-work", "custody-changed"] as const)
+test(`credential preflight fences the last genuine Git read: ${change}`, async () => {
+  const root = mkdtempSync("/var/tmp/credential-dispatch-"); packageFixtures.push(root);
+  const state = join(root, "state"), dir = join(state, "self-update"), bin = join(root, "bin");
+  mkdirSync(dir, { recursive: true }); mkdirSync(bin); mkdirSync(join(root, ".next"));
+  for (const name of ["cli.mjs", "launcher-credentials.mjs"]) copyFileSync(resolve("bin", name), join(bin, name));
+  writeFileSync(join(root, ".next", "BUILD_ID"), "fixture");
+  const git = Bun.which("git")!;
+  const run = (...args: string[]) => {
+    const result = spawnSync(git, args, { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0); return result.stdout.trim();
+  };
+  run("init", "-q", "-b", "main"); run("add", ".");
+  run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "credential fixture");
+  const sha = run("rev-parse", "HEAD");
+  const requestFile = join(dir, "request.json"), pointer = join(dir, "release.json"), gate = join(dir, "auto-admission.json");
+  writeFileSync(pointer, JSON.stringify({ sha, dir: root, checkoutHead: sha }));
+  writeFileSync(gate, JSON.stringify({ id: "owned-preflight", until: Date.now() + 60000 }));
+  const decision = { mode: "checkout", record: { ...record, checkout: root, requestFile, releasePointer: pointer, socket: "fixture-socket", launcher: { ...record.launcher } } };
+  const entered = join(root, "entered"), release = join(root, "release"), count = join(root, "count");
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+n=0
+[ ! -f "$CREDENTIAL_COUNT" ] || n=$(cat "$CREDENTIAL_COUNT")
+n=$((n+1))
+printf "%s" "$n" > "$CREDENTIAL_COUNT"
+if [ "$n" = 2 ]; then touch "$CREDENTIAL_ENTERED"; while [ ! -f "$CREDENTIAL_RELEASE" ]; do sleep 0.01; done; fi
+exec "$CREDENTIAL_GIT" "$@"
+`, { mode: 0o700 });
+  const names = ["PATH", "CREDENTIAL_COUNT", "CREDENTIAL_ENTERED", "CREDENTIAL_RELEASE", "CREDENTIAL_GIT"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  Object.assign(process.env, { PATH: `${bin}:${process.env.PATH}`, CREDENTIAL_COUNT: count, CREDENTIAL_ENTERED: entered, CREDENTIAL_RELEASE: release, CREDENTIAL_GIT: git });
+  let pending;
+  try {
+    pending = installAction(decision as never, { cgroup: () => "", ready: () => true, env: { LLV_STATE_DIR: state } });
+    const deadline = Date.now() + 1500;
+    while (!existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(existsSync(entered)).toBe(true);
+    if (change === "gate-expired") writeFileSync(gate, JSON.stringify({ id: "owned-preflight", until: 0 }));
+    if (change === "new-work") writeFileSync(join(state, "agent-registry.json"), JSON.stringify({ accepted: "new-turn" }));
+    if (change === "custody-changed") decision.record.launcher.startIdentity = "successor";
+    const pointerBefore = readFileSync(pointer, "utf8"), gateBefore = readFileSync(gate, "utf8");
+    writeFileSync(release, "");
+    expect(await pending).toEqual({ id: "secure-handoff", button: false });
+    expect(readFileSync(pointer, "utf8")).toBe(pointerBefore); expect(readFileSync(gate, "utf8")).toBe(gateBefore);
+    expect(existsSync(requestFile)).toBe(false);
+  } finally {
+    writeFileSync(release, ""); await pending;
+    for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+  }
 });
