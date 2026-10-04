@@ -4,6 +4,10 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "memory.label": "Спільна пам’ять для цього проєкту",
+  "memory.explanation": "Jev добирає доречну пам’ять для кожного вашого повідомлення й передає агенту; до Jev надсилається контекст із прихованими секретами.",
+  "memory.spend": "Спільний бюджет Jev: ${spent} із ${cap} цього місяця.",
+  "memory.offered": "Запропонована пам’ять: {names}",
   "stateWrites.title": "Диск заповнений: зміни стану не зберігаються",
   "stateWrites.free": "Вільне місце: {free}.",
   "stateWrites.unknown": "невідомо",
