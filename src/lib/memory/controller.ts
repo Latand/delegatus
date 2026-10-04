@@ -71,28 +71,26 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // A retry of this native id keeps the same receipt; repeated words on a
       // later id do not consume it again.
       const terminalOrigin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine);
-      if (terminalOrigin === null) {
-        // Delivery can proceed after both optional receipt stores fail. The
-        // registry reservation predates transport and survives reload; without
-        // its matching receipt, native authorship remains unproven. Explicit
-        // structured operator metadata above needs no such inference.
-        const contentDigest = structuredContent(prompt, []).contentDigest;
-        const missingMachineReceipt = Object.values(snapshot.heldDeliveries).some(delivery =>
-          delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
-          && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
-          && !index.hasTerminalDelivery(delivery.command.operationId));
-        const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
-        const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
-        // A relay reservation belongs to its child conversation, while its
-        // terminal receipt belongs to the root. Every matching source delivery
-        // must have evidence; a prior same-text relay cannot cover a lost one.
-        const missingRelayReceipt = relay && (!index.hasTerminalPrompt(conversationId, prompt)
-          || Object.values(snapshot.heldDeliveries).some(delivery =>
-            (delivery.contentDigest === relayDigest || delivery.payloadKind !== "text")
-            && !index.hasTerminalDelivery(delivery.command.operationId)));
-        const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
-        if (missingMachineReceipt || missingLaunchReceipt || missingRelayReceipt) return "";
-      }
+      // Delivery can proceed after both optional receipt stores fail. The
+      // registry reservation predates transport and survives reload; without
+      // its matching receipt, native authorship remains unproven. Explicit
+      // structured operator metadata above needs no such inference.
+      const contentDigest = structuredContent(prompt, []).contentDigest;
+      const missingMachineReceipt = Object.values(snapshot.heldDeliveries).some(delivery =>
+        delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
+        && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
+        && !index.hasTerminalDelivery(delivery.command.operationId));
+      const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
+      const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
+      // A relay reservation belongs to its child conversation, while its
+      // terminal receipt belongs to the root. Every matching source delivery
+      // must have evidence; a prior same-text relay cannot cover a lost one.
+      const missingRelayReceipt = relay && (!index.hasTerminalPrompt(conversationId, prompt)
+        || Object.values(snapshot.heldDeliveries).some(delivery =>
+          (delivery.contentDigest === relayDigest || delivery.payloadKind !== "text")
+          && !index.hasTerminalDelivery(delivery.command.operationId)));
+      const missingLaunchReceipt = (receipt.delegationDepth ?? 1) > 0 && !index.hasTerminalDelivery(`spawn:${receipt.launchId}`);
+      if (missingMachineReceipt || missingLaunchReceipt || missingRelayReceipt) return "";
       origin = terminalOrigin ?? "operator";
       const initialOperator = receipt.delegationDepth === 0 && receipt.launchDisplay?.echo === prompt;
       if (origin !== "operator" || (transcript ? !transcript.includes(input.session_id) : !initialOperator)) return "";

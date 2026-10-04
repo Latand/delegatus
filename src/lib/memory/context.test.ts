@@ -93,13 +93,13 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} native termin
   try {
     fs.writeFileSync(filename, "");
     memoryIndex().recordTerminalDelivery("synthetic-machine", "synthetic-conversation", machine, "agent", filename);
-    fs.appendFileSync(filename, line("synthetic-machine", machine) + "\n");
-    expect(memoryIndex().terminalOrigin("synthetic-conversation", "native:synthetic-machine", machine, filename, engine)).toBe("agent");
+    fs.appendFileSync(filename, line("synthetic-queued", machine) + "\n" + line("synthetic-machine", machine) + "\n");
+    expect(memoryIndex().terminalOrigin("synthetic-conversation", "native:synthetic-machine", machine, filename, engine)).toBe("unknown");
     fs.appendFileSync(filename, line("synthetic-operator", operator) + "\n");
     memoryIndex().close();
     const context = memoryTurnContext(filename, engine, "Continue");
     expect(groundedRequest({ engine, prompt: "Continue", candidates: [], context }).state.openingRequest).toBe(operator);
-    expect(context.find(turn => turn.text === machine)?.role).toBe("machine");
+    expect(context.filter(turn => turn.text === machine).map(turn => turn.role)).toEqual(["machine", "machine"]);
   } finally {
     memoryIndex().close(); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });

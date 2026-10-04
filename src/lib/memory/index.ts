@@ -391,11 +391,11 @@ export class MemoryIndex {
       const cursor = nativeHookCursor(filename, engine, turn.request.slice("native:".length));
       if (cursor.key && cursor.digest === turn.digest) seen.add(cursor.key);
     }
-    const receipts = db.query<{ id: string; conversation: string; digest: string; request: string | null; offset: number | null }, [string, string | null]>(
-      "SELECT id, conversation, digest, request, offset FROM memory_terminal_deliveries WHERE transcript = ? OR (transcript IS NULL AND conversation = ?) ORDER BY rowid DESC LIMIT 256"
+    const receipts = db.query<{ id: string; conversation: string; digest: string; origin: string; request: string | null; offset: number | null }, [string, string | null]>(
+      "SELECT id, conversation, digest, origin, request, offset FROM memory_terminal_deliveries WHERE transcript = ? OR (transcript IS NULL AND conversation = ?) ORDER BY rowid DESC LIMIT 256"
     ).all(filename, conversation ?? null).reverse();
     for (const receipt of receipts) {
-      if (joined.has(receipt.id)) continue;
+      if (joined.has(receipt.id) || !receipt.request && receipt.origin !== "operator") continue;
       if (performance.now() >= deadline) throw Error("memory occurrence join budget");
       const cursor = receipt.request ? nativeHookCursor(filename, engine, receipt.request.slice("native:".length)) : null;
       const occurrence = cursor?.key && cursor.digest === receipt.digest && !seen.has(cursor.key) ? cursor
@@ -412,9 +412,22 @@ export class MemoryIndex {
   terminalContextOrigins(filename: string, engine: "claude" | "codex", conversation?: string) {
     return this.hookDatabase(db => {
       this.replayTerminalDeliveries(db);
-      this.terminalOccurrences(db, filename, engine, conversation);
-      return new Map(db.query<{ offset: number; origin: string }, [string]>(`SELECT o.offset, d.origin FROM memory_terminal_occurrences o
+      const owned = this.terminalOccurrences(db, filename, engine, conversation);
+      const origins = new Map(db.query<{ offset: number; origin: string }, [string]>(`SELECT o.offset, d.origin FROM memory_terminal_occurrences o
         JOIN memory_terminal_deliveries d ON d.id = o.delivery WHERE o.transcript = ?`).all(filename).map(row => [row.offset, row.origin]));
+      const pending = db.query<{ digest: string; offset: number | null }, [string, string | null]>(
+        "SELECT digest, offset FROM memory_terminal_deliveries WHERE origin != 'operator' AND (transcript = ? OR (transcript IS NULL AND conversation = ?)) ORDER BY rowid DESC LIMIT 256"
+      ).all(filename, conversation ?? null);
+      const deadline = performance.now() + 100;
+      for (const receipt of pending) for (let count = 0; ; count++) {
+        if (count >= 256 || performance.now() >= deadline) throw Error("memory context authorship budget");
+        const occurrence = nativeOccurrenceAfter(filename, engine, receipt.offset ?? 0, receipt.digest, owned);
+        if (!occurrence) break;
+        // Every indistinguishable row stays unknown, including the actual
+        // machine row. Positive native operator ownership is excluded above.
+        origins.set(occurrence.offset, "unknown"); owned.add(occurrence.key);
+      }
+      return origins;
     });
   }
 
@@ -427,6 +440,13 @@ export class MemoryIndex {
       return db.transaction(() => {
         const existing = db.query<{ origin: string }, [string, string]>("SELECT origin FROM memory_terminal_deliveries WHERE conversation = ? AND request = ?").get(conversation, request);
         if (existing) return existing.origin;
+        const digest = messageTextDigest(prompt);
+        const operator = db.query("SELECT 1 FROM memory_native_turns WHERE conversation = ? AND request = ? AND digest = ?").get(conversation, request, digest);
+        if (operator) return "operator";
+        // Offset and equal text cannot distinguish an earlier queued operator
+        // from the machine submission. Preserve the receipt instead of letting
+        // either occurrence consume the other's authorship evidence.
+        if (db.query("SELECT 1 FROM memory_terminal_deliveries WHERE conversation = ? AND digest = ? AND origin != 'operator'").get(conversation, digest)) return "unknown";
         const deliveries = db.query<{ id: string; origin: string; transcript: string | null; offset: number | null }, [string, string]>("SELECT id, origin, transcript, offset FROM memory_terminal_deliveries WHERE conversation = ? AND request IS NULL AND digest = ? ORDER BY rowid LIMIT 256").all(conversation, messageTextDigest(prompt));
         const cursor = transcript && engine ? nativeHookCursor(transcript, engine, request.slice("native:".length)) : null;
         for (const delivery of deliveries) {

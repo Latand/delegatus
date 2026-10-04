@@ -257,7 +257,7 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
 });
 
-for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical", "unowned"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input preserves delivery authorship`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical", "unowned", "racing before journal", "racing after journal"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input preserves delivery authorship`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-authorship-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
   process.env.OPENROUTER_API_KEY = "fixture";
@@ -292,6 +292,10 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   if (mode === "relay") { fs.writeFileSync(child, ""); registry.ensureConversation(engine, child, "default"); }
   const entry = { path: transcript, root, engine, title: "Synthetic terminal" } as FileEntry;
   const childEntry = { ...entry, path: child, parent: transcript };
+  // Independent positive ownership already exists for this queued operator id.
+  // Text equality alone would be insufficient for a new native id after delivery.
+  const queuedOperatorPrompt = mode === "relay" ? `User message for your branch «${childEntry.title}» — forward it or handle it yourself:\n${prompt}` : prompt;
+  memoryIndex().recordNativeTurn(receipt.conversationId, "native:synthetic-typed", transcript, fs.statSync(transcript).size, queuedOperatorPrompt);
   // The earlier operator hook ran before its journal row materialized.
   const lock = contended ? new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite")) : null;
   lock?.exec("BEGIN IMMEDIATE");
@@ -305,11 +309,15 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   memoryIndex().close();
   expect(result.ok).toBe(true);
   if (queued === "identical") memoryIndex().recordNativeTurn(receipt.conversationId, "native:synthetic-earlier", transcript, fs.statSync(transcript).size, wire);
+  const earlierHook = () => offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+    prompt_id: "synthetic-earlier", turn_id: "synthetic-earlier", prompt: wire, ...(engine === "claude" ? { source: "user" } : {}) });
+  if (queued === "racing before journal") { expect(await earlierHook()).toBe(""); expect(calls).toBe(0); memoryIndex().close(); }
   // Another submission queued before actuation can journal after this receipt.
   fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
     ? { type: "user", uuid: "synthetic-earlier", message: { role: "user", content: queued !== "different" ? wire : "Earlier queued input" } }
     : { type: "response_item", payload: { type: "message", turn_id: "synthetic-earlier", role: "user", content: [{ type: "input_text", text: queued !== "different" ? wire : "Earlier queued input" }] } }) + "\n");
-  if (queued === "identical") fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
+  if (queued === "racing after journal") { expect(await earlierHook()).toBe(""); expect(calls).toBe(0); memoryIndex().close(); }
+  if (queued === "identical" || queued.startsWith("racing")) fs.appendFileSync(transcript, JSON.stringify(engine === "claude"
     ? { type: "user", uuid: "synthetic-machine", message: { role: "user", content: wire } }
     : { type: "response_item", payload: { type: "message", turn_id: "synthetic-machine", role: "user", content: [{ type: "input_text", text: wire }] } }) + "\n");
   if (engine === "claude") for (const source of ["sdk", "system", "loop_wakeup", "schedule_wakeup", "poll_event"]) {
@@ -324,7 +332,7 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["followup
   expect(await offerForHook(request, input)).toBe("");
   expect(calls).toBe(0);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toEqual([]);
-  if (queued === "unowned") {
+  if (queued === "unowned" || queued.startsWith("racing")) {
     // Optional earlier hooks can fail. Neither guessed journal ownership nor
     // a retry after reload may admit memory to the pending machine delivery.
     memoryIndex().close();

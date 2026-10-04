@@ -333,7 +333,7 @@ test("a previously indexed source that becomes oversized stops returning stale c
   } finally { index.close(); }
 });
 
-test("an unobserved terminal delivery retains unknown authorship until its native hook establishes ownership", () => {
+test("native text remains unknown until independent operator ownership is established", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-cursor-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -347,8 +347,8 @@ test("an unobserved terminal delivery retains unknown authorship until its nativ
     expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-other", "Different typed input", transcript, "claude")).toBeNull();
     fs.appendFileSync(transcript, JSON.stringify({ type: "user", uuid: "synthetic-earlier", message: { role: "user", content: "Repeat synthetic input" } }) + "\n");
     expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
-    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-earlier", "Repeat synthetic input", transcript, "claude")).toBe("agent");
-    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBeNull();
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-earlier", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
+    expect(index.terminalOrigin("synthetic-conversation", "native:synthetic-next", "Repeat synthetic input", transcript, "claude")).toBe("unknown");
   } finally {
     index.close();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
@@ -431,24 +431,26 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} ambiguous ide
     expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
     index.close();
     expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
-    // Once native ownership disambiguates the earlier row, bind only the machine.
+    // Positive ownership protects that operator id; other same-text ids stay unknown.
     index.recordNativeTurn("ambiguous-conversation", "native:synthetic-queued", transcript, 0, prompt);
-    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("agent");
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-machine", prompt, transcript, engine)).toBe("unknown");
     fs.appendFileSync(transcript, line("synthetic-typed"));
-    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBeNull();
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("unknown");
+    index.recordNativeTurn("ambiguous-conversation", "native:synthetic-typed", transcript, 0, prompt);
+    expect(index.terminalOrigin("ambiguous-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("operator");
   } finally { index.close(); }
 });
 
-for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts own separate native occurrences`, () => {
+for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts cannot prove native operator authorship`, () => {
   const transcript = fixture("queued.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
   try {
     index.recordTerminalDelivery("queued-first", "queued-conversation", prompt, "agent", transcript);
     index.recordTerminalDelivery("queued-second", "queued-conversation", prompt, "agent", transcript);
-    expect(index.terminalOrigin("queued-conversation", "native:synthetic-first", prompt, transcript, engine)).toBe("agent");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-first", prompt, transcript, engine)).toBe("unknown");
     const line = JSON.stringify(engine === "claude" ? { type: "user", uuid: "synthetic-first", message: { role: "user", content: prompt } }
       : { type: "response_item", payload: { type: "message", turn_id: "synthetic-first", role: "user", content: [{ type: "input_text", text: prompt }] } });
     fs.appendFileSync(transcript, line + "\n");
-    expect(index.terminalOrigin("queued-conversation", "native:synthetic-second", prompt, transcript, engine)).toBe("agent");
-    expect(index.terminalOrigin("queued-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBeNull();
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-second", prompt, transcript, engine)).toBe("unknown");
+    expect(index.terminalOrigin("queued-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("unknown");
   } finally { index.close(); }
 });
