@@ -12,6 +12,8 @@ import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
 
 import { registerPipelineTick } from "./controllerSignal";
+import { PIPELINE_REMOTE_ACTIONS } from "./controllerCapabilities";
+import { procBackend } from "@/lib/proc";
 import { tickPipelines } from "./engine";
 import { archiveSettledPipelines, loadPipelines } from "./store";
 
@@ -89,7 +91,8 @@ export function writeFlowPipelineControllerHeartbeat(
   filename = statePath(HEARTBEAT_FILE),
 ): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  writeJsonDurably(filename, heartbeat);
+  writeJsonDurably(filename, { ...heartbeat, pid: process.pid,
+    processIdentity: procBackend.processIdentity(process.pid), remoteActions: PIPELINE_REMOTE_ACTIONS });
 }
 
 export async function controllerFileScan(): Promise<{ files: FileEntry[]; complete: boolean }> {
