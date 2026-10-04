@@ -1379,7 +1379,7 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   } finally { if (isAlive(after.launcher.pid)) process.kill(after.launcher.pid, "SIGTERM"); await until(() => !isAlive(after.launcher.pid)); }
 }, 90_000);
 
-for (const failure of ["host", "web", "import"] as const) (legacySource ? test : test.skip)(`a legacy ready pointer without an apply intent restores prior custody after ${failure} failure`, async () => {
+for (const priorPublished of [false, true]) for (const failure of ["host", "web", "import"] as const) (legacySource ? test : test.skip)(`a legacy ready pointer without an apply intent restores prior custody after ${failure} failure (prior published=${priorPublished})`, async () => {
   const { SelfUpdateService } = await import("../src/lib/selfUpdate/service");
   const { readRevision } = await import("../src/lib/selfUpdate/git");
   const { readStartIdentity } = await import("../src/lib/selfUpdate/pid");
@@ -1395,29 +1395,70 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   const candidateFixture = install();
   const candidate = release(candidateFixture, `ready-broken-${failure}`, { brokenHost: failure === "host" });
   git(fixture.checkout, "fetch", candidate.dir, candidate.sha);
+  const prior = priorPublished ? release(fixture, "prior-published") : { sha: fixture.first, dir: fixture.checkout };
+  if (priorPublished) {
+    const installId = path.basename(pointerFile(fixture)).slice("release-".length, -".json".length);
+    const destination = path.join(fixture.env.XDG_CACHE_HOME!, "delegatus", "self-update", installId, "releases", prior.sha.slice(0, 12));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    git(fixture.checkout, "worktree", "move", prior.dir, destination); prior.dir = destination;
+  }
+  const priorPointer = priorPublished ? JSON.stringify({ ...prior, checkoutHead: fixture.first }) : null;
+  if (priorPointer) { mkdirSync(path.dirname(pointerFile(fixture)), { recursive: true }); writeFileSync(pointerFile(fixture), priorPointer); }
   const running = await start(fixture);
   let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   writeFileSync(record.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
   // Old code can switch just the web before the new Viewer owns any apply intent.
   writeFileSync(record.requestFile, JSON.stringify({ role: "web", requestId: "legacy-web-only", requestedAt: new Date().toISOString() }));
   record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.web.revision === candidate.sha.slice(0, 7) ? r : null; });
-  expect(record.runtimeHost.revision).toBe(fixture.first.slice(0, 7));
-  if (failure === "import") writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), 'throw new Error("fixture import failure");\n' + readFileSync(path.join(candidate.dir, "bin", "cli.mjs"), "utf8"));
+  expect(record.runtimeHost.revision).toBe(prior.sha.slice(0, 7));
+  const unexpectedStart = path.join(candidate.dir, "unexpected-start");
+  if (failure === "import") writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"),
+    `if (!process.argv.includes("--version")) (await import("node:fs")).writeFileSync(${JSON.stringify(unexpectedStart)}, "candidate started"); throw new Error("fixture import failure");\n`
+      + readFileSync(path.join(candidate.dir, "bin", "cli.mjs"), "utf8").replace(/^#![^\n]*\n/, ""));
   if (failure === "web") writeFileSync(path.join(candidate.dir, "node_modules", ".bin", "next"), STUB_NEXT(true));
   const directory = path.dirname(record.requestFile);
+  const managerDir = path.join(fixture.root, "manager"); mkdirSync(managerDir);
+  const manager = path.join(managerDir, "systemctl");
+  writeFileSync(manager, `#!${process.execPath} --bun
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+const record = JSON.parse(readFileSync(${JSON.stringify(recordFile(fixture.state))}, "utf8"));
+const directory = ${JSON.stringify(directory)};
+const intent = JSON.parse(readFileSync(directory + "/apply.json", "utf8"));
+const drain = JSON.parse(readFileSync(directory + "/auto-drain.json", "utf8"));
+if (intent.state !== "switching" || intent.requestId !== drain.id) process.exit(9);
+writeFileSync(${JSON.stringify(path.join(fixture.root, "recovery-custody.json"))}, JSON.stringify({ requestId: intent.requestId, state: intent.state, drain: drain.id }));
+process.kill(record.launcher.pid, "SIGTERM");
+const deadline = Date.now() + 5000;
+while (Date.now() < deadline) { try { process.kill(record.launcher.pid, 0); } catch { break; } await Bun.sleep(25); }
+spawn(process.execPath, ["--bun", ${JSON.stringify(path.join(fixture.checkout, "bin", "cli.mjs"))}, "--no-open", "--port", ${JSON.stringify(String(running.port))}], { cwd: ${JSON.stringify(fixture.checkout)}, detached: true, stdio: "ignore", env: process.env }).unref();
+`, { mode: 0o700 });
   expect(existsSync(path.join(directory, "apply.json"))).toBe(false);
   let restarting: Promise<void> | undefined;
+  let recoveryOutput = "";
   const runner = { state: idleUpdate(), start: async () => {}, retry: async () => {}, restore(state: ReturnType<typeof idleUpdate>) { this.state = state; }, logPath: () => "" };
   const service = new SelfUpdateService({
     now: () => Date.now(), env: fixture.env, dir: directory, remote: "https://example.invalid/project.git", branch: "main", pollMinutes: 60, bun: process.execPath,
-    mode: async () => ({ mode: "checkout", reason: null, record: record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord }),
+    mode: async () => ({ mode: "checkout", reason: null, record: readRecord(fixture.state) as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord }),
     check: async () => ({ ok: false, error: "fixture", installed: null }), describe: readRevision,
     createRunner: () => runner, requestRestart: () => "unused", processAlive: (pid, identity) => readStartIdentity(pid) === identity,
-    hostHealth: async () => ({ pid: record.runtimeHost.pid!, startIdentity: readStartIdentity(record.runtimeHost.pid!)!, hostEpoch: 1 }),
+    hostHealth: async () => { const r = readRecord(fixture.state); return await socketAnswers(r.socket) ? { pid: r.runtimeHost.pid!, startIdentity: readStartIdentity(r.runtimeHost.pid!)!, hostEpoch: 1 } : null; },
     requestDeployment: async () => { throw new Error("unused"); }, readDeployment: async () => null,
     findDeploymentByIdempotencyKey: async () => null, releaseTarget: () => null, prepareCheckRepo: async () => { throw new Error("unused"); },
     buildEnv: () => ({}), web: { pid: record.web.pid!, port: running.port, startedAt: "" },
-    install: { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }), entry: () => path.join(fixture.checkout, "bin", "cli.mjs"), run: () => {
+    install: { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }), entry: () => path.join(prior.dir, "bin", "cli.mjs"), run: (action, recovery) => {
+      if (recovery) {
+        restarting = (async () => {
+          const { runInstallAction } = await import("../src/lib/selfUpdate/actions");
+          runInstallAction(action, args => {
+            const command = args.slice(args.indexOf("--") + 1);
+            const helper = spawn(command[0]!, command.slice(1), { cwd: fixture.checkout, env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, stdio: "pipe" }); children.add(helper);
+            // The recovery must outlive the Viewer that requested it.
+            helper.stderr?.on("data", chunk => { recoveryOutput += String(chunk); });
+          }, recovery);
+        })();
+        return;
+      }
       restarting = (async () => {
         const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
         const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
@@ -1426,36 +1467,45 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
     } },
   });
   try {
-    const result = await service.performInstallAction();
+    const { postInstallAction } = await import("../src/lib/selfUpdate/routes");
+    const { setSelfUpdateServiceForTests } = await import("../src/lib/selfUpdate/instance");
+    const { NextRequest } = await import("next/server");
+    setSelfUpdateServiceForTests(service);
+    const response = await postInstallAction(new NextRequest("http://localhost/api/self-update/install-action", { method: "POST", headers: { origin: "http://localhost", host: "localhost", "sec-fetch-site": "same-origin" } }));
+    await response.json();
     if (failure === "import") {
-      expect(result).toMatchObject({ ok: false, status: 503 });
-      expect(restarting).toBeUndefined();
-      expect(record.launcher.pid).toBe(readRecord(fixture.state).launcher.pid);
-      expect(existsSync(record.releasePointer)).toBe(false);
-      // The existing processes remain untouched; a later real service start
-      // must select A rather than retrying the entry that failed preflight.
-      const closed = new Promise(resolve => running.child.once("exit", resolve)); running.child.kill("SIGTERM"); await closed;
-      const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(running.port)], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
-      children.add(child);
-      await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy"
-        && r.web.revision === fixture.first.slice(0, 7) && r.runtimeHost.revision === fixture.first.slice(0, 7) ? r : null; });
-      expect(await served(running.port)).toBe(fixture.checkout);
+      expect(response.status).toBe(503);
+      // The action itself must finish owned recovery, without a second restart.
+      const settled = readRecord(fixture.state);
+      expect(recoveryOutput).toBe("");
+      expect(settled.web.revision).toBe(settled.runtimeHost.revision);
+      expect(settled.web.revision).toBe(prior.sha.slice(0, 7));
+      expect(await served(running.port)).toBe(prior.dir);
+      expect(await socketAnswers(settled.socket)).toBe(true);
+      expect(restarting).toBeDefined();
+      const intent = JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"));
+      expect(intent).toMatchObject({ state: "failed", rolledBack: true, launcherPid: record.launcher.pid, launcherIdentity: record.launcher.startIdentity });
+      expect(JSON.parse(readFileSync(path.join(fixture.root, "recovery-custody.json"), "utf8"))).toEqual({ requestId: intent.requestId, state: "switching", drain: intent.requestId });
+      expect(existsSync(unexpectedStart)).toBe(false);
+      expect(existsSync(path.join(directory, "auto-drain.json"))).toBe(false);
+      expect(new ApplyController(directory).observe(settled as never, await socketAnswers(settled.socket))).toBeNull();
+      expect(existsSync(record.releasePointer) ? JSON.parse(readFileSync(record.releasePointer, "utf8")).sha : null).toBe(priorPublished ? prior.sha : null);
       return;
     }
-    expect(result).toEqual({ ok: true });
+    expect(response.status).toBe(202);
     await restarting;
     const intent = JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"));
-    expect(intent.rollbackPointer).toBeNull();
-    expect(intent.rollbackWebRevision).toBe(fixture.first.slice(0, 7));
-    expect(intent.rollbackHostRevision).toBe(fixture.first.slice(0, 7));
+    expect(intent.rollbackPointer ? JSON.parse(intent.rollbackPointer).sha : null).toBe(priorPublished ? prior.sha : null);
+    expect(intent.rollbackWebRevision).toBe(prior.sha.slice(0, 7));
+    expect(intent.rollbackHostRevision).toBe(prior.sha.slice(0, 7));
     record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy"
-      && r.web.revision === fixture.first.slice(0, 7) && r.runtimeHost.revision === fixture.first.slice(0, 7) ? r : null; }, 60_000);
-    expect(existsSync(record.releasePointer)).toBe(false);
-    expect(await served(running.port)).toBe(fixture.checkout);
+      && r.web.revision === prior.sha.slice(0, 7) && r.runtimeHost.revision === prior.sha.slice(0, 7) ? r : null; }, 60_000);
+    expect(existsSync(record.releasePointer) ? JSON.parse(readFileSync(record.releasePointer, "utf8")).sha : null).toBe(priorPublished ? prior.sha : null);
+    expect(await served(running.port)).toBe(prior.dir);
     const cold = new ApplyController(directory);
     expect(cold.observe(record as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord, await socketAnswers(record.socket))).toBe("failed");
     expect(cold.current).toMatchObject({ rolledBack: true, state: "failed" });
-  } finally { service.stop(); await restarting; }
+  } finally { const { setSelfUpdateServiceForTests } = await import("../src/lib/selfUpdate/instance"); setSelfUpdateServiceForTests(null); service.stop(); await restarting; }
 }, 90_000);
 
 (legacySource ? test : test.skip)("actual legacy bootstrap rollback settles the apply and seat receipt", async () => {

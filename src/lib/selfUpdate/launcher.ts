@@ -14,9 +14,9 @@ import type { ProcessError, ProcessStateName } from "./types";
 export type LauncherRole = "web" | "runtime-host";
 
 /** Companion control files never overwrite the request they describe. */
-export function launcherControlFile(requestFile: string, role: "trial" | "adopt"): string {
+export function launcherControlFile(requestFile: string, role: "trial" | "adopt" | "launcher" | "recovery"): string {
   const name = basename(requestFile);
-  if (!/^request(?:-[^/]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
   return join(dirname(requestFile), name.replace(/^request/, role));
 }
 

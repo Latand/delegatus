@@ -133,12 +133,14 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
   const unit = serviceFor(root);
   return unit ? { id: "start-service", button: true, unit } : { id: "start-launcher", button: false, command };
 }
+export interface ServiceRecovery { file: string; entry: string; bun: string }
 export function runInstallAction(action: InstallAction, run: (args: string[]) => void = args => {
   const result = spawnSync(args[0]!, args.slice(1), { stdio: "ignore", timeout: 10_000 });
   if (result.status !== 0) throw new Error("The user service manager did not accept the launcher action");
-}): void {
+}, recovery?: ServiceRecovery): void {
   if (!action.button || !action.unit || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(action.unit)
     || !["restart-service", "start-service"].includes(action.id)) throw new Error("The install action cannot run here");
   run(["systemd-run", "--user", "--collect", "--quiet", `--unit=delegatus-apply-${crypto.randomUUID()}`, "--",
-    "systemctl", "--user", action.id === "restart-service" ? "restart" : "start", action.unit]);
+    ...(recovery ? [recovery.bun, "--bun", recovery.entry, "--recover-service", recovery.file]
+      : ["systemctl", "--user", action.id === "restart-service" ? "restart" : "start", action.unit])]);
 }

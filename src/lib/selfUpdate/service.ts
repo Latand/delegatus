@@ -1,3 +1,5 @@
+import { probeHeadersFrom } from "../../../bin/internalService.mjs";
+import { viewerBootGateKey } from "../../../bin/viewerGateKey.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
 /* The self-update service (#2007): one per web process, behind the Update
    surface's routes. It holds the update check, and either the checkout
@@ -49,7 +51,7 @@ import {
 import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
 import { runGit } from "./git";
 import { comparePackageVersions, manualInstallRoot, PackageRunner, packageRoot, packageVersion, registryRevision } from "./package";
-import { installAction, runInstallAction, userUnit } from "./actions";
+import { installAction, runInstallAction, userUnit, type ServiceRecovery } from "./actions";
 import { ApplyController, writeAtomic } from "./apply";
 import { readStartIdentity } from "./pid";
 import { LAUNCHER_RECORD_ENV, type ModeDecision } from "./mode";
@@ -91,7 +93,7 @@ export interface ServiceDeps {
   pollMinutes: number;
   bun: string;
   mode(): Promise<ModeDecision>;
-  install?: { action(decision: ModeDecision): InstallAction | null | Promise<InstallAction | null>; run(action: InstallAction): void; entry(record: LauncherRecord): string | null };
+  install?: { action(decision: ModeDecision): InstallAction | null | Promise<InstallAction | null>; run(action: InstallAction, recovery?: ServiceRecovery): void; entry(record: LauncherRecord): string | null };
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
   createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
@@ -1420,10 +1422,47 @@ export class SelfUpdateService {
             { timeoutMs: 30_000, maxOutputBytes: 64 * 1024 })).code === 0;
         } finally { rmSync(scratch, { recursive: true, force: true }); }
         if (!loads) {
-          this.apply.restoreUntaken(record);
-          this.apply.patch({ state: "failed", detail: "The replacement launcher failed its load check before restart" });
-          this.changes.emit();
-          return refuse(503, "cannot-restart", "The replacement launcher could not load; the prior release is restored for the next start");
+          const previousEntry = this.deps.install ? this.deps.install.entry(record)
+            : readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs"));
+          if (!previousEntry || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity!))
+            return refuse(503, "cannot-restart", "The prior launcher identity changed; update custody is retained");
+          const intent = this.apply.current!;
+          const detail = "The replacement launcher failed its load check before restart";
+          const occupied = this.reserve(record, () => {
+            writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+            this.apply.patch({ state: "switching", switchedAt: new Date(this.deps.now()).toISOString(), detail });
+            this.apply.restoreUntaken(record);
+            writeAtomic(launcherControlFile(record.requestFile, "trial"), {
+              requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry,
+              state: "rolled-back", detail, at: intent.startedAt,
+            });
+          }, intent.requestId);
+          if (occupied) return occupied;
+          const file = launcherControlFile(record.requestFile, "recovery");
+          const headers = probeHeadersFrom(dirname(this.deps.dir));
+          const key = viewerBootGateKey({ ...process.env, ...this.deps.env, LLV_STATE_DIR: dirname(this.deps.dir) });
+          if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
+          writeAtomic(file, { requestId: intent.requestId, requestFile: record.requestFile, unit: action.unit, headers });
+          const recovery = { file, entry: join(release.dir, "bin", "launcher-relaunch.mjs"), bun: this.deps.bun };
+          try {
+            if (this.deps.install) this.deps.install.run(action, recovery);
+            else runInstallAction(action, undefined, recovery);
+          } catch {
+            return refuse(503, "cannot-restart", "The service recovery was not accepted; update custody is retained");
+          }
+          // The helper runs outside this service's unit and completes even
+          // after this Viewer exits. A surviving caller reads its settlement.
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            const settled = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8"));
+            if (settled.requestId !== intent.requestId) break;
+            if (settled.state === "failed" && settled.rolledBack) {
+              this.apply.patch(settled); this.changes.emit();
+              return refuse(503, "cannot-restart", "The replacement launcher could not load; the verified prior release is serving");
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          return refuse(503, "cannot-restart", "Prior release health is not proven; update custody is retained");
         }
         this.apply.patch({ state: "ready" });
         const runner = this.runnerFor(record);

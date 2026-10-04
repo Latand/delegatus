@@ -150,6 +150,61 @@ if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "-
   catch (error) { console.error(error instanceof Error ? error.message : "Terminal launcher upgrade failed"); process.exitCode = 1; }
 }
 
+/* This helper belongs to the transient recovery unit, so stopping the old
+   Viewer cannot interrupt rollback verification or release custody early. */
+async function recoverService(file) {
+  const plan = JSON.parse(readFileSync(file, "utf8"));
+  const name = basename(plan.requestFile);
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(plan.unit)) throw new Error("Invalid recovery plan");
+  const directory = dirname(plan.requestFile);
+  const applyFile = join(directory, "apply.json");
+  const trialFile = join(directory, name.replace(/^request/, "trial"));
+  const recordFile = join(directory, name.replace(/^request/, "launcher"));
+  const read = target => { try { return JSON.parse(readFileSync(target, "utf8")); } catch { return null; } };
+  const intent = read(applyFile); const trial = read(trialFile); const owner = read(recordFile);
+  if (intent?.requestId !== plan.requestId || intent.state !== "switching" || !intent.externalRestart || intent.trigger !== "operator"
+    || trial?.requestId !== intent.requestId || trial.target !== intent.target || trial.rollbackPointer !== intent.rollbackPointer
+    || trial.state !== "rolled-back" || owner?.launcher.pid !== intent.launcherPid || owner.launcher.startIdentity !== intent.launcherIdentity
+    || readStartIdentity(intent.launcherPid) !== intent.launcherIdentity || existsSync(plan.requestFile)) throw new Error("Recovery ownership changed; custody is retained");
+  const restored = () => intent.rollbackPointer === null ? !existsSync(intent.releasePointer)
+    : existsSync(intent.releasePointer) && readFileSync(intent.releasePointer, "utf8") === intent.rollbackPointer;
+  const revision = intent.rollbackPointer === null ? intent.rollbackHostRevision : readPointer(intent.rollbackPointer)?.sha?.slice(0, 7);
+  if (!restored() || !revision || intent.rollbackWebRevision !== intent.rollbackHostRevision) throw new Error("Prior release is unverifiable; custody is retained");
+  const restart = spawnSync("systemctl", ["--user", "restart", plan.unit], { timeout: 30_000, stdio: "ignore" });
+  if (restart.status !== 0) throw new Error("Service recovery was refused; custody is retained");
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const current = read(applyFile); const record = read(recordFile);
+    if (current?.requestId !== intent.requestId || current.state !== "switching" || read(trialFile)?.requestId !== intent.requestId
+      || !restored() || existsSync(plan.requestFile)) throw new Error("Recovery custody changed before health was proven");
+    if (record && record.launcher.startIdentity && record.launcher.startIdentity === readStartIdentity(record.launcher.pid)
+      && (record.launcher.pid !== intent.launcherPid || record.launcher.startIdentity !== intent.launcherIdentity)
+      && (!record.launcher.state || record.launcher.state === "healthy")
+      && record.web.state === "healthy" && record.runtimeHost.state === "healthy"
+      && record.web.revision === revision && record.runtimeHost.revision === revision
+      && record.web.startIdentity && record.web.startIdentity === readStartIdentity(record.web.pid)
+      && record.runtimeHost.startIdentity && record.runtimeHost.startIdentity === readStartIdentity(record.runtimeHost.pid)
+      && readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").includes(trial.previousEntry)
+      && await terminalHostHealthy(record) && await probePageAndChunk(record.port, 5000, plan.headers) === null) {
+      // Recheck the durable owner after the awaited health observations.
+      if (read(applyFile)?.requestId !== intent.requestId || !restored()) throw new Error("Recovery owner changed during verification");
+      atomic(applyFile, JSON.stringify({ ...current, state: "failed", rolledBack: true, detail: trial.detail }) + "\n");
+      const drainFile = join(directory, "auto-drain.json");
+      if (read(drainFile)?.id === intent.requestId) rmSync(drainFile, { force: true });
+      if (read(trialFile)?.requestId === intent.requestId) rmSync(trialFile, { force: true });
+      rmSync(file, { force: true });
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error("Prior release health is unproven; custody is retained");
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "--recover-service") {
+  try { await recoverService(process.argv[3]); }
+  catch (error) { console.error(error instanceof Error ? error.message : "Service recovery failed"); process.exitCode = 1; }
+}
+
 export function createRelaunch({ paths, installRoot, entry, release, servingRelease = () => release, stop, record, args = process.argv.slice(2) }) {
   const trialFile = paths.trial;
   const canExec = process.platform !== "win32" && typeof process.execve === "function";
