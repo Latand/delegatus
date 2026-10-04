@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -120,8 +120,8 @@ async function fixture() {
   };
   const old = start(path.join(base, "bin", "cli.mjs"));
   let output = "";
-  old.stdout!.on("data", data => { output += data; });
-  old.stderr!.on("data", data => { output += data; });
+  old.stdout!.on("data", data => { output = (output + data).slice(-4096); });
+  old.stderr!.on("data", data => { output = (output + data).slice(-4096); });
   const before = await until(() => { const record = readRecord(); return record?.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null; }, 20000).catch(error => { throw new Error(String(error) + " (exit " + old.exitCode + ")\n" + output + "\n" + JSON.stringify(readRecord())); });
   const apply = new ApplyController(path.dirname(recordFile));
   apply.begin(before, target, "operator");
@@ -129,14 +129,87 @@ async function fixture() {
   apply.patch({ state: "ready" });
   const requestFile = process.platform === "win32" ? before.requestFile : path.win32.join("C:\\fixtures\\request-context\\self-update", path.basename(before.requestFile));
   const plan = Buffer.from(JSON.stringify({ root: base, requestFile, releasePointer: pointer, target, rollbackPointer, priorRevision: priorSha.slice(0, 7), priorVersion: "0.0.1", checkout: false })).toString("base64");
+  // Observe ignored descendant output through files, so detached children keep
+  // their existing lifetime and never block on an undrained pipe.
+  const diagnosticsDir = path.join(root, "diagnostics");
+  mkdirSync(diagnosticsDir);
+  const diagnosticsPreload = path.join(root, "diagnostics.preload.mjs");
+  writeFileSync(diagnosticsPreload, `
+    import cp from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    import { appendFileSync, openSync, closeSync } from "node:fs";
+    import path from "node:path";
+    const directory = ${JSON.stringify(diagnosticsDir)};
+    let sequence = 0;
+    for (const method of ["spawn", "spawnSync"]) {
+      const original = cp[method];
+      cp[method] = function(command, args, options) {
+        if (command !== process.execPath || options?.stdio !== "ignore") return original(command, args, options);
+        const name = process.pid + "-" + (++sequence);
+        const files = ["stdout", "stderr"].map(stream => openSync(path.join(directory, name + "." + stream), "a"));
+        const trace = value => appendFileSync(path.join(directory, name + ".jsonl"), JSON.stringify(value) + "\\n");
+        try {
+          const child = original(command, args, { ...options, stdio: ["ignore", ...files] });
+          trace({ method, pid: child.pid, entry: args.find(arg => /\\.(mjs|js)$/.test(arg)), status: child.status, signal: child.signal, error: child.error?.message });
+          if (method === "spawn") {
+            child.once("exit", (code, signal) => trace({ code, signal }));
+            child.once("error", error => trace({ error: error.message }));
+          }
+          return child;
+        } finally { files.forEach(fd => closeSync(fd)); }
+      };
+    }
+    syncBuiltinESMExports();
+  `);
   const bootstrap = (encoded = plan) => {
-    const preload = process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")];
+    const preload = ["--preload", diagnosticsPreload, ...(process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")])];
     const child = spawn(process.execPath, ["--bun", ...preload, path.resolve("bin/launcher-relaunch.mjs"), "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
       { cwd: base, env: { ...env, LLV_TEST_WINDOWS_STATE_ROOT: root }, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
-    let error = ""; child.stderr!.on("data", data => { error += data; });
-    return { child, error: () => error };
+    let error = "", stdout = "";
+    child.stderr!.on("data", data => { error = (error + data).slice(-4096); });
+    child.stdout!.on("data", data => { stdout = (stdout + data).slice(-4096); });
+    return { child, error: () => error, stdout: () => stdout };
   };
-  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env };
+  const diagnose = async (observation: string, run: ReturnType<typeof bootstrap>) => {
+    const sanitize = (value: string) => value.split(root).join("<fixture>")
+      .split(root.replaceAll("\\", "\\\\")).join("<fixture>")
+      .split(process.execPath).join("<bun>").split(process.execPath.replaceAll("\\", "\\\\")).join("<bun>")
+      .split(path.resolve(".")).join("<repo>").split(path.resolve(".").replaceAll("\\", "\\\\")).join("<repo>")
+      .split("synthetic-terminal-key").join("<synthetic-key>").slice(-4096);
+    const print = (item: string, value: unknown) => console.error("[terminal-diagnostic] " + item + " " + sanitize(typeof value === "string" ? value : JSON.stringify(value)));
+    const tail = (file: string) => {
+      const fd = openSync(file, "r");
+      try {
+        const size = statSync(file).size, bytes = Buffer.alloc(Math.min(size, 4096));
+        readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+        return bytes.toString("utf8");
+      } finally { closeSync(fd); }
+    };
+    print("waiting", observation);
+    print("old-child", { pid: old.pid, code: old.exitCode, signal: old.signalCode, output });
+    print("bootstrap", { pid: run.child.pid, code: run.child.exitCode, signal: run.child.signalCode, stdout: run.stdout(), stderr: run.error() });
+    for (const directory of [path.dirname(recordFile), diagnosticsDir]) {
+      const names = readdirSync(directory).sort();
+      print("directory", { directory, names });
+      for (const name of names.slice(0, 24)) {
+        const file = path.join(directory, name);
+        if (statSync(file).isFile()) print(name, tail(file));
+      }
+    }
+    for (const [label, record] of [["before", before], ["current", readRecord()]] as const) {
+      if (!record) continue;
+      for (const role of ["launcher", "web", "runtimeHost"] as const) {
+        const entry = record[role];
+        print(label + "-" + role, { ...entry, alive: entry.pid ? isAlive(entry.pid) : false,
+          comparedIdentity: entry.pid ? readStartIdentity(entry.pid) : null });
+      }
+    }
+    try {
+      const page = await fetch(`http://127.0.0.1:${port}/`, { headers: { authorization: "Bearer " + env.LLV_TOKEN }, signal: AbortSignal.timeout(2000) });
+      print("page-health", { status: page.status, body: (await page.text()).slice(0, 2048) });
+    } catch (error) { print("page-health", String(error)); }
+  };
+  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose };
 }
 
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
@@ -147,8 +220,9 @@ for (const rollback of [false, true]) test(`Windows request-context terminal ent
   const record = await until(() => {
     const value = f.readRecord();
     return value?.launcher.pid !== f.before.launcher.pid && value?.web.state === "healthy" && value.runtimeHost.state === "healthy" ? value : null;
-  });
-  await until(() => run.child.exitCode !== null ? true : null);
+  }).catch(async error => { await f.diagnose("replacement owner with web/runtimeHost healthy", run); throw error; });
+  await until(() => run.child.exitCode !== null ? true : null)
+    .catch(async error => { await f.diagnose("bootstrap exit after replacement became healthy", run); throw error; });
   expect(run.child.exitCode).toBe(rollback ? 1 : 0);
   if (rollback) {
     expect(run.error()).toContain("verified prior release");
