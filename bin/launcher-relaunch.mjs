@@ -2,7 +2,7 @@
    restore the exact previous pointer before replacing itself on failure. */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
@@ -27,9 +27,11 @@ function atomic(file, value) {
    supervisor alive after reporting a failed upgrade to the terminal. */
 async function terminalBootstrap(encoded, nextEntry, args) {
   const plan = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  const name = basename(plan.requestFile);
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
   const directory = dirname(plan.requestFile);
-  const trialFile = plan.requestFile.replace(/request([^/]*)$/, "trial$1");
-  const recordFile = plan.requestFile.replace(/request([^/]*)$/, "launcher$1");
+  const trialFile = join(directory, name.replace(/^request/, "trial"));
+  const recordFile = join(directory, name.replace(/^request/, "launcher"));
   const applyFile = join(directory, "apply.json");
   const startupLock = lockLauncherStartup(recordFile);
   assertLauncherAvailable({ record: recordFile });
