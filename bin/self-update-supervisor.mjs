@@ -33,7 +33,7 @@ import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
 
@@ -242,6 +242,10 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
     let admitted = request.autoGateId === undefined;
     let retain = false;
     const original = readFileSync(requestFile, "utf8");
+    const recordFile = join(dirname(requestFile), basename(requestFile).replace(/^request/, "launcher"));
+    const owner = () => { try { return JSON.stringify(JSON.parse(readFileSync(recordFile, "utf8"))?.launcher); } catch { return null; } };
+    const originalOwner = owner();
+    const activity = dispatchActivityVersion(dirname(dirname(requestFile)));
     const originalGate = request.autoGateId ? (() => { try { return readFileSync(gateFile, "utf8"); } catch { return null; } })() : null;
     const rejected = (detail) => {
       const file = `${requestFile}.result.json`;
@@ -273,7 +277,10 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
           rejected("Final automatic dispatch has stale gate or issuer custody"); return;
         }
       }
-      if (readFileSync(requestFile, "utf8") !== original) { retain = true; return; }
+      if (readFileSync(requestFile, "utf8") !== original || owner() !== originalOwner
+        || activity !== dispatchActivityVersion(dirname(dirname(requestFile)))) {
+        retain = true; rejected("Final dispatch has stale launcher or work custody"); return;
+      }
       admitted = true;
       // Do not remove a newer request that arrived while admission was read.
       try {

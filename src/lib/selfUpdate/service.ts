@@ -927,7 +927,7 @@ export class SelfUpdateService {
       // LAST awaited read precedes this synchronous fence. No state is consumed
       // by a stale issuer, launcher, request or activity observation.
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-      const current = recordFile ? readLauncherRecord(recordFile) : decision.record;
+      const current = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : decision.record);
       let request, durable;
       try {
         request = JSON.parse(readFileSync(record.requestFile, "utf8"));
@@ -936,7 +936,8 @@ export class SelfUpdateService {
       return green.state === "green" && reachable && this.quietAdmits(quiet)
         && activity !== null && activity === quietDispatchVersion(this.deps.quiet, this.deps.now())
         && binding === JSON.stringify(this.apply.current) && binding === JSON.stringify(durable)
-        && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
+        && request.role === "relaunch" && request.requestId === requestId && request.target === apply.target && request.autoGateId === gateId
+        && request.requestedAt === apply.startedAt && request.rollbackPointer === apply.rollbackPointer
         && current?.launcher.pid === owner.pid && current.launcher.startIdentity === owner.startIdentity
         && current.requestFile === record.requestFile && this.deps.processAlive(owner.pid, owner.startIdentity!)
         && ownsRestartGate(restartGateFile(record.requestFile), gateId);
@@ -1375,7 +1376,7 @@ export class SelfUpdateService {
     const current = await this.decide();
     if (!current.record) throw new StaleApplyDispatch("The launcher is unavailable; accepted custody is retained");
     const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
-    const record = file ? readLauncherRecord(file) : current.record;
+    const record = readLauncherRecord(file || launcherControlFile(current.record.requestFile, "launcher")) ?? (file ? null : current.record);
     let durable;
     try { durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
     // The decision's final await cannot transfer the accepted apply to a
@@ -1399,11 +1400,19 @@ export class SelfUpdateService {
         if (previousRoot) previousEntry = join(previousRoot, "bin", "cli.mjs");
       }
       if (!previousEntry || !this.deps.processAlive(current.record.launcher.pid, current.record.launcher.startIdentity!)) throw new Error("The launcher identity changed");
+      const action = await this.actionFor(current);
+      const finalRecord = readLauncherRecord(file || launcherControlFile(current.record.requestFile, "launcher")) ?? (file ? null : current.record);
+      let finalIntent;
+      try { finalIntent = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
+      if (!finalRecord || finalRecord.launcher.pid !== intent.launcherPid || finalRecord.launcher.startIdentity !== intent.launcherIdentity
+        || JSON.stringify(finalIntent) !== binding || JSON.stringify(this.apply.current) !== binding
+        || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(current.record.requestFile))
+        throw new StaleApplyDispatch("Stale credential preflight was refused; accepted custody is retained");
       writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
       });
       this.apply.patch({ externalRestart: true });
-      if ((await this.actionFor(current))?.id === "restart-service") {
+      if (action?.id === "restart-service") {
         const result = await this.performInstallAction();
         if (!result.ok) throw new Error(result.error);
       }
@@ -1451,6 +1460,8 @@ export class SelfUpdateService {
         // loading its recovery code. Reject that entry before stopping anything.
         const scratch = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/var/tmp", "delegatus-upgrade-preflight-"));
         let loads = false;
+        const preflightBinding = JSON.stringify(this.apply.current);
+        const preflightActivity = quietDispatchVersion(this.deps.quiet, this.deps.now());
         try {
           mkdirSync(join(scratch, "tmp"));
           const environment: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])),
@@ -1460,6 +1471,14 @@ export class SelfUpdateService {
           loads = (await realExec(this.deps.bun, ["--bun", join(release.dir, "bin", "cli.mjs"), "--version"], release.dir, environment,
             { timeoutMs: 30_000, maxOutputBytes: 64 * 1024 })).code === 0;
         } finally { rmSync(scratch, { recursive: true, force: true }); }
+        const ownerFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
+        const finalOwner = readLauncherRecord(ownerFile) ?? (existsSync(ownerFile) ? null : record);
+        let finalIntent;
+        try { finalIntent = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
+        if (!finalOwner || finalOwner.launcher.pid !== record.launcher.pid || finalOwner.launcher.startIdentity !== record.launcher.startIdentity
+          || JSON.stringify(this.apply.current) !== preflightBinding || JSON.stringify(finalIntent) !== preflightBinding
+          || preflightActivity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(record.requestFile))
+          return refuse(409, "cannot-restart", "Stale launcher preflight was refused; accepted custody is retained");
         if (!loads) {
           const previousEntry = this.deps.install ? this.deps.install.entry(record)
             : readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs"));

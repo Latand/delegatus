@@ -7,6 +7,7 @@ import { headOf, ReleasePointer } from "./release";
 import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 import { sameProcess } from "./pid";
+import { dispatchActivityVersion } from "../../../bin/self-update-supervisor.mjs";
 import { prepareLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 
 const quote = (text: string) => `\u0027${text.replaceAll("\u0027", "\u0027\\\u0027\u0027")}\u0027`;
@@ -46,11 +47,18 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     const files = [launcherControlFile(record.requestFile, "launcher"), record.requestFile,
       join(dirname(record.requestFile), "apply.json"), join(dirname(record.requestFile), "auto-admission.json"),
       join(dirname(record.requestFile), "auto-drain.json")];
-    return JSON.stringify([record.launcher, files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
+    return JSON.stringify([record.launcher, dispatchActivityVersion(dirname(dirname(record.requestFile)), ports.env ?? process.env), files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
   };
   const accepted = custody();
-  const currentCustody = () => accepted === custody() && (!owner || decision.record?.launcher.pid === owner.pid
-    && decision.record.launcher.startIdentity === owner.startIdentity);
+  const gateFile = decision.record?.requestFile ? join(dirname(decision.record.requestFile), "auto-admission.json") : null;
+  const currentCustody = () => {
+    if (gateFile && existsSync(gateFile)) {
+      const gate = JSON.parse(readFileSync(gateFile, "utf8"));
+      if (typeof gate.until !== "number" || gate.until <= Date.now()) return false;
+    }
+    return accepted === custody() && (!owner || decision.record?.launcher.pid === owner.pid
+      && decision.record.launcher.startIdentity === owner.startIdentity);
+  };
   const args: string[] = [];
   const original = decision.record ? ports.argv?.(decision.record.launcher.pid) ?? [] : [];
   for (let i = 0; i < original.length; i++) {

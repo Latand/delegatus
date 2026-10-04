@@ -276,7 +276,10 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       trial = { requestId: apply.requestId, target: apply.target, rollbackPointer: apply.rollbackPointer,
         previousEntry: join(prior, "bin", "cli.mjs"), state: "starting", at: apply.startedAt };
       atomic(trialFile, JSON.stringify(trial) + "\n");
-      atomic(join(dirname(paths.request), "auto-drain.json"), JSON.stringify({ id: apply.requestId, target: apply.target,
+      const drainFile = join(dirname(paths.request), "auto-drain.json");
+      const drain = read(drainFile);
+      if (drain && drain.target !== apply.target) throw new Error("Another admission hold owns this installation.");
+      if (!drain) atomic(drainFile, JSON.stringify({ id: apply.requestId, target: apply.target,
         since: apply.startedAt, until: Date.now() + 600000, persistent: true }) + "\n");
       atomic(applyFile, JSON.stringify({ ...apply, state: "switching", switchedAt: apply.switchedAt ?? new Date().toISOString() }) + "\n");
       if (request) rmSync(paths.request, { force: true });

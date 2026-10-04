@@ -10,6 +10,8 @@ import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredD
 import { conversationTurnLiveness } from "@/lib/runtime/liveness";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
+import { flowPipelineController } from "@/lib/pipelines/controller";
+import { seatTickIdle } from "@/lib/monitor/seatTickController";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -124,7 +126,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
           try { const st = statSync(file, { bigint: true }); return [String(st.ino), String(st.size), String(st.mtimeNs), String(st.ctimeNs)]; }
           catch (error) { if (file.endsWith("-wal") && (error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
         });
-        return createHash("sha256").update(JSON.stringify([files, agentRegistry().snapshot()])).digest("hex");
+        return createHash("sha256").update(JSON.stringify([files, agentRegistry().snapshot(), flowPipelineController().idle(), seatTickIdle()])).digest("hex");
       },
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
