@@ -1,0 +1,178 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "scheme": "dark",
+  "readings": [
+    {
+      "locale": "en",
+      "scene": "plain",
+      "hint": null,
+      "hintText": null,
+      "hintCount": 0,
+      "hintCut": false,
+      "dismissTarget": null,
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false
+    },
+    {
+      "locale": "en",
+      "scene": "hint",
+      "hint": {
+        "x": 11,
+        "y": 662.625,
+        "width": 368,
+        "height": 63.375
+      },
+      "hintText": "Safari asks for the microphone again after every reload. To be asked once: Page Menu button in the address bar → Website Settings → Microphone → Allow.",
+      "hintCount": 1,
+      "hintCut": false,
+      "dismissTarget": {
+        "width": 44,
+        "height": 44
+      },
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false,
+      "dismissedKept": true,
+      "hintsAfterReload": 0
+    },
+    {
+      "locale": "uk",
+      "scene": "plain",
+      "hint": null,
+      "hintText": null,
+      "hintCount": 0,
+      "hintCut": false,
+      "dismissTarget": null,
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false
+    },
+    {
+      "locale": "uk",
+      "scene": "hint",
+      "hint": {
+        "x": 11,
+        "y": 647.5,
+        "width": 368,
+        "height": 78.5
+      },
+      "hintText": "Safari питає про мікрофон після кожного перезавантаження. Щоб питав один раз: кнопка меню сторінки в адресному рядку → параметри вебсайту → «Мікрофон» → «Дозволити».",
+      "hintCount": 1,
+      "hintCut": false,
+      "dismissTarget": {
+        "width": 44,
+        "height": 44
+      },
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false,
+      "dismissedKept": true,
+      "hintsAfterReload": 0
+    }
+  ],
+  "failures": []
+}
