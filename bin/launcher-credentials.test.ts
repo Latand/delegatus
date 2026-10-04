@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -93,67 +93,6 @@ async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN") {
   };
   return { root, base, candidate, state, env, clean, key, directory, readRecord };
 }
-// Failure-only observation. Never log records, commands, environment values,
-// credential digests or Windows account identifiers. Replay the exact ACL
-// program on a separate empty directory, leaving the failed custody untouched.
-function custodyFailure(f: Awaited<ReturnType<typeof fixture>>, action = "prepare-refused") {
-  if (process.platform !== "win32") return;
-  const safe = (value: string) => {
-    for (const secret of [f.key, f.env.LLV_TOKEN, f.env.DELEGATUS_TOKEN]) if (secret) value = value.replaceAll(secret, "[credential]");
-    for (const root of [f.root, process.cwd(), process.env.USERPROFILE, process.env.HOME, process.env.RUNNER_TEMP]) if (root) value = value.replaceAll(root, "[fixture-root]");
-    return value.replace(/S-1-[\d-]+/g, "[sid]").slice(0, 3072);
-  };
-  const snapshot = String.raw`
-function Snapshot {
-  try {
-    $s = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $i = Get-Item -LiteralPath $env:DELEGATUS_CUSTODY_PATH -Force
-    $a = Get-Acl -LiteralPath $env:DELEGATUS_CUSTODY_PATH
-    $r = @($a.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
-      $principal = if ($_.IdentityReference.Value -eq $s.Value) { 'current-user' } elseif ($_.IdentityReference.Value -eq 'S-1-5-18') { 'system' } elseif ($_.IdentityReference.Value -eq 'S-1-5-32-544') { 'administrators' } elseif ($_.IdentityReference.Value -eq 'S-1-1-0') { 'everyone' } else { 'other' }
-      @{ currentUser=($principal -eq 'current-user'); system=($principal -eq 'system'); administrators=($principal -eq 'administrators'); everyone=($principal -eq 'everyone'); other=($principal -eq 'other'); fullControl=($_.FileSystemRights -eq 'FullControl'); allow=($_.AccessControlType -eq 'Allow'); inherited=$_.IsInherited }
-    })
-    @{ ownerMatchesCurrentSid=($a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $s.Value); protected=$a.AreAccessRulesProtected; reparse=(($i.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0); rules=$r } | ConvertTo-Json -Compress -Depth 4
-  } catch { 'snapshot-unavailable' }
-}
-`;
-  const original = /const ACL_SCRIPT = String.raw`([\s\S]*?)`;/m.exec(readFileSync("bin/launcher-credentials.mjs", "utf8"))![1]!;
-  const traced = original.replace(/^(\s*)(\$item =|if \(\$item.PSIsContainer|\$acl\.SetOwner|\$acl\.SetAccessRuleProtection|\$acl\.AddAccessRule|Set-Acl|\$acl = Get-Acl|\$rules =|if \(!\$acl|if \(\$rules.Count)/gm,
-    (line, space: string, operation: string) => `${space}$stage = '${operation.replaceAll("'", "")}';\n${line}`)
-    .replace("else { $acl =", "else { $stage = 'new-file-security'; $acl =")
-    .replace("exit 0", "Snapshot; exit 0")
-    .replace("} catch { exit 1 }", "} catch { @{ stage=$stage; error=$_.Exception.Message; errorType=$_.Exception.GetType().Name } | ConvertTo-Json -Compress; Snapshot; exit 1 }");
-  const replay = path.join(f.root, "acl-replay"), isolated = path.join(f.root, "acl-isolated-replay"); mkdirSync(replay); mkdirSync(isolated);
-  const moduleProbe = String.raw`
-$ErrorActionPreference = 'Stop'
-@{ shellMajor=$PSVersionTable.PSVersion.Major; inheritedModulePath=[bool]$env:PSModulePath } | ConvertTo-Json -Compress
-try { Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; 'security-module-loaded' }
-catch { @{ operation='import-security-module'; error=$_.Exception.Message; errorType=$_.Exception.GetType().Name } | ConvertTo-Json -Compress }
-`;
-  for (const [kind, file, script, create, cleanModulePath] of [
-    ["failed-directory", f.directory, snapshot + "\nSnapshot", "0", false],
-    ["exact-create-replay", replay, moduleProbe + snapshot + traced, "1", false],
-    ["isolated-module-create-replay", isolated, moduleProbe + snapshot + traced, "1", true],
-  ] as const) {
-    const childEnv = { ...process.env, DELEGATUS_CUSTODY_PATH: file, DELEGATUS_CUSTODY_CREATE: create };
-    if (cleanModulePath) for (const name of Object.keys(childEnv)) if (name.toLowerCase() === "psmodulepath") delete childEnv[name as keyof typeof childEnv];
-    const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script!, "utf16le").toString("base64")], {
-      env: childEnv, encoding: "utf8", timeout: 10000,
-    });
-    console.error("[custody-diagnostic]", JSON.stringify({ kind, spawned: !observed.error, exit: observed.status, spawnError: (observed.error as NodeJS.ErrnoException | undefined)?.code ?? null, stdout: safe(observed.stdout ?? ""), stderr: safe(observed.stderr ?? "") }));
-  }
-  const entries = ["identity.json", "environment.json"].map(name => {
-    try { const s = lstatSync(path.join(f.directory, name)); return { name, present: true, link: s.isSymbolicLink(), file: s.isFile(), links: s.nlink, empty: s.size === 0 }; }
-    catch { return { name, present: false }; }
-  });
-  let identity = "not-written", fingerprint = "not-written";
-  try {
-    const record = JSON.parse(readFileSync(path.join(f.directory, "identity.json"), "utf8"));
-    identity = record.installRoot === path.resolve(f.base) ? "install-matches" : "install-mismatch";
-    fingerprint = record.keyDigest === createHash("sha256").update(f.key).digest("hex") ? "matches" : "mismatch";
-  } catch { /* Do not print parsing errors or record bytes. */ }
-  console.error("[custody-diagnostic]", JSON.stringify({ action, prerequisite: "protected-custody-or-reader", entries, identity, fingerprint }));
-}
 async function gateIntact(port: number, key: string) {
   for (const route of ["/api/files", "/api/runtime/deployments", "/api/mcp"]) for (const [credential, status] of [[undefined, 403], ["synthetic-wrong-key", 403], [key, 200]] as const) {
     const response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: credential ? { authorization: `Bearer ${credential}` } : {}, signal: AbortSignal.timeout(2000) });
@@ -176,7 +115,6 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   writeFileSync(before.releasePointer, JSON.stringify({ kind: "package", sha: target, dir: f.candidate, baseVersion: "0.0.0", version: "0.0.1" }));
   const action = await installAction(actionId === "restart-terminal" || rollback ? { mode: "package", reason: null, record: { ...before, launcher: { ...before.launcher, relaunch: undefined } } }
     : { mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => true, env: { ...f.env, PORT: String(port) }, argv: () => [] });
-  if (action?.id !== (rollback ? "restart-terminal" : actionId)) custodyFailure(f, action?.id ?? "null");
   expect(action?.id).toBe(rollback ? "restart-terminal" : actionId); expect(Boolean(action?.command?.includes(f.key))).toBe(false);
   await stop(old);
   // On Windows the recorded children can outlive termination of their parent.
@@ -215,14 +153,19 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
   } else {
     // Read native argv without printing it or passing a secret to PowerShell.
     const script = "$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | Where-Object { @(" + [after.launcher.pid, after.web.pid, after.runtimeHost.pid].join(",") + ") -contains $_.ProcessId } | ForEach-Object { [Console]::WriteLine($_.CommandLine) }";
-    const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", timeout: 10000 });
+    const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { env: windowsPowerShellEnv(), encoding: "utf8", timeout: 10000 });
     expect(observed.status).toBe(0); expect(observed.stdout.includes(f.key)).toBe(false); expect(observed.stderr.includes(f.key)).toBe(false);
   }
 }, 120000);
 
+function windowsPowerShellEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  for (const name of Object.keys(env)) if (name.toUpperCase() === "PSMODULEPATH") delete env[name];
+  return env;
+}
 function alterAcl(file: string, right: "Read" | "Write") {
   const script = String.raw`$ErrorActionPreference='Stop'; try { $p=$env:DELEGATUS_TEST_CUSTODY_PATH; $a=Get-Acl -LiteralPath $p; $sid=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0'); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($sid, '` + right + String.raw`', 'Allow'); $a.AddAccessRule($r); Set-Acl -LiteralPath $p -AclObject $a; exit 0 } catch { exit 1 }`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { env: { ...process.env, DELEGATUS_TEST_CUSTODY_PATH: file }, stdio: "ignore", timeout: 10000 });
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { env: windowsPowerShellEnv({ DELEGATUS_TEST_CUSTODY_PATH: file }), stdio: "ignore", timeout: 10000 });
   expect(result.status).toBe(0);
 }
 for (const unsafe of ["readable", "writable", "directory", "link", "foreign-identity", "stale-key"] as const) test(`native private custody refuses ${unsafe} before reading its credential`, async () => {
@@ -231,10 +174,7 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
   const port = (listener.address() as net.AddressInfo).port; await new Promise<void>(resolve => listener.close(() => resolve()));
   const old = spawn(process.execPath, ["--bun", path.join(f.base, "bin/cli.mjs"), "--port", String(port), "--no-open"], { cwd: f.base, env: f.env, stdio: "ignore" }); children.add(old);
   const before = await until(() => { const r = f.readRecord(); return r?.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
-  let prepared;
-  try { prepared = prepareLauncherCredentials(f.base, f.env); }
-  catch (error) { custodyFailure(f); throw error; }
-  expect(prepared).toBe(true);
+  expect(prepareLauncherCredentials(f.base, f.env)).toBe(true);
   const file = path.join(f.directory, "environment.json"), receipt = path.join(f.root, "credential-read");
   if (unsafe === "readable" || unsafe === "writable" || unsafe === "directory") {
     const target = unsafe === "directory" ? f.directory : file;
@@ -269,4 +209,48 @@ for (const unsafe of ["readable", "writable", "directory", "link", "foreign-iden
   const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: unsafe === "stale-key" ? { ...f.env, LLV_TOKEN: randomBytes(32).toString("hex") } : f.env });
   expect(action).toEqual({ id: "secure-handoff", button: false });
   await gateIntact(port, f.key); expect(f.readRecord()?.launcher.pid).toBe(before.launcher.pid);
+}, 120000);
+
+test("custody survives an incompatible inherited PowerShell module path", async () => {
+  const f = await fixture();
+  const modules = path.join(f.root, "incompatible-modules"), security = path.join(modules, "Microsoft.PowerShell.Security");
+  mkdirSync(security, { recursive: true });
+  // A module that Windows PowerShell cannot import makes the old child
+  // environment fail before it can establish the private NTFS DACL.
+  writeFileSync(path.join(security, "Microsoft.PowerShell.Security.psd1"), "@{ RootModule='reject.psm1'; ModuleVersion='99.0.0'; PowerShellVersion='99.0' }\n");
+  writeFileSync(path.join(security, "reject.psm1"), "throw 'Incompatible fixture module'\n");
+  const entry = path.join(f.root, "prepare-and-restore.mjs");
+  writeFileSync(entry, `
+    import { prepareLauncherCredentials, restoreLauncherCredentials } from "./package/bin/launcher-credentials.mjs";
+    import { fileURLToPath } from "node:url";
+    const root = fileURLToPath(new URL("./package", import.meta.url));
+    const env = { ...process.env };
+    if (!prepareLauncherCredentials(root, env)) throw new Error("Credential preparation refused");
+    delete env.LLV_TOKEN; delete env.DELEGATUS_TOKEN;
+    restoreLauncherCredentials(root, env);
+    if (env.LLV_TOKEN !== process.env.LLV_TOKEN) throw new Error("Credential restoration disagreed");
+  `);
+  const run = spawnSync(process.execPath, ["--bun", entry], { env: { ...f.env, PSModulePath: modules }, encoding: "utf8", timeout: 30000 });
+  expect(run.status).toBe(0); expect((run.stdout + run.stderr).includes(f.key)).toBe(false);
+  if (process.platform === "win32") {
+    const script = String.raw`$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $p=$env:DELEGATUS_TEST_CUSTODY_PATH; foreach ($file in @($p, (Join-Path $p 'identity.json'), (Join-Path $p 'environment.json'))) {
+      $item=Get-Item -LiteralPath $file -Force; $acl=Get-Acl -LiteralPath $file; $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]);
+      @{ ownerMatchesCurrentUser=($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value); protected=$acl.AreAccessRulesProtected; reparse=(($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0); onlyCurrentUser=($rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $sid.Value -and $rules[0].AccessControlType -eq 'Allow' -and $rules[0].FileSystemRights -eq 'FullControl') } | ConvertTo-Json -Compress
+    }`;
+    const acl = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+      env: windowsPowerShellEnv({ DELEGATUS_TEST_CUSTODY_PATH: f.directory }), encoding: "utf8", timeout: 10000,
+    });
+    expect(acl.status).toBe(0); expect((acl.stdout + acl.stderr).includes(f.key)).toBe(false);
+    const facts = acl.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+    expect(facts).toHaveLength(3);
+    for (const fact of facts) expect(fact).toEqual({ ownerMatchesCurrentUser: true, protected: true, reparse: false, onlyCurrentUser: true });
+  }
+}, 120000);
+
+test("native custody refuses a launcher with an incompatible credential reader", async () => {
+  const f = await fixture();
+  expect(prepareLauncherCredentials(f.base, f.env)).toBe(true);
+  writeFileSync(path.join(f.base, "bin/cli.mjs"), "// Prior launcher without a protected credential reader\n");
+  const action = await installAction({ mode: "unsupported", reason: "no-launcher", record: null, installRoot: f.base }, { cgroup: () => "", ready: () => false, env: f.env });
+  expect(action).toEqual({ id: "secure-handoff", button: false });
 }, 120000);
