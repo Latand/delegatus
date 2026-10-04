@@ -79,6 +79,10 @@ export interface StructuredMessageRequest {
       (#2051). The registry honours it only for the launch that created the
       conversation's current generation, on that generation's account. */
   launchId?: string;
+  /** Admission time of the work this message continues (a stage attempt the
+      controller follows up on). Kept on the reservation so an update drain
+      treats the message as part of that cohort. */
+  cohortAt?: string;
 }
 
 export type StructuredMessageResult =
@@ -286,6 +290,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.policy ? { policy: request.policy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
+    ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
   };
 }
 

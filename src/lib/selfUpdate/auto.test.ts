@@ -1320,3 +1320,56 @@ test("timer ticks renew the drain while an earlier observation is still waiting"
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
   } finally { resume(); await firstTick; service.stop(); }
 });
+
+test("ending the drain delivers a held autonomous message once without any other wake", async () => {
+  const { StructuredDeliveryQueue } = await import("../runtime/structuredDeliveryQueue");
+  const h = scenario();
+  h.setTurn(true);
+  let service = h.service();
+  await service.autoTick();
+  await service.autoTick();
+  const lease = join(h.dir, "auto-drain.json");
+  const hold = activeDrain(lease, h.deps.now())!;
+  expect(hold).not.toBeNull();
+  // An agent's message for an idle host, accepted after the drain began.
+  const admittedAt = new Date(Date.parse(hold.since) + 1_000).toISOString();
+  let status = { status: "queued", revision: 1, admittedAt };
+  const writes: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    autonomousTurnHeld: (_operationId, admitted) => {
+      const drain = activeDrain(lease, h.deps.now());
+      return !!drain && !(Date.parse(admitted ?? "") < Date.parse(drain.since));
+    },
+    effects: async () => status.status === "delivered" ? [] : [{ id: "effect:held", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "held-operation", conversationId: "conversation-idle", text: "start the next task", policy: "queue", origin: { kind: "agent", role: "builder" } } }],
+    status: async () => status,
+    hostClaim: async () => "owner:1",
+    transition: async (_id, next) => { status = { ...status, status: next, revision: status.revision + 1 }; },
+  }, () => ({
+    supportsSteer: true,
+    attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+    send: async (entry: { id: string }) => { writes.push(entry.id); return { outcome: "turn-started", turnId: "turn-one" }; },
+    interrupt: async () => {}, answer: async () => {}, release: async () => {},
+    health: async () => ({ status: "idle", sessionKey: "session-one", endpoint: "test:host", pid: 1, processStartIdentity: "1",
+      eventCursor: 0, protocolVersion: "test", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+  }) as never);
+  let kicks = 0;
+  let woken: Promise<unknown> = Promise.resolve();
+  h.deps.kickDeliveryQueue = () => { kicks++; woken = queue.drain(); return woken as Promise<void>; };
+  try {
+    await queue.drain();
+    expect(writes).toEqual([]);
+    expect(status.status).toBe("queued");
+    // The operator turns automatic updates off: the only event is the release itself.
+    service.stop();
+    writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), enabled: false });
+    service = h.service();
+    await service.autoTick();
+    expect(activeDrain(lease, h.deps.now())).toBeNull();
+    await woken;
+    expect(kicks).toBe(1);
+    expect(writes).toEqual(["held-operation"]);
+    await queue.drain();
+    expect(writes).toEqual(["held-operation"]);
+  } finally { service.stop(); }
+});

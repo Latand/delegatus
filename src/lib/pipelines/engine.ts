@@ -327,6 +327,9 @@ export interface PipelinePorts {
     policy?: "queue";
     project?: string;
     cwd?: string;
+    /** Admission time of the attempt this message continues. An update drain
+        delivers a follow-up to an attempt it found running and holds the rest. */
+    cohortAt?: string;
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
@@ -1494,6 +1497,7 @@ export function defaultPipelinePorts(
         /* #1117: the continuation is the controller's own message, and the
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
+        ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       });
       return result?.ok === true;
     },
@@ -2060,7 +2064,7 @@ async function recoverProviderCut(
   try {
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
-      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir });
+      project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
     return true;
@@ -4074,6 +4078,9 @@ async function requestStageVerdictOnce(
     text: VERDICT_REQUEST_TEXT,
     project: pipeline.project,
     cwd: pipeline.repoDir,
+    /* The request continues this attempt; a recovered activation replays its
+       reserved start, so the stamp is the attempt's admission. */
+    ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
   });
   /* A refused admission leaves the request owed; the next tick asks again under
      the same identity, until the bound above runs out. */

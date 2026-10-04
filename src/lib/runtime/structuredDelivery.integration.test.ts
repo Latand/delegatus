@@ -4558,3 +4558,49 @@ test("update drain recovery: queued agent rechecks admission after awaiting the 
     expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId, origin: fixture.request.origin }]);
   } finally { unlock(); await fixture.close(); }
 });
+
+/* The controller's own follow-up to a stage attempt (the verdict request, the
+   continuation after a provider cut) belongs to the attempt's cohort: a drain
+   that found the attempt running has to let it finish, and one that began
+   before the attempt was admitted keeps holding its follow-ups. */
+for (const projection of ["dead", "hosted"] as const) {
+  for (const cohort of ["before", "after"] as const) {
+    test(`update drain cohort: controller follow-up to an attempt admitted ${cohort} the drain began, ${projection} host`, async () => {
+      const name = `cohort-${cohort}-${projection}`;
+      const fixture = await drainRecoveryFixture(name);
+      try {
+        fixture.projectDead();
+        if (projection === "hosted") {
+          // The attempt's own turn ran and ended before the drain: an idle live host.
+          await enqueueStructuredMessage({ ...fixture.request, operationId: `${name}-brief`, clientMessageId: `${name}-brief`,
+            origin: { kind: "operator" } }, fixture.dependencies);
+          for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+          expect(fixture.launches()).toBe(1);
+          expect(fixture.ledger.writes).toMatchObject([{ id: `${name}-brief` }]);
+          fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+            conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+          } });
+        }
+        const before = fixture.ledger.writes.length;
+        const launched = fixture.launches();
+        const since = Date.now() - 60_000;
+        fixture.hold(new Date(since).toISOString());
+        const followUp = { ...fixture.request, origin: { kind: "agent" as const, role: "pipeline" },
+          cohortAt: new Date(since + (cohort === "before" ? -60_000 : 30_000)).toISOString() };
+        const result = await enqueueStructuredMessage(followUp, fixture.dependencies);
+        expect(result).toMatchObject({ ok: true, operationId: followUp.operationId });
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        if (cohort === "before") {
+          expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+          expect(fixture.launches()).toBe(projection === "dead" ? 1 : launched);
+          return;
+        }
+        expect(fixture.ledger.writes).toHaveLength(before);
+        expect(fixture.launches()).toBe(launched);
+        releaseDrain(drainFile(), name);
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+      } finally { await fixture.close(); }
+    });
+  }
+}

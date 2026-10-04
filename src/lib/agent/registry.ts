@@ -2354,6 +2354,7 @@ function canonicalHeldDeliveryCommand(
      rather than replaying as a forged attribution. */
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
+  if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
   return command;
 }
 
@@ -5210,13 +5211,18 @@ export class AgentRegistry {
     });
   }
 
-  /** Immutable acceptance time, including a spawn's already-admitted first prompt. */
+  /** Immutable acceptance time, including a spawn's already-admitted first
+      prompt. A message that continues earlier admitted work answers with that
+      work's admission when it is the earlier of the two. */
   deliveryAdmissionAtForOperation(operationId: string): string | null {
     return this.readKeyed(file => {
       const owner = file.deliveryOperationOwners[operationId];
       const delivery = owner ? file.heldDeliveries[owner.deliveryId]
         : registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)[0];
-      return delivery ? initialSpawnReceiptOf(file, delivery)?.createdAt ?? delivery.createdAt : null;
+      if (!delivery) return null;
+      const acceptedAt = initialSpawnReceiptOf(file, delivery)?.createdAt ?? delivery.createdAt;
+      const cohortAt = delivery.command.cohortAt;
+      return cohortAt && Date.parse(cohortAt) < Date.parse(acceptedAt) ? cohortAt : acceptedAt;
     });
   }
 

@@ -11,6 +11,7 @@ import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { loadFlows } from "@/lib/flows/store";
@@ -114,6 +115,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     },
     requestPipelineTick,
+    kickDeliveryQueue: kickStructuredDeliveryQueue,
     updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
       runtimeSnapshot: async () => {

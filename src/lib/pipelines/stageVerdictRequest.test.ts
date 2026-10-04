@@ -48,7 +48,7 @@ const PRODUCTION_FINAL_MESSAGE = [
 const PROGRESS_LINE = "Only the runtime check remains. Waiting on it.";
 
 function harness() {
-  const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string }> = [];
+  const requests: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string; cohortAt?: string }> = [];
   let wall = Date.parse("2026-09-19T00:45:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
   let deliveryOutstanding = false;
@@ -204,6 +204,9 @@ test("a completed turn without a verdict is asked once and settles when the answ
   expect(h.requests[0]).toMatchObject({ conversationId: STAGE_CONVERSATION, transcriptPath: STAGE_TRANSCRIPT });
   const asked = loadPipelines()[0]!;
   expect(asked.state).toBe("running");
+  /* The request names the attempt's own admission, so an update drain that
+     found the attempt running delivers it instead of holding it as new work. */
+  expect(h.requests[0]!.cohortAt).toBe(asked.runs[0]!.attempts[0]!.startedAt!);
   /* The request is not a recovery check: none has been spent. */
   expect(asked.runs[0]!.attempts[0]!.verdictRecovery).toBeUndefined();
   expect(asked.runs[0]!.attempts[0]!.verdictRequest).toMatchObject({

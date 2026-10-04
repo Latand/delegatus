@@ -10758,7 +10758,8 @@ test("a waiting Claude stage continues its original conversation after that acco
   h.ports.allowedAccountIds = () => allowed;
   h.ports.claudeAccountRecovered = () => recovered;
   const continuations: string[] = [];
-  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); return true; };
+  const cohorts: Array<string | undefined> = [];
+  h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); cohorts.push(input.cohortAt); return true; };
 
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.state).toBe("running");
@@ -10773,6 +10774,9 @@ test("a waiting Claude stage continues its original conversation after that acco
   expect(resumed.runs[0]!.attempts).toHaveLength(1);
   expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
   expect(continuations).toEqual([attempt.conversationId!]);
+  // The continuation belongs to the attempt's cohort under an update drain.
+  expect(attempt.startedAt).toBeTruthy();
+  expect(cohorts).toEqual([attempt.startedAt!]);
 });
 
 test("a previously limited Claude account becomes available for a later stage reseat and waiting reconciliation", async () => {

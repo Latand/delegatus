@@ -100,6 +100,9 @@ export interface ServiceDeps {
   green?: GreenReader;
   quiet?: QuietPorts;
   requestPipelineTick?(): void;
+  /** Wakes structured delivery when the drain ends: a held autonomous message
+      for an idle host has no other event coming to move it. */
+  kickDeliveryQueue?(): void | Promise<void>;
   updateProject?(): string;
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
@@ -944,6 +947,8 @@ export class SelfUpdateService {
     this.auto = { ...this.auto, drain: null };
     this.saveAuto();
     this.deps.requestPipelineTick?.();
+    const failed = (error: unknown) => console.error("[self-update] delivery wake after the drain failed", error instanceof Error ? error.name : "unknown");
+    try { void Promise.resolve(this.deps.kickDeliveryQueue?.()).catch(failed); } catch (error) { failed(error); }
   }
 
   private finishAutoRestart(pending: NonNullable<AutoState["pending"]>, outcome: "done" | "failed" | "fell-back", detail: string | undefined, record: LauncherRecord): void {
