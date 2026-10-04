@@ -254,7 +254,7 @@ for (const rollback of [false, true]) test(`native protected terminal gate ${ali
     // Windows CI runs the same seam under its own interpreter and kernel.
     if (process.platform !== "win32") {
       const entry = path.join(f.base, "bin/cli.mjs");
-      writeFileSync(entry, `process.execve = undefined;\n${readFileSync(entry, "utf8")}`);
+      writeFileSync(entry, readFileSync(entry, "utf8").replace("#!/usr/bin/env bun\n", "#!/usr/bin/env bun\nprocess.execve = undefined;\n"));
     }
     const recovered = process.platform === "win32"
       ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", recovery!.command!], { cwd: f.base, env: f.clean, stdio: ["ignore", "pipe", "pipe"] })
