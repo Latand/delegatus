@@ -45,12 +45,9 @@ const EXACT = 0.01;
    feed step back and forth by a pixel forever. */
 const SLIVER_PX = 1;
 
-/* Moves are whole CSS pixels, since the browser does not honour a sub-pixel
-   scroll move. Back (revealing the cut row) rounds up, so the row ends at most
-   a pixel below the edge; forward (letting it leave) rounds down, so what is
-   left of it is a sliver and the row after it is not pushed above the edge. */
+/* Back (revealing the cut row) rounds up, so the row starts below the edge.
+   Forward clears the row and its controls to the ink's half-pixel tolerance. */
 const backPx = (value: number) => Math.ceil(value - EXACT);
-const forwardPx = (value: number) => Math.floor(value + EXACT);
 
 const ROW_SELECTOR = "[data-feed-key], li, [data-tool-row]";
 /* Rows of a run or a list sit a few pixels apart; an edge in that gap is on a
@@ -100,8 +97,14 @@ export function rowEdgeCut(scroller: HTMLElement): EdgeCut | null {
     /* Leaving forward clears the frame of a row it closes too (a run's card
        ends a few pixels under its last call), or that frame's edge stays
        behind as a sliver of a cut row. */
-    const bottom = around.reduce((lowest, end) => (end >= rect.bottom && end - rect.bottom <= FRAME_PX ? Math.max(lowest, end) : lowest), rect.bottom);
-    return { hidden: backPx(edge - rect.top), shown: forwardPx(bottom - edge) };
+    let bottom = around.reduce((lowest, end) => (end >= rect.bottom && end - rect.bottom <= FRAME_PX ? Math.max(lowest, end) : lowest), rect.bottom);
+    // Negative action margins can put a tap target below its row's box.
+    // Leaving that row clears the target too, including fractional pixels.
+    for (const control of row.querySelectorAll("button")) {
+      const box = control.getBoundingClientRect();
+      if (box.height <= MAX_CONTROL_PX && box.bottom - rect.bottom <= FRAME_PX) bottom = Math.max(bottom, box.bottom);
+    }
+    return { hidden: backPx(edge - rect.top), shown: Math.ceil(bottom - edge - 0.5) };
   }
   return null;
 }
@@ -179,8 +182,12 @@ function bandInk(roots: readonly Element[], scroller: Element, low: number, high
     control again, so both are cleared together. Null when nothing crosses;
     an unreachable direction is Infinity. Moves stay inside the band and
     inside the row being read, so the position they reach is clear by
-    construction and the next reading finds nothing to do. */
-export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
+    construction and the next reading finds nothing to do. `probe: false` is
+    for an edge already known to sit on a row boundary: no row crosses it, so
+    the probes would only hit the rows' container, and walking that is one
+    rectangle per mounted row. Only the controls of the rows beside the edge
+    are read then. */
+export function inkEdgeCut(scroller: HTMLElement, probe = true): EdgeCut | null {
   if (scroller.scrollHeight <= scroller.clientHeight || typeof document.elementFromPoint !== "function") return null;
   const bounds = scroller.getBoundingClientRect();
   const edge = bounds.top + scroller.clientTop;
@@ -188,23 +195,37 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
      none, whatever the edge probes hit. */
   let span: Span = { top: -Infinity, bottom: Infinity };
   let roots: Element[] = [];
+  /* Rows that end within a frame above the edge, and the one crossing it:
+     the only rows whose controls can reach the edge. */
+  const near: HTMLElement[] = [];
   for (const row of rowsAtEdge(scroller, edge)) {
     const rect = row.getBoundingClientRect();
-    if (rect.top < edge && rect.bottom > edge) {
+    if (rect.top >= edge) break;
+    if (rect.bottom > edge - FRAME_PX) near.push(row);
+    if (rect.bottom > edge) {
       roots = [row];
       span = { top: rect.top, bottom: rect.bottom };
       break;
     }
-    if (rect.top >= edge) break;
   }
-  if (!roots.length) {
+  if (!roots.length && probe) {
     const left = bounds.left + scroller.clientLeft;
     for (const column of PROBE_COLUMNS) {
       const hit = document.elementFromPoint(left + scroller.clientWidth * column, edge + 0.5);
       if (hit && hit !== scroller && scroller.contains(hit) && !roots.includes(hit)) roots.push(hit);
     }
   }
-  const ink = bandInk(roots, scroller, edge - BAND_PX, edge + BAND_PX);
+  // Phone action rows have negative margins: a control can cross the edge
+  // after its enclosing message has already left it. Include that overhang
+  // in the same ink reading, even when the next row starts on a boundary.
+  const overhangs: Span[] = [];
+  for (const control of new Set(near.flatMap((row) => Array.from(row.querySelectorAll("button"))))) {
+    const rect = control.getBoundingClientRect();
+    if (rect.height > MAX_CONTROL_PX || rect.top >= edge || rect.bottom <= edge) continue;
+    overhangs.push({ top: rect.top, bottom: rect.bottom });
+    span = { top: Math.min(span.top, rect.top), bottom: Math.max(span.bottom, rect.bottom) };
+  }
+  const ink = [...bandInk(roots, scroller, edge - BAND_PX, edge + BAND_PX), ...overhangs];
   /* After a move of `delta` the edge sits at `edge + delta` in today's
      coordinates; half a pixel of overlap is rounding, not a cut. */
   const crosses = (delta: number) => ink.some((line) => line.top < edge + delta - 0.5 && line.bottom > edge + delta + 0.5);
@@ -229,7 +250,12 @@ export function inkEdgeCut(scroller: HTMLElement): EdgeCut | null {
     whichever is shorter and still inside the scroll range. A row that fits is
     aligned whole; otherwise the ink under the edge. Zero when nothing is cut. */
 export function restingDelta(scroller: HTMLElement): number {
-  const cut = rowEdgeCut(scroller) ?? inkEdgeCut(scroller);
+  const row = rowEdgeCut(scroller);
+  const ink = inkEdgeCut(scroller, row !== ON_BOUNDARY);
+  // A whole-row landing must also clear an action overhanging its neighbour.
+  const cut = row && (row.hidden || row.shown)
+    ? { hidden: Math.max(row.hidden, ink?.hidden ?? 0), shown: Math.max(row.shown, ink?.shown ?? 0) }
+    : ink;
   if (!cut) return 0;
   const room = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
   const forward = cut.shown <= room ? cut.shown : Infinity;
