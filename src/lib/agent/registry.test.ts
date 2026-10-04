@@ -200,6 +200,55 @@ describe("agent registry", () => {
     expect(store.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.structuredTerminationSurvivors).toEqual([root, survivor]);
   });
 
+  test("a withdrawn termination capture leaves the row as it was and keeps another capture's evidence", () => {
+    const store = jsonRegistry(() => true);
+    const sessionId = crypto.randomUUID();
+    const artifactPath = `/sessions/${sessionId}.jsonl`;
+    const conversation = store.ensureConversation("codex", artifactPath, "default");
+    const key = { engine: "codex" as const, sessionId: conversation.generations[0]!.id };
+    const root = { pid: 42_001, startIdentity: "42001:root" };
+    const child = { pid: 42_002, startIdentity: "42002:child" };
+    const columns = {
+      kind: "codex-app-server" as const, endpoint: "stdio:live", process: root, eventCursor: 172,
+      protocolVersion: "v2", writerClaimEpoch: 3, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    };
+    store.upsert({
+      key, artifactPath, cwd: "/repo", accountId: "default", status: "idle", host: null,
+      structuredHost: columns, claimEpoch: 3, claimOwner: "structured-host:writer", pendingAction: null,
+    });
+    const row = () => store.readOnlySnapshot().entries[`codex:${key.sessionId}`];
+    const before = structuredClone(row());
+
+    const capture = store.captureStructuredTerminationSurvivors(key, root, [root, child], "test-stop");
+    expect(capture).toMatchObject({ added: [root, child], retainedField: false, previousUpdatedAt: before!.updatedAt });
+    // The guard #2440 added: while a tree is captured the host's own write is refused and the row keeps its process.
+    expect(store.setStructuredHostClaimed(key, { ...columns, eventCursor: 173 }, "idle", "structured-host:writer", 3)).toBeNull();
+    expect(store.structuredHostWriteHeldByTermination(key, "structured-host:writer", 3)).toBeTrue();
+    expect(store.structuredHostWriteHeldByTermination(key, "structured-host:other", 3)).toBeFalse();
+    expect(row()).toMatchObject({ structuredHost: { process: root, eventCursor: 172 }, structuredTerminationSurvivors: [root, child] });
+
+    expect(store.withdrawStructuredTerminationSurvivors(key, root, capture!, "test-stop")).toBeTrue();
+    expect(row()).toEqual(before);
+    expect(store.setStructuredHostClaimed(key, { ...columns, eventCursor: 173 }, "idle", "structured-host:writer", 3))
+      .toMatchObject({ structuredHost: { eventCursor: 173 } });
+
+    // A second capture over retained evidence withdraws only what it added.
+    const first = store.captureStructuredTerminationSurvivors(key, root, [root], "partial-kill");
+    const second = store.captureStructuredTerminationSurvivors(key, root, [root, child], "test-stop");
+    expect(second).toMatchObject({ added: [child], retainedField: true });
+    expect(store.withdrawStructuredTerminationSurvivors(key, root, second!, "test-stop")).toBeTrue();
+    expect(row()!.structuredTerminationSurvivors).toEqual([root]);
+    expect(first).not.toBeNull();
+
+    const journal = fs.readFileSync(path.join(path.dirname(store.filename), "host-termination-journal.ndjson"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line) as { event: string; source: string; key: string; root: number; pids?: number[]; removed?: number[] });
+    expect(journal.map(line => `${line.event}:${line.source}`)).toEqual([
+      "captured:test-stop", "withdrawn:test-stop", "captured:partial-kill", "captured:test-stop", "withdrawn:test-stop",
+    ]);
+    expect(journal[0]).toMatchObject({ key: `codex:${key.sessionId}`, root: root.pid, pids: [root.pid, child.pid] });
+    expect(journal[1]).toMatchObject({ removed: [root.pid, child.pid] });
+  });
+
   test("snapshot lookup preserves aliases and first path ownership without disk reads", () => {
     const store = registry();
     const first = store.ensureConversation("codex", "/shared.jsonl", "default");

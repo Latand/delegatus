@@ -334,6 +334,10 @@ export interface StructuredHostTerminationDependencies {
   /** Persist every verified identity in the captured tree before any runtime
       release or process signal can make a child disappear from observation. */
   persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
+  /** Undo that capture. Called once, and only when the termination was refused
+      before its first effect: no release was asked for and nothing was
+      signalled, so the row owes the capture nothing. */
+  withdrawCapturedTree?(): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void;
   /** Previously captured descendants whose root may have exited between retries. */
@@ -538,6 +542,7 @@ export async function terminateStructuredHostTree(
     };
   }
   let terminationStarted = false;
+  let completed = false;
   const partialEvidence = () => {
     if (!terminationStarted) return { survivors: [] as ProcessIdentity[] };
     const survivors = [...identities.values()].filter((identity) => {
@@ -683,6 +688,7 @@ export async function terminateStructuredHostTree(
     if (key && retire(key, expected, [...identities.values()]) === false) {
       return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
     }
+    completed = true;
     return { ok: true, via, pids: tree };
   } catch (error) {
     const evidence = partialEvidence();
@@ -693,5 +699,9 @@ export async function terminateStructuredHostTree(
       remaining: evidence.survivors.map((identity) => identity.pid),
       ...evidence,
     };
+  } finally {
+    if (!terminationStarted && !completed) {
+      try { dependencies.withdrawCapturedTree?.(); } catch { /* the capture stays; a retry reads it as retained evidence */ }
+    }
   }
 }

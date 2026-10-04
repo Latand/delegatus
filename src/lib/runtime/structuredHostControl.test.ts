@@ -526,6 +526,46 @@ test("termination refuses to act when the captured tree was not durably recorded
   expect(effects).toEqual(["persist:6050,6051"]);
 });
 
+test("a termination refused before its first effect withdraws its capture, and one that began does not", async () => {
+  const run = async (refuseAt: number) => {
+    const effects: string[] = [];
+    let asked = 0;
+    let alive = true;
+    const outcome = await terminateStructuredHostTree(
+      ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }),
+      {
+        processIdentity: pid => alive ? `${pid}:start` : null,
+        pidAlive: () => alive,
+        ppidMap: () => new Map(),
+        processGroupId: () => null,
+        protectedPids: () => new Set(),
+        persistCapturedTree: () => { effects.push("capture"); return true; },
+        withdrawCapturedTree: () => { effects.push("withdraw"); },
+        authorize: () => (asked += 1) === refuseAt ? { status: 409, error: "authority lost" } : null,
+        terminateOwnedHost: async () => { effects.push("runtime-release"); return false; },
+        signal: () => { effects.push("signal"); alive = false; },
+        retireRegistryEntry: () => { effects.push("retire"); },
+        sleep: async () => {},
+      },
+    );
+    return { outcome, effects };
+  };
+
+  // Refused at the first authority check after the capture: nothing was asked of the runtime or signalled.
+  const refused = await run(1);
+  expect(refused.outcome).toMatchObject({ ok: false, status: 409, error: "authority lost", survivors: [] });
+  expect(refused.effects).toEqual(["capture", "withdraw"]);
+
+  // Refused after the runtime release was asked for: the capture is evidence of a termination that began.
+  const begun = await run(2);
+  expect(begun.outcome).toMatchObject({ ok: false, terminationStarted: true });
+  expect(begun.effects).toEqual(["capture", "runtime-release"]);
+
+  const completed = await run(0);
+  expect(completed.outcome).toMatchObject({ ok: true });
+  expect(completed.effects).toEqual(["capture", "runtime-release", "signal", "retire"]);
+});
+
 test("a refused signal reports each survivor with the identity it carried (#1501)", async () => {
   const outcome = await terminateStructuredHostTree(
     ref({ pid: 6_100, startIdentity: "6100:start", sessionId: CLAUDE_SESSION }),
