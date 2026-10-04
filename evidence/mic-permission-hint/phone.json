@@ -1,0 +1,189 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "scheme": "dark",
+  "browser": "Edge on iOS (user agent)",
+  "readings": [
+    {
+      "locale": "en",
+      "scene": "plain",
+      "hint": null,
+      "hintText": null,
+      "hintCount": 0,
+      "hintCut": false,
+      "dismissTarget": null,
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false
+    },
+    {
+      "locale": "en",
+      "scene": "hint",
+      "hint": {
+        "x": 11,
+        "y": 632.375,
+        "width": 368,
+        "height": 93.625
+      },
+      "hintText": "On iOS this browser has no setting that stops the microphone question after a reload or a ten-minute pause. Safari has one: open Delegatus in Safari, then Page Menu button → Website Settings (before iOS 27, one more tap) → Microphone → Allow.",
+      "hintCount": 1,
+      "hintCut": false,
+      "dismissTarget": {
+        "width": 46,
+        "height": 46
+      },
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false,
+      "shownKept": true,
+      "hintsAfterUntouchedReloads": [
+        0,
+        0,
+        0
+      ],
+      "hintsAfterDismissedReload": 0
+    },
+    {
+      "locale": "uk",
+      "scene": "plain",
+      "hint": null,
+      "hintText": null,
+      "hintCount": 0,
+      "hintCut": false,
+      "dismissTarget": null,
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false
+    },
+    {
+      "locale": "uk",
+      "scene": "hint",
+      "hint": {
+        "x": 11,
+        "y": 617.25,
+        "width": 368,
+        "height": 108.75
+      },
+      "hintText": "На iOS у цього браузера немає налаштування, яке прибирає питання про мікрофон після перезавантаження чи десяти хвилин паузи. У Safari воно є: відкрийте Delegatus у Safari, далі кнопка «Меню сторінки» → «Параметри вебсайту» (до iOS 27 ще один дотик) → «Мікрофон» → «Дозволити».",
+      "hintCount": 1,
+      "hintCut": false,
+      "dismissTarget": {
+        "width": 46,
+        "height": 46
+      },
+      "unit": {
+        "x": 11,
+        "y": 732,
+        "width": 368,
+        "height": 84
+      },
+      "send": {
+        "x": 326,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "mic": {
+        "x": 169.734375,
+        "y": 769,
+        "width": 44,
+        "height": 44
+      },
+      "textarea": {
+        "x": 20,
+        "y": 737,
+        "width": 350,
+        "height": 32
+      },
+      "sendReachable": true,
+      "micReachable": true,
+      "textareaReachable": true,
+      "overflow": false,
+      "shownKept": true,
+      "hintsAfterUntouchedReloads": [
+        0,
+        0,
+        0
+      ],
+      "hintsAfterDismissedReload": 0
+    }
+  ],
+  "failures": []
+}

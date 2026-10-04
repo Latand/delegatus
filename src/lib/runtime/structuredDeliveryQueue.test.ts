@@ -2811,3 +2811,73 @@ for (const policy of ["steer-or-queue", "steer-if-active"]) test(`${policy} unkn
   expect(dropped.states.get("m0")!.status).toBe(policy === "steer-or-queue" ? "queued" : "failed");
   expect((await dropped.target.health()).status).toBe("active");
 });
+
+test.each(["steer", "idle", "unsupported", "interrupt", "fallback-policy", "fallback-effect"] as const)("update drain permits original-turn steering and holds fresh %s turn actuation", async (seam) => {
+  const f = steerQueueFixture([seam === "interrupt" ? "interrupt-active" : seam === "fallback-policy" ? "steer-if-active" : seam === "fallback-effect" ? "queue" : "steer-or-queue"]);
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  if (seam === "fallback-effect") Object.assign(f.effects[0], { kind: "runtime.steer" });
+  let held = true;
+  f.port.autonomousTurnHeld = () => held;
+  if (seam === "idle") f.setActive(null);
+  if (seam === "unsupported" || seam.startsWith("fallback")) Object.assign(f.target, { supportsSteer: false, steerFallback: "interrupt" });
+  await f.queue.drain();
+  expect(f.interrupts).toEqual([]);
+  if (seam === "steer") { expect(f.writes).toEqual(["steer:m0"]); return; }
+  expect(f.writes).toEqual([]); expect(f.states.get("m0")!.status).toBe("queued");
+  held = false; f.setActive(null);
+  await f.queue.drain(); await f.queue.drain();
+  expect(f.writes).toEqual(["start:m0"]);
+});
+test("a fresh autonomous message cannot recover a missing host during update drain", async () => {
+  const f = steerQueueFixture();
+  Object.assign(f.effects[0].payload, { origin: { kind: "agent" } });
+  f.port.autonomousTurnHeld = () => true;
+  let recoveries = 0;
+  const queue = new StructuredDeliveryQueue(f.port, () => null, undefined, undefined, async () => { recoveries++; return false; });
+  await queue.drain(); await queue.drain();
+  expect(recoveries).toBe(0); expect(f.transitions).toEqual([]);
+});
+
+test.each(["running", "attention", "flags", "unreadable"])("automatic kill defers owned host with %s evidence", async (scenario) => {
+  let pending = true;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  let terminations = 0;
+  const transitions: string[] = [];
+  const owned = host(async () => { throw new Error("no delivery expected"); });
+  owned.health = async () => {
+    if (scenario === "unreadable") throw new Error("health unavailable");
+    return { ...idleState(), ...(scenario === "running" ? { status: "active" as const, activeTurnRef: "resumed-turn" } : {}),
+      pendingAttention: scenario === "attention" ? ["request-one"] : [],
+      activeFlags: scenario === "flags" ? ["busy"] : [] };
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:retire-one", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "retire-one", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
+        onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; transitions.push(status); if (status === "failed") pending = false; },
+  }, () => owned, async () => { terminations++; return true; });
+  await queue.drain();
+  expect(terminations).toBe(0);
+  expect(transitions).toEqual(["delivering", "failed"]);
+});
+
+
+test.each(["native-queue", "native-inject", "structured-image-v1", "native-turn-profile", "native-multi-agent-deny:Task"])("automatic kill permits idle capability marker %s", async (flag) => {
+  let pending = true;
+  let terminations = 0;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  const owned = host(async () => { throw new Error("no delivery expected"); });
+  owned.health = async () => ({ ...idleState(), activeFlags: [flag] });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:retire-capability", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "retire-capability", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
+        onlyIfIdle: { revision: 4, writerClaim: "owner:1" } } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; if (status === "delivered") pending = false; },
+  }, () => owned, async () => { terminations++; return true; });
+  await queue.drain();
+  expect(terminations).toBe(1);
+});

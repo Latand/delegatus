@@ -37,6 +37,12 @@ export interface TaskChip {
 export const MAX_TASK_CHIPS = MAX_SELECTED_TASKS;
 
 const NONE: readonly TaskChip[] = Object.freeze([]);
+const chipRevisions = new WeakMap<TaskChip, string>();
+const revisionOf = (chip: TaskChip): string => {
+  let revision = chipRevisions.get(chip);
+  if (!revision) { revision = crypto.randomUUID(); chipRevisions.set(chip, revision); }
+  return revision;
+};
 const byProject = new Map<string, readonly TaskChip[]>();
 /** Projects whose stored list has been read into `byProject` (or cleared). */
 const loaded = new Set<string>();
@@ -64,10 +70,12 @@ function stored(project: string): readonly TaskChip[] {
     for (const entry of value) {
       if (chips.length >= MAX_TASK_CHIPS) break;
       if (!entry || typeof entry !== "object") continue;
-      const { id, title, color, icon } = entry as Record<string, unknown>;
+      const { id, title, color, icon, revision } = entry as Record<string, unknown>;
       if (typeof id !== "string" || !id || typeof title !== "string" || seen.has(id)) continue;
       seen.add(id);
-      chips.push({ id, title, ...(typeof color === "string" && color ? { color: color as TaskColor } : {}), ...(typeof icon === "string" && icon ? { icon } : {}) });
+      const chip = { id, title, ...(typeof color === "string" && color ? { color: color as TaskColor } : {}), ...(typeof icon === "string" && icon ? { icon } : {}) };
+      if (typeof revision === "string" && revision) chipRevisions.set(chip, revision);
+      chips.push(chip);
     }
     return chips.length ? chips : NONE;
   } catch {
@@ -77,7 +85,7 @@ function stored(project: string): readonly TaskChip[] {
 
 function persist(project: string, next: readonly TaskChip[]): void {
   try {
-    if (next.length) storage()?.setItem(taskChipsStorageKey(project), JSON.stringify(next));
+    if (next.length) storage()?.setItem(taskChipsStorageKey(project), JSON.stringify(next.map((chip) => ({ ...chip, revision: revisionOf(chip) }))));
     else storage()?.removeItem(taskChipsStorageKey(project));
   } catch { /* a full or blocked storage costs the reload, never the chip */ }
 }
@@ -136,6 +144,21 @@ export function settleTaskChips(project: string, snapshot: readonly TaskChip[]):
   const current = readTaskChips(project);
   if (!snapshot.length || !current.some((chip) => snapshot.includes(chip))) return;
   set(project, current.filter((chip) => !snapshot.includes(chip)));
+}
+
+export type TaskChipSnapshot = { id: string; revision: string };
+
+/** Persist each attachment's identity so a remounted fallback can distinguish
+ * its sent chips from ones reattached while delivery was pending. */
+export function captureTaskChipSnapshot(project: string, chips: readonly TaskChip[]): TaskChipSnapshot[] {
+  persist(project, readTaskChips(project));
+  return chips.map((chip) => ({ id: chip.id, revision: revisionOf(chip) }));
+}
+
+export function settleTaskChipSnapshot(project: string, snapshot: readonly TaskChipSnapshot[]): void {
+  const current = readTaskChips(project);
+  const sent = (chip: TaskChip) => snapshot.some((entry) => entry.id === chip.id && entry.revision === revisionOf(chip));
+  if (current.some(sent)) set(project, current.filter((chip) => !sent(chip)));
 }
 
 /** Restore a refused snapshot alongside later chips without replacing their titles. */

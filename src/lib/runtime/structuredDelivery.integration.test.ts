@@ -9,11 +9,13 @@ import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migrati
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
@@ -21,9 +23,45 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-delivery-"));
+const ownedKillChildren = new Set<ReturnType<typeof Bun.spawn>>();
+afterAll(async () => {
+  for (const child of ownedKillChildren) {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+});
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+async function ownedKillProcess() {
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  ownedKillChildren.add(child);
+  const stop = async () => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    ownedKillChildren.delete(child);
+  };
+  try {
+    await waitForCondition(() => processIdentityStatus(captureProcessIdentity(child.pid)) === "alive");
+    const identity = captureProcessIdentity(child.pid);
+    return {
+      identity,
+      owns: (expected: Readonly<ProcessIdentity>) => sameRecordedProcessIdentity(identity, expected)
+        && processIdentityStatus(identity) === "alive",
+      stop,
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
 
 function journalPort(
   journal: RuntimeJournal,
@@ -1152,6 +1190,7 @@ test("a failed route kick retries queued controls and messages without a host-st
 });
 
 test("a kill cancels an automatic delivery retry and fails the send retryably", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-cancels-auto-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "e40306b9-a4df-\x347b3-bf6e-4570c44259c7";
@@ -1178,7 +1217,7 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-auto-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1215,8 +1254,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       status: released ? "unhosted" as const : "active" as const,
       sessionKey: sessionId,
       endpoint: "fake:kill-auto-retry-host",
-      pid: 1,
-      processStartIdentity: "fake:1",
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       activeTurnRef: released ? null : "turn:kill-auto-retry",
@@ -1225,11 +1264,20 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       account: null,
     }),
     release: async () => {
+      await ownedProcess.stop();
       releaseCount += 1;
       released = true;
     },
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await this.release();
+      return true;
+    },
     onStateChange: () => () => {},
-  } satisfies EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  } satisfies EngineHost & {
+    onStateChange(listener: (state: HostState) => void): () => void;
+    releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  };
   const successorLedger = createFakeDeliveryLedger();
   const successor = observableFakeHost(new FakeEngineHost(successorLedger));
   let recoveryCalls = 0;
@@ -1251,8 +1299,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     return { target: null, path: artifactPath, conversationId, spawned: true } as const;
   };
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client, recover });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client, recover });
     const sendOperationId = "operation-send-before-kill";
     journal.executeOperation({
       kind: "send",
@@ -1311,12 +1364,13 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
 test("a failed kill projection retries through the coalesced drain and terminalizes", async () => {
+  const ownedProcess = await ownedKillProcess();
   const directory = path.join(sandbox, "controller-kill-projection-retry");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "b6b55ea7-4a5e-\x34fe5-894d-2f332a7247c7";
@@ -1343,7 +1397,7 @@ test("a failed kill projection retries through the coalesced drain and terminali
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "fake:kill-retry-host",
-      process: null,
+      process: ownedProcess.identity,
       eventCursor: 0,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 0,
@@ -1374,9 +1428,28 @@ test("a failed kill projection retries through the coalesced drain and terminali
     },
   } satisfies RuntimeHostClient;
   const host = observableFakeHost(new FakeEngineHost());
+  const hostState = await host.health();
+  Object.assign(host, {
+    health: async () => ({
+      ...hostState,
+      pid: ownedProcess.identity.pid,
+      processStartIdentity: ownedProcess.identity.startIdentity,
+    }),
+    release: ownedProcess.stop,
+    async releaseIfOwned(expected: Readonly<ProcessIdentity>) {
+      if (!ownedProcess.owns(expected)) return false;
+      await ownedProcess.stop();
+      return true;
+    },
+  });
 
+  const processFixture = await ownedHostProcess();
   try {
-    await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+    registry.setStructuredHost(key, {
+      ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost!,
+      process: processFixture.identity,
+    });
+    await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client });
     const operationId = "operation-kill-projection-retry";
     journal.executeOperation({
       kind: "kill",
@@ -1397,8 +1470,8 @@ test("a failed kill projection retries through the coalesced drain and terminali
       host: "dead",
     });
   } finally {
-    await bindStructuredDeliveryQueue([], { registry, client: null });
-    journal.close();
+    try { await bindStructuredDeliveryQueue([], { registry, client: null }); }
+    finally { await processFixture.cleanup(); await ownedProcess.stop(); journal.close(); }
   }
 });
 
@@ -4300,3 +4373,234 @@ test("a real executor killed after the engine write leaves one actuation and an 
     reopened.close();
   }
 });
+
+// Exercise the real admission, recovery reservation and production controller;
+// only the launcher is replaced, with real receipt settlement and publication.
+async function drainRecoveryFixture(name: string) {
+  const directory = path.join(sandbox, `drain-recovery-${name}`);
+  fs.mkdirSync(directory, { recursive: true });
+  const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const profile = emptyLaunchProfile({ cwd: directory });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const key = { engine: "codex" as const, sessionId };
+  const evidence = { kind: "codex-app-server" as const, endpoint: "fake:drain-recovery",
+    process: null, eventCursor: 0, protocolVersion: "fake-v1", writerClaimEpoch: 0,
+    activeTurnRef: null, pendingAttention: [], activeFlags: [] };
+  const entry = { key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+    status: "dead" as const, host: null, structuredHost: evidence, claimEpoch: 0, claimOwner: null, pendingAction: null };
+  registry.upsert({ ...entry, structuredHost: null });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const ledger = createFakeDeliveryLedger();
+  const host = observableFakeHost(new FakeEngineHost(ledger));
+  let launches = 0;
+  let beforeReservation = () => {};
+  const projectDead = () => journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: key, hostKind: "codex-app-server", host: "dead",
+    turn: "unknown", provenance: "structured", artifactPath, capabilities: { steer: true, structuredAttention: true },
+  } });
+  const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
+    ...dependencies, registry, client, transport: () => "structured",
+    resolveAccount: () => {
+      beforeReservation();
+      return { engine: "codex", accountId: "default", kind: "managed",
+        home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" } };
+    },
+    spawn: async (input) => {
+      launches += 1;
+      const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+      if (!claimed?.claimOwner || !claimed.structuredHost) throw new Error("recovery fixture claim unavailable");
+      const staged = registry.stageStructuredSpawn(input.receipt.launchId, {
+        ...claimed, key, artifactPath, cwd: directory, accountId: "default", launchProfile: profile,
+        status: "idle", host: null, pendingAction: "spawn",
+        structuredHost: { ...claimed.structuredHost, process: captureProcessIdentity(process.pid) },
+      });
+      expect(staged.kind).toBe("settled");
+      expect(registry.finalizeStructuredSpawn(input.receipt.launchId).kind).toBe("settled");
+      await publishStructuredDeliveryHost({ key, host });
+      return { ok: true, target: null, path: artifactPath, conversationId: conversation.id, launchId: input.receipt.launchId,
+        launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+    },
+    requestDeliveryDrain: () => {},
+  });
+  const request = { path: artifactPath, conversationId: conversation.id, operationId: `operation-${name}`,
+    clientMessageId: `client-${name}`, text: "continue the accepted instruction", hasImages: false,
+    kind: "send" as const, policy: "queue" as const, origin: { kind: "agent" as const, role: "builder" } };
+  const dependencies = { enabled: () => true, registry: () => registry, client: () => client, recover,
+    kick: () => {}, requestMigrationTick: () => {}, republish: async () => false };
+  const hold = (since = new Date(Date.now() - 60_000).toISOString()) => writeDrain(drainFile(), {
+    id: name, target: "fixture-update", since, until: 0, persistent: true,
+  });
+  const drain = (now = Date.now()) => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery, path: deliveryPath, clientMessageId }) => await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id, clientMessageId,
+      text: delivery.text, command: delivery.command,
+    }, { ...dependencies, kick: kickStructuredDeliveryQueue }) ?? "held",
+  }, registry, { now: () => now });
+  const receipts = () => Object.values(registry.readOnlySnapshot().receipts).filter(row => row.purpose === "resume-successor");
+  await bindStructuredDeliveryQueue([], { registry, client, recover });
+  registry.upsert(entry);
+  return { registry, journal, client, request, dependencies, recover, projectDead, hold, drain, ledger,
+    launches: () => launches, receipts,
+    beforeReservation: (callback: () => void) => { beforeReservation = callback; },
+    async close() {
+      releaseDrain(drainFile(), name);
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+    } };
+}
+
+for (const projection of ["missing", "dead"] as const) {
+  test(`update drain recovery: fresh agent ${projection} projection waits for release with original identity`, async () => {
+    const fixture = await drainRecoveryFixture(`fresh-${projection}`);
+    try {
+      if (projection === "dead") fixture.projectDead();
+      expect(fixture.journal.readSession({ conversationId: fixture.request.conversationId })?.host ?? "missing").toBe(projection);
+      fixture.hold();
+      const result = await enqueueStructuredMessage(fixture.request, fixture.dependencies);
+      expect(fixture.launches()).toBe(0);
+      expect(fixture.receipts()).toHaveLength(0);
+      expect(result).toMatchObject({ ok: true, outcome: "held", operationId: fixture.request.operationId });
+      await fixture.drain(Date.now() + 6 * 60 * 60_000);
+      await kickStructuredDeliveryQueue();
+      expect(fixture.registry.pendingDeliveries(fixture.request.conversationId)).toMatchObject([{ state: "assigned" }]);
+      expect(fixture.launches()).toBe(0);
+      expect(fixture.receipts()).toHaveLength(0);
+      expect(fixture.ledger.writes).toHaveLength(0);
+      releaseDrain(drainFile(), `fresh-${projection}`);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await fixture.drain();
+        await kickStructuredDeliveryQueue();
+      }
+      expect(fixture.launches()).toBe(1);
+      expect(fixture.receipts()).toHaveLength(1);
+      expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId, origin: fixture.request.origin }]);
+      expect(fixture.journal.operationResult(fixture.request.operationId)?.receipt).toMatchObject({
+        status: "delivered", idempotencyKey: fixture.request.clientMessageId,
+      });
+    } finally { await fixture.close(); }
+  });
+}
+
+for (const cohort of ["registry", "journal", "operator"] as const) {
+  test(`update drain recovery: ${cohort} admitted recovery stays available under hold`, async () => {
+    const fixture = await drainRecoveryFixture(`admitted-${cohort}`);
+    try {
+      fixture.projectDead();
+      if (cohort === "operator") {
+        fixture.hold();
+        await enqueueStructuredMessage({ ...fixture.request, origin: { kind: "operator" } }, fixture.dependencies);
+      } else {
+        if (cohort === "registry") {
+          fixture.registry.holdDelivery(fixture.request.conversationId, fixture.request.text,
+            fixture.request.clientMessageId, "text", [], structuredContentDigest({ text: fixture.request.text, images: [] }),
+            { operationId: fixture.request.operationId, kind: "send", policy: "queue", origin: fixture.request.origin },
+            { recoveryIntent: "reclaimed-host" });
+        } else {
+          fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+            conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+          } });
+          fixture.journal.executeOperation({ kind: "send", operationId: fixture.request.operationId,
+            conversationId: fixture.request.conversationId, idempotencyKey: fixture.request.clientMessageId,
+            text: fixture.request.text, policy: "queue", origin: fixture.request.origin });
+          fixture.projectDead();
+        }
+        // A future boundary makes ordering deterministic without sleeping.
+        fixture.hold(new Date(Date.now() + 60_000).toISOString());
+        if (cohort === "registry") await fixture.drain();
+        else await kickStructuredDeliveryQueue();
+      }
+      for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+      expect(fixture.launches()).toBe(1);
+      expect(fixture.receipts()).toHaveLength(1);
+      expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId }]);
+    } finally { await fixture.close(); }
+  });
+}
+
+test("update drain recovery: queued agent rechecks admission after awaiting the account lock", async () => {
+  const fixture = await drainRecoveryFixture("queued-lock-race");
+  let unlock = () => {};
+  let lockEntered = () => {};
+  const entered = new Promise<void>(resolve => { lockEntered = resolve; });
+  const gate = new Promise<void>(resolve => { unlock = resolve; });
+  try {
+    fixture.projectDead();
+    fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+      conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+    } });
+    fixture.journal.executeOperation({ kind: "send", operationId: fixture.request.operationId,
+      conversationId: fixture.request.conversationId, idempotencyKey: fixture.request.clientMessageId,
+      text: fixture.request.text, policy: "queue", origin: fixture.request.origin });
+    fixture.projectDead();
+    let locked: Promise<void> | undefined;
+    fixture.beforeReservation(() => {
+      locked = withAccountMutationLockAsync(async () => { lockEntered(); await gate; });
+    });
+    const recovering = kickStructuredDeliveryQueue();
+    await entered;
+    // Recovery has reached account admission while this independent lease
+    // holds it. Close admission before allowing that reservation to proceed.
+    fixture.hold();
+    unlock();
+    await locked;
+    await recovering;
+    fixture.beforeReservation(() => {});
+    expect(fixture.launches()).toBe(0);
+    expect(fixture.receipts()).toHaveLength(0);
+    expect(fixture.journal.operationResult(fixture.request.operationId)?.receipt.status).toBe("queued");
+    releaseDrain(drainFile(), "queued-lock-race");
+    await kickStructuredDeliveryQueue();
+    expect(fixture.launches()).toBe(1);
+    expect(fixture.ledger.writes).toMatchObject([{ id: fixture.request.operationId, origin: fixture.request.origin }]);
+  } finally { unlock(); await fixture.close(); }
+});
+
+/* The controller's own follow-up to a stage attempt (the verdict request, the
+   continuation after a provider cut) belongs to the attempt's cohort: a drain
+   that found the attempt running has to let it finish, and one that began
+   before the attempt was admitted keeps holding its follow-ups. */
+for (const projection of ["dead", "hosted"] as const) {
+  for (const cohort of ["before", "after"] as const) {
+    test(`update drain cohort: controller follow-up to an attempt admitted ${cohort} the drain began, ${projection} host`, async () => {
+      const name = `cohort-${cohort}-${projection}`;
+      const fixture = await drainRecoveryFixture(name);
+      try {
+        fixture.projectDead();
+        if (projection === "hosted") {
+          // The attempt's own turn ran and ended before the drain: an idle live host.
+          await enqueueStructuredMessage({ ...fixture.request, operationId: `${name}-brief`, clientMessageId: `${name}-brief`,
+            origin: { kind: "operator" } }, fixture.dependencies);
+          for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+          expect(fixture.launches()).toBe(1);
+          expect(fixture.ledger.writes).toMatchObject([{ id: `${name}-brief` }]);
+          fixture.journal.append({ scope: `session:${fixture.request.conversationId}`, kind: "session-status", payload: {
+            conversationId: fixture.request.conversationId, host: "hosted", turn: "idle",
+          } });
+        }
+        const before = fixture.ledger.writes.length;
+        const launched = fixture.launches();
+        const since = Date.now() - 60_000;
+        fixture.hold(new Date(since).toISOString());
+        const followUp = { ...fixture.request, origin: { kind: "agent" as const, role: "pipeline" },
+          cohortAt: new Date(since + (cohort === "before" ? -60_000 : 30_000)).toISOString() };
+        const result = await enqueueStructuredMessage(followUp, fixture.dependencies);
+        expect(result).toMatchObject({ ok: true, operationId: followUp.operationId });
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        if (cohort === "before") {
+          expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+          expect(fixture.launches()).toBe(projection === "dead" ? 1 : launched);
+          return;
+        }
+        expect(fixture.ledger.writes).toHaveLength(before);
+        expect(fixture.launches()).toBe(launched);
+        releaseDrain(drainFile(), name);
+        for (let attempt = 0; attempt < 3; attempt += 1) { await fixture.drain(); await kickStructuredDeliveryQueue(); }
+        expect(fixture.ledger.writes.slice(before)).toMatchObject([{ id: followUp.operationId, origin: followUp.origin }]);
+      } finally { await fixture.close(); }
+    });
+  }
+}

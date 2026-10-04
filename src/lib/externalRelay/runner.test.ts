@@ -639,3 +639,46 @@ test("hard cap kills the child and completes failed hard_cap", async () => {
     await server.close();
   }
 });
+
+
+test("relay advertises zero capacity and starts no answer child during drain, then admits after release", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const marker = path.join(root, "drain-child-marker");
+  const command = stub(`const a=process.argv; await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched"); await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply', text:'Done', reply_to:'m1'}));`);
+  const completed: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completed.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const request = { ...sampleRequest, request_id: "rq_drain" };
+  try {
+    writeDrain(drainFile(), { id: "relay-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(fs.existsSync(marker)).toBe(false); expect(readRunLedger().runs).toEqual([]);
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    releaseDrain(drainFile(), "relay-hold");
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
+    expect(await runClaimedRequest(paired, { ...request, lease_id: "ls_released_Zq3vN8bY1xKp4Lm" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(fs.readFileSync(marker, "utf8")).toBe("launched");
+    expect(completed).toHaveLength(2);
+  } finally { releaseDrain(drainFile(), "relay-hold"); await server.close(); }
+});
+
+test("an answer admitted before drain completes normally while fresh children stay held", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const marker = path.join(root, "admitted-child-marker");
+  const gate = path.join(root, "admitted-child-release");
+  const command = stub(`const a=process.argv; await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched"); while(!require('node:fs').existsSync(${JSON.stringify(gate)})) await Bun.sleep(10); await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply', text:'Done', reply_to:'m1'}));`);
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  const pending = runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_admitted_drain" }, undefined, { command });
+  try {
+    for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await Bun.sleep(10);
+    expect(fs.existsSync(marker)).toBe(true);
+    writeDrain(drainFile(), { id: "relay-admitted", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    fs.writeFileSync(gate, "release");
+    expect(await pending).toMatchObject({ outcome: "answered" });
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { fs.writeFileSync(gate, "release"); await pending; releaseDrain(drainFile(), "relay-admitted"); await server.close(); }
+});

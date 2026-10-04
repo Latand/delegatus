@@ -47,7 +47,7 @@ through the installed Next configuration loaders.
 PostCSS rc overrides and `Dockerfile.dockerignore`, which takes precedence over
 the root Docker ignore file, also trigger a build.
 
-The broad trigger is retained for compatibility with #2452 and to avoid GitHub's
+Every PR reaches scope without a trigger paths filter, avoiding GitHub's
 300-file trigger-filter limit. A three-minute, read-only `scope` job evaluates
 the full `base...head` diff with Git. It uses immutable event SHAs, NUL-separated
 paths and disabled rename detection. Main-only changes do not count; deletions
@@ -113,8 +113,29 @@ GitHub's official syntax and the workflow contract test validate `queue: max`.
 
 ## Other lane
 
-Read #2452 and lane `2f67b71b` at `0d6874678`: retained its broad-trigger
-contract, per-ref cancellation, 45/360-minute budgets and release steps.
-Its other workflows, local hooks and test files are untouched. Its Docker
-workflow contract remains satisfied by this change. This PR adds admission and
-capacity control to that approach; it does not move further checks off CI.
+#2452 is now merged. Compatibility is pinned to its published head
+`8102797577817b52d07ff184927dc14e255debf0` and main merge
+`880409de7c42835f85db5b64666c200c6cea6c9d` (2026-10-04). The earlier
+`0d6874678` pin is superseded: that snapshot's broad trigger was later narrowed.
+Main was merged into this branch, resolving the Docker workflow overlap here.
+The resulting tree contains main as an ancestor, so combining it with that
+pinned main has no conflicts. The fenced lane checkout was never edited.
+
+The merged lane's paths filter omitted `landing/site/demo/taskIcons.json`,
+`scripts/demo-capture-browser.cjs`, `.env.production` and `.postcssrc.json`.
+Removing the trigger filter ensures all four reach the complete-diff scope job,
+including when an input occurs after GitHub's first 300 changed files. Its
+per-ref cancellation expression, 45/360-minute build budgets, main/tag triggers
+and release steps are retained verbatim. Its other workflows and local hooks
+match pinned main byte-for-byte.
+
+The Docker contract in `scripts/local-gate.workflows.test.ts` now checks the
+scope-to-build admission wiring and the actual image-input decisions. Prose,
+hooks and unrelated shell scripts skip Docker; the Docker workflow itself and
+TypeScript tooling remain real inputs. The input, Git-history and capacity
+contracts in `scripts/docker-image-scope.test.ts` run on the same combined tree.
+Both files pass together: **12 tests, 240 assertions**. ESLint and whitespace
+checks also pass. Negative controls run the new trigger regression against the
+previous branch workflow (`11006167e`) and the updated publishing contract
+against pinned main; each fails on the paths filter, then passes on the combined
+workflow. No Docker build or hosted CI wait is needed for these local contracts.

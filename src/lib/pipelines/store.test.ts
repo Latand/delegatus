@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -75,31 +75,48 @@ test("promoted Viewer loads historical severity-only verdicts before hot-state a
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.findings).toEqual(["P1", "P2"]);
 }));
 
-test("delivery ownership survives concurrent processes and original-key replay after restart", async () => isolatedDelivery(async (root) => {
+test.each([
+  { name: "delivery ownership survives concurrent processes and original-key replay after restart", contendedRelease: false },
+  { name: "delivery ownership survives a contended lease release and original-key replay after restart", contendedRelease: true },
+])("$name", async ({ contendedRelease }) => isolatedDelivery(async (root) => {
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    import { injectStateWriteFaultForTests } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
+    if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
+      site: "release", collection: "pipelines", times: 1,
+      error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
+    });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
     console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
-  const run = (record: Pipeline) => Bun.spawn([process.execPath, "-e", script], {
-    env: { ...process.env, LLV_STATE_DIR: root, DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
+  const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
+    env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
+      DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
     stdout: "pipe", stderr: "pipe",
   });
-  const children = [run(deliveryFixture("owner-a")), run(deliveryFixture("owner-b"))];
-  const results = await Promise.all(children.map(async (child) => {
-    const output = await new Response(child.stdout).text();
-    const errors = await new Response(child.stderr).text();
-    expect({ exit: await child.exited, errors }).toEqual({ exit: 0, errors: "" });
-    return JSON.parse(output) as Pipeline;
-  }));
+  // A committed write can defer lease cleanup when a competing process holds
+  // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
+  // durable ownership and restart replay still have to prove success.
+  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
+  const collect = async (child: ReturnType<typeof run>) => {
+    const [output, errors, exit] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(exit).toBe(0);
+    expect(["", releaseWarning]).toContain(errors);
+    return { record: JSON.parse(output) as Pipeline, errors };
+  };
+  const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
+  const completed = await Promise.all(children.map(collect));
+  if (contendedRelease) expect(completed[0]!.errors).toBe(releaseWarning);
+  const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
   expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
   expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
   const replay = run(deliveryFixture(owner.id));
-  expect(JSON.parse(await new Response(replay.stdout).text()).id).toBe(owner.id);
-  expect(await replay.exited).toBe(0);
-  expect(loadPipelines()).toHaveLength(2);
+  expect((await collect(replay)).record).toEqual(owner);
+  expect(loadPipelines().sort((a, b) => a.id.localeCompare(b.id))).toEqual(results.sort((a, b) => a.id.localeCompare(b.id)));
   const database = new Database(path.join(root, "state.sqlite"));
   try {
     const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
@@ -865,6 +882,7 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
     savePipelines([pipeline]);
     if (collection === "pipelines_archive") await archiveSettledPipelines(Date.parse("2026-08-05T00:00:00.000Z"));
     expect(loadPipelinesForStartup()).toHaveLength(1);
+    expect(loadPipelinesForRetirement()).toHaveLength(1);
     loadPipelines();
     db = new Database(path.join(sandbox, "state.sqlite"));
     const read = () => db!.query("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?").get(collection, pipeline.id) as { value_json: string };
@@ -873,9 +891,11 @@ test.each(["pipelines", "pipelines_archive"])("startup strictly rereads %s despi
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(corrupt, collection, pipeline.id);
       if (corrupt === "{broken") expect(() => loadPipelinesForStartup()).toThrow();
       else expect(loadPipelinesForStartup()).toEqual([]);
+      expect(() => loadPipelinesForRetirement()).toThrow();
       expect(read().value_json).toBe(corrupt);
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(original, collection, pipeline.id);
       expect(loadPipelinesForStartup()).toHaveLength(1);
+      expect(loadPipelinesForRetirement()).toHaveLength(1);
     }
     if (collection === "pipelines_archive") {
       db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run("{broken", collection, pipeline.id);

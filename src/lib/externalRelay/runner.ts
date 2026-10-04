@@ -1,3 +1,4 @@
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,12 +49,13 @@ export function runningCount(relayId: string, targetId: string): number {
 export function advertisedSlots(
   relay: PairedRelay,
 ): { target_id: string; free: number }[] {
+  const drainHeld = !!activeDrain();
   const held = readRunLedger().runs;
   return relay.targets
     .filter((target) => target.enabled && target.engine && target.model)
     .map((target) => ({
       target_id: target.id,
-      free: Math.max(
+      free: drainHeld ? 0 : Math.max(
         0,
         target.concurrency -
           Math.max(
@@ -165,6 +167,7 @@ export async function runClaimedRequest(
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
+  if (activeDrain()) return finish(declined(leaseId, "busy"));
   let runDir: string | null = null;
   let recorded = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
@@ -218,6 +221,7 @@ export async function runClaimedRequest(
     let nextBeatAt = 0;
     const started = Date.now();
     try {
+      if (activeDrain()) return await finish(declined(leaseId, "busy"));
       run = runEphemeralAgent({
         key: `external-relay:${requestId}`,
         engine: target.engine,

@@ -77,7 +77,7 @@ const wire = (task: BoardTask) => encodeTask(task, { id: SELF, prefix: installPr
 function peerRow(base: Partial<WireTask> & { id: string }, stampMs: number, prefix = installPrefix(PEER)): WireTask {
   const stamp = `${String(stampMs).padStart(13, "0")}.000.${prefix}`;
   return { project: key, text: "from peer", status: "inbox", placement: "unplaced", machine: PEER,
-    createdAt: "2026-09-28T00:00:00.000Z", updatedAt: "2026-09-28T00:00:00.000Z",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     s: { text: stamp, status: stamp, look: stamp, place: stamp, links: stamp, machine: stamp, handover: stamp }, ...base };
 }
 

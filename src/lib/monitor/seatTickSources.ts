@@ -345,7 +345,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
       return "unreachable";
     }
   };
-  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId });
+  const evidence = await ports.lookup({ conversationId: wake.conversationId, clientMessageId: wake.clientMessageId, text: wake.text });
   if (evidence.kind === "absent") {
     if (!wake.operationId) return { state: "absent", evidence: { operationId: null, record: null, journal: "unasked" } };
     const journal = await asked(wake.operationId);
@@ -367,7 +367,24 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
     if (settled.state === "in-flight") return { state: "retained", evidence: withRecord(settled, "unasked") };
     current = settled;
   }
-  if (current.state === "delivered") return { state: "landed", evidence: withRecord(current, "unasked") };
+  if (current.state === "delivered") {
+    // A caller may supply the generic resolver's late-confirmation projection.
+    // Preserve the provenance even when it has already projected arrival.
+    if (evidence.receipt.state !== "delivered" && ports.confirmed) {
+      let confirmed = false;
+      try { confirmed = await ports.confirmed(wake, evidence.operationId); } catch { /* The delivered receipt still stands. */ }
+      if (confirmed) {
+        const journal = await asked(evidence.operationId);
+        const written = await ports.settleFromJournal?.(
+          { conversationId: wake.conversationId, operationId: evidence.operationId, deliveryId: evidence.deliveryId },
+          { status: "delivered", reason: null },
+        );
+        return { state: "landed", evidence: { ...withRecord(written ?? evidence.receipt, journal), confirmation: "claude-ledger",
+          ...(written?.state === "delivered" ? { recorded: "delivered" } : {}) } };
+      }
+    }
+    return { state: "landed", evidence: withRecord(current, "unasked") };
+  }
   /* `safe` is the fenced, proven non-delivery and the only failure the record
      alone can license raising the wake again on. */
   if (current.resend === "safe") return { state: "dropped", evidence: withRecord(current, "unasked") };
@@ -1327,11 +1344,14 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   return found;
 }
 
-export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending">): SeatTickSignalInput[] {
+export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending"> & Pick<Partial<AutoState>, "drain">): SeatTickSignalInput[] {
   if (auto.off) return [{ id: "self-update-off", label: `self-update: automatic updates turned off — ${auto.off.reason}` }];
-  if (auto.noticeAt && auto.waitingSince) {
-    const counts = [auto.lastBlockers?.turns ? `${auto.lastBlockers.turns} agent turns` : "", auto.lastBlockers?.stages ? `${auto.lastBlockers.stages} stages` : ""].filter(Boolean).join(", ");
-    return [{ id: "self-update-wait", label: `self-update: ${auto.waitingTarget?.slice(0, 7) ?? "built release"} has waited over 24 h for a quiet moment${counts ? ` (${counts})` : ""}` }];
+  if (auto.drain?.overranAt) {
+    const blockers = auto.drain.blockers;
+    const names = [...(blockers?.stageList ?? []).map((stage) => `${stage.stageId} · ${stage.task}`),
+      ...(blockers?.turnList ?? []).map((turn) => turn.seat ? turn.project ?? turn.conversationId : `${turn.engine} · ${turn.conversationId}`)].join(", ");
+    if (auto.drain.acknowledgedAt) return [];
+    return [{ id: "self-update-drain-overran", label: `self-update: admission remains held after 6 h; still blocked by ${names || "unreadable activity"}; the operator can deploy now or keep waiting in Needs-you` }];
   }
   return [];
 }

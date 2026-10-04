@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { externalRelayTempRoot } from "./runner";
+import { accountManager } from "@/lib/accounts/manager";
 import { procBackend } from "@/lib/proc";
 import {
   ensureExternalRelayPollers,
@@ -509,4 +510,41 @@ test("a 5xx, an invalid body or a network error keeps the stored targets and say
   } finally {
     await empty.close();
   }
+});
+
+
+test("a claim already waiting when drain begins is declined without reserving an answer", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  let entered!: () => void, release!: () => void, completed!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const done = new Promise<void>(resolve => { completed = resolve; });
+  const completions: unknown[] = [], slots: unknown[] = [];
+  let claimed = false;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: "target_1", name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url?.endsWith("/requests/claim")) {
+      slots.push((body as { slots: unknown }).slots);
+      if (claimed) return { status: 204 };
+      claimed = true; entered(); await gate;
+      return { body: { request: { ...sampleRequest, request_id: "rq_waiting_drain" } } };
+    }
+    if (req.url?.endsWith("/complete")) { completions.push(body); completed(); return { body: { status: "accepted", duplicate: false } }; }
+    return { status: 404 };
+  });
+  const originalRelays = readRelayStore().relays;
+  const resolve = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = () => ({ kind: "unavailable" });
+  try {
+    updateRelayStore(store => ({ ...store, relays: [pairedRelay("drain_claim", server.origin, [configured("target_1")])] }));
+    ensureExternalRelayPollers();
+    await waiting;
+    expect(slots[0]).toEqual([{ target_id: "target_1", free: 2 }]);
+    writeDrain(drainFile(), { id: "claim-wait", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+    release(); await done;
+    expect(completions).toMatchObject([{ outcome: "declined", reason: "busy" }]);
+    expect(readRunLedger().runs).toEqual([]);
+    for (let i = 0; i < 100 && slots.length < 2; i++) await Bun.sleep(20);
+    expect(slots[1]).toEqual([{ target_id: "target_1", free: 0 }]);
+  } finally { accountManager.resolveHeadlessSpawn = resolve; release(); stopExternalRelayPollers(); releaseDrain(drainFile(), "claim-wait"); updateRelayStore(store => ({ ...store, relays: originalRelays })); await server.close(); }
 });

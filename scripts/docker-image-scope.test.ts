@@ -23,7 +23,7 @@ interface Job {
 const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/docker-image.yml"), "utf8")) as {
   jobs: Record<string, Job>;
   concurrency: { group: string; "cancel-in-progress": string };
-  on: { push: { branches: string[]; tags: string[] } };
+  on: { pull_request?: { paths?: string[]; "paths-ignore"?: string[] }; push: { branches: string[]; tags: string[] } };
 };
 
 test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
@@ -117,6 +117,16 @@ test("admitted PostCSS rc files override the checked-in config in installed Next
   }
 });
 
+test("every PR reaches scope even for inputs omitted by the former trigger", () => {
+  expect(workflow.on).toHaveProperty("pull_request");
+  expect(workflow.on.pull_request?.paths).toBeUndefined();
+  expect(workflow.on.pull_request?.["paths-ignore"]).toBeUndefined();
+  for (const file of [
+    "landing/site/demo/taskIcons.json", "scripts/demo-capture-browser.cjs",
+    ".env.production", ".postcssrc.json",
+  ]) expect(isImageInput(file), file).toBe(true);
+});
+
 test("workflow gates Docker steps and reserves capacity across different refs", () => {
   const { scope, build } = workflow.jobs;
   expect(scope.if).toBe("github.event_name == 'pull_request'");
@@ -132,7 +142,7 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(build.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
   expect(build.concurrency).toEqual({ group: "docker-image-build", "cancel-in-progress": false, queue: "max" });
   expect(workflow.concurrency.group).toBe("docker-image-${{ github.ref }}");
-  expect(workflow.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}");
+  expect(workflow.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
   expect(workflow.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
   expect(build["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   const image = build.steps.find((step: { name?: string }) => step.name === "Build both architectures");

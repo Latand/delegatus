@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
+import { closeAgentRegistryForTests } from "./registry";
 import { ensureOperatorSpawnCapability } from "./operatorCapability";
 import {
   directOperatorActivityAuthority,
@@ -44,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   setCallerConversationResolverForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;

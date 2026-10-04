@@ -1,17 +1,23 @@
+import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
+import { handoffQueue } from "./handoffQueueStore";
+import { blockingHostActivityFlags } from "./hostActivityFlags";
+import { runtimeIdleKillMatches } from "./contracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
-import { captureProcessIdentity } from "@/lib/processIdentity";
-import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -695,10 +701,54 @@ export async function bindStructuredDeliveryQueue(
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
     },
+    succession: (conversationId, binding, admittedAt) => {
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      if (!conversation || conversation.engine !== "codex") return { status: "refused", reason: "native queue conversation is unavailable" };
+      const migration = conversation.migration;
+      const generations = conversation.generations;
+      const sourceIndex = generations.findIndex(generation => generation.id === binding.threadId && generation.accountId === binding.accountId);
+      const migrationSourceIndex = generations.findLastIndex(generation => generation.id === migration?.sourceGenerationId
+        && (migration?.phase !== "committed" || generation.archivedAt !== null));
+      if (!migration || sourceIndex < 0 || migrationSourceIndex < sourceIndex) return null;
+      const source = generations[sourceIndex]!;
+      const current = generations.at(-1);
+      // Terminal migration residue applies only to entries already admitted
+      // when this migration began, regardless of who requested the switch.
+      // A reused intent can predate this conversation's migration.
+      const terminal = migration.phase === "rolled-back" || migration.phase === "failed-recoverable";
+      if (terminal && current === source && !conversation.switchHold && admittedAt !== undefined) {
+        const startedAt = migration.startedAt ?? registry.readOnlySnapshot().migrationIntents[migration.intentId]?.createdAt;
+        if (Date.parse(admittedAt) > Date.parse(startedAt ?? "")) return null;
+      }
+      // Each committed edge archives its predecessor at the successor's birth.
+      // Keep that evidence when a newer migration replaces the previous receipt.
+      for (let index = sourceIndex; index < migrationSourceIndex; index++) {
+        if (!generations[index]!.archivedAt || generations[index]!.archivedAt !== generations[index + 1]!.createdAt) {
+          return { status: "refused", reason: "runtime switch successor chain is unproven" };
+        }
+      }
+      if (conversation.switchHold) return { status: "refused", reason: `account switch failed: ${conversation.switchHold.reason}` };
+      if (conversation.reconfigure?.status === "cancelled" || migration.phase === "rolled-back") return { status: "refused", reason: "runtime switch cancelled" };
+      if (conversation.reconfigure?.status === "failed" || migration.phase === "failed-recoverable") {
+        return { status: "refused", reason: `runtime switch failed: ${conversation.reconfigure?.error ?? migration.error ?? "successor is unavailable"}` };
+      }
+      if (migration.phase !== "committed" || conversation.reconfigure?.status === "applying") return { status: "pending" };
+      if (!source.archivedAt || !current || current.id !== migration.providerReceipt?.nativeId || current.accountId !== migration.targetId) {
+        return { status: "refused", reason: "runtime switch successor is unproven" };
+      }
+      return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
+    },
   });
   const queue = new StructuredDeliveryQueue(
     {
       handoffHeld: () => !!activeRestartGate(statePath("self-update", "auto-admission.json")),
+      autonomousTurnHeld: (operationId, admittedAt) => {
+        const hold = activeDrain();
+        if (!hold) return false;
+        const acceptedAt = registry.deliveryAdmissionAtForOperation(operationId) ?? admittedAt;
+        const accepted = Date.parse(acceptedAt ?? "");
+        return !Number.isFinite(accepted) || accepted >= Date.parse(hold.since);
+      },
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
@@ -763,7 +813,7 @@ export async function bindStructuredDeliveryQueue(
         if (!generation || !claim) return null;
         return { threadId: generation.id, accountId: generation.accountId, writerClaim: claim };
       },
-      transition: async (operationId, status, details) => {
+      transition: async (operationId, status, details, options) => {
         const terminal = status === "delivered" || status === "failed" || status === "uncertain";
         /* Terminal transitions take out the journal's retention as they commit
            (#1612): the registry write below rides on this call's ANSWER, and an
@@ -774,7 +824,7 @@ export async function bindStructuredDeliveryQueue(
           operationId,
           status,
           details,
-          terminal ? { awaitProjection: true } : {},
+          { ...options, ...(terminal ? { awaitProjection: true } : {}) },
         );
         /* The three states a held delivery can settle into. `uncertain` — a
            send an executor actuated and could not answer for — settles the
@@ -819,7 +869,79 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey) => {
+    async (conversationId, expectedKey, onlyIfIdle, authority) => {
+      if (onlyIfIdle) {
+        // Re-read the journal after admission and immediately before actuation.
+        // Missing evidence leaves retirement deferred, with no process effects.
+        const session = await client.readSession?.({ conversationId }).catch(() => null);
+        if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
+      }
+      let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      const durableAuthority = async (): Promise<boolean> => {
+        if (!onlyIfIdle) return true;
+        if (!authority || stopped || state.activeQueue !== queue) return false;
+        const result = await client.operationStatus(authority.operationId).catch(() => null);
+        // Rebind may have happened while the socket read was pending.
+        return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
+          && result.receipt.retirementClaim?.executorId === authority.claim.executorId
+          && sameRecordedProcessIdentity(result.receipt.retirementClaim.process, authority.claim.process);
+      };
+      const idleAuthority = (): boolean => {
+        if (!onlyIfIdle) return true;
+        if (stopped || state.activeQueue !== queue) return false;
+        const snapshot = registry.readOnlySnapshot();
+        if (Object.values(snapshot.heldDeliveries).some(delivery => delivery.conversationId === conversationId
+          && ["held", "assigned", "delivery-uncertain"].includes(delivery.state))) return false;
+        try {
+          if (handoffQueue().rows().some(row => (row.conversationId === conversationId
+            || (row.engine === expectedKey.engine && row.engineSessionId === expectedKey.sessionId))
+            && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)))) return false;
+        } catch { return false; }
+        const entry = snapshot.entries[sessionKeyId(expectedKey)];
+        const conversation = registry.conversation(conversationId as ViewerConversationId);
+        const generation = conversation?.generations.at(-1);
+        try {
+          if (pipelineHostHasLiveWork(loadPipelinesForRetirement(), {
+            conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
+          }, id => resolveConversationAlias(snapshot, id as ViewerConversationId))) return false;
+        } catch { return false; }
+        // Turn idleness cannot release a seat. Read designation and revocation
+        // epochs together, afresh before each signal; silence defers retirement.
+        const seats = readOrchestratorSeatRetirementEvidenceOrNull();
+        if (!seats || !conversation) return false;
+        const namesConversation = (id: string | null) => id !== null
+          && resolveConversationAlias(snapshot, id as ViewerConversationId) === conversation.id;
+        const revokedEpochs = new Map<string, number>();
+        for (const revocation of seats.revocations) {
+          if (namesConversation(revocation.conversationId)) revokedEpochs.set(revocation.project,
+            Math.max(revokedEpochs.get(revocation.project) ?? 0, revocation.seatEpoch));
+        }
+        const designations = [
+          ...Object.values(seats.seats),
+          ...Object.values(seats.pending).filter(seat => seat.intent.error === null),
+          ...(seats.seatLineage ?? []),
+        ];
+        if (designations.some(seat => namesConversation(seat.conversationId)
+          && seat.seatEpoch > (revokedEpochs.get(seat.project) ?? 0))) return false;
+        // Memberships persist after rotation. Only that project's durable
+        // revocation ends protection; another project's rotation cannot do it.
+        if ((snapshot.memberships[conversation.id] ?? []).some(membership => membership.kind === "orchestrator"
+          && !revokedEpochs.has(canonicalOrchestratorProject(membership.containerId)))) return false;
+        // A host's terminal persistence callback releases its writer when the
+        // captured tree prevents it clearing the row. The same captured tree
+        // still belongs to this teardown; a replacement writer never does.
+        const captured = capturedRetirement;
+        const releasedCapturedWriter = captured !== null && entry?.claimOwner === null
+          && entry.claimEpoch === captured.claimEpoch
+          && entry.structuredHost?.writerClaimEpoch === captured.claimEpoch
+          && (entry.structuredTerminationSurvivors ?? []).some(identity => identity.pid === captured.root.pid
+            && identity.startIdentity === captured.root.startIdentity && identity.bootEpoch === captured.root.bootEpoch);
+        return !!entry?.structuredHost && generation?.id === expectedKey.sessionId
+          && !entry.host && entry.status === "idle" && entry.structuredHost.activeTurnRef === null
+          && entry.structuredHost.pendingAttention.length === 0 && blockingHostActivityFlags(entry.structuredHost.activeFlags).length === 0
+          && (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` === onlyIfIdle.writerClaim || releasedCapturedWriter);
+      };
+      if (!await durableAuthority() || !idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
         for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
@@ -863,6 +985,7 @@ export async function bindStructuredDeliveryQueue(
           if (branchSharesRootHost(registry, registry.conversation(conversationId as ViewerConversationId))) {
             return { status: 409, error: BRANCH_SHARED_HOST_ERROR };
           }
+          if (!idleAuthority()) return { status: 409, error: "idle-retirement-deferred" };
           return null;
         };
         const refusal = authorize();
@@ -870,7 +993,19 @@ export async function bindStructuredDeliveryQueue(
         const outcome = await terminateStructuredHostTree(ref, {
           retainedSurvivors,
           authorize,
-          persistCapturedTree: identities => registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities),
+          ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
+            ? null : { status: 409 as const, error: "idle-retirement-authority-lost" } } : {}),
+          // The automatic path uses the signal ladder's synchronous authority
+          // recheck rather than the operator's unconditional release method.
+          ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
+          persistCapturedTree: identities => {
+            const persisted = registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities);
+            if (persisted && onlyIfIdle) {
+              const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]!;
+              capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
+            }
+            return persisted;
+          },
           retireRegistryEntry: (key, expected, confirmed) => registry.terminateStructuredHost(key, expected, confirmed),
         });
         if (!outcome.ok) {
@@ -890,7 +1025,7 @@ export async function bindStructuredDeliveryQueue(
       return true;
     },
     () => scheduleAutomaticRetry(),
-    async (conversationId) => {
+    async (conversationId, admission = {}) => {
       if (!conversationId.startsWith("conversation_")) return false;
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
@@ -900,6 +1035,7 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...admission,
       }, {
         registry,
         client,
@@ -1396,6 +1532,7 @@ export async function bindStructuredDeliveryQueue(
   });
   state.stopActive = () => {
     stopped = true;
+    queue.retire();
     if (drainTimer) clearTimeout(drainTimer);
     drainTimer = null;
     for (const timer of inheritedRetries.values()) clearTimeout(timer);

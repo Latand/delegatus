@@ -9,6 +9,13 @@ import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
    numbers — see `@/lib/attention/eligibility`. */
 const QUERY = MOBILE_LAYOUT_QUERY;
 
+/* Module-level, so the snapshot keeps its identity across renders: a new
+   function each render makes React re-register the store on every commit, once
+   for every row of a feed that calls this hook. */
+function matches(): boolean {
+  return window.matchMedia(QUERY).matches;
+}
+
 function subscribe(onChange: () => void) {
   const mq = window.matchMedia(QUERY);
   mq.addEventListener("change", onChange);
@@ -25,7 +32,7 @@ const noSubscription = () => () => {};
 export function useIsMobile(active = true): boolean {
   return useSyncExternalStore(
     active ? subscribe : noSubscription,
-    () => window.matchMedia(QUERY).matches,
+    matches,
     () => false,
   );
 }

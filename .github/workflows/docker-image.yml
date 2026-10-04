@@ -1,38 +1,9 @@
 name: Docker image
 
 on:
-  # Keep the broad trigger shared with the local-hooks lane. The cheap scope
-  # job checks the complete PR diff before admitting an image build; GitHub's
-  # trigger path filter only inspects the first 300 files. Tailwind's source
-  # root is now src/, so prose and unrelated workflows can skip the build.
+  # The scope job checks the complete PR diff before admitting a build.
+  # GitHub paths filters only inspect the first 300 files and can hide inputs.
   pull_request:
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - "**/*"
-      - package.json
-      - bun.lock
-      - bunfig.toml
-      - patches/**
-      - next.config.ts
-      - postcss.config.mjs
-      - tsconfig.json
-      - src/**
-      - public/**
-      - bin/**
-      - vendor/**
-      - scripts/**
-      - "**/*.ts"
-      - "**/*.tsx"
-      - "**/*.mts"
-      - "**/*.json"
-      - "**/*.html"
-      - "**/*.js"
-      - "**/*.jsx"
-      - "**/*.mjs"
-      - "**/*.cjs"
-      - "**/.gitignore"
-      - .github/workflows/docker-image.yml
   push:
     branches: [main]
     tags: ["v*"]
@@ -43,7 +14,7 @@ permissions:
 
 concurrency:
   group: docker-image-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref_type != 'tag' }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   scope:

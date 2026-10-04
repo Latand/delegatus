@@ -282,8 +282,11 @@ body {
   animation-play-state: paused !important;
 }
 
-/* Feed rows inside compact scheme panes: off-screen messages skip layout and
-   paint entirely; the placeholder height keeps scroll geometry sane. */
+/* Feed rows, on the canvas and in the desktop reader (never on the phone,
+   see `rowsSkipOffscreen` in LogFeed): off-screen messages skip layout and
+   paint entirely; the placeholder height keeps scroll geometry sane. The
+   skipped text stays reachable to find-in-page and to a selection that
+   crosses rows, which is why this is not a JS virtualizer. */
 .feed-cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 44px;
@@ -384,6 +387,32 @@ body {
 .scheme-session [data-scheme-node][data-select-check-hover="true"] > * {
   opacity: 1;
   filter: none;
+}
+
+/* «Needs you» filter (docs/design/needs-me-filter.md): the Viewer sets one
+   attribute on <main> and every card that does not wait on the operator
+   recedes. A waiting card carries data-attention (the desktop card's own mark,
+   and the phone shell's), so lit and dim are the same answer the queue gives.
+   Opacity and filter only, so geometry, hit areas and scrolling never move
+   when it toggles. The exclusions keep the drag, ghost and landing animations
+   their own opacity (this selector would out-specify theirs), and hover,
+   focus-within and an open reader bring a card back while the operator points
+   at it, works inside it or reads the conversation it holds. A new-task draft
+   is the operator's own and never dims. */
+[data-needs-only] .kb .card:not([data-attention], .dragging, .ghost, .landing, .has-reader, .new-task, :hover, :focus-within),
+[data-needs-only] .kb .remote-unbound:not(:hover, :focus-within),
+[data-needs-only] [data-phone-card-shell]:not([data-attention]) {
+  opacity: var(--needs-dim-opacity);
+  filter: saturate(var(--needs-dim-saturate));
+}
+[data-phone-card-shell] {
+  transition: opacity var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
+}
+.kb .remote-unbound {
+  transition: opacity var(--motion-base) var(--ease-standard), filter var(--motion-base) var(--ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-phone-card-shell], .kb .remote-unbound { transition: none; }
 }
 
 /* The hover-revealed selection check (#771): the fade is the whole reveal — the

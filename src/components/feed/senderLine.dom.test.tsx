@@ -105,6 +105,6 @@ test("an agent's relay keeps its internal card and names no person", () => {
     senders: {},
   }, [item]);
   const container = render(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
-  expect(container.textContent).toContain("reviewer");
+  expect(container.textContent).toContain("Reviewer");
   expect(senderOf(container)).toBeNull();
 });

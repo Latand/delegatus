@@ -113,7 +113,7 @@ probe("Claude reads lane artifacts in all access/sandbox profiles and restricted
   ] as const;
   for (const part of parts) {
     const external = path.join(root, "state", `${part.name}.md`);
-    const lane = path.join(prepareControllerArtifactDirectory(cwd), `${part.name}.md`);
+    const lane = path.join(await prepareControllerArtifactDirectory(cwd), `${part.name}.md`);
     fs.mkdirSync(path.dirname(external), { recursive: true });
     fs.mkdirSync(path.dirname(lane), { recursive: true });
     fs.writeFileSync(external, part.text, { mode: 0o600 });

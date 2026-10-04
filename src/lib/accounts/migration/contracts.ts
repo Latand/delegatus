@@ -177,6 +177,9 @@ export interface NativeGeneration {
 
 export interface ConversationMigration {
   intentId: string;
+  /** This conversation's migration start, preserved through phase transitions.
+      Older records fall back to the intent's creation time. */
+  startedAt?: string;
   phase: MigrationPhase;
   targetId: string;
   revision: number;
@@ -327,6 +330,12 @@ export interface HeldDeliveryCommand {
       digest. Orchestrator relay receipts additionally compare this durable
       origin: a different sender must never inherit their operation. */
   origin?: MessageOrigin;
+  /** When the work this message continues was admitted, where that is earlier
+      than the message itself: the controller's follow-up to a stage attempt
+      carries the attempt's admission. An update drain holds autonomous work
+      admitted after it began, and reads this to tell a continuation of its
+      original cohort from a fresh start. Outside the request digest. */
+  cohortAt?: string;
 }
 
 export interface HeldDeliveryCommandInput {
@@ -335,6 +344,7 @@ export interface HeldDeliveryCommandInput {
   policy?: HeldDeliveryCommand["policy"];
   turnId?: string | null;
   origin?: MessageOrigin;
+  cohortAt?: string;
 }
 
 export interface HeldDelivery {

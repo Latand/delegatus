@@ -4,6 +4,14 @@
    mirrored name for name, so light and dark follow the app's theme. Sizes,
    spacing and radii are the prototype's; keep them in step with it. */
 
+/* Grid track values belong to the board itself. They must not invalidate
+   the styles of every descendant when the wide share changes. */
+@property --c-inbox { syntax: "*"; inherits: false; }
+@property --c-assigned { syntax: "*"; inherits: false; }
+@property --c-blocked { syntax: "*"; inherits: false; }
+@property --c-done { syntax: "*"; inherits: false; }
+@property --kb-column-width { syntax: "<length>"; inherits: false; initial-value: 280px; }
+
 .kb {
   --shelf-w: 264px;
   --work-min: 520px;
@@ -77,6 +85,21 @@
 }
 .kb .bar .search input:focus { background: var(--surface-card); border-color: var(--color-accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 25%, transparent); }
 .kb .bar .search svg { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; color: var(--color-muted); pointer-events: none; }
+.kb .bar-find { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.kb .reason-filters { display: flex; min-width: 0; max-width: 420px; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+/* Under the bar the row is the bar's second line: the same surface, with the bottom border the bar
+   gives on its own (the bar's border is then the row's, so no line runs between them). The page
+   scrolls from the row's lower edge, so scrolled content never touches a chip, and the Orchestrator
+   row keeps its one 12 px gap from that edge. The row is 8 + 18 + 8 + 1 px; the reader and the
+   draft take that height out of theirs twice (--reason-row-h), so the row costs the card nothing. */
+.kb > .reason-filter-row {
+  flex: 0 0 auto; flex-wrap: wrap; max-width: none; padding: 8px var(--kb-edge); overflow: visible;
+  background: var(--surface-card); border-bottom: 1px solid var(--border-default);
+}
+.kb > .bar:has(+ .reason-filter-row) { border-bottom: 0; }
+.kb:has(> .reason-filter-row) { --reason-row-h: 35px; }
+.kb .reason-filter { flex: 0 0 auto; min-height: 18px; padding: 0 6px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-card); color: var(--color-secondary); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.kb .reason-filter[aria-pressed="true"] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, var(--surface-card)); color: var(--color-primary); }
 
 /* The project board's one header bar (#1801, docs/design/board-header.md): one
    48 px row at every desktop width, 32 px controls, 8 px inside a group and
@@ -104,8 +127,20 @@
    pixel from the lead, and Chrome draws the ellipsis for it. At 100 000 the lead's share of the at
    most 128 px the search gives stays under half a layout unit (1/128 px) and rounds to nothing;
    once the search sits at its floor the rest falls to the lead as before. */
-.kb .bar[data-bar="project"] .search { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
+.kb .bar[data-bar="project"] .bar-find { flex: 1 100000 240px; max-width: 420px; min-width: 112px; }
+.kb .bar[data-bar="project"] .bar-find .search { flex: 0 1 auto; max-width: none; min-width: 0; }
+/* Filters share the search row in a wide bar; below 1168 px of bar width the component
+   puts them in their own wrapping row beneath the bar. */
+/* Keep the field's placeholder readable in both locales and include that
+   floor in the group's minimum, so its children cannot overlap later controls. */
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) { flex-basis: 440px; max-width: 536px; min-width: min-content; flex-direction: row; align-items: center; gap: 8px; }
+.kb .bar[data-bar="project"] .bar-find:has(.reason-filters) .search { flex: 1 1 144px; min-width: 144px; }
+.kb .bar[data-bar="project"] .reason-filters { flex: 0 0 auto; max-width: calc(100% - 72px); }
 .kb .bar[data-bar="project"] .search input { width: 100%; }
+/* The attention island is fixed over the bar's 236 px reserve. Under 1168 px of bar the controls
+   crowd it, and the uk label is wider than the reserve leaves: the chip keeps its dot and count
+   (the button keeps its aria-label and title) so it stays clear of the panel toggles and ⋯. */
+.kb .bar[data-bar="project"][data-bar-compact] [data-attention-chip-label] { display: none; }
 /* A bar under 768 px (a narrow desktop window) cannot hold the groups beside the island's
    reserve in one row; there, and only there, they wrap. The bar's own width decides, since it
    spans the Tasks panel: a board narrowed by the panel keeps its one-row bar. */
@@ -119,13 +154,15 @@
 .kb .bar[data-bar="overview"] .summary .dot.warn { background: var(--color-warning); }
 .kb .bar[data-bar="overview"] .grow { flex: 1 1 auto; }
 .kb .bar[data-bar="overview"] .bar-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.kb .bar[data-bar="overview"] .bar-find { min-width: 0; max-width: 420px; }
 .kb .bar[data-bar="overview"] .search input { width: 240px; }
 /* Two rows: only the first, beside the island, needs the clearance. */
 .kb[data-mode="scroll"] .bar[data-bar="overview"] { padding: 10px 236px 10px 16px; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-tools { margin-right: -220px; }
 .kb[data-mode="tabs"] .bar[data-bar="overview"] { padding: 44px 16px 10px; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-tools, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-tools { flex-basis: 100%; }
-.kb[data-mode="scroll"] .bar[data-bar="overview"] .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search { flex: 1 1 auto; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { flex: 1 1 auto; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find .search { flex: 1 1 auto; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .search input, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search input { width: 100%; min-width: 120px; }
 .kb[data-mode="tabs"] .bar[data-bar="overview"] .summary { display: none; }
 /* On the two narrow faces the controls come first and the search field takes
@@ -133,10 +170,10 @@
    of this row, covers part of the field instead of the view tabs. */
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .view-switch, .kb[data-mode="tabs"] .bar[data-bar="overview"] .view-switch { order: 1; }
 .kb[data-mode="scroll"] .bar[data-bar="overview"] .hidden-pill, .kb[data-mode="tabs"] .bar[data-bar="overview"] .hidden-pill { order: 2; }
-.kb[data-mode="scroll"] .bar[data-bar="overview"] .search, .kb[data-mode="tabs"] .bar[data-bar="overview"] .search { order: 3; min-width: 0; flex-basis: 160px; }
+.kb[data-mode="scroll"] .bar[data-bar="overview"] .bar-find, .kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { order: 3; min-width: 0; flex-basis: 160px; }
 /* Tabbed (narrowest) face: the island's card spans most of the first row
    under the badge, so that row is the search field and the tabs follow. */
-.kb[data-mode="tabs"] .bar[data-bar="overview"] .search { order: 0; flex-basis: 100%; }
+.kb[data-mode="tabs"] .bar[data-bar="overview"] .bar-find { order: 0; flex-basis: 100%; }
 
 .kb .btn {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
@@ -169,8 +206,8 @@
 /* The snap keeps the board's own edge: without the scroll padding a column
    snaps flush to the scroller and the edge padding scrolls away. */
 .kb .board.scroll { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-inline: var(--kb-edge); gap: 12px; padding: var(--kb-stack) var(--kb-edge) 16px; }
-.kb .board.scroll .column { flex: 0 0 280px; scroll-snap-align: start; }
-.kb .board.scroll .column[data-status="assigned"] { flex-basis: 480px; }
+.kb .board.scroll .column { flex: 0 0 auto; width: var(--kb-column-width, 280px); scroll-snap-align: start; }
+.kb .board.scroll .column[data-status="assigned"] { --kb-column-width: 480px; }
 /* Tabs (640–767 px): one column at a time under a segmented strip. */
 .kb .board.tabs { display: flex; flex-direction: column; padding: 0 12px 12px; overflow: hidden; }
 .kb .board.tabs .column { display: none; }
@@ -178,7 +215,7 @@
 
 /* Every column has the 1 px frame Assigned and a widened shelf draw, clear on
    a shelf, so a title and a card sit at the same place in each. */
-.kb .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
+.kb .column { contain: layout style; display: flex; flex-direction: column; min-height: 0; min-width: 0; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid transparent; }
 .kb .column[data-status="inbox"] { grid-area: inbox; }
 .kb .column[data-status="assigned"] { grid-area: assigned; }
 .kb .column[data-status="blocked"] { grid-area: blocked; }
@@ -193,7 +230,24 @@
 .kb .column.drop { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The wide share (#1841): a widened shelf takes the workspace's dot grid and
    Assigned the shelf's fill, and the swap animates. */
-.kb .board:not(.scroll):not(.tabs) { transition: grid-template-columns var(--motion-base) var(--ease-standard); }
+/* The layout helper owns the visible width transition. Reflowing tracks on
+   every frame repeatedly wraps every card on the board. */
+.kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
+/* Tabs show one column and animate no width. Scroll anchoring stays on there:
+   it holds a draft opened under a launched agent in the window at 1000 px. */
+.kb .board:not(.tabs), .kb .board:not(.tabs) .col-body { overflow-anchor: none; }
+/* Promotion exists only while these real surfaces are moving. */
+.kb[data-column-layout-active] .column { transition: none; }
+.kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
+.kb [data-layout-animating="content"] { transform-origin: top left; will-change: transform; }
+/* Keep promoted glyphs paused while their temporary text layers are released. */
+.kb [data-layout-animating="content"].mglyph::before,
+.kb [data-layout-animating="content"] .mglyph::before,
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-column-text-held] .mglyph::before,
+.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb :is([data-layout-animating="content"], [data-column-text-held]) :is(.pedge, .pdot, .pmark),
+.kb :is([data-layout-animating="content"], [data-column-text-held]) .pmark::before { animation-play-state: paused !important; }
 .kb .column.wide {
   background-color: var(--surface-canvas);
   background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px);
@@ -201,8 +255,8 @@
   border: 1px solid var(--border-default);
 }
 .kb .column[data-status="assigned"].shelf { background: var(--surface-well); border-color: transparent; }
-.kb .board.scroll .column.wide { flex-basis: 480px; }
-.kb .board.scroll .column[data-status="assigned"].shelf { flex-basis: 280px; }
+.kb .board.scroll .column.wide { --kb-column-width: 480px; }
+.kb .board.scroll .column[data-status="assigned"].shelf { --kb-column-width: 280px; }
 .kb .col-head .icon-btn.col-pin[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
 /* The mouse resting in a narrow column is about to widen it
    (`useColumnDwell`): the column's frame and its Widen button take the accent,
@@ -226,29 +280,42 @@
 /* The head is one line from a 220 px shelf up: the title, its count and the
    buttons keep their size, and the «working» and «waiting on you» counters
    end in an ellipsis before anything wraps; under 300 px they shorten to a
-   dot and their number. Each carries its full text as a title. */
+   sign and their number, the stopped and no-reason counters included. Each carries its full text as a title. */
 .kb .col-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; position: sticky; top: 0; z-index: 2; white-space: nowrap; container: col-head / inline-size; }
+/* While the layout helper scales the head surface and counter-scales its text
+   layer, the end-aligned buttons sit at their final wide position. The head
+   clips them to its own box, so none paints over the gutter before the frame
+   edge reaches it. The buttons' focus rings fit inside the 12 px padding. */
+.kb .col-head:is([data-layout-animating], [data-column-text-held]) { overflow: clip; }
 .kb .col-head > * { flex-shrink: 0; }
 .kb .col-head h2 { margin: 0; font-size: var(--text-body); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }
 .kb .col-head .live { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-size: var(--text-label); font-weight: 600; }
 .kb .col-head .live::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .kb .col-head .needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+.kb .col-head :is([data-column-stopped], [data-column-no-reason]) { color: var(--color-muted); font-size: var(--text-label); }
 .kb .col-head > :is(.live, .needs) { flex-shrink: 1; min-width: 0; }
 .kb .col-head :is(.live, .needs) > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @container col-head (max-width: 299.98px) {
   /* Shortened, the counters keep their number, and the title is what gives way last. */
-  .kb .col-head { gap: 6px; }
-  .kb .col-head > :is(.live, .needs) { flex-shrink: 0; }
+  /* A container query reaches the head's descendants, never the head, so its 8 px gap stays. The
+     zero-width spacer would still take two of them; it shares one. */
+  .kb .col-head > .spacer { margin-left: -8px; }
+  .kb .col-head > :is(.live, .needs, [data-column-stopped], [data-column-no-reason]) { flex-shrink: 0; }
   .kb .col-head > h2 { flex-shrink: 1; }
   .kb .col-head :is(.live, .needs) > .ct { display: none; }
   .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
-  .kb .col-head .needs::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .kb .col-head .needs::before { content: "⚠"; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason]) { font-size: 0; }
+  .kb .col-head [data-column-stopped]::before { content: "■"; }
+  .kb .col-head [data-column-no-reason]::before { content: "⏸"; }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::before { font-size: var(--text-label); }
+  .kb .col-head :is([data-column-stopped], [data-column-no-reason])::after { content: attr(data-count); font-size: var(--text-label); margin-left: 2px; }
 }
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
-.kb .col-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+.kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
@@ -277,14 +344,36 @@
   position: relative; display: flex; flex-direction: column; gap: 6px;
   padding: var(--inset-card); border-radius: var(--radius-surface); background: var(--surface-card);
   border: 1px solid var(--border-default); box-shadow: var(--shadow-1);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), opacity var(--motion-base), filter var(--motion-base);
   touch-action: pan-y; outline-offset: 2px;
   content-visibility: auto; contain-intrinsic-size: auto 132px;
 }
 .kb .card:hover { border-color: var(--border-strong); }
 .kb .card:focus-visible { outline: 2px solid var(--color-accent); }
 .kb .card.dragging { opacity: 0.35; }
-.kb .card.ghost { position: fixed; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); transform: rotate(1.5deg); opacity: 0.95; content-visibility: visible; }
+.kb .card.ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; width: var(--w); box-shadow: var(--shadow-2); content-visibility: visible; will-change: transform; }
+/* The whole card is the drag handle (cardDrag.ts). The pointer is captured on
+   the held card, so nothing under the ghost takes hover, and a text selection is
+   refused by `selectstart` there. No inherited property (`user-select`,
+   `pointer-events`) is set on the board for it: that would restyle every element
+   on it (3000 and more) in the frame the drag begins. */
+.kb .card[data-id] { cursor: grab; }
+.kb[data-card-drag] .card.dragging { cursor: grabbing; }
+/* A working agent's glyph turns, breathes and pulses on SVG children, which
+   Chromium animates on the main thread: a style recalculation and a layout in
+   every frame, for as many glyphs as the board has live, and four times as long
+   on a phone's CPU. A held card has the operator's eye, and the board stands
+   still around it. The desktop marks its board (`.kb`), the phone its body. The
+   glyph's `animation` shorthand resets the play state, hence `!important`; no
+   `*` or attribute-substring subject, which would restyle every element on the
+   page when the attribute is set (a 4000-element recalculation). */
+[data-card-drag] .mglyph[data-live="1"]::before,
+[data-card-drag] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+[data-card-drag] .animate-pulse,
+[data-card-drag] .motion-safe\:animate-pulse,
+[data-card-drag] .pedge.live,
+[data-card-drag] .pnode.pulse .pdot,
+[data-card-drag] .pstrip.pulse .pmark::before { animation-play-state: paused !important; }
 .kb .card.flash { animation: kb-flash var(--motion-slow) var(--ease-standard) 2; }
 @keyframes kb-flash { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent); } }
 .kb .card.done { background: var(--surface-quiet); }
@@ -684,12 +773,17 @@
    - a reader or agent draft inside a task card sits in a column that already
      scrolls, so it takes the viewport minus the bar and the column's chrome
      (100dvh - 180px), and never less than min(700px, 84dvh), which keeps it
-     above the old min(620px, 74vh) at every window height.
+     above the old min(620px, 74vh) at every window height. The
+     reason-filter row, when it stands under the bar, comes out of the result
+     twice: its height pushes the card down, and the reader's lower edge rises
+     by the same height again, which keeps the share of a launched reader the
+     window shows above what the layout without the row gives. The old height
+     stays the floor.
    The phone does not use these: its conversation screen (MobileFocusView)
    already fills the viewport. */
 .kb {
   --seat-default-h: 75dvh;
-  --conv-in-card-h: max(min(700px, 84dvh), calc(100dvh - 180px));
+  --conv-in-card-h: max(min(620px, 74dvh), max(min(700px, 84dvh), 100dvh - 180px) - 2 * var(--reason-row-h, 0px));
 }
 
 /* ── Page: the orchestrator seat above the board (K3) ────────────────────── */
@@ -1041,12 +1135,12 @@
 /* A shelf column holding an open conversation widens to reading width; the
    board then scrolls sideways inside itself, never the page. */
 .kb .board.reading { overflow-x: auto; }
-.kb .board.scroll .column.reading { flex-basis: 460px; }
+.kb .board.scroll .column.reading { --kb-column-width: 460px; }
 
 /* Written as specific as the Assigned shelf's 280 px basis above, and after
    it, so an Assigned column that gave the wide share away keeps the agent's
    minimum too. */
-.kb .board.scroll .column[data-status].agent { flex-basis: var(--agent-min); }
+.kb .board.scroll .column[data-status].agent { --kb-column-width: var(--agent-min); }
 
 /* An empty column folds to a strip. Rested on by a mouse (`.open`, set after
    DWELL_CUE_MS), focused or under a dragged card (`.drop`) it opens to the
@@ -1056,10 +1150,10 @@
 .kb .board:has(> .column.strip[data-status="assigned"]:is(.open, :focus-within, .drop)) { --kb-open-assigned: var(--kb-track-assigned); }
 .kb .board:has(> .column.strip[data-status="blocked"]:is(.open, :focus-within, .drop)) { --kb-open-blocked: var(--kb-track-blocked); }
 .kb .board:has(> .column.strip[data-status="done"]:is(.open, :focus-within, .drop)) { --kb-open-done: var(--kb-track-done); }
-.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { flex-basis: var(--strip-w); }
+.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { --kb-column-width: var(--strip-w); }
 .kb .column.strip:not(.open, :focus-within, .drop) { overflow: hidden; }
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu]) { display: none; }
+.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu], [data-column-stopped], [data-column-no-reason]) { display: none; }
 /* The menu is not drawn on the strip, where the strip opening would move it
    from under the pointer; it stays in the tab order, and focus opens the strip. */
 .kb .column.strip:not(.open, :focus-within, .drop) > .col-head > [data-colmenu] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -1322,13 +1416,16 @@
 .kb .card .history .hopen { font-size: var(--text-label); font-weight: 600; color: var(--color-accent); padding: 0 6px; min-height: 22px; border-radius: 4px; }
 .kb .card .history .hopen:hover { background: var(--color-accent-soft); }
 .kb .card .history .hnone { font-size: var(--text-caption); color: var(--color-muted); }
+.kb .card .history .helsewhere { align-self: flex-start; max-width: 100%; margin-left: 4px; font-size: var(--text-label); color: var(--color-muted); padding: 0 4px; min-height: 22px; border-radius: 4px; text-align: left; }
+.kb .card .history .helsewhere:hover { background: var(--surface-well); color: var(--color-secondary); }
+.kb .card .history ul[data-elsewhere] { max-height: 160px; overflow-y: auto; }
 .kb .card .history .hsub { margin: 4px 0 0 16px; font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 @media (prefers-reduced-motion: reduce) {
   .kb .pedge.live, .kb .pnode.pulse .pdot, .kb .pstrip.pulse .pmark::before { animation: none; }
   .kb .pedge.live { stroke-width: 3; stroke-dasharray: none; }
 }
 @media (pointer: coarse) {
-  .kb .card .history summary, .kb .card .history .hopen { min-height: 44px; }
+  .kb .card .history summary, .kb .card .history .hopen, .kb .card .history .helsewhere { min-height: 44px; }
 }
 
 /* ── Stages (K5b, prototype `renderSheet`, `renderPane`, `renderStageDraft`, `renderDraftMessage`) ─ */
@@ -1583,6 +1680,22 @@
 :is(.kb, [data-phone-kanban]) .remote-agent-asof { grid-column: 2 / -1; }
 .kb .remote-unbound { padding: 4px 10px; }
 
+/* Task motion stays visible when card contents fold. */
+.motion-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 2lh; overflow: hidden; }
+.motion-line[data-motion-full] { display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; }
+.kb .card .motion-line { margin: 2px 0 6px; font-size: var(--text-label); line-height: 1.45; color: var(--color-muted); overflow-wrap: anywhere; }
+.kb .card .motion-line[data-motion="working"] { color: var(--color-success); }
+.kb .card .motion-line[data-motion="needs-you"] { color: var(--color-warning); }
+.motion-line a { text-decoration: underline; }
+.motion-line button { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; }
+.kb .card .motion-age { color: var(--color-muted); white-space: nowrap; }
+
+.hold-editor { display: grid; gap: 8px; margin: 8px 0; font-size: var(--text-label); }
+.hold-editor label { display: grid; gap: 3px; min-width: 0; }
+.hold-editor input, .hold-editor select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--surface-card); }
+.hold-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.hold-actions button { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px; }
+@media (pointer: coarse) { .hold-editor input, .hold-editor select, .hold-actions button { min-height: 44px; } }
 /* Keyboard focus and an open reader expose the full note. Pointer focus keeps
    the compact note; a note already expanded by the keyboard holds its geometry
    until the pointer click has landed, even on a neighbouring card. */

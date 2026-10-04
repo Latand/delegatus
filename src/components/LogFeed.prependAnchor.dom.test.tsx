@@ -36,8 +36,9 @@ let tail: LogTailState;
 let file: FileEntry;
 let finish: (count: number) => void;
 let calls: number;
+let compactPane = false;
 const render = () => flushSync(() => root!.render(<LogFeed file={file} showSvc={false} lineFilter=""
-  onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} />));
+  onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} compact={compactPane} />));
 const wait = () => new Promise((resolve) => setTimeout(resolve, 50));
 let serial = 0;
 async function mount(fixture = lines) {
@@ -93,6 +94,49 @@ for (const movement of [0, 60, -60]) {
   });
 }
 
+test("an older page keeps the DOM node of every row that was already on screen", async () => {
+  const scroller = await mount(); request(); scroller.scrollTop = 140;
+  const nodes = () => new Map([...host.querySelectorAll<HTMLElement>("[data-feed-key]")].map((row) => [row.dataset.feedKey!, row]));
+  const before = nodes();
+  expect([...before.keys()]).toEqual(["group:3:0", "row:5:0", "row:6:0", "row:7:0"]);
+  tail = { ...tail, lines, linesStart: 0, prependGen: 1, hasMore: false };
+  render(); finish(3); await wait(); render();
+  const after = nodes();
+  expect([...after.keys()]).toEqual(["row:0:0", "row:1:0", "row:2:0", "group:3:0", "row:5:0", "row:6:0", "row:7:0"]);
+  /* A re-parse of the window must not hand the rows new React keys: a new key
+     unmounts the row and mounts another, for every row, on every page. */
+  for (const key of before.keys()) expect(after.get(key)).toBe(before.get(key)!);
+});
+
+test("the phone reader keeps every row laid out; the desktop reader lets off-screen rows skip layout", async () => {
+  /* A skipped row is a 44 px estimate until first reached, so older history
+     prepended above a resting phone reader would grow under it with no scroll
+     compensation (see `rowsSkipOffscreen` in LogFeed). */
+  const skipping = () => [...host.querySelectorAll("[data-feed-key]")].filter((row) => row.classList.contains("feed-cv")).length;
+  const target = dom as unknown as { matchMedia: (query: string) => unknown };
+  const original = target.matchMedia;
+  /* The conversation window is a compact pane on the phone too. */
+  compactPane = true;
+  const layout = (phone: boolean) => {
+    target.matchMedia = (query: string) => ({ matches: phone, media: query, addEventListener() {}, removeEventListener() {} });
+  };
+  try {
+    layout(true);
+    await mount();
+    expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThan(0);
+    expect(skipping()).toBe(0);
+    flushSync(() => root!.unmount()); root = undefined; host.remove(); restoreGeometry();
+    layout(false);
+    await mount();
+    const rows = host.querySelectorAll("[data-feed-key]").length;
+    expect(rows).toBeGreaterThan(0);
+    expect(skipping()).toBe(rows);
+  } finally {
+    compactPane = false;
+    target.matchMedia = original;
+  }
+});
+
 test("interleaved tail growth and media below the reader do not enter prepend compensation", async () => {
   const scroller = await mount(); request(); scroller.scrollTop = 140;
   tail = { ...tail, lines: [...tail.lines, message("tail-arrival")] }; render();
@@ -114,16 +158,73 @@ test("repeated request triggers share a pending load and an empty result permits
   expect(scroller.scrollTop).toBe(540);
 });
 
+test("an older response before the enlarged feed commits completes its reveal ramp", async () => {
+  compactPane = true;
+  try {
+    const records = Array.from({ length: 1123 }, (_, i) => message(`ramp-${i}`, i % 2 ? "assistant" : "user"));
+    const scroller = await mount(records.slice(1000));
+    scroller.scrollTop = 500;
+    expect(host.querySelectorAll("[data-feed-key]").length).toBe(120);
+    request();
+    /* useLogTail enqueues its enlarged window and resolves loadOlder in the
+       same microtask. The request callback runs before its layout commit. */
+    tail = { ...tail, lines: records.slice(3), linesStart: 0, prependGen: 1, hasMore: false };
+    finish(1000);
+    await wait(); render();
+    for (let frames = 0; frames < 15 && host.querySelectorAll("[data-feed-key]").length < 620; frames += 1) {
+      await wait(); render();
+    }
+    expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThanOrEqual(620);
+  } finally { compactPane = false; }
+});
+
 test("a previous conversation response cannot reveal more rows in the new project", async () => {
   await mount(); request(); const oldFinish = finish;
   file = { ...file, path: file.path + "-other", project: "other-project" };
   tail = { ...tail, lines: Array.from({ length: 1700 }, (_, i) => message(`other-${i}`, i % 2 ? "assistant" : "user")),
     linesStart: 0, hasMore: false, prependGen: 0 };
   render(); await wait(); render();
+  /* The window grows a few rows per frame, not all at once. */
+  for (let frames = 0; frames < 40 && host.querySelectorAll("[data-feed-key]").length < 1500; frames += 1) { await wait(); render(); }
   expect(host.querySelectorAll("[data-feed-key]").length).toBe(1500);
   oldFinish(3); await wait(); render();
   expect(host.querySelectorAll("[data-feed-key]").length).toBe(1500);
 });
+
+test("a load that settles with the reader already at the top reveals its rows without a scroll event", async () => {
+  const scroller = await mount();
+  file = { ...file, path: file.path + "-settle" };
+  tail = { ...tail, lines: Array.from({ length: 1700 }, (_, i) => message(`settle-${i}`, i % 2 ? "assistant" : "user")),
+    linesStart: 0, hasMore: true, prependGen: 0 };
+  render(); await wait(); render();
+  for (let frames = 0; frames < 40 && host.querySelectorAll("[data-feed-key]").length < 1500; frames += 1) { await wait(); render(); }
+  const settled = host.querySelectorAll("[data-feed-key]").length;
+  expect(settled).toBe(1500);
+  /* A prefetch is in flight when the reader reaches the top: the scroll
+     handler skips the reveal because the load is pending. */
+  tail = { ...tail, loadingOlder: true }; render();
+  scroller.scrollTop = 0;
+  /* The load settles with its rows hidden. Nothing moves the scroller. */
+  tail = { ...tail, loadingOlder: false }; render();
+  for (let frames = 0; frames < 10 && host.querySelectorAll("[data-feed-key]").length <= settled; frames += 1) { await wait(); render(); }
+  expect(host.querySelectorAll("[data-feed-key]").length).toBeGreaterThan(settled);
+});
+
+for (const top of [80, 500]) {
+  test(`a zero-progress older load at ${top}px waits for an explicit retry`, async () => {
+    const scroller = await mount();
+    scroller.scrollTop = top;
+    request();
+    tail = { ...tail, loadingOlder: true }; render();
+    finish(0); await wait();
+    tail = { ...tail, loadingOlder: false }; render();
+    await wait(); render();
+    expect(calls).toBe(1);
+    request();
+    expect(calls).toBe(2);
+    finish(0); await wait();
+  });
+}
 
 test("an unmounted pending load cannot change the replacement pane", async () => {
   await mount(); request(); const oldFinish = finish;

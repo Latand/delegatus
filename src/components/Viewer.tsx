@@ -42,6 +42,9 @@ import { purgeLegacyOperatorCredential } from "./operatorCredential";
 import { ArtifactPreviewHost } from "./preview/ArtifactPreviewHost";
 import { OnboardingHost } from "./onboarding/OnboardingDialog";
 import { OnboardingWalk } from "./onboarding/OnboardingWalk";
+import { publishBlockerNames } from "./selfUpdate/blockerNames";
+import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
+import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -87,8 +90,24 @@ export function initialProjectFromState(hash: string, storedProject: string | nu
   return parseConversationHash(hash).project ?? storedProject ?? OVERVIEW;
 }
 
-export function filesRequestPin(pendingHash: ConversationHash | null, retainedPath: string | null): string | null {
-  return pendingHash?.filePath ?? pendingHash?.conversationId ?? retainedPath;
+/** The transcript the catalog request pins, or null for the plain catalog.
+    The plain catalog is the one every board poll already holds, so a request
+    that changes nothing about it is answered by a version check or a delta; a
+    pin is a new request scope with nothing cached behind it, so the whole
+    catalog comes down again. A link therefore pins only what the plain catalog
+    could not resolve: `hashPinWanted` says the plain catalog was asked and had
+    no answer, and `retainedPath` is the open conversation that needed a pin of
+    its own. */
+export function filesRequestPin(pendingHash: ConversationHash | null, retainedPath: string | null, hashPinWanted = true): string | null {
+  const hashPin = hashPinWanted ? pendingHash?.filePath ?? pendingHash?.conversationId : null;
+  return hashPin ?? retainedPath;
+}
+
+/** Whether the plain catalog holds `file`, so opening it needs no pin of its
+    own. An archived predecessor is held only while the catalog cap lets it
+    stay, so it is pinned like a row the catalog lacks. */
+export function catalogHoldsWithoutPin(file: FileEntry, unpinnedPaths: ReadonlySet<string>): boolean {
+  return unpinnedPaths.has(file.path) && !isArchivedPredecessor(file);
 }
 
 /** Every fragment key this app speaks, each with a payload: conversation
@@ -103,20 +122,23 @@ export function recognizedFragment(hash: string, { phone = false }: { phone?: bo
   return phone && /^#(?:(?:task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
 }
 
-export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null } | null;
+/** `requested`: the catalog request names this path. False while the plain
+    catalog holds the conversation; it turns true when a confirmed payload no
+    longer carries it, and the pinned payload that follows decides its fate. */
+export type CatalogPinState = { path: string; hydrated: boolean; conversationId: string | null; requested: boolean } | null;
 export type CatalogPinEvent =
-  | { kind: "open"; path: string; conversationId?: string }
-  | { kind: "resolve"; path: string; conversationId?: string }
+  | { kind: "open"; path: string; conversationId?: string; unpinned?: boolean }
+  | { kind: "resolve"; path: string; conversationId?: string; unpinned?: boolean }
   | { kind: "release"; path?: string }
   | { kind: "files"; paths: ReadonlySet<string>; pending: boolean; currentPath?: string };
 
 export function reduceCatalogPin(state: CatalogPinState, event: CatalogPinEvent): CatalogPinState {
-  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null };
-  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null };
+  if (event.kind === "open") return { path: event.path, hydrated: false, conversationId: event.conversationId ?? null, requested: !event.unpinned };
+  if (event.kind === "resolve") return { path: event.path, hydrated: true, conversationId: event.conversationId ?? null, requested: !event.unpinned };
   if (event.kind === "release") return !event.path || state?.path === event.path ? null : state;
   if (!state) return state;
   const current = event.currentPath && event.currentPath !== state.path ? { ...state, path: event.currentPath } : state;
-  if (current.hydrated && !event.pending && !event.paths.has(current.path)) return null;
+  if (current.hydrated && !event.pending && !event.paths.has(current.path)) return current.requested ? null : { ...current, requested: true };
   return current;
 }
 
@@ -218,7 +240,12 @@ function ViewerApp() {
     return initial.filePath || initial.conversationId ? initial : null;
   });
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
-  const { systemHealth, files: polledFiles, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.path ?? null));
+  /* The link whose target the plain catalog could not resolve, and which
+     therefore asks for the exact transcript. Held by identity: a new link is a
+     new object and starts without a pin. */
+  const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
+  const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -255,16 +282,32 @@ function ViewerApp() {
      pinned row cannot duplicate a card, and the moment a current generation
      arrives the pin retargets to it (see the catalog-pin files effect) and the
      predecessor folds away again. */
+  /* The open conversation as the catalog last carried it. A conversation the
+     plain catalog held can age out of a later payload; this keeps its row on
+     the board for the one fetch that asks for it by name, instead of closing
+     the pane under the reader and reopening it. */
+  const openedRow = catalogPin ? allFiles.find((file) => file.path === catalogPin.path) : undefined;
+  const [lastOpenedRow, setLastOpenedRow] = useState<FileEntry | null>(null);
+  if (openedRow && openedRow !== lastOpenedRow) setLastOpenedRow(openedRow);
   const files = useMemo(() => {
     const folded = withoutArchivedPredecessors(allFiles);
     const pinnedPath = catalogPin?.path;
     if (!pinnedPath || folded.some((file) => file.path === pinnedPath)) return folded;
     const pinned = allFiles.find((file) => file.path === pinnedPath);
-    if (!pinned || !isArchivedPredecessor(pinned)) return folded;
+    if (!pinned) {
+      return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
+    }
+    if (!isArchivedPredecessor(pinned)) return folded;
     const currentGenerationPresent = Boolean(pinned.conversationId)
       && folded.some((file) => file.conversationId === pinned.conversationId);
     return currentGenerationPresent ? folded : [...folded, pinned];
-  }, [allFiles, catalogPin]);
+  }, [allFiles, catalogPin, lastOpenedRow]);
+  /* The paths the plain catalog carries: the payload without the rows only a
+     pin admitted. */
+  const unpinnedPaths = useMemo(() => {
+    const pinOnly = new Set(pinOverlayPaths);
+    return new Set(allFiles.filter((file) => !pinOnly.has(file.path)).map((file) => file.path));
+  }, [allFiles, pinOverlayPaths]);
   const isMobile = useIsMobile();
   /* The phone's Overview is a board under a stack (#2098): a card opens its
      task, its pipeline or its conversation as a screen over it, and that
@@ -462,9 +505,13 @@ function ViewerApp() {
      multi-entry jump (which fires no hashchange) cannot leave a stale arm that
      swallows the next genuine hashchange — see `createTraversalFence`. */
   const traversalFenceRef = useRef(createTraversalFence());
+  const unpinnedPathsRef = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     filesRef.current = files;
   }, [files]);
+  useEffect(() => {
+    unpinnedPathsRef.current = unpinnedPaths;
+  }, [unpinnedPaths]);
   useEffect(() => {
     pendingHashRef.current = pendingHash;
   }, [pendingHash]);
@@ -753,14 +800,16 @@ function ViewerApp() {
 
   /* Full-catalog list/search rows can sit beyond the scheme window. Their path
      stays pinned for the displayed conversation so recurring polls preserve
-     the node after the transient hash intent resolves. */
+     the node after the transient hash intent resolves. A conversation the
+     plain catalog already carries is not pinned: the pin is a request scope of
+     its own and brings the whole catalog down again. */
   const openPinnedFile = useCallback((file: FileEntry, hydrated = false) => {
     /* On the phone's Overview every landing (a replay, a search result, a
        pasted link, a catalog row) opens the conversation as a screen over it
        and keeps the Overview, so ‹ comes back to it (#2098). */
     if (overviewPhoneRef.current) {
       setStaleFocusNotice(false);
-      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
+      dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
       openOverOverview(file, { catalog: true });
       return;
     }
@@ -769,7 +818,7 @@ function ViewerApp() {
        viewer is now showing a conversation, so the failure claim is over. */
     setStaleFocusNotice(false);
     queueColumnOpen(key, file.path, isChildConversation(file));
-    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId });
+    dispatchCatalogPin({ kind: hydrated ? "resolve" : "open", path: file.path, conversationId: file.conversationId, unpinned: catalogHoldsWithoutPin(file, unpinnedPathsRef.current) });
     setProject(key);
     localStorage.setItem(PROJECT_KEY, key);
     setOpenNonce((value) => value + 1);
@@ -835,6 +884,14 @@ function ViewerApp() {
       setPendingHash(null);
     }
   }, [pendingHash, allFiles, conversationAliases, launchRoutes, openPinnedFile]);
+  /* The plain catalog answered and does not carry the target (a conversation
+     beyond its cap, an archived predecessor, an id it has never seen): only
+     now does the link ask for the exact transcript. */
+  useEffect(() => {
+    if (!pendingHash || wantsHashPin || !loaded || !scopeCertified) return;
+    if (resolveConversationTarget(allFiles, pendingHash, conversationAliases, launchRoutes)) return;
+    setHashPinFor(pendingHash);
+  }, [pendingHash, wantsHashPin, loaded, scopeCertified, allFiles, conversationAliases, launchRoutes]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   /* A deep-link intent no payload resolves (the id is absent from the corpus
@@ -847,16 +904,18 @@ function ViewerApp() {
      `loaded` and says nothing about the target, so it must not start the
      clock: a pinned fetch slower than the deadline would otherwise be reported
      stale before it could answer. The popstate path arms its own
-     identity-checked timer — for a replayed entry both reach the same notice. */
+     identity-checked timer — for a replayed entry both reach the same notice.
+     The clock starts on the payload certified for the pinned scope, which only
+     exists once the plain catalog has failed to resolve the target. */
   useEffect(() => {
-    if (!pendingHash || !loaded || !scopeCertified) return;
+    if (!pendingHash || !wantsHashPin || !loaded || !scopeCertified) return;
     const timer = window.setTimeout(() => {
       setPendingHash(null);
       dispatchCatalogPin({ kind: "release" });
       setStaleFocusNotice(true);
     }, STALE_FOCUS_REPLAY_MS);
     return () => window.clearTimeout(timer);
-  }, [pendingHash, loaded, scopeCertified]);
+  }, [pendingHash, wantsHashPin, loaded, scopeCertified]);
 
   const releaseCatalogFile = useCallback((path: string) => {
     dispatchCatalogPin({ kind: "release", path });
@@ -901,7 +960,20 @@ function ViewerApp() {
      rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines), [files, pipelines, clock, closingPipelines]);
+  const updateFeed = useSelfUpdateFeed(true);
+  const updateDecision = updateFeed.snapshot?.auto?.decision;
+  /* The update surface names the work it waits on by project name and
+     conversation title; the server sends keys and ids. */
+  const updateBlockers = updateFeed.snapshot?.auto?.blockers;
+  useEffect(() => {
+    const wanted = new Set([...(updateBlockers?.turnList ?? []), ...(updateDecision?.blockers?.turnList ?? [])].map((turn) => turn.conversationId));
+    const conversations: Record<string, string> = {};
+    if (wanted.size) for (const file of allFiles) {
+      if (file.conversationId && wanted.has(file.conversationId) && file.title) conversations[file.conversationId] = cleanTitle(file.title, 90);
+    }
+    publishBlockerNames({ projects: projectDisplayNames, conversations });
+  }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision), [files, pipelines, clock, closingPipelines, updateDecision]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -994,18 +1066,11 @@ function ViewerApp() {
     };
   }, [panelFloating, setPanelOpen]);
 
-  /* «Show only needs me» filter: React-only state that auto-disables once no
-     conversation waits (below, beside the paths it keeps lit) — a filter
-     surviving reload would silently gray the whole board (D6). Desktop-only, like the F key: the mobile
-     strip and map render without the dimming channel, so the funnel stays
-     hidden there and the state clears if the viewport shrinks into the phone
-     layout mid-session. */
-  const [attentionFilter, setAttentionFilter] = useState(false);
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (isMobile) setAttentionFilter(false);
-  }, [isMobile]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  /* «Show only needs me» filter: React-only state that turns itself off once
+     nothing on the board waits (below, beside the queue it keeps lit) — a
+     filter surviving reload would silently gray the whole board (D6). It is
+     per tab, so per device, and it survives every re-render and poll. */
+  const [needsOnly, setNeedsOnly] = useState(false);
 
   const cancelPendingIntent = useCallback(() => setPendingHash(null), []);
   const requestFocus = useCallback((path: string) => {
@@ -1208,26 +1273,6 @@ function ViewerApp() {
      out without moving the pointer's neighbors (D12). */
   const cycleRef = useRef<string | null>(null);
 
-  /* Membership key first, Set second: polls rebuild the queue array, but the
-     set identity only moves when membership does, so the memoized node layers
-     never re-render for an unchanged filter (D6). */
-  const attentionKey = useMemo(
-    () => needsYou.flatMap((entry) => (entry.kind === "conversation" ? [entry.item.file.path] : [])).sort().join("\n"),
-    [needsYou],
-  );
-  /* The filter keeps waiting conversations lit, so it exists only while one
-     waits: a queue of parked lanes alone (#2129) leaves it nothing to keep,
-     and switched on it would dim the whole board. */
-  const attentionFilterable = attentionKey !== "";
-  /* eslint-disable-next-line react-hooks/set-state-in-effect */
-  useEffect(() => {
-    if (!attentionFilterable) setAttentionFilter(false);
-  }, [attentionFilterable]);
-  const attentionPaths = useMemo<ReadonlySet<string> | null>(
-    () => (attentionFilter && attentionFilterable ? new Set(attentionKey.split("\n")) : null),
-    [attentionFilter, attentionFilterable, attentionKey],
-  );
-
   /* N never leaves the current project (D4): the same items and order the
      global list holds, conversations and lanes, taken off its memo. */
   const projectEntries = useMemo(
@@ -1252,6 +1297,16 @@ function ViewerApp() {
      phone and the desktop cannot disagree either (#2129). */
   const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
   const shellQueueCount = shellEntries.length;
+  /* The filter is offered while anything on the board on screen waits, a
+     parked lane (#2129) included: that card is what stays lit. Scoped to the
+     board, so it never offers to dim a board where nothing would stay lit.
+     The boards read it from one attribute on <main> (globals.css), so
+     flipping it re-renders none of them. */
+  const needsOnlyAvailable = shellQueueCount > 0;
+  /* eslint-disable-next-line react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!needsOnlyAvailable) setNeedsOnly(false);
+  }, [needsOnlyAvailable]);
   /* An agent's request_attention on the phone (docs/design/needs-attention.md
      §6): a dot on the ⚠ badge and a row in its sheet, never a move. Each row
      names where it points, in the words the board uses for it. */
@@ -1280,6 +1335,7 @@ function ViewerApp() {
      returns to the board the operator left. */
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         if (entry.item.project !== project) applyProject(entry.item.project);
         requestFocus(entry.item.file.path);
@@ -1295,9 +1351,8 @@ function ViewerApp() {
   );
 
   useEffect(() => {
-    /* N and F are desktop keys (D4/D6): the phone layout renders without the
-       scheme dimming channel, and a hardware keyboard there must never drive
-       hidden filter state or focus jumps. */
+    /* N and F are desktop keys (D4/D6): a phone has no hardware keys, and the
+       filter has its own funnel in the ⚠ sheet there. */
     if (isMobile) return;
     /* Same guard as useSchemeCamera: hotkeys stay quiet while a composer or
        any form control is focused. */
@@ -1315,9 +1370,9 @@ function ViewerApp() {
         event.preventDefault();
         openAttentionEntry(next);
       } else if (event.key === "f" || event.key === "F") {
-        if (!attentionFilterable) return;
+        if (!needsOnlyAvailable) return;
         event.preventDefault();
-        setAttentionFilter((value) => !value);
+        setNeedsOnly((value) => !value);
       } else if (event.key === "b" || event.key === "B") {
         /* B for the rail (issue #1819). Free on both sides: the Viewer binds
            only N, F and / at window level, the kanban board U and /, and the
@@ -1333,7 +1388,7 @@ function ViewerApp() {
     };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
-  }, [isMobile, projectEntries, attentionFilterable, openAttentionEntry, openSearch, toggleRail]);
+  }, [isMobile, projectEntries, needsOnlyAvailable, openAttentionEntry, openSearch, toggleRail]);
 
   /* A panel row's click is a deliberate act, so unlike the N hotkey it may
      switch the project; the focus hand-off glides the board to the node. A
@@ -1354,6 +1409,7 @@ function ViewerApp() {
      conversation's row, landing on the lane's card. */
   const jumpToEntry = useCallback(
     (entry: MobileAttentionEntry) => {
+      if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "conversation") {
         jumpToItem(entry.item);
         return;
@@ -1467,9 +1523,9 @@ function ViewerApp() {
       <AttentionIsland
         count={needsYou.length}
         panelOpen={panelOpen}
-        filterActive={attentionFilter}
+        filterActive={needsOnly && needsOnlyAvailable}
         onTogglePanel={() => setPanelOpen((value) => !value)}
-        onToggleFilter={attentionFilterable ? () => setAttentionFilter((value) => !value) : undefined}
+        onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
       />
       {panelFloating ? panel("overlay") : null}
     </div>
@@ -1505,6 +1561,7 @@ function ViewerApp() {
     return {
       attentionCount: shellQueueCount,
       noticeDot: phoneNotices.unseen,
+      filterActive: needsOnly && needsOnlyAvailable,
       arrival: toastFile ? (
         <AttentionToast
           file={toastFile}
@@ -1575,13 +1632,15 @@ function ViewerApp() {
               onOpenNotice={(notice) => openNotice(notice, close)}
               onClearNotice={clearNotice}
               onNoticesSeen={markNoticesSeen}
+              filterActive={needsOnly}
+              onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
             />
           );
         }
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
@@ -1633,7 +1692,7 @@ function ViewerApp() {
           conversation took the difference for an open keyboard, and 42 px of
           empty band stayed under its composer. Clipping the slide here keeps the
           page the phone's width. */}
-      <main ref={mainRef} className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
+      <main ref={mainRef} data-needs-only={needsOnly && needsOnlyAvailable ? "" : undefined} className={`flex min-w-0 flex-1 flex-col${isMobile ? " overflow-x-clip" : ""}`}>
         {/* Desktop: the corner attention anchor — the badge pill sits where the
             toast appears, so a new toast visually docks into it (D7). On the
             phone the badge lives in the board header and the toast docks in flow
@@ -1714,7 +1773,6 @@ function ViewerApp() {
             openNonce={openNonce}
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}
             placeRequest={placeRequest}
-            attentionPaths={attentionPaths}
             archived={archivedProjects.has(dashboardProject)}
             catalogKnown={catalogProjects.has(dashboardProject)}
             catalogConversationCount={catalogConversationCounts.get(dashboardProject) ?? 0}
@@ -1765,7 +1823,7 @@ function ViewerApp() {
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       <LinkedSettingsHost />
-      <TelemetrySettingsHost />
+      <TelemetrySettingsHost project={project === OVERVIEW ? undefined : project} />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card

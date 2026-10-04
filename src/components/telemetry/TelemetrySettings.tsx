@@ -3,10 +3,11 @@ import { createPortal } from "react-dom";
 import { Z } from "@/components/layers";
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
+import { MemorySetting } from "@/components/memory/MemorySetting";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
-export function TelemetrySettingsHost() {
+export function TelemetrySettingsHost({ project }: { project?: string }) {
   const { t, locale } = useLocale();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
@@ -51,6 +52,7 @@ export function TelemetrySettingsHost() {
           {t("telemetry.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.label")} checked={status.enabled} disabled={busy || status.locked} onChange={e => void save({ enabled: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
+        {project && <MemorySetting project={project} />}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
       </section>
     </div>}

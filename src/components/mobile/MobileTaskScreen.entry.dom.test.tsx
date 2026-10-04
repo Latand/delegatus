@@ -74,6 +74,7 @@ const OVERRIDES: Record<string, unknown> = {
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     if (url.startsWith("/api/board") && init?.method === "PATCH") {
       const body = JSON.parse(String(init.body)) as { mutations?: BoardMutationV1[] };
@@ -309,14 +310,19 @@ test("from the task: the Stages line opens the pipeline screen, Open conversatio
   expect(getMobileNav().getState().stack.map((screen) => screen.kind)).toEqual(["board", "task"]);
 });
 
-test("a conversation's task strip opens the task screen above the conversation, and ‹ returns to it", async () => {
+test("a conversation's pinned message opens the task screen above the conversation, and ‹ returns to it", async () => {
   const root = await board();
   /* The agent's conversation, opened from its task's screen. */
   click(q(root, '[data-phone-card="task:t-data"]'));
   expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);
   click(q(root, `[data-phone-task-agent="${agentFile.path}"] [data-mobile2-row="conversation"]`));
-  expect(await waitFor(() => q(root, '[data-task-relation="t-data"]') !== null)).toBe(true);
-  click(q(root, '[data-task-relation="t-data"]'));
+  expect(await waitFor(() => top().kind === "chat")).toBe(true);
+  expect(q(root, '[data-task-relation="t-data"]')).toBeNull();
+  click(q(root, '[data-mobile2-open="menu"]'));
+  expect(await waitFor(() => q(root, '[data-mobile2-menu-row="pinned"]') !== null)).toBe(true);
+  click(q(root, '[data-mobile2-menu-row="pinned"]'));
+  expect(await waitFor(() => q(root, '[data-mobile2-pinned-open="t-data"]') !== null)).toBe(true);
+  click(q(root, '[data-mobile2-pinned-open="t-data"]'));
   expect(await waitFor(() => top().kind === "task")).toBe(true);
   expect(getMobileNav().getState().stack.map((screen) => screen.kind)).toEqual(["board", "task", "chat", "task"]);
   expect(await waitFor(() => onTask(root, "t-data"))).toBe(true);

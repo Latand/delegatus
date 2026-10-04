@@ -28,7 +28,7 @@ export interface StepPorts {
   exists(path: string): boolean;
   buildIdReadable(dir: string): boolean;
   /** Makes a ready build the installed release. */
-  publish(release: Release): void;
+  publish(release: Release): void | Promise<void>;
   now(): number;
   abort?(): void;
   childAlive?(): boolean;
@@ -233,7 +233,17 @@ export class UpdateRunner {
         const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
         const fetched = (await this.ports.revParse(TIP_REF, checkout)).trim();
         if (fetched !== target) {
-          throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
+          // Automatic admission freezes a green revision while its original
+          // cohort finishes. Later merges may advance main without invalidating
+          // that revision. Verify it is still on main before building it;
+          // manual updates retain the exact-tip check and rewrites fail closed.
+          const ancestry = ["git", "merge-base", "--is-ancestor", target, fetched];
+          const ancestor = this.state.trigger === "auto"
+            && await this.ports.run(ancestry, { cwd: checkout, env, onLine: (line) => push(line), lowPriority: true }) === 0;
+          if (!ancestor) {
+            throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
+          }
+          push(`main advanced to ${shortSha(fetched)}; building its validated ancestor ${shortSha(target)}`, false);
         }
         return code;
       }
@@ -251,7 +261,7 @@ export class UpdateRunner {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
-        this.ports.publish({ sha: target, dir: release });
+        await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
       }
@@ -265,7 +275,7 @@ export class UpdateRunner {
     this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): void }
 
-export function realPorts(publish: (release: Release) => void): RealPorts {
+export function realPorts(publish: (release: Release) => void | Promise<void>): RealPorts {
   let current: RecordedPid | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority }) {

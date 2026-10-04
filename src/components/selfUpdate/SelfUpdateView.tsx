@@ -1,5 +1,7 @@
 "use client";
 
+import { AutoDrainDecision } from "./AutoDrainDecision";
+import { blockerRows, useBlockerNames } from "./blockerNames";
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -372,6 +374,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
 
 function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction; locale: "en" | "uk" }) {
   const auto = s.auto;
+  const names = useBlockerNames();
   if (!auto) return null;
   const available = auto.availability === "available";
   const failed = auto.off?.stage === "build" ? s.update.steps.find((step) => step.state === "failed") : null;
@@ -387,6 +390,9 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
     : t(auto.enabled ? s.mode === "managed" ? "selfUpdate.auto.readyManaged" : "selfUpdate.auto.ready"
       : s.mode === "managed" ? "selfUpdate.auto.disabledManaged" : "selfUpdate.auto.disabled");
   const blockers = auto.blockers;
+  const drainKey: MessageKey = auto.drain?.state !== "overran" ? "selfUpdate.auto.drain.draining"
+    : auto.drain.choice === "keep-waiting" ? "selfUpdate.auto.drain.keptWaiting"
+    : auto.drain.choice === "deploy-now" ? "selfUpdate.auto.drain.deployChosen" : "selfUpdate.auto.drain.overran";
   return (
     <section data-section="auto" className={CARD}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -395,17 +401,20 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
           disabled={state.pending.has("auto") || (!available && !auto.enabled)} />
       </div>
       <p className="m-0 text-ui text-secondary">{available || auto.off || auto.phase === "deploying" ? phase : t(`selfUpdate.auto.unavailable.${auto.availability}` as MessageKey)}</p>
-      {auto.enabled && blockers && auto.phase === "waiting" ? (
-        <ul className="m-0 list-disc pl-5 text-ui text-secondary">
-          {blockers.turns > 0 ? <li>{t("selfUpdate.auto.block.turns", { count: blockers.turns })}</li> : null}
-          {blockers.stages > 0 ? <li>{t("selfUpdate.auto.block.stages", { count: blockers.stages })}</li> : null}
+      {auto.enabled && blockers && auto.phase === "waiting" && !auto.decision ? (
+        <ul data-auto-blockers className="m-0 list-disc pl-5 text-ui text-secondary [overflow-wrap:anywhere]">
+          {blockerRows(blockers, names, t).map((row) => <li key={row.key}>{row.text}</li>)}
           {blockers.operatorActiveAt ? <li>{t("selfUpdate.auto.block.operator")}</li> : null}
-          {blockers.busy ? <li>{t("selfUpdate.auto.block.busy")}</li> : null}
+          {blockers.busy ? <li>{t(blockers.busyReason ? `selfUpdate.auto.busy.${blockers.busyReason}` as MessageKey : "selfUpdate.auto.block.busy")}</li> : null}
           {blockers.memoryMb !== null ? <li>{t("selfUpdate.auto.block.memory", { mb: Math.floor(blockers.memoryMb) })}</li> : null}
           {blockers.unreadable ? <li>{t("selfUpdate.auto.block.unreadable", { detail: blockers.unreadable })}</li> : null}
         </ul>
       ) : null}
-      {auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
+      {/* A pending decision carries the list and the choice; once it is answered the line below says what was chosen. */}
+      {auto.decision ? <AutoDrainDecision key={auto.decision.id} decision={auto.decision} /> : null}
+      {auto.enabled && auto.drain && !auto.decision ? <p className="m-0 text-ui text-secondary" data-drain-state={auto.drain.state} data-drain-choice={auto.drain.choice}>
+        {t(drainKey, { time: `${day(auto.drain.at, locale)} ${clock(auto.drain.at)}` })}
+      </p> : !auto.decision && auto.phase === "waiting" && auto.longWait ? <p className="m-0 text-ui text-warning">{t("selfUpdate.auto.longWait")}</p> : null}
       {s.mode === "checkout" && auto.target?.short && (s.serving.web?.short !== auto.target.short || s.serving.runtimeHost?.short !== auto.target.short) ? (
         <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.serving", { web: s.serving.web?.short ?? "—", host: s.serving.runtimeHost?.short ?? "—", built: auto.target.short })}</p>
       ) : null}

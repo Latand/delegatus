@@ -33,6 +33,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -114,6 +115,9 @@ import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { activeDrain } from "@/lib/selfUpdate/drain";
+import { statePath } from "@/lib/configDir";
+import { readAuto } from "@/lib/selfUpdate/auto";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
@@ -222,6 +226,7 @@ import {
   newestDeploymentsFirst,
   pipelineAcknowledgement,
   pipelineActionAcknowledgement,
+  pipelineCheckFields,
   pipelineStageRead,
   stageReportAcknowledgement,
   type AccountLimitsInput,
@@ -279,6 +284,7 @@ export interface ViewerControlDependencies {
 }
 
 const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
+const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
 const CONTROL_RECOVERY_BUDGET_MS = 8_000;
 const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
@@ -352,7 +358,7 @@ async function requestViewerControl(
   const callerBudget = deadlineAt === undefined
     ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
     : Math.max(0, deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const expiresAt = now + Math.min(CONTROL_RECOVERY_BUDGET_MS, callerBudget);
+  const expiresAt = now + Math.min(CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {
@@ -1433,6 +1439,18 @@ function refuseMcpSpawnSizing(args: McpToolArgs, dependencies: Pick<ViewerMcpDom
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  let autonomous = !!dependencies;
+  if (dependencies) {
+    try { autonomous = ["manager", "agent", "unidentified"].includes(attributionOf(dependencies).kind); }
+    catch { /* Unavailable attribution retains the autonomous admission restriction. */ }
+  }
+  const hold = dependencies ? activeDrain() : null;
+  if (hold && autonomous) {
+    throw new McpToolRefusal("new launches are held while the automatic update drains running work", {
+      code: "launch_held_for_update", target: hold.target, since: hold.since,
+      blockers: readAuto(statePath("self-update", "auto.json")).lastBlockers,
+    });
+  }
   validateExplicitMcpLaunchModel(args);
   if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
     const caller = dependencies ? attributionOf(dependencies) : null;
@@ -1475,7 +1493,9 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     }
   }
   const launcher = mcpSpawnLauncher(dependencies);
-  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), spawnControlHeaders());
+  const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
+    ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
+  });
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
@@ -1654,6 +1674,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     throw new McpToolRefusal("machine accepts only \"here\": a new task runs on the machine that creates it", { code: "TASK_INVALID_FIELD", field: "machine", status: 400 });
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
+  const caller = dependencies ? attributionOf(dependencies) : null;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   const input: CreateTaskInput = {
     ...args,
@@ -1661,7 +1682,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, seatHolding: taskSeatHoldingSnapshot() });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot() });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1707,6 +1728,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const maintainer = maintenanceCaller(dependencies);
+  const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
     if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
     return refineBoardTask(args, dependencies);
@@ -1746,11 +1768,10 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
     assertMaintenanceWrite(maintainer ? maintenanceCaller(dependencies) : null, args, prior, false, open?.id, liveAgent, retiredSeat);
     const before = fieldValues(prior);
-    const caller = attributionOf(dependencies);
     const noteAuthor = caller.kind === "manager"
       ? { kind: "orchestrator" as const, conversationId: caller.conversationId }
       : { kind: "agent" as const, conversationId: caller.conversationId };
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", conversationId: caller.conversationId ?? undefined, noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
@@ -4062,7 +4083,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
   const auto = objectRecord(snapshot.auto) ? snapshot.auto : {};
   const target = objectRecord(auto.target) ? auto.target : null;
   const history = Array.isArray(snapshot.history) ? snapshot.history.filter(objectRecord) : [];
-  return {
+  const answer: McpToolPayload = {
     mode: snapshot.mode ?? null,
     availability: auto.availability ?? null,
     enabled: auto.enabled === true,
@@ -4070,9 +4091,14 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
     phase: auto.phase ?? null,
     target: target ? { sha: target.sha ?? null, short: target.short ?? null, version: target.version || null } : null,
     green: auto.green ?? null,
-    blockers: auto.blockers ?? null,
+    blockers: objectRecord(auto.blockers) ? { ...auto.blockers,
+      turnList: Array.isArray(auto.blockers.turnList) ? auto.blockers.turnList.slice(0, 20) : [],
+      stageList: Array.isArray(auto.blockers.stageList) ? auto.blockers.stageList.slice(0, 20) : [],
+    } : null,
     waitingSince: auto.waitingSince ?? null,
     longWait: auto.longWait === true,
+    drain: auto.drain ?? null,
+    decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,
     changedAt: auto.changedAt ?? null,
     changedBy: auto.changedBy ?? null,
     recentChanges: history
@@ -4080,6 +4106,15 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
       .slice(0, 5)
       .map((entry) => ({ at: entry.at, enabled: entry.kind === "auto-on", writer: entry.writer ?? null })),
   };
+  // Names share a byte budget; totals and drain times survive truncation.
+  const bounded = JSON.parse(JSON.stringify(answer, (_key, value) => typeof value === "string" ? value.slice(0, 400) : value)) as McpToolPayload;
+  const blockers = objectRecord(bounded.blockers) ? bounded.blockers : null;
+  const turns = Array.isArray(blockers?.turnList) ? blockers.turnList : [];
+  const stages = Array.isArray(blockers?.stageList) ? blockers.stageList : [];
+  while (Buffer.byteLength(JSON.stringify(bounded)) >= 5_800 && (turns.length || stages.length)) {
+    if (turns.length >= stages.length) turns.pop(); else stages.pop();
+  }
+  return bounded;
 }
 
 /**
@@ -4526,6 +4561,7 @@ async function getPipeline(args: McpToolArgs): Promise<McpToolPayload> {
     return redactPayload({
       pipelineId,
       ...pipelineCompactRow(pipeline),
+      ...pipelineCheckFields(pipeline),
       revision: recordRevision(pipeline),
       taskIds: pipeline.taskIds,
       stageDigests: stageDigests(pipeline.stages),
@@ -4692,7 +4728,7 @@ async function listPipelines(
     if (args.full === true) return { ...pipeline, workLinks: pipelineWorkLinks(pipeline), mergeOnReview: mergeOnReviewEnabled(pipeline.project), bridgeReports: bridgeReportsEnabled(pipeline.project) };
     if (args.compact === false) return { ...pipelineListRow(pipeline), workLinks: pipelineWorkLinks(pipeline), ...mergeFields(pipeline) };
     const { stages, ...status } = pipelineCompactRow(pipeline);
-    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
+    return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
@@ -5721,6 +5757,8 @@ async function requestAttention(
   if (intent !== "show" && intent !== "open") throw new Error("intent must be show or open");
   const zoom = text(args.zoom) as ZoomIntent | "";
   if (zoom && zoom !== "inspect" && zoom !== "situate") throw new Error("zoom must be inspect or situate");
+  const waitFor = args.waitFor ?? "arrived";
+  if (waitFor !== "accepted" && waitFor !== "arrived") throw new Error("waitFor must be accepted or arrived");
   const reason = required(args, "reason");
   const contextLabel = text(args.contextLabel);
   /* Canonical, as every seat is: a target named by a key that has since moved
@@ -5828,6 +5866,15 @@ async function requestAttention(
        one, and this run reports it rather than counting a creation. */
     if (created.adopted) created = null;
   }
+
+  if (waitFor === "accepted") return redactPayload({
+    attentionId: request.id, request, accepted: true,
+    arrival: request.state === "following" || (request.state === "returned" && request.returnPoints.length > 0)
+      ? "arrived" : ["expired", "dismissed", "returned"].includes(request.state) ? "failed" : "pending",
+    handoff: null, recovered: created === null,
+    superseded: created?.superseded ?? [], dropped: created?.dropped ?? [],
+    ...mutationReceipt(operationKey),
+  });
 
   /* Inside the caller's own transport deadline, so the bounded failure is OURS
      to report rather than a timeout the caller reads as silence. */
@@ -6490,7 +6537,7 @@ export function viewerMcpBindings(
     message_receipt: (args) => messageReceipt(args),
     create_task: (args) => createBoardTask(args, domainDependencies),
     update_task: (args) => updateBoardTask(args, domainDependencies),
-    create_pipeline: (args, context) => unadmittedBeforeMutation(() => createPipeline(args, context, domainDependencies)),
+    create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
       { authorizeReceipt: (args: McpToolArgs) => {

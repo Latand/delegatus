@@ -211,7 +211,7 @@ test.each(["codex", "claude"] as const)(
       pill.click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(host.querySelector('[data-mobile2-sheet="model"]')).toBeTruthy();
+    expect(document.querySelector('[data-mobile2-sheet="model"]')).toBeTruthy();
     flushSync(() => root.unmount());
   },
 );

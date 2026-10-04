@@ -3,23 +3,28 @@
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
-  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent as ReactTouchEvent,
 } from "react";
+
+import { createPortal } from "react-dom";
 
 import { clearedLine, needLabel } from "@/components/attention/decision";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
 import { EngineMark } from "@/components/EngineMark";
 import { ChevronRight } from "@/components/icons";
+import { Z } from "@/components/layers";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
+import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kanban/remoteFeed";
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
-import { useTaskMutations, type StatusMoveOutcome, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
@@ -40,6 +45,7 @@ import { useMobileNav, useMobileNavStore, useSheetSelection } from "./mobileNav"
 import { mobileRowState } from "./mobileBoardModel";
 import { buildPhoneKanban, columnEmpty, nearestWithWork, type PhoneCard, type PhoneColumn } from "./phoneKanbanModel";
 import { readPlace, usePhoneKanbanColumn, usePhoneKanbanDoneShown, writePlace } from "./phoneKanbanPlace";
+import { armTouchGuard, beginCardLift, CARD_LIFT_MS, liftStore } from "./phoneCardLift";
 import { LONG_PRESS_MS, SWIPE_LOCK_PX } from "./swipeIntent";
 import { usePhoneBoardModel, type PhoneBoardInput, type TaskMutations } from "./usePhoneBoard";
 
@@ -141,22 +147,35 @@ function ageText(t: TFunction, ms: number, nowMs: number): string {
 
 /* ── Long-press ─────────────────────────────────────────────────────────── */
 
+/** What a hold on a movable card lifts it for: the column it is in, and the
+    move a release over another column asks for. */
+interface Lift {
+  status: TaskStatus;
+  onDrop: (to: TaskStatus) => void;
+}
+
 /**
  * A held finger (or a right click, or the keyboard's menu key) opens the
  * card's sheet, and the click the lift would leave behind is swallowed. A
  * finger that moves is the pager or the column scrolling: the press is off.
+ *
+ * A movable card is different for a finger: held `CARD_LIFT_MS` it lifts, with
+ * a dock of the four columns (`phoneCardLift.ts`), and the sheet opens only if
+ * the finger lets go where it lifted.
  */
-function usePress(onLongPress: (() => void) | null) {
+function usePress(onLongPress: (() => void) | null, lift: Lift | null) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const start = useRef<{ x: number; y: number; id: number } | null>(null);
   const held = useRef(false);
+  const lifting = useRef(false);
+  const disarm = useRef<(() => void) | null>(null);
   const openedAt = useRef(-Infinity);
   const swallowUntil = useRef(0);
   const cancel = () => {
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
   };
-  useEffect(() => cancel, []);
+  useEffect(() => () => { cancel(); disarm.current?.(); }, []);
   const open = (byFinger: boolean) => {
     /* One press opens one sheet: the browser's own long-press menu event
        arrives beside the timer, while the finger that opened it is down. No
@@ -169,17 +188,41 @@ function usePress(onLongPress: (() => void) | null) {
     swallowUntil.current = performance.now() + SWALLOW_CLICK_MS;
     onLongPress();
   };
+  const settle = () => {
+    disarm.current?.();
+    disarm.current = null;
+  };
   if (!onLongPress) return {};
   return {
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
       if (event.pointerType === "mouse" && event.button !== 0) return;
       cancel();
+      settle();
       held.current = false;
       start.current = { x: event.clientX, y: event.clientY, id: event.pointerId };
+      const touch = event.pointerType !== "mouse";
+      const element = event.currentTarget;
+      if (lift && touch) disarm.current = armTouchGuard(element);
       timer.current = setTimeout(() => {
         timer.current = null;
-        if (start.current) open(true);
-      }, LONG_PRESS_MS);
+        const from = start.current;
+        if (!from) return;
+        if (!lift || !touch) { open(true); return; }
+        /* Lifted: the finger now belongs to the drag, and the sheet waits for its release. */
+        start.current = null;
+        lifting.current = true;
+        swallowUntil.current = performance.now() + SWALLOW_CLICK_MS;
+        beginCardLift({
+          element, pointerId: from.id, x: from.x, y: from.y, status: lift.status,
+          onDrop: lift.onDrop,
+          onMenu: () => open(true),
+          onEnd: () => {
+            lifting.current = false;
+            swallowUntil.current = performance.now() + SWALLOW_CLICK_MS;
+            settle();
+          },
+        });
+      }, lift && touch ? CARD_LIFT_MS : LONG_PRESS_MS);
     },
     onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
       const from = start.current;
@@ -187,11 +230,13 @@ function usePress(onLongPress: (() => void) | null) {
       if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > SWIPE_LOCK_PX) {
         cancel();
         start.current = null;
+        settle();
       }
     },
     onPointerUp: () => {
       cancel();
       start.current = null;
+      if (!lifting.current) settle();
       /* However long the finger stayed down after the sheet opened, its lift
          still belongs to the press. */
       if (held.current) swallowUntil.current = performance.now() + SWALLOW_CLICK_MS;
@@ -201,6 +246,7 @@ function usePress(onLongPress: (() => void) | null) {
       cancel();
       start.current = null;
       held.current = false;
+      if (!lifting.current) settle();
     },
     onClickCapture: (event: ReactMouseEvent<HTMLElement>) => {
       if (performance.now() >= swallowUntil.current) return;
@@ -210,6 +256,8 @@ function usePress(onLongPress: (() => void) | null) {
     },
     onContextMenu: (event: ReactMouseEvent<HTMLElement>) => {
       event.preventDefault();
+      /* The browser's menu event arrives under a finger that is dragging a card. */
+      if (lifting.current) return;
       open(false);
     },
     onTouchEnd: (event: ReactTouchEvent<HTMLElement>) => {
@@ -218,9 +266,46 @@ function usePress(onLongPress: (() => void) | null) {
   };
 }
 
-function Pressable({ onLongPress, children }: { onLongPress: (() => void) | null; children: ReactNode }) {
-  const press = usePress(onLongPress);
-  return <div className="select-none [-webkit-touch-callout:none]" {...press}>{children}</div>;
+/* `waits` marks the card the «Needs you» filter keeps lit (globals.css): the
+   outer shell carries it, so the whole card dims as one layer. */
+function Pressable({ onLongPress, lift, waits, children }: { onLongPress: (() => void) | null; lift: Lift | null; waits: boolean; children: ReactNode }) {
+  const press = usePress(onLongPress, lift);
+  return <div className="select-none [-webkit-touch-callout:none]" data-phone-card-shell="" data-attention={waits ? "needs" : undefined} {...press}>{children}</div>;
+}
+
+/** The four columns a lifted card can be let go over. The lift draws and
+    highlights its tiles by hand; this only says what they are. */
+function ColumnDock() {
+  const { t } = useLocale();
+  const lifted = useSyncExternalStore(liftStore.subscribe, liftStore.get, () => null);
+  if (!lifted || typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      data-phone-dock=""
+      aria-hidden="true"
+      className={`fixed inset-x-0 bottom-0 ${Z.dock} border-t border-border bg-canvas px-3 pt-2 pb-[calc(10px+env(safe-area-inset-bottom))] shadow-2`}
+    >
+      <div className="pb-2 text-center text-label font-semibold text-secondary">{t("mobile2.kanban.dockHint")}</div>
+      <div className="grid grid-cols-4 gap-2">
+        {KANBAN_STATUSES.map((status) => {
+          const Icon = STATUS_ICON[status];
+          const here = status === lifted.from;
+          return (
+            <div
+              key={status}
+              data-phone-dock-tile={status}
+              data-here={here ? "" : undefined}
+              className={`flex min-h-20 min-w-0 flex-col items-center justify-center gap-1.5 rounded-[14px] px-1 text-ui font-semibold ${here ? "border-2 border-dashed border-border text-muted" : "bg-card text-primary shadow-1"} data-[over]:bg-accent data-[over]:text-white`}
+            >
+              <Icon className="h-5 w-5" aria-hidden />
+              <span className="max-w-full truncate">{here ? t("mobile2.kanban.dockHere") : t(STATUS_LABEL[status])}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /* ── Cards ──────────────────────────────────────────────────────────────── */
@@ -330,13 +415,14 @@ function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; r
      so a remote card keeps the working count and the age and drops the word
      (the desktop card does the same). */
   const word = agents.conversations ? t("mobile2.kanban.agents", { count: agents.conversations }) : remote ? null : t("mobile2.kanban.noAgents");
-  const lead = Boolean(agents.working || word);
+  const showWorking = agents.working > 0 && item.card.motion.key !== "working";
+  const lead = Boolean(showWorking || word);
   if (!lead && agents.atMs <= 0) return null;
   return (
     <span data-phone-card-agents="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
-      {agents.working ? (
+      {showWorking ? (
         <>
-          <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
+          <span data-foot-working={agents.working} className="inline-flex shrink-0 items-center gap-1 font-semibold text-success">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success motion-safe:animate-pulse" />
             {t("mobile2.kanban.working", { count: agents.working })}
           </span>
@@ -396,7 +482,7 @@ function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCar
   );
 }
 
-function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, onDismiss, onUndo }: {
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, lift, onDismiss, onUndo }: {
   item: PhoneCard;
   /** The task runs on another linked machine. */
   remote: RemoteCard | null;
@@ -407,6 +493,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   remoteAgents: readonly RemoteAgentView[];
   onOpen: (() => void) | null;
   onLongPress: (() => void) | null;
+  /** A task card can be lifted and dropped on a column. */
+  lift: Lift | null;
   /** Dismiss what the card asks (docs/design/needs-attention.md §5). */
   onDismiss: (() => void) | null;
   /** Bring back what the card shows as cleared. */
@@ -459,6 +547,9 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         ) : null}
         <NeedBadge item={item} />
       </span>
+      <TaskMotionLine motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />
+      <TaskStepsLine summary={card.stepSummary} />
+      {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
@@ -493,7 +584,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   );
   return (
     <>
-    <Pressable onLongPress={onLongPress}>
+    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0}>
       {aside ? (
         <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
           {face}
@@ -522,7 +613,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         </div>
       ) : face}
     </Pressable>
-    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1"><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
 }
@@ -850,13 +941,24 @@ export function MobileKanban(props: MobileKanbanProps) {
   }, [shownKey, onShown]);
 
   /* ── Moves, hides and the card sheet ─────────────────────────────────── */
-  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true) => {
+  const move = useCallback((item: PhoneCard, to: TaskStatus, receipt = true, options: StatusMoveOptions = {}) => {
     const task = item.card.task ? tasksById.current.get(item.card.task.id) ?? item.card.task : null;
     const from = item.card.status;
     if (!task || from === to) return;
     const title = shortTitle(t, item);
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => move({ ...item, card: { ...item.card, status: to } }, from, false) });
-    void controller.move(task, to).then((outcome: StatusMoveOutcome) => {
+    const previousHold = controller.holdFor(task) ?? null;
+    let settled: StatusMoveOutcome | null = null;
+    const operation = controller.move(task, to, options);
+    const undo = (outcome: StatusMoveOutcome) => {
+      if (outcome.kind !== "saved") return;
+      move({ ...item, card: { ...item.card, status: to } }, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
+    };
+    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
+      if (settled) undo(settled);
+      else void operation.then(undo);
+    } });
+    void operation.then((outcome: StatusMoveOutcome) => {
+      settled = outcome;
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
@@ -1033,6 +1135,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       remote={item.card.task ? remoteCards.get(item.card.task.id) ?? null : null}
       onOpen={open(item)}
       onLongPress={() => openSheet(item)}
+      lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => move(item, to) } : null}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
       onUndo={item.cleared ? () => sendCardDismissal(item, true) : null}
     />
@@ -1128,6 +1231,7 @@ export function MobileKanban(props: MobileKanbanProps) {
           );
         })}
       </div>
+      <ColumnDock />
       {sheetItem ? (
         <CardSheet
           title={t("kanban.cardActions", { title: shortTitle(t, sheetItem) })}
