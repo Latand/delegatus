@@ -366,15 +366,27 @@ test("custody survives an incompatible inherited PowerShell module path", async 
   const run = spawnSync(process.execPath, ["--bun", entry], { env: { ...f.env, PSModulePath: modules }, encoding: "utf8", timeout: 30000 });
   expect(run.status).toBe(0); expect((run.stdout + run.stderr).includes(f.key)).toBe(false);
   if (process.platform === "win32") {
-    const script = String.raw`$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $p=$env:DELEGATUS_TEST_CUSTODY_PATH; foreach ($file in @($p, (Join-Path $p 'identity.json'), (Join-Path $p 'environment.json'))) {
-      $item=Get-Item -LiteralPath $file -Force; $acl=Get-Acl -LiteralPath $file; $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]);
-      @{ ownerMatchesCurrentUser=($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value); protected=$acl.AreAccessRulesProtected; reparse=(($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0); onlyCurrentUser=($rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $sid.Value -and $rules[0].AccessControlType -eq 'Allow' -and $rules[0].FileSystemRights -eq 'FullControl') } | ConvertTo-Json -Compress
+    // The observer reads each DACL through .NET and writes one line per entry.
+    // Get-Acl and ConvertTo-Json autoload modules and the formatter, which
+    // took this one call past its limit on a slow hosted runner.
+    const script = String.raw`$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $p=$env:DELEGATUS_TEST_CUSTODY_PATH; foreach ($file in @($p, [System.IO.Path]::Combine($p, 'identity.json'), [System.IO.Path]::Combine($p, 'environment.json'))) {
+      if ([System.IO.Directory]::Exists($file)) { $acl=[System.IO.Directory]::GetAccessControl($file) } else { $acl=[System.IO.File]::GetAccessControl($file) }
+      $rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));
+      $owner=($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value); $protected=[bool]$acl.AreAccessRulesProtected;
+      $reparse=(([System.IO.File]::GetAttributes($file) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0);
+      $only=($rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $sid.Value -and $rules[0].AccessControlType -eq 'Allow' -and $rules[0].FileSystemRights -eq 'FullControl');
+      [Console]::WriteLine([string]::Join(',', @($owner.ToString(), $protected.ToString(), $reparse.ToString(), $only.ToString())))
     }`;
     const acl = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
-      env: windowsPowerShellEnv({ DELEGATUS_TEST_CUSTODY_PATH: f.directory }), encoding: "utf8", timeout: 10000,
+      env: windowsPowerShellEnv({ DELEGATUS_TEST_CUSTODY_PATH: f.directory }), encoding: "utf8", timeout: 30000,
     });
-    expect(acl.status).toBe(0); expect((acl.stdout + acl.stderr).includes(f.key)).toBe(false);
-    const facts = acl.stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+    // A refused observer names how it ended; its output never carries the key.
+    expect({ status: acl.status, signal: acl.signal, error: (acl.error as NodeJS.ErrnoException | undefined)?.code ?? null }).toEqual({ status: 0, signal: null, error: null });
+    expect((acl.stdout + acl.stderr).includes(f.key)).toBe(false);
+    const facts = acl.stdout.trim().split(/\r?\n/).map(line => {
+      const [ownerMatchesCurrentUser, isProtected, reparse, onlyCurrentUser] = line.split(",").map(value => value === "True");
+      return { ownerMatchesCurrentUser, protected: isProtected, reparse, onlyCurrentUser };
+    });
     expect(facts).toHaveLength(3);
     for (const fact of facts) expect(fact).toEqual({ ownerMatchesCurrentUser: true, protected: true, reparse: false, onlyCurrentUser: true });
   }
