@@ -79,6 +79,7 @@ async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN") {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: path.join(root, "home"), USERPROFILE: path.join(root, "home"), LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_CACHE_HOME: path.join(root, "cache"), LLV_BUN_EXECUTABLE: process.execPath, TMPDIR: root, TMP: root, TEMP: root };
   delete env.LLV_TOKEN; delete env.DELEGATUS_TOKEN; env[alias] = key;
+  if (alias === "DELEGATUS_TOKEN") env.LLV_TOKEN = randomBytes(32).toString("hex");
   const id = createHash("sha256").update(path.resolve(base)).digest("hex").slice(0, 16);
   const directory = path.join(state, `launcher-custody-${id}`);
   const clean = { ...env }; delete clean.LLV_TOKEN; delete clean.DELEGATUS_TOKEN;

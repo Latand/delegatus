@@ -1850,6 +1850,7 @@ async function protectedInstall(shape: "checkout" | "package", alias: "LLV_TOKEN
   const key = randomBytes(32).toString("hex");
   delete f.env.LLV_TOKEN; delete f.env.DELEGATUS_TOKEN;
   f.env[alias] = key;
+  if (alias === "DELEGATUS_TOKEN") f.env.LLV_TOKEN = randomBytes(32).toString("hex");
   return { f, candidate, key };
 }
 async function perimeterRemains(port: number, key: string) {
