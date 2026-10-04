@@ -638,7 +638,7 @@ function ProcessBlock({ s, role, state, actions, t }: { s: Snapshot; role: "web"
       {errorText ? (
         <p data-error="process" className={status.state === "failed" ? ERROR_LINE : "m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]"}>{errorText}</p>
       ) : null}
-      {stale ? <p data-stale="" className="m-0 rounded-[8px] bg-accent-soft px-2 py-1.5 text-ui text-primary">{t("selfUpdate.process.stale", { old: status.revision!, new: s.installed.short })}</p> : null}
+      {stale ? <p data-stale="" className="m-0 rounded-[8px] bg-accent-soft px-2 py-1.5 text-ui text-primary">{t(wholeInstallationPending(s) ? "selfUpdate.process.staleInstallation" : "selfUpdate.process.stale", { old: status.revision!, new: s.installed.short })}</p> : null}
       {action}
     </section>
   );

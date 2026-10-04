@@ -582,26 +582,26 @@ describe("done: counted per process, only once healthy on the build", () => {
 
   test("built and not running yet: the header stays amber and each process says it serves the old release", () => {
     const el = render(done({}, {}));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toBe("Built a1b2c3d in 4 m 12 s. The running processes still serve the previous release. Restart web, then the runtime host, to run it.");
-    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built and not running yet · restart web and the runtime host to run it · checked 12:04");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toBe("Built a1b2c3d in 4 m 12 s. The installation apply is pending verification of the launcher, web and runtime host.");
+    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built · the installation apply is pending verification · checked 12:04");
     expect(text(section(el, "header"))).toContain("Built1.2.3 · a1b2c3d");
     expect([...el.querySelectorAll("[data-stale]")].map(text)).toEqual([
-      "Serves 7fb7345; a1b2c3d is built. Restart to run it.",
-      "Serves 7fb7345; a1b2c3d is built. Restart to run it.",
+      "Serves 7fb7345; a1b2c3d is built. Apply the whole installation together.",
+      "Serves 7fb7345; a1b2c3d is built. Apply the whole installation together.",
     ]);
   });
 
   test("web restarted onto it: web runs it, the runtime host is next", () => {
     const el = render(done({ revision: "a1b2c3d" }, {}));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("Web runs it; restart the runtime host to run it there too.");
-    expect(text(el.querySelector("[data-status]"))).toBe("Web runs a1b2c3d; restart the runtime host to run it there too · checked 12:04");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("The installation apply is pending verification of the launcher, web and runtime host.");
+    expect(text(el.querySelector("[data-status]"))).toBe("a1b2c3d is built · the installation apply is pending verification · checked 12:04");
     expect(text(section(el, "header"))).toContain("Web runs1.2.3 · a1b2c3d");
     expect(text(section(el, "header"))).toContain("Runtime host runs1.2.2 · 7fb7345");
   });
 
   test("a web process still starting on the build does not count yet", () => {
     const el = render(done({ revision: "a1b2c3d", state: "starting" }, {}, "restart-web"));
-    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("Web is restarting onto it.");
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain("The installation apply is pending verification");
   });
 
   test("both on it: done, and the header is green", () => {

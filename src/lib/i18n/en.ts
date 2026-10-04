@@ -5094,6 +5094,7 @@ export const en = {
   "selfUpdate.process.switchingWeb": "Switching to {sha}… waiting for its health check",
   "selfUpdate.process.handingOverHost": "Handing over to {sha}… waiting for the successor",
   "selfUpdate.process.notRunning": "Not running",
+  "selfUpdate.process.staleInstallation": "Serves {old}; {new} is built. Apply the whole installation together.",
   "selfUpdate.process.stale": "Serves {old}; {new} is built. Restart to run it.",
   "selfUpdate.process.managedRestart": "Restarted by a deployment.",
   "selfUpdate.error.exit": "Exited with code {code} after {seconds} s",

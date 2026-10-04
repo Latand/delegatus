@@ -54,8 +54,7 @@ export function staleProcesses(s: Snapshot): { web: boolean; host: boolean } {
 export function wholeInstallationPending(s: Snapshot): boolean {
   const stale = staleProcesses(s);
   const switching = s.update.steps.some(step => step.name === "switch" && ["pending", "running"].includes(step.state));
-  return s.mode !== "managed" && (!!s.action || s.update.steps.some(step => step.name === "switch"))
-    && (stale.web || stale.host || switching);
+  return (s.mode === "checkout" || s.mode === "package") && (stale.web || stale.host || switching);
 }
 
 export interface HeaderStatus { icon: IconKind; text: string; next: string | null; edge: "warning" | "danger" | null }

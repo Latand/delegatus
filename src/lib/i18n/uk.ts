@@ -5003,6 +5003,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.process.switchingWeb": "Перемикаю на {sha}… чекаю на перевірку здоров'я",
   "selfUpdate.process.handingOverHost": "Передаю на {sha}… чекаю на наступника",
   "selfUpdate.process.notRunning": "Не запущено",
+  "selfUpdate.process.staleInstallation": "Обслуговує {old}; {new} зібрано. Застосуйте оновлення до всього встановлення разом.",
   "selfUpdate.process.stale": "Обслуговує {old}; {new} уже зібрано. Перезапустіть, щоб перейти.",
   "selfUpdate.process.managedRestart": "Перезапускається розгортанням.",
   "selfUpdate.error.exit": "Завершився з кодом {code} через {seconds} с",
