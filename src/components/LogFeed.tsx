@@ -93,9 +93,9 @@ type ConversationRow =
       canonical: CanonicalMessage | null;
       responseDurationMs?: number;
     }
-  | { kind: "item"; live?: RuntimeLiveTurnItem; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
+  | { kind: "item"; live?: RuntimeLiveTurnItem; leads?: boolean; key: string; anchorKey?: string | null; item: FeedSnapshot["items"][number]["item"]; speakText?: string; speechIndex?: number; speakOffset?: number; speechId?: string; responseDurationMs?: number; resumes?: SeatResume }
   | { kind: "launch"; key: "launch" }
-  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; liveOrder?: number; resumes?: SeatResume }
+  | { kind: "delta"; key: string; items: RuntimeLiveTurnItem[]; instant?: number | null; liveOrder?: number; leads?: boolean; resumes?: SeatResume }
   /* A seat deputy's block (docs/design/ghost-seat.md §6.1): pinned at its
      head's position among the transcript rows, never part of the tail. */
   | { kind: "deputy"; key: string; deputy: SeatDeputyView };
@@ -1217,7 +1217,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     adoptCanonicalAssistantClaims(tailPath, memoryKey);
     publishCanonicalAssistantClaims(memoryKey, feed.items);
   }, [tailPath, memoryKey, feed.items]);
-  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn);
+  /* The tail settles `loading` on a failed first read too, and the lines land
+     on the retry. A file with bytes and no line read yet is still an unread
+     window, so nothing is judged against it. */
+  const windowUnread = tail.loading || tail.lines.length === 0 && tail.size > 0;
+  const assistantHandoff = useAssistantHandoff(memoryKey, runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn, windowUnread);
   const visibleLiveTurnItems = useMemo(
     () => visibleRuntimeLiveTurnItems(runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn).filter(item => item.tool || !item.text.trim()),
     [runtimeLiveTurn, feed.items, assistantClaims, runtimeTurn],
@@ -1559,6 +1563,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         const row = rows[index]!;
         if (row.kind === "item" || row.kind === "delta") rows[index] = { ...row, resumes: { ask } };
       }
+      /* The seat's live turn is one stream however many rows carry it, so
+         only the first row of an uninterrupted run names the seat. */
+      let streaming = false;
+      for (const [index, row] of rows.entries()) {
+        const live = row.kind === "delta" || row.kind === "item" && Boolean(row.live);
+        if (live && !streaming) rows[index] = { ...row, leads: true };
+        streaming = live;
+      }
     }
     return rows;
     /* `messageRowKey`/`answerFor` are read, not depended on: both are pure
@@ -1841,7 +1853,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                    own live turn names its participant too, so the two streams
                    never read as one. */
                 const lead = row.resumes ? <SeatSpeakerLine resumes={row.resumes} engine={file.engine} />
-                  : deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
+                  : row.leads && deputies.some((deputy) => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null;
                 return <LiveTurnRows key={row.key} items={row.items} lead={lead} />;
               }
               if (row.kind === "deputy") return <DeputyBlock key={row.key} deputy={row.deputy} engine={file.engine} />;
@@ -1896,7 +1908,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   className={rowsSkipOffscreen ? "feed-cv" : undefined}
                 >
                   {resumes && !foldResumes ? <SeatSpeakerLine resumes={resumes} engine={file.engine} />
-                    : row.live && !resumes && deputies.some(deputy => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null}
+                    : row.leads && !resumes && deputies.some(deputy => deputy.state !== "ended") ? <SeatSpeakerLine engine={file.engine} /> : null}
                   {row.live?.omittedChars ? <div data-live-turn-omitted-chars className="my-1 text-caption text-muted">
                     {t("feed.liveOmittedChars", { chars: row.live.omittedChars })}
                   </div> : null}
@@ -1917,11 +1929,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                          The keyed row survives completion and its own echo. */
                       <div className={`my-2 ${phone ? "" : "ml-9 "}${READING_MEASURE} whitespace-pre-wrap [overflow-wrap:anywhere] ${phone ? "text-title leading-[1.45]" : "text-body"}`}>
                         <StreamingMd text={row.live.text} streaming />
+                        <span data-live-turn-caret="seat" className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent align-text-bottom" aria-hidden />
                       </div>
                     ) : <FeedItem item={item} speakText={speakText} speakId={speechId} resumesAsk={foldResumes ? resumes.ask : undefined} />}</SpeechScope.Provider>
                     </MandateConversationContext.Provider>
                   </GalleryOwnerProvider>
-                  {row.live?.phase === "streaming" ? <span data-live-turn-caret="seat" className="inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] bg-accent" aria-hidden /> : null}
                   {responseDurationMs !== undefined ? <ResponseDuration durationMs={responseDurationMs} /> : null}
                 </div>
               );

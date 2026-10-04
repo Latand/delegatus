@@ -3,21 +3,31 @@
 import { useState } from "react";
 import { assistantEchoText, type FeedEntry, type Item } from "../feed/parse";
 import type { RuntimeTurnAxis } from "@/lib/runtime/contracts";
-import { transcriptInstant } from "../feed/transcriptOrder";
+import { newestTranscriptInstant, transcriptInstant } from "../feed/transcriptOrder";
 import { LIVE_TURN_ITEM_LIMIT, LIVE_TURN_OVERFLOW_LIMIT, runtimeLiveTurnItems, type RuntimeLiveTurn, type RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 
-interface PendingAnswer { key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; turnId: string; occurrence: number }
+interface PendingAnswer {
+  key: string; live: RuntimeLiveTurnItem; wire: RuntimeLiveTurnItem; order: number; turnId: string; occurrence: number;
+  /** First seen in the mount's first runtime projection, with the window still unread. */
+  unjudged?: boolean;
+  /** The window had already moved past this reply when the pane first saw it. */
+  fenced?: boolean;
+}
 interface RetiredAnswer { wire: RuntimeLiveTurnItem; turnId: string; occurrence: number; text: string }
 interface Binding { key: string; at: number | null; order: number; identity: string }
 export interface AssistantHandoff {
   pending: PendingAnswer[];
+  /** Replies this pane never watched: tracked so they stay unpainted, as the tail fence leaves them. */
+  held: PendingAnswer[];
+  /** A runtime projection has been seen, so later replies are ones this pane watched arrive. */
+  observed: boolean;
   bindings: Map<string, Binding>;
   sequence: number;
   retiredAnswers: readonly RetiredAnswer[];
   liveOrder: ReadonlyMap<string, number>;
   hiddenEchoes: ReadonlySet<string>;
 }
-const empty = (): AssistantHandoff => ({ pending: [], bindings: new Map(), sequence: 0, retiredAnswers: [], liveOrder: new Map(), hiddenEchoes: new Set() });
+const empty = (): AssistantHandoff => ({ pending: [], held: [], observed: false, bindings: new Map(), sequence: 0, retiredAnswers: [], liveOrder: new Map(), hiddenEchoes: new Set() });
 const at = (live: RuntimeLiveTurnItem) => {
   const value = Date.parse(live.startedAt ?? live.completedAt ?? "");
   return Number.isFinite(value) ? value : null;
@@ -63,12 +73,21 @@ const bindingIdentity = (entry: FeedEntry) => source(entry.item)
 /** Pane-owned completed replies survive a missing runtime snapshot until an
  * actual echo or durable claim retires them. Idle settles the caret without
  * proving canonical ownership. No transcript/parser state changes.
+ *
+ * A fresh mount (reload, new tab, another device) is handed every reply the
+ * host still keeps, up to 544 of them, and watched none of them arrive. Once
+ * the window has loaded, the ones it has already moved past are held under the
+ * tail fence of `visibleRuntimeLiveTurnItems` and their transcript records
+ * stay the only rows for them. `mount` is the mounted pane's own input: it
+ * turns the fence on and defers the judgement until the window exists. Without
+ * it every reply counts as watched.
  */
 export function projectAssistantHandoff(previous: AssistantHandoff | null, liveTurn: RuntimeLiveTurn | null,
-  feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null): AssistantHandoff {
+  feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null,
+  mount: { windowLoading: boolean } | null = null): AssistantHandoff {
   const state = previous ?? empty();
   let sequence = state.sequence;
-  const pending = state.pending.map(entry => liveTurn && entry.turnId !== liveTurn.turnId
+  const pending = [...state.pending, ...state.held].map(entry => liveTurn && entry.turnId !== liveTurn.turnId
     && entry.live.startedAt === null && entry.live.phase === "streaming"
     ? { ...entry, live: { ...entry.live, phase: "awaiting-echo" as const }, wire: { ...entry.wire, phase: "awaiting-echo" as const } } : entry);
   const retiredAnswers = [...state.retiredAnswers];
@@ -96,7 +115,8 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       usedPending.add(index);
     } else if (live.text.trim()) {
       usedPending.add(pending.length);
-      pending.push({ key: `assistant-pending:${sequence++}`, live, wire: live, order, turnId: liveTurn!.turnId, occurrence });
+      pending.push({ key: `assistant-pending:${sequence++}`, live, wire: live, order, turnId: liveTurn!.turnId, occurrence,
+        ...(mount && !state.observed ? { unjudged: true } : {}) });
     }
   }
   const bindings = new Map<string, Binding>();
@@ -123,7 +143,23 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
       : item.kind === "review" || item.kind === "mem-citation" ? item.raw : "").join("\n\n"),
     at: rows.map(row => transcriptInstant(row.item)).find(value => value !== null) ?? null,
   }));
-  for (let entry of pending) {
+  const held: PendingAnswer[] = [];
+  const transcriptAt = newestTranscriptInstant(feed);
+  for (const [index, tracked] of pending.entries()) {
+    let entry = tracked;
+    // A reply in flight on a running turn is one this pane watches being written.
+    if (entry.unjudged && entry.wire.phase === "streaming" && turn !== "idle") entry = { ...entry, unjudged: false };
+    if (entry.unjudged && !mount?.windowLoading) {
+      const liveAt = Date.parse(entry.live.completedAt ?? "") || at(entry.live);
+      const fenced = transcriptAt !== null && liveAt !== null && liveAt <= transcriptAt
+        && (entry.live.phase !== "streaming" || turn === "idle");
+      entry = { ...entry, unjudged: false, fenced };
+    }
+    if (entry.fenced || entry.unjudged && entry.live.phase !== "streaming") {
+      // Tracked for as long as the host keeps the descriptor, never painted.
+      if (!liveTurn || usedPending.has(index)) held.push(entry);
+      continue;
+    }
     if (turn === "idle" && entry.live.phase === "streaming") {
       // Keep the wire phase for matching a missed completion's longer echo.
       entry = { ...entry, live: { ...entry.live, phase: "awaiting-echo" } };
@@ -164,19 +200,21 @@ export function projectAssistantHandoff(previous: AssistantHandoff | null, liveT
     } else if (!entry.live.itemId || !claims.has(entry.live.itemId)) remaining.push(entry);
   }
   while (retiredAnswers.length > LIVE_TURN_ITEM_LIMIT + LIVE_TURN_OVERFLOW_LIMIT) retiredAnswers.shift();
-  return { pending: remaining, bindings, sequence, retiredAnswers, liveOrder, hiddenEchoes };
+  return { pending: remaining, held, observed: state.observed || Boolean(liveTurn), bindings, sequence, retiredAnswers, liveOrder, hiddenEchoes };
 }
 
 export function useAssistantHandoff(identity: string | null, live: RuntimeLiveTurn | null,
-  feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null): AssistantHandoff {
-  const [snapshot, setSnapshot] = useState(() => ({ identity, live, feed, claims, turn,
-    value: projectAssistantHandoff(null, live, feed, claims, turn) }));
+  feed: readonly FeedEntry[], claims: ReadonlySet<string>, turn: RuntimeTurnAxis | null = null,
+  windowLoading = false): AssistantHandoff {
+  const [snapshot, setSnapshot] = useState(() => ({ identity, live, feed, claims, turn, windowLoading,
+    value: projectAssistantHandoff(null, live, feed, claims, turn, { windowLoading }) }));
   // History-only panes have nothing to reconcile. In particular, a prepend
   // must not schedule a second render just to remember another empty handoff.
   if (!live && snapshot.identity === identity && !snapshot.value.pending.length && !snapshot.value.bindings.size) return snapshot.value;
-  if (snapshot.identity !== identity || snapshot.live !== live || snapshot.feed !== feed || snapshot.claims !== claims || snapshot.turn !== turn) {
-    const value = projectAssistantHandoff(snapshot.identity === identity ? snapshot.value : null, live, feed, claims, turn);
-    setSnapshot({ identity, live, feed, claims, turn, value });
+  if (snapshot.identity !== identity || snapshot.live !== live || snapshot.feed !== feed || snapshot.claims !== claims || snapshot.turn !== turn
+    || snapshot.windowLoading !== windowLoading) {
+    const value = projectAssistantHandoff(snapshot.identity === identity ? snapshot.value : null, live, feed, claims, turn, { windowLoading });
+    setSnapshot({ identity, live, feed, claims, turn, windowLoading, value });
     return value;
   }
   return snapshot.value;

@@ -118,7 +118,7 @@ const session: RuntimeSession = {
   liveTurn: firstTurn(),
 };
 
-const tailState = { lines: [] as string[] };
+const tailState = { lines: [] as string[], loading: false, size: null as number | null, error: null as string | null };
 /* The hosted session a test renders against; tests swap the live turn. */
 const sessionState = { session };
 
@@ -154,9 +154,9 @@ mock.module("@/hooks/useLogTail", () => ({
   useLogTail: () => ({
     lines: tailState.lines,
     linesStart: 0,
-    size: tailState.lines.length,
-    loading: false,
-    error: null,
+    size: tailState.size ?? tailState.lines.length,
+    loading: tailState.loading,
+    error: tailState.error,
     tickTime: null,
     paused: false,
     setPaused: () => undefined,
@@ -183,6 +183,9 @@ beforeEach(() => {
   resetOutboxForTests();
   resetCanonicalAssistantClaimsForTests();
   tailState.lines = [];
+  tailState.loading = false;
+  tailState.size = null;
+  tailState.error = null;
   sessionState.session = session;
 });
 afterEach(() => {
@@ -715,4 +718,138 @@ test("an event-first review hydrates from redacted capped display text", () => {
     expect(host.querySelectorAll('[data-feed-kind="review"]')).toHaveLength(1);
     expect(host.textContent).not.toContain(privateValue);
   } finally { file.engine = "claude"; file.fmt = "claude"; }
+});
+
+/* A fresh mount (reload, new tab, another device) is handed every reply the
+   host still keeps and watched none of them arrive. */
+const oldReplies = (): RuntimeLiveTurn => [1, 2, 3].reduce<RuntimeLiveTurn | null>((live, second) => projectRuntimeLiveTurnItem(live, "old-turn", {
+  type: "assistant", uuid: `old-reply-${second}`, message: { role: "assistant", content: [{ type: "text", text: `Old reply ${second}` }] },
+}, "completed", AT(second)), null)!;
+const feedRows = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>("[data-feed-kind], [data-live-turn]")]
+  .map(row => row.dataset.feedKind ?? `live:${row.dataset.liveTurnItemId ?? ""}`);
+
+test("a fresh mount leaves replies the loaded window has moved past to their transcript records", () => {
+  sessionState.session = { ...session, turn: "idle", liveTurn: oldReplies() };
+  tailState.lines = [
+    JSON.stringify({ type: "user", timestamp: AT(30), message: { content: "Latest request" } }),
+    JSON.stringify({ type: "assistant", uuid: "latest-answer", timestamp: AT(31), message: { content: [{ type: "text", text: "Latest answer" }] } }),
+  ];
+  const { host, paint } = render();
+  expect(feedRows(host)).toEqual(["user", "prose"]);
+  expect(host.textContent).not.toContain("Old reply");
+  // Later projections of the same snapshot keep them out as well.
+  sessionState.session = { ...sessionState.session, revision: 10 };
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "user", timestamp: AT(40), message: { content: "One more" } })];
+  paint();
+  expect(feedRows(host)).toEqual(["user", "prose", "user"]);
+});
+
+test("a fresh mount does not wedge an unrecorded old reply between loaded transcript rows", () => {
+  sessionState.session = { ...session, turn: "idle", liveTurn: projectRuntimeLiveTurnItem(null, "old-turn", {
+    type: "assistant", uuid: "never-recorded", message: { role: "assistant", content: [{ type: "text", text: "Unrecorded reply" }] },
+  }, "completed", AT(2)) };
+  tailState.lines = [[0, "user", "Request one"], [5, "assistant", "Answer one"], [8, "user", "Request two"], [9, "assistant", "Answer two"]]
+    .map(([second, type, text]) => JSON.stringify({ type, uuid: `record-${second}`, timestamp: AT(second as number),
+      message: { content: type === "user" ? text : [{ type: "text", text }] } }));
+  const { host } = render();
+  expect(feedRows(host)).toEqual(["user", "prose", "user", "prose"]);
+  expect(host.textContent).not.toContain("Unrecorded reply");
+});
+
+test("a fresh mount judges snapshot replies only once its window has loaded", () => {
+  sessionState.session = { ...session, turn: "idle", liveTurn: oldReplies() };
+  tailState.loading = true;
+  const stale = render();
+  expect(feedRows(stale.host)).toEqual([]);
+  tailState.loading = false;
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(30), message: { content: "Latest request" } })];
+  stale.paint();
+  expect(feedRows(stale.host)).toEqual(["user"]);
+
+  // A failed first read settles `loading` and the lines land on the retry: bytes with no line yet are still unread.
+  tailState.lines = [];
+  tailState.size = 2048;
+  tailState.error = "server unavailable";
+  const settling = render();
+  expect(feedRows(settling.host)).toEqual([]);
+  tailState.size = null;
+  tailState.error = null;
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(30), message: { content: "Latest request" } })];
+  settling.paint();
+  expect(feedRows(settling.host)).toEqual(["user"]);
+
+  // The same snapshot over a window that has not reached those replies keeps every one.
+  tailState.loading = true;
+  tailState.lines = [];
+  const current = render();
+  tailState.loading = false;
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "The request" } })];
+  current.paint();
+  expect(feedRows(current.host)).toEqual(["user", "live:old-reply-1", "live:old-reply-2", "live:old-reply-3"]);
+});
+
+test("a reply that arrives after the mount stays until its echo although the window moves past it", () => {
+  sessionState.session = { ...session, liveTurn: oldReplies() };
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(30), message: { content: "Latest request" } })];
+  const { host, paint } = render();
+  expect(feedRows(host)).toEqual(["user"]);
+  sessionState.session = { ...session, liveTurn: projectRuntimeLiveTurnItem(oldReplies(), "old-turn", {
+    type: "assistant", uuid: "watched-reply", message: { role: "assistant", content: [{ type: "text", text: "Watched reply" }] },
+  }, "completed", AT(31)) };
+  paint();
+  tailState.lines = [...tailState.lines, JSON.stringify({ type: "user", timestamp: AT(35), message: { content: "Follow-up" } })];
+  paint();
+  expect(feedRows(host)).toEqual(["user", "live:watched-reply", "user"]);
+});
+
+test("the seat is named once above an uninterrupted run of its live rows", () => {
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(0), message: { content: "Review the queue" } })];
+  let liveTurn = projectRuntimeLiveTurnItem(null, "seat-run", {
+    type: "assistant", uuid: "seat-run-reply", message: { role: "assistant", content: [{ type: "text", text: "Looking at three files." }] },
+  }, "completed", AT(2));
+  for (const second of [3, 4, 5]) liveTurn = projectRuntimeLiveTurnItem(liveTurn, "seat-run", {
+    type: "assistant", uuid: `seat-run-read-${second}`,
+    message: { role: "assistant", content: [{ type: "tool_use", id: `seat-run-tool-${second}`, name: "Read", input: { file_path: `/repo/file-${second}.ts` } }] },
+  }, "completed", AT(second));
+  sessionState.session = { ...session, liveTurn };
+  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "active" } as SeatDeputyView]);
+  expect(liveRows(host)).toEqual(["prose:seat-run-reply", "tool:seat-run-tool-3:run", "tool:seat-run-tool-4:run", "tool:seat-run-tool-5:run"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-seat-speaker]")].map(line => line.dataset.seatSpeaker)).toEqual(["resumes"]);
+});
+
+test("a run of live tool rows alone carries one seat line, above its first row", () => {
+  tailState.lines = [JSON.stringify({ type: "user", timestamp: AT(2), message: { content: "Review the queue" } })];
+  let liveTurn: RuntimeLiveTurn | null = null;
+  for (let index = 0; index < 12; index += 1) liveTurn = projectRuntimeLiveTurnItem(liveTurn, "tool-run", {
+    type: "assistant", uuid: `tool-run-${index}`,
+    message: { role: "assistant", content: [{ type: "tool_use", id: `tool-run-call-${index}`, name: "Read", input: { file_path: `/repo/file-${index}.ts` } }] },
+  }, "completed", AT(3 + index));
+  sessionState.session = { ...session, liveTurn };
+  const { host } = render([{ askId: "deputy", startedAt: AT(1), state: "active" } as SeatDeputyView]);
+  expect(host.querySelectorAll("[data-live-turn]")).toHaveLength(8);
+  expect(host.querySelector("[data-live-turn-earlier]")?.getAttribute("data-live-turn-earlier")).toBe("4");
+  const lines = [...host.querySelectorAll<HTMLElement>("[data-seat-speaker]")];
+  expect(lines.map(line => line.dataset.seatSpeaker)).toEqual(["live"]);
+  const first = host.querySelector("[data-live-turn-earlier]")!;
+  expect(lines[0]!.compareDocumentPosition(first) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("a reply painted in flight keeps its node when it completes before the window's first line", () => {
+  const pending = { itemId: null, text: "Written while the window loads.", phase: "streaming" as const, startedAt: AT(3), completedAt: null };
+  sessionState.session = { ...session, liveTurn: { turnId: "unread-window", text: pending.text, items: [pending] } };
+  tailState.size = 2048;
+  tailState.error = "server unavailable";
+  const { host, paint } = render();
+  const row = host.querySelector("[data-live-turn]")!;
+  expect(row.textContent).toContain(pending.text);
+  sessionState.session = { ...session, liveTurn: { turnId: "unread-window", text: pending.text,
+    items: [{ ...pending, itemId: "unread-window-answer", phase: "awaiting-echo", completedAt: AT(4) }] } };
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  tailState.size = null;
+  tailState.error = null;
+  tailState.lines = [0, 9].map(second => JSON.stringify({ type: "user", timestamp: AT(second), message: { content: `Request ${second}` } }));
+  paint();
+  expect(host.querySelector("[data-live-turn]")).toBe(row);
+  expect(feedRows(host)).toEqual(["user", "live:unread-window-answer", "user"]);
 });

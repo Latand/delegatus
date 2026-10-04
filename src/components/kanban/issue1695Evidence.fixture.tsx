@@ -102,6 +102,10 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
 const FEED_FAILURES = SCENARIO === "feed-failures";
+/* `&reload=1`: a window opened fresh on a long conversation. The host still
+   keeps the replies of the turns it ran, and this window watched none arrive. */
+const FEED_RELOAD = FEED_CONTINUITY && new URLSearchParams(location.search).get("reload") === "1";
+const reloadReply = (index: number) => L(`Earlier reply ${index + 1}, kept by the host.`, `Раніша відповідь ${index + 1}, яку зберіг хост.`);
 let feedContinuityStep = 0;
 const continuousAnswer = L("The answer stays here while the transcript catches up.", "Відповідь залишається тут, поки запис розмови наздоганяє її.");
 if (FEED_FAILURES) {
@@ -373,8 +377,11 @@ function structuredSnapshot() {
     schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
     sessions: [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
-      turn: FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
-      ...(FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
+      turn: FEED_RELOAD ? "idle" : FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
+      ...(FEED_RELOAD ? { liveTurn: { turnId: "reload-turn", text: "", items: Array.from({ length: 12 }, (_, index) => ({
+        itemId: `reload-reply-${index}`, text: reloadReply(index), phase: "awaiting-echo" as const,
+        startedAt: iso(7_200 - index * 60), completedAt: iso(7_200 - index * 60),
+      })) } } : FEED_CONTINUITY ? { liveTurn: feedContinuityStep === 2 ? null : {
         turnId: "continuity-turn", text: continuousAnswer, items: [{ itemId: feedContinuityStep ? "continuity-answer" : null,
           text: continuousAnswer, phase: feedContinuityStep ? "awaiting-echo" : "streaming",
           startedAt: iso(60), completedAt: feedContinuityStep ? iso(59) : null },
@@ -1849,6 +1856,12 @@ function transcriptOf(pathname: string): string {
   if ((LAUNCH_CLS || SEAT_CLS) && file.path.startsWith("spawn:")) return "";
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
+  if (FEED_RELOAD && file === searchVer2) return `${[
+    asked(600, L("Please check the result.", "Перевір результат, будь ласка.")),
+    said(590, L("The result holds: every check passed.", "Результат тримається: усі перевірки пройшли.")),
+    asked(300, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка.")),
+    said(290, L("The next step is done.", "Наступний крок виконано.")),
+  ].join("\n")}\n`;
   if (FEED_CONTINUITY && file === searchVer2) return `${[
     asked(120, L("Please check the result.", "Перевір результат, будь ласка.")),
     ...(feedContinuityStep >= 1 ? [asked(30, L("Please continue with the next step.", "Продовжуй наступний крок, будь ласка."))] : []),
@@ -1959,6 +1972,11 @@ if (FEED_RECOVERY) searchVer2.generation = 1;
 
 const evidence = {
   advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
+  /* Replies the runtime store holds for the reloaded conversation, read after a fresh snapshot. */
+  async feedReloadSnapshotReplies() {
+    await getRuntimeBus().refresh();
+    return getRuntimeBus().getState().store.sessions[searchVer2.conversationId!]?.liveTurn?.items?.length ?? 0;
+  },
   failFeedDelivery() {
     const id = "fixture-failed-delivery";
     enqueueOutbox(searchVer2.conversationId!, { id, text: L("Send this follow-up.", "Надішли це уточнення."), images: 0, at: Date.now() });

@@ -461,3 +461,52 @@ test.each([240_009, 24_009])("a missed completion adopts its capped or redacted 
   expect(state.pending).toEqual([]);
   expect(state.bindings.get(feed[0].key)?.key).toBe(original);
 });
+
+test("a fresh mount fences snapshot replies the loaded window has moved past", () => {
+  const stale = projectAssistantHandoff(null, live("awaiting-echo"), [later], claims, "idle", { windowLoading: false });
+  expect(stale.pending).toEqual([]);
+  expect(rows([later], stale).map(row => row.key)).toEqual(["later"]);
+  // The descriptor stays fenced on every later projection, and across a reconnect.
+  let state = projectAssistantHandoff(stale, live("awaiting-echo"), [later], claims, "idle", { windowLoading: false });
+  state = projectAssistantHandoff(state, null, [later], claims, null, { windowLoading: false });
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later], claims, "idle", { windowLoading: false });
+  expect(state.pending).toEqual([]);
+  expect(state.held).toHaveLength(1);
+  // Its record loading leaves the canonical row its own key and place.
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [echo, later], claims, "idle", { windowLoading: false });
+  expect(rows([echo, later], state).map(row => row.key)).toEqual(["echo", "later"]);
+  // Once the host drops the descriptor there is nothing left to track.
+  state = projectAssistantHandoff(state, { turnId: "next", text: "", items: [] }, [echo, later], claims, "running", { windowLoading: false });
+  expect(state.held).toEqual([]);
+});
+
+test("a fresh mount waits for its window before judging, and keeps what the window has not reached", () => {
+  const earlier: FeedEntry = { key: "earlier", anchorKey: "row:0:0", item: { kind: "user", ts: "2026-10-02T09:59:59Z", text: "Request" } };
+  let state = projectAssistantHandoff(null, live("awaiting-echo"), [], claims, "idle", { windowLoading: true });
+  expect(state.pending).toEqual([]);
+  expect(state.held).toHaveLength(1);
+  const reached = projectAssistantHandoff(state, live("awaiting-echo"), [later], claims, "idle", { windowLoading: false });
+  expect(reached.pending).toEqual([]);
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [earlier], claims, "idle", { windowLoading: false });
+  expect(rows([earlier], state).map(row => row.key)).toEqual(["earlier", "assistant-pending:0"]);
+  // Judged once: the window moving past it later is the delayed-echo case.
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [earlier, later], claims, "idle", { windowLoading: false });
+  expect(rows([earlier, later], state).map(row => row.key)).toEqual(["earlier", "assistant-pending:0", "later"]);
+});
+
+test("a fresh mount keeps an in-flight reply and every reply it watches arrive", () => {
+  let state = projectAssistantHandoff(null, live("streaming", null), [later], claims, "running", { windowLoading: false });
+  expect(state.pending).toHaveLength(1);
+  // Painted while the window is still unread, it stays when it completes before the first line lands.
+  state = projectAssistantHandoff(null, live("streaming", null), [], claims, "running", { windowLoading: true });
+  const key = state.pending[0].key;
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [], claims, "running", { windowLoading: true });
+  expect(state.pending.map(answer => answer.key)).toEqual([key]);
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later], claims, "running", { windowLoading: false });
+  expect(rows([later], state).map(row => row.key)).toEqual([key, "later"]);
+  // The same stale stream on an idle turn is a broker that died mid-answer.
+  expect(projectAssistantHandoff(null, live("streaming", null), [later], claims, "idle", { windowLoading: false }).pending).toEqual([]);
+  state = projectAssistantHandoff(null, { turnId: "turn", text: "", items: [] }, [later], claims, "running", { windowLoading: false });
+  state = projectAssistantHandoff(state, live("awaiting-echo"), [later], claims, "running", { windowLoading: false });
+  expect(rows([later], state).map(row => row.key)).toEqual(["assistant-pending:0", "later"]);
+});

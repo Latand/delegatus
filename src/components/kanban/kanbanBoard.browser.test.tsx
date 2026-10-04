@@ -16811,6 +16811,29 @@ describe("conversation feed continuity and errors", () => {
           expect(pageErrors).toEqual([]);
           readings.push({ locale, width, retainedNode: true, answerRows: 1, retainedAfterNineTools: true, echoShift, position });
         } finally { await context.close(); }
+        /* A window opened fresh on a long conversation: the host's snapshot
+           carries twelve replies of earlier turns, all older than the loaded
+           window. They stay with their transcript records and none is painted. */
+        const reload = await openFixture(browser, `${server.base}?scenario=feed-continuity&reload=1#c=conversation_search-ver-2`,
+          { width, height: 900 }, "light", locale, "reduce", width === 390);
+        try {
+          const last = reload.page.locator('[data-feed-kind="prose"]').filter({ hasText: locale === "en" ? "The next step is done." : "Наступний крок виконано." });
+          await last.waitFor();
+          /* The snapshot is in the store before anything is read off the page. */
+          expect(await reload.page.evaluate(() => (window as unknown as { evidence: { feedReloadSnapshotReplies(): Promise<number> } }).evidence.feedReloadSnapshotReplies())).toBe(12);
+          await reload.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const feed = last.locator("xpath=ancestor::*[@data-feed-state][1]");
+          const rows = await feed.locator("[data-feed-kind], [data-live-turn]").evaluateAll(nodes =>
+            nodes.map(node => (node as HTMLElement).dataset.feedKind ?? "live"));
+          expect(rows).toEqual(["user", "prose", "user", "prose"]);
+          expect(await reload.page.locator("[data-live-turn]").count()).toBe(0);
+          expect(await reload.page.getByText(locale === "en" ? "Earlier reply" : "Раніша відповідь").count()).toBe(0);
+          const overflow = await reload.page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBe(false);
+          expect(reload.pageErrors).toEqual([]);
+          await reload.page.screenshot({ path: path.join(out, `${locale}-${width}-reload.png`) });
+          readings.push({ locale, width, reload: true, snapshotReplies: 12, liveRows: 0, rows, overflow });
+        } finally { await reload.context.close(); }
         const errors = await openFixture(browser, `${server.base}?scenario=feed-failures#c=conversation_search-ver-2`,
           { width, height: 900 }, "light", locale, "reduce", width === 390);
         try {
