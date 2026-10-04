@@ -119,6 +119,51 @@ function installTransientOwnerReadFailure(): void {
   }) as typeof fs.readFileSync;
 }
 
+/** Publishes another lock generation's retirement owner in the namespace of
+    this claimant's lock: either between its namespace cleanup and its claim
+    on a stale lock ("observe"), or as the entry that beats its own retirement
+    to the first epoch ("retire"). That is the state inode reuse leaves: the
+    namespace is named by the inode, the owner entry names another token. */
+function installForeignGenerationOwner(
+  receiptPath: string,
+  ownerPid: number,
+  readyPath: string,
+  phase: "observe" | "retire",
+): void {
+  const lockPath = `${receiptPath}.lock`;
+  const originalOpen = fs.openSync.bind(fs);
+  const originalLink = fs.linkSync.bind(fs);
+  let published = false;
+  const publish = () => {
+    published = true;
+    const stat = fs.statSync(lockPath);
+    fs.writeFileSync(`${lockPath}.${stat.dev}-${stat.ino}.recovering.recovery-owner-0`, JSON.stringify({
+      version: 1,
+      epoch: 0,
+      pid: ownerPid,
+      startIdentity: procBackend.processIdentity(ownerPid),
+      token: crypto.randomUUID(),
+      targetDev: stat.dev,
+      targetIno: stat.ino,
+      targetToken: "another-generation-at-this-inode",
+    }));
+    fs.writeFileSync(readyPath, "ready");
+  };
+  fs.openSync = ((filename: fs.PathLike, flags: string | number, mode?: fs.Mode) => {
+    try {
+      return originalOpen(filename, flags, mode);
+    } catch (error) {
+      if (phase === "observe" && !published
+        && (error as NodeJS.ErrnoException).code === "EEXIST" && String(filename) === lockPath) publish();
+      throw error;
+    }
+  }) as typeof fs.openSync;
+  fs.linkSync = ((existingPath: fs.PathLike, newPath: fs.PathLike) => {
+    if (phase === "retire" && !published && String(newPath).endsWith(".recovery-owner-0")) publish();
+    return originalLink(existingPath, newPath);
+  }) as typeof fs.linkSync;
+}
+
 function installNamespaceHandoffPause(
   receiptPath: string,
   pinPath: string,
@@ -441,6 +486,14 @@ if (mode === "hold") {
   );
 } else if (mode === "transient-owner-read-claim") {
   installTransientOwnerReadFailure();
+  await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
+} else if (mode === "foreign-owner-claim") {
+  installForeignGenerationOwner(
+    process.argv[3]!,
+    Number(process.argv[6]),
+    process.argv[7]!,
+    process.argv[8] as "observe" | "retire",
+  );
   await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
 } else if (mode === "crash-claim") {
   installCrashBoundary(process.argv[3]!, process.argv[6] as CrashBoundary, process.argv[7]!);

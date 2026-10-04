@@ -1064,6 +1064,64 @@ describe("MCP tool service", () => {
     }
   }, 30_000);
 
+  /* The recovery namespace is named by the lock's inode, and the filesystem
+     hands a freed inode number to the next lock. Two generations of the lock
+     then meet in one namespace; each case below is one side of that meeting. */
+  test.each([
+    { name: "a stale-lock claimant waits out another generation's live retirement at the same inode", phase: "observe", ownerAlive: true },
+    { name: "a stale-lock claimant retires another generation's dead retirement at the same inode", phase: "observe", ownerAlive: false },
+    { name: "a holder retires its lock after another generation's owner took the first epoch", phase: "retire", ownerAlive: true },
+  ] as const)("$name", async ({ phase, ownerAlive }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-foreign-generation-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const countPath = path.join(directory, "binding-count");
+    const resultPath = path.join(directory, "result.json");
+    const readyPath = path.join(directory, "foreign-owner-ready");
+    const child = path.join(import.meta.dir, "server.lockChild.ts");
+    if (phase === "observe") {
+      fs.writeFileSync(`${receiptPath}.lock`, JSON.stringify({
+        pid: 999_999_999,
+        startIdentity: "dead",
+        token: "foreign-generation-stale-owner",
+      }));
+    }
+
+    const claimant = ownFixtureChild(Bun.spawn({
+      cmd: [
+        process.execPath,
+        child,
+        "foreign-owner-claim",
+        receiptPath,
+        countPath,
+        resultPath,
+        String(ownerAlive ? process.pid : 999_999_999),
+        readyPath,
+        phase,
+      ],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+    expect(await waitForFile(readyPath, 10_000)).toBeTrue();
+    let settledWhileOwned = false;
+    if (ownerAlive) {
+      /* The other generation's owner is this process, so its entry stays until
+         it is removed here, as that owner's own retirement would remove it. */
+      await Bun.sleep(150);
+      settledWhileOwned = fs.existsSync(resultPath) || claimant.exitCode !== null;
+      const foreign = recoveryArtifacts(directory).filter((entry) => entry.endsWith(".recovery-owner-0"));
+      expect(foreign).toHaveLength(1);
+      fs.unlinkSync(path.join(directory, foreign[0]!));
+    }
+
+    expect(await childResult(claimant)).toEqual({ exit: 0, error: "" });
+    expect(settledWhileOwned).toBeFalse();
+    expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({ ok: true, replayed: false });
+    expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 20_000);
+
   test("same-inode replacement survives a paused stale reaper", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-inode-reuse-"));
     scratch.push(directory);

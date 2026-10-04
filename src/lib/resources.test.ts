@@ -134,6 +134,19 @@ function fileHasText(filename: string): boolean {
   }
 }
 
+/** Holds the caller until a fixture process has written a file. The wait is
+    synchronous on purpose: it stands inside a signal the collector is sending,
+    so the collector's own timers cannot run past the fixture. */
+function waitForFixtureText(filename: string, timeoutMs = 5_000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (!fileHasText(filename)) {
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(pause, 0, 0, 1);
+  }
+  return true;
+}
+
 interface FixtureProcessGroup {
   pgid: number;
   authorizerPid: number;
@@ -1674,7 +1687,9 @@ describe("resource recurring reads", () => {
             // later SIGKILL removes it and the escaped child together.
             '  setInterval(() => {}, 1_000);',
             '});',
-            'fs.writeFileSync(memberReady, "ready");',
+            // The handler is installed by now; the host PID names this member
+            // to the test, which holds cleanup until the handler has run.
+            'fs.writeFileSync(memberReady, fs.readFileSync("/proc/self/stat", "utf8").split(" ", 1)[0]);',
             'setInterval(() => {}, 1_000);',
             '',
           ].join("\n"));
@@ -1697,30 +1712,47 @@ describe("resource recurring reads", () => {
         }, async (directory) => {
           const baseline = referencedHandles();
           const escapedPidFile = path.join(directory, "term-escaped-pid");
+          const memberReadyFile = path.join(directory, "term-member-ready");
           const realKill = process.kill.bind(process);
           let injectedDenial = false;
-          const kill = fixture.denyEscaped
-            ? spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
-                if (pid > 0 && signal !== 0 && existsSync(escapedPidFile)
-                  && pid === Number(readFileSync(escapedPidFile, "utf8"))) {
-                  injectedDenial = true;
-                  throw errno("EPERM");
-                }
-                return realKill(pid, signal as NodeJS.Signals | number | undefined);
-              }) as typeof process.kill)
-            : null;
+          let memberTermDelivered = false;
+          /* Cleanup gives a member closeTimeoutMs between its SIGTERM and the
+             SIGKILL behind it. Whether the member's handler runs inside that
+             window is the scheduler's choice, and a member killed first never
+             escapes anything. The escape is what this test is about, so the
+             first SIGTERM cleanup sends waits for the handler to be installed,
+             and the member's own SIGTERM returns once the handler has run. */
+          const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+            if (fixture.denyEscaped && pid > 0 && signal !== 0 && existsSync(escapedPidFile)
+              && pid === Number(readFileSync(escapedPidFile, "utf8"))) {
+              injectedDenial = true;
+              throw errno("EPERM");
+            }
+            if (memberTermDelivered || pid <= 0 || signal !== "SIGTERM") {
+              return realKill(pid, signal as NodeJS.Signals | number | undefined);
+            }
+            if (!waitForFixtureText(memberReadyFile)
+              || pid !== Number(readFileSync(memberReadyFile, "utf8"))) return realKill(pid, signal);
+            memberTermDelivered = true;
+            const delivered = realKill(pid, signal);
+            waitForFixtureText(escapedPidFile);
+            return delivered;
+          }) as typeof process.kill);
           let escapedPid = 0;
           let leaked = false;
           let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
           try {
+            /* Only the timeout fixture's worker budget and the SIGTERM to
+               SIGKILL window elapse here. The other limits bound a stalled
+               fixture and are sized so that the holds above fit inside them. */
             outcome = await workerTestReader({
               initial: null,
               workerLimits: {
-                observeTimeoutMs: 900,
+                observeTimeoutMs: 20_000,
                 inputTimeoutMs: 10,
-                timeoutMs: fixture.name === "timeout" ? 180 : 500,
+                timeoutMs: fixture.name === "timeout" ? 180 : 10_000,
                 closeTimeoutMs: 40,
-                cleanupTimeoutMs: 150,
+                cleanupTimeoutMs: 6_000,
                 headroomMs: 250,
               },
             }).read(true);
@@ -1730,7 +1762,7 @@ describe("resource recurring reads", () => {
             expect(escapedPid, `${pipes} ${fixture.name} escaped PID`).toBeGreaterThan(0);
             leaked = processExists(escapedPid);
           } finally {
-            kill?.mockRestore();
+            kill.mockRestore();
             if (escapedPid > 0 && processExists(escapedPid)) realKill(escapedPid, "SIGKILL");
           }
           await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1743,7 +1775,7 @@ describe("resource recurring reads", () => {
         });
       }
     }
-  });
+  }, 120_000);
 
   test("pre-armed owner-mutating TERM descendants observe member-before-root cleanup", async () => {
     const fixtures = [
@@ -2114,6 +2146,69 @@ describe("resource recurring reads", () => {
       expect(newReferencedHandleCount(baseline)).toBe(0);
     });
   }, 15_000);
+
+  test("a contained member that exits while cleanup verifies it leaves the observation healthy", async () => {
+    await withResourceWorkerScript((directory) => {
+      const holder = (name: string) => `sh -c 'read host_pid _ < /proc/self/stat; printf "%s" "$host_pid" > "$1"; exec tail -f /dev/null' sh "${path.join(directory, name)}" &`;
+      return [
+        `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+        "trap 'exit 0' TERM INT",
+        holder("holder-a"),
+        holder("holder-b"),
+        `while [ ! -s "${path.join(directory, "holder-a")}" ] || [ ! -s "${path.join(directory, "holder-b")}" ]; do sleep 0.005; done`,
+        `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
+        "wait",
+      ];
+    }, async (directory) => {
+      const realKill = process.kill.bind(process);
+      const realIdentity = procBackend.processIdentity.bind(procBackend);
+      const holders = () => ["holder-a", "holder-b"].map((name) => Number(readFileSync(path.join(directory, name), "utf8")));
+      let victim = 0;
+      let exitedDuringVerification = false;
+      /* Cleanup verifies a member and then signals it, one member at a time.
+         The first signalled holder names the other as the next one verified;
+         that one is gone by the time its first identity read returns. */
+      const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+        if (victim === 0 && signal === "SIGTERM" && holders().includes(pid)) {
+          victim = holders().find((holder) => holder !== pid)!;
+        }
+        return realKill(pid, signal as NodeJS.Signals | number | undefined);
+      }) as typeof process.kill);
+      const processIdentity = spyOn(procBackend, "processIdentity").mockImplementation((pid) => {
+        const identity = realIdentity(pid);
+        if (pid !== victim || exitedDuringVerification || identity === null) return identity;
+        exitedDuringVerification = true;
+        realKill(victim, "SIGKILL");
+        const deadline = Date.now() + 5_000;
+        while (realIdentity(victim) !== null && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+        }
+        return identity;
+      });
+      let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
+      try {
+        outcome = await workerTestReader({
+          initial: null,
+          workerLimits: {
+            observeTimeoutMs: 20_000,
+            inputTimeoutMs: 10,
+            timeoutMs: 10_000,
+            closeTimeoutMs: 250,
+            cleanupTimeoutMs: 6_000,
+            headroomMs: 900,
+          },
+        }).read(true);
+      } finally {
+        kill.mockRestore();
+        processIdentity.mockRestore();
+      }
+
+      expect(exitedDuringVerification).toBeTrue();
+      expect(realIdentity(victim)).toBeNull();
+      expect(outcome.diagnostic.degradedReason).toBeUndefined();
+      expect(outcome.diagnostic).toMatchObject({ fresh: true, status: "complete" });
+    });
+  }, 30_000);
 
   test("leader-first cleanup sends no signals to recycled or null-identity groups", async () => {
     for (const identity of ["recycled", "null"] as const) {

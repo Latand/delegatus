@@ -1804,9 +1804,15 @@ async function collectResourcesInWorker(
           if (identity === undefined) continue;
           const currentIdentity = processRuntime.processIdentity(ownedPid);
           if (currentIdentity === null) continue;
+          const namespaceId = processRuntime.processNamespaceId?.(ownedPid);
+          const confirmedIdentity = processRuntime.processIdentity(ownedPid);
+          /* A member that exits between these reads leaves no namespace link
+             to read. It is gone, as an ESRCH from the signal below would say,
+             and nothing has taken its place. */
+          if (currentIdentity === identity && confirmedIdentity === null) continue;
           if (currentIdentity !== identity
-            || processRuntime.processNamespaceId?.(ownedPid) !== containmentNamespaceId
-            || processRuntime.processIdentity(ownedPid) !== currentIdentity) {
+            || namespaceId !== containmentNamespaceId
+            || confirmedIdentity !== currentIdentity) {
             failCleanupVerification("resource collector PID namespace member identity changed before cleanup");
             continue;
           }
