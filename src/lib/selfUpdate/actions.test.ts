@@ -22,6 +22,13 @@ test("an unbuilt upgrade needs Update first", async () => {
   expect(await installAction({ mode: "checkout", record } as never, { cgroup: () => "", ready: () => false }))
     .toMatchObject({ id: "update-first", button: true });
 });
+test("default install-action ports safely read custody for a legacy record without a socket", async () => {
+  const root = mkdtempSync("/var/tmp/action-default-env-");
+  try {
+    const legacy = { ...record, requestFile: join(root, "request.json") };
+    expect(await installAction({ mode: "checkout", record: legacy } as never)).toMatchObject({ id: "update-first", button: true });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 test("new and Docker launchers need no bootstrap action", async () => {
   expect(await installAction({ mode: "checkout", record: { ...record, launcher: { ...record.launcher, relaunch: 1 } } } as never)).toBeNull();
   expect(await installAction({ mode: "managed", record: null, reason: null })).toBeNull();

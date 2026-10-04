@@ -47,7 +47,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     const files = [launcherControlFile(record.requestFile, "launcher"), record.requestFile,
       join(dirname(record.requestFile), "apply.json"), join(dirname(record.requestFile), "auto-admission.json"),
       join(dirname(record.requestFile), "auto-drain.json")];
-    return JSON.stringify([record.launcher, dispatchActivityVersion(dirname(dirname(record.requestFile)), { LLV_RUNTIME_JOURNAL: ports.env?.LLV_RUNTIME_HOST_SOCKET === record.socket ? ports.env.LLV_RUNTIME_JOURNAL : undefined }), files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
+    return JSON.stringify([record.launcher, dispatchActivityVersion(dirname(dirname(record.requestFile)), { LLV_RUNTIME_JOURNAL: record.socket && ports.env?.LLV_RUNTIME_HOST_SOCKET === record.socket ? ports.env?.LLV_RUNTIME_JOURNAL : undefined }), files.map(file => existsSync(file) ? readFileSync(file, "utf8") : null)]);
   };
   const accepted = custody();
   const gateFile = decision.record?.requestFile ? join(dirname(decision.record.requestFile), "auto-admission.json") : null;
