@@ -235,7 +235,10 @@ function structuredHostTurnReleased(
     record says. Between a host taking a turn and the CLI journaling its prompt
     the file still ends on the previous turn's terminal record. The evidence
     bar is the one above: a verified live process, never a bare row, so a host
-    that is gone holds nothing open and the transcript governs again. */
+    that is gone holds nothing open and the transcript governs again. A host
+    that has exited and waits for its parent's reap is gone in that sense: it
+    keeps its pid and start identity for as long as the reap is outstanding,
+    and it will never end the turn its row still names. */
 function structuredHostTurnActive(
   registry: AgentRegistry,
   engine: AgentEngine,
@@ -248,7 +251,8 @@ function structuredHostTurnActive(
   return host.activeTurnRef !== null
     && host.process !== null
     && host.process.startIdentity !== null
-    && procBackend.processIdentity(host.process.pid) === host.process.startIdentity;
+    && procBackend.processIdentity(host.process.pid) === host.process.startIdentity
+    && !procBackend.processExited(host.process.pid);
 }
 
 /** The generation an in-flight migration is moving off, matching the source

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,9 +17,14 @@ import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
 type Engine = "claude" | "codex";
 
 const sandboxes: string[] = [];
+/** Pids this file started, each stopped by that pid and by nothing else. */
+const startedPids: number[] = [];
 
 afterEach(() => {
   setBoardFileForTests(null);
+  for (const pid of startedPids.splice(0)) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -102,13 +108,14 @@ function scannedEntry(engine: Engine, pathname: string): FileEntry {
 }
 
 /** A structured host row. `alive` backs it with this test process, whose start
-    identity verifies; otherwise the recorded identity matches no process. */
+    identity verifies; otherwise the recorded identity matches no process. A
+    `process` given outright is recorded as it is. */
 function registerStructuredHost(
   registry: AgentRegistry,
   engine: Engine,
   sessionId: string,
   pathname: string,
-  options: { alive: boolean; activeTurnRef: string | null },
+  options: { alive: boolean; activeTurnRef: string | null; process?: { pid: number; startIdentity: string } },
 ): void {
   const identity = procBackend.processIdentity(process.pid);
   if (!identity) throw new Error("expected this process to have a start identity");
@@ -122,7 +129,7 @@ function registerStructuredHost(
     structuredHost: {
       kind: engine === "codex" ? "codex-app-server" : "claude-broker",
       endpoint: "stdio:host",
-      process: { pid: process.pid, startIdentity: options.alive ? identity : `${identity}:gone` },
+      process: options.process ?? { pid: process.pid, startIdentity: options.alive ? identity : `${identity}:gone` },
       eventCursor: 1,
       protocolVersion: "v1",
       writerClaimEpoch: 1,
@@ -196,6 +203,66 @@ describe.each(["claude", "codex"] as const)("a %s host inside a turn outranks th
     expect(registry.conversation(conversationId)?.migration?.phase).toBe("committed");
   });
 });
+
+/** A real process that has exited and that nobody has collected. The shell
+    starts it, prints its pid and replaces itself with a `sleep` that never
+    waits, so once the child is stopped it stays unreaped until the test ends
+    its parent. Its identity is recorded while it still runs, as a host's is. */
+async function exitedUnreapedProcess(): Promise<{ pid: number; startIdentity: string }> {
+  const parent = spawn("sh", ["-c", "sleep 300 & echo $!; exec sleep 300"], { stdio: ["ignore", "pipe", "ignore"] });
+  startedPids.push(parent.pid!);
+  const pid = await new Promise<number>((resolve, reject) => {
+    let out = "";
+    parent.stdout!.on("data", (chunk) => {
+      out += String(chunk);
+      if (out.includes("\n")) resolve(Number(out.trim()));
+    });
+    parent.once("error", reject);
+    parent.once("exit", () => reject(new Error("the parent exited before naming its child")));
+  });
+  startedPids.push(pid);
+  const startIdentity = procBackend.processIdentity(pid);
+  if (!startIdentity) throw new Error("expected the child to have a start identity");
+  process.kill(pid, "SIGKILL");
+  const deadline = Date.now() + 5_000;
+  while (!procBackend.processExited(pid)) {
+    if (Date.now() > deadline) throw new Error("the child never reached its exited state");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return { pid, startIdentity };
+}
+
+/* A host that exited keeps its pid and start identity until its parent
+   collects it. An inventory read in that window sees the row's process verify
+   and its turn still named, though nothing can end that turn any more. */
+describe.skipIf(process.platform === "win32").each(["claude", "codex"] as const)(
+  "a %s host that exited and is not yet reaped holds nothing open",
+  (engine) => {
+    test("the terminal transcript releases the reseat while the exited host's identity still verifies", async () => {
+      const { registry, sandbox } = sandboxRegistry();
+      const pathname = path.join(sandbox, `${engine}-unreaped.jsonl`);
+      writeTranscript(pathname, previousTurnEnded(engine));
+      registry.reconcileConversations([observation(engine, pathname, "terminal")]);
+      const conversation = registry.conversationForPath(pathname)!;
+      const exited = await exitedUnreapedProcess();
+      registerStructuredHost(registry, engine, conversation.generations[0]!.id, pathname, {
+        alive: true,
+        activeTurnRef: "turn-next",
+        process: exited,
+      });
+      registry.requestConversationReseat(conversation.id, "healthy");
+      const provider = countingProvider(path.join(sandbox, "successor.jsonl"));
+
+      expect(procBackend.processIdentity(exited.pid)).toBe(exited.startIdentity);
+      expect(procBackend.pidAlive(exited.pid)).toBe(true);
+      expect(procBackend.processExited(process.pid)).toBe(false);
+      await advanceConversationMigration(conversation.id, registry, provider);
+
+      expect(provider.created).toBe(1);
+      expect(registry.conversation(conversation.id)?.migration?.phase).toBe("committed");
+    });
+  },
+);
 
 /** A turn that opened and never closed: what a session that died mid-turn
     leaves behind, and what a resumed host has not appended to yet. */
