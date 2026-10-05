@@ -8,6 +8,7 @@ import type { ModeDecision } from "./mode";
 import type { InstallAction } from "./types";
 import { sameProcess } from "./pid";
 import { prepareLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
+import { SERVICE_UNIT, unitRunsLauncher as provesService } from "../../../bin/launcher-service-proof.mjs";
 
 const quote = (text: string) => `\u0027${text.replaceAll("\u0027", "\u0027\\\u0027\u0027")}\u0027`;
 export function userUnit(cgroup: string): string | null {
@@ -16,25 +17,19 @@ export function userUnit(cgroup: string): string | null {
   return match?.[1] ?? null;
 }
 function read(file: string): string { try { return readFileSync(file, "utf8"); } catch { return ""; } }
-function startsLauncher(unitFile: string, root: string): boolean {
-  return read(unitFile).split("\n").some(line => line.startsWith("ExecStart=") && line.includes(join(root, "bin", "cli.mjs")));
+/** What the proof reads. `show` answers what the service manager shows for a
+    unit; the rest describe a process. Each defaults to the live system. */
+export interface ServiceProofPorts {
+  show?(unit: string): string | null;
+  parent?(pid: number): number | null;
+  argv?(pid: number): string[];
+  cwd?(pid: number): string | null;
 }
-/** A cgroup names the unit a launcher runs inside, and that unit can be a
-    terminal multiplexer, a terminal emulator or a desktop session's autostart
-    scope. Restarting it would end everything else in it and bring no launcher
-    back. A unit is this install's service only on proof: its unit file starts
-    this install's `bin/cli.mjs`, or the service manager names the launcher as
-    the unit's main process. `bin/launcher-relaunch.mjs` applies the same rule
-    before it restarts a unit from a recovery plan. */
-export function unitRunsLauncher(unit: string, root: string, launcherPid?: number,
-  mainPid: (unit: string) => number | null = unit => {
-    const result = spawnSync("systemctl", ["--user", "show", "--property=MainPID", "--value", unit], { encoding: "utf8", timeout: 5_000 });
-    const pid = Number(result.status === 0 ? result.stdout.trim() : "");
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  }, home = homedir()): boolean {
-  if (!/^[A-Za-z0-9_.@\\x-]+\.service$/.test(unit)) return false;
-  if (startsLauncher(join(home, ".config", "systemd", "user", unit), root)) return true;
-  return launcherPid !== undefined && mainPid(unit) === launcherPid;
+/** Whether a unit is this install's service. The rule and its reasons are in
+    `bin/launcher-service-proof.mjs`, which `bin/launcher-relaunch.mjs` asks
+    too before it restarts a unit from a recovery plan. */
+export function unitRunsLauncher(unit: string, root: string, launcherPid?: number, ports: ServiceProofPorts = {}): boolean {
+  return provesService(unit, root, launcherPid, ports);
 }
 /** The user service that runs this launcher, or null without proof. */
 export function launcherService(launcherPid: number, root: string, cgroup: (pid: number) => string = pid => read(`/proc/${pid}/cgroup`),
@@ -50,16 +45,20 @@ async function ready(pointer: string, root: string): Promise<boolean> {
     return read(join(value.dir, "bin", "launcher-relaunch.mjs")).includes("delegatus-launcher-relaunch-v1");
   } catch { return false; }
 }
-function serviceFor(root: string): string | null {
-  const directory = join(homedir(), ".config", "systemd", "user");
+/** The one unit of the user's own that starts this install. A unit file only
+    nominates a candidate; the service manager proves it. */
+function serviceFor(root: string, proven: (unit: string, root: string) => boolean = unitRunsLauncher, home = homedir()): string | null {
+  const directory = join(home, ".config", "systemd", "user");
   try {
-    const units = readdirSync(directory).filter(name => /^[A-Za-z0-9_.@-]+\.service$/.test(name) && startsLauncher(join(directory, name), root));
+    const units = readdirSync(directory).filter(name => SERVICE_UNIT.test(name) && read(join(directory, name)).includes("cli.mjs") && proven(name, root));
     return units.length === 1 ? units[0]! : null;
   } catch { return null; }
 }
 export async function installAction(decision: ModeDecision, ports: { cgroup(pid: number): string; ready(pointer: string, root: string): boolean | Promise<boolean>; argv?(pid: number): string[]; env?: Partial<NodeJS.ProcessEnv>; platform?: NodeJS.Platform;
   /** Whether the unit is proven to run this install's launcher. */
-  proven?(unit: string, root: string, launcherPid?: number): boolean } = {
+  proven?(unit: string, root: string, launcherPid?: number): boolean;
+  /** The home whose unit files nominate a service for an install that is not running. */
+  home?: string } = {
   cgroup: (pid: number) => read(`/proc/${pid}/cgroup`), ready,
   argv: (pid: number): string[] => read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean),
 }, root = decision.record?.checkout ?? decision.record?.installRoot ?? decision.installRoot ?? process.cwd(),
@@ -199,7 +198,7 @@ export async function installAction(decision: ModeDecision, ports: { cgroup(pid:
     return unit ? { id: "restart-service", button: true, unit }
       : { id: "restart-terminal", button: false, command, ...(windows ? { terminalEveryUpdate: true } : {}) };
   }
-  const unit = serviceFor(root);
+  const unit = serviceFor(root, ports.proven, ports.home);
   if (!unit) {
     try {
       if (prepareLauncherCredentials(root, env)) {
@@ -219,7 +218,7 @@ export function runInstallAction(action: InstallAction, run: (args: string[]) =>
   if (result.status !== 0) throw new Error("The user service manager did not accept the launcher action");
 }, recovery?: ServiceRecovery, owner?: { root: string; launcherPid?: number },
   proven: (unit: string, root: string, launcherPid?: number) => boolean = unitRunsLauncher): void {
-  if (!action.button || !action.unit || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(action.unit)
+  if (!action.button || !action.unit || !SERVICE_UNIT.test(action.unit)
     || !["restart-service", "start-service"].includes(action.id)) throw new Error("The install action cannot run here");
   if (!owner || !proven(action.unit, owner.root, action.id === "restart-service" ? owner.launcherPid : undefined))
     throw new Error("The service is not proven to run this launcher");

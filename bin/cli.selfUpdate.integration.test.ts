@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 import {
   ADMISSION_LOG, BROKEN_HOST, STUB_HOST, STUB_NEXT, WORK_STARTED, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile,
-  protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceUnit, socketAnswers, start, stateText, until, version,
+  protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceShown, socketAnswers, start, stateText, until, version,
   type LauncherRecord,
 } from "./__fixtures__/cli-self-update";
 
@@ -1188,6 +1188,7 @@ for (const priorPublished of [false, true]) for (const failure of ["host", "web"
   writeFileSync(manager, `#!${process.execPath} --bun
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+if (process.argv.includes("show")) { process.stdout.write(${JSON.stringify(serviceShown(fixture))}); process.exit(0); }
 const record = JSON.parse(readFileSync(${JSON.stringify(recordFile(fixture.state))}, "utf8"));
 const directory = ${JSON.stringify(directory)};
 const intent = JSON.parse(readFileSync(directory + "/apply.json", "utf8"));
@@ -1222,14 +1223,14 @@ launcher.unref();
       if (recovery) {
         restarting = (async () => {
           const { runInstallAction, unitRunsLauncher } = await import("../src/lib/selfUpdate/actions");
-          // The unit file in the install's home proves the service, here and in the helper.
-          const owner = serviceUnit(fixture);
+          // What the manager shows proves the service, here and in the helper.
+          const owner = { root: fixture.checkout };
           runInstallAction(action, args => {
             const command = args.slice(args.indexOf("--") + 1);
             const helper = spawn(command[0]!, command.slice(1), { cwd: fixture.checkout, env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, stdio: "pipe" }); children.add(helper); recoveryHelper = helper;
             // The recovery must outlive the Viewer that requested it.
             helper.stderr?.on("data", chunk => { recoveryOutput += String(chunk); });
-          }, recovery, owner, (unit, root, pid) => unitRunsLauncher(unit, root, pid, () => null, fixture.env.HOME));
+          }, recovery, owner, (unit, root, pid) => unitRunsLauncher(unit, root, pid, { show: () => serviceShown(fixture) }));
         })();
         return;
       }
@@ -1715,6 +1716,7 @@ for (const outcome of ["refused", "settled"] as const) (outcome === "refused" ||
   writeFileSync(path.join(managerDir, "systemctl"), `#!${process.execPath} --bun
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+if (process.argv.includes("show")) { process.stdout.write(${JSON.stringify(serviceShown(f))}); process.exit(0); }
 const bootstrapPid = ${JSON.stringify(running.child.pid)};
 process.kill(bootstrapPid, "SIGTERM");
 const deadline = Date.now() + 5000;
@@ -1744,7 +1746,7 @@ launcher.unref();
         const command = args.slice(args.indexOf("--") + 1), env = cleanTerminalEnv(f);
         helper = spawn(command[0]!, command.slice(1), { cwd: f.checkout, env: { ...env, PATH: managerDir + path.delimiter + env.PATH }, stdio: ["ignore", "pipe", "pipe"] }); children.add(helper);
         helper.stderr?.on("data", chunk => { helperOutput += String(chunk); });
-      }, recovery, serviceUnit(f), (unit, root, pid) => unitRunsLauncher(unit, root, pid, () => null, f.env.HOME));
+      }, recovery, { root: f.checkout }, (unit, root, pid) => unitRunsLauncher(unit, root, pid, { show: () => serviceShown(f) }));
     } },
   });
   try {

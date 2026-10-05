@@ -96,38 +96,94 @@ test.each(["building", "ready", "published"] as const)("a launcher restarted dur
   expect(() => new ApplyController(directory).begin(after as never, candidate.sha, "operator")).not.toThrow();
 }, 90_000);
 
-/* The recovery helper restarts a unit from a plan. A unit that is not proven
-   to run this install's launcher is left alone, whatever the plan says. */
-test("the recovery helper refuses a unit that is not proven to run this launcher", async () => {
+/* The recovery helper restarts a unit from a plan, on the proof the Viewer
+   asks for (bin/launcher-service-proof.mjs). The service manager here answers
+   `show` the way systemd does and refuses every restart, so a proven unit is
+   seen being handed over and nothing is ever restarted. */
+test("the recovery helper restarts only a unit proven to run this launcher", async () => {
   const { readStartIdentity } = await import("../src/lib/selfUpdate/pid");
   const fixture = install();
   const control = path.join(fixture.state, "self-update"); mkdirSync(control, { recursive: true });
   const requestFile = path.join(control, "request-fixture.json"), planFile = path.join(control, "recovery-fixture.json");
-  const target = "a".repeat(40), requestId = "unproven-unit";
-  // A plan whose custody is all in order: only the unit lacks its proof.
-  writeFileSync(path.join(control, "apply.json"), JSON.stringify({ requestId, target, state: "switching", externalRestart: true, trigger: "operator",
-    launcherPid: process.pid, launcherIdentity: readStartIdentity(process.pid), rollbackPointer: null, releasePointer: path.join(control, "release-fixture.json"),
-    rollbackWebRevision: fixture.first.slice(0, 7), rollbackHostRevision: fixture.first.slice(0, 7), startedAt: new Date().toISOString(), rolledBack: false }));
-  writeFileSync(path.join(control, "trial-fixture.json"), JSON.stringify({ requestId, target, rollbackPointer: null, previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "rolled-back", detail: "fixture" }));
-  writeFileSync(path.join(control, "launcher-fixture.json"), JSON.stringify({ launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid) } }));
-  // A service manager that answers and records what it was asked.
-  const managerDir = path.join(fixture.root, "manager"); mkdirSync(managerDir);
-  const asked = path.join(managerDir, "asked.log");
-  writeFileSync(path.join(managerDir, "systemctl"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(asked)}\necho 4242\n`); chmodSync(path.join(managerDir, "systemctl"), 0o700);
-  const helper = (unit: string) => {
-    writeFileSync(planFile, JSON.stringify({ requestId, requestFile, unit, root: fixture.checkout, custody: false, context: { HOME: fixture.env.HOME } }));
-    return spawnSync(process.execPath, ["--bun", path.resolve("bin/launcher-relaunch.mjs"), "--recover-service", planFile],
-      { env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, encoding: "utf8", timeout: 30_000 });
-  };
-  for (const unit of ["tmux.service", "gnome-terminal-server.service"]) {
-    const run = helper(unit);
+  const target = "a".repeat(40), requestId = "unit-proof";
+  // After the first self-update the unit's main process is the bootstrap and
+  // the recorded launcher is its child. Both processes belong to this test.
+  const bootRoot = path.join(fixture.root, "bootstrapped"); mkdirSync(path.join(bootRoot, "bin"), { recursive: true });
+  writeFileSync(path.join(bootRoot, "bin", "cli.mjs"), `import { spawn } from "node:child_process";
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+console.log(child.pid); setInterval(() => {}, 1000);
+`);
+  const bootstrap = Bun.spawn([process.execPath, "bin/cli.mjs", "--no-open"], { cwd: bootRoot, stdout: "pipe", stderr: "ignore" });
+  const reader = bootstrap.stdout.getReader(); let printed = "";
+  while (!printed.includes("\n")) { const chunk = await reader.read(); if (chunk.done) break; printed += new TextDecoder().decode(chunk.value); }
+  const child = Number(printed.trim());
+  try {
+    expect(child).toBeGreaterThan(0);
+    // A plan whose custody is all in order: only the unit's proof differs.
+    const custody = (launcherPid: number) => {
+      writeFileSync(path.join(control, "apply.json"), JSON.stringify({ requestId, target, state: "switching", externalRestart: true, trigger: "operator",
+        launcherPid, launcherIdentity: readStartIdentity(launcherPid), rollbackPointer: null, releasePointer: path.join(control, "release-fixture.json"),
+        rollbackWebRevision: fixture.first.slice(0, 7), rollbackHostRevision: fixture.first.slice(0, 7), startedAt: new Date().toISOString(), rolledBack: false }));
+      writeFileSync(path.join(control, "trial-fixture.json"), JSON.stringify({ requestId, target, rollbackPointer: null, previousEntry: path.join(fixture.checkout, "bin", "cli.mjs"), state: "rolled-back", detail: "fixture" }));
+      writeFileSync(path.join(control, "launcher-fixture.json"), JSON.stringify({ launcher: { pid: launcherPid, startIdentity: readStartIdentity(launcherPid) } }));
+    };
+    const managerDir = path.join(fixture.root, "manager"); mkdirSync(managerDir);
+    const asked = path.join(managerDir, "asked.log");
+    const shown = (start: string, main: number, directory = "") => `MainPID=${main}\nExecStart={ path=${start.split(" ")[0]} ; argv[]=${start} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=${main} ; code=(null) ; status=0/0 }\nWorkingDirectory=${directory}`;
+    const entry = path.join(fixture.checkout, "bin", "cli.mjs");
+    const units: Record<string, string> = {
+      // The launcher's own parent is the main process of these, as a terminal
+      // is of what was typed into it.
+      "tmux.service": shown("/usr/bin/tmux new-session -d -s main", process.ppid),
+      "gnome-terminal-server.service": shown("/usr/libexec/gnome-terminal-server", process.ppid),
+      // Written with a specifier in the unit file; the manager shows it expanded.
+      "expanded.service": shown(`${process.execPath} ${entry} --no-open`, 4242, fixture.checkout),
+      "relative.service": shown(`${process.execPath} --bun bin/cli.mjs --no-open`, 4242, fixture.checkout),
+      "bootstrap.service": shown("/usr/local/bin/start-delegatus", bootstrap.pid),
+    };
+    writeFileSync(path.join(managerDir, "systemctl"), `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(asked)}
+case "$*" in *" show "*) ;; *) exit 1 ;; esac
+case "$*" in
+${Object.entries(units).map(([unit, text]) => `  *" ${unit}") cat <<'SHOWN'\n${text}\nSHOWN\n  ;;`).join("\n")}
+esac
+`); chmodSync(path.join(managerDir, "systemctl"), 0o700);
+    const helper = (unit: string, root: string) => {
+      writeFileSync(planFile, JSON.stringify({ requestId, requestFile, unit, root, custody: false, context: { HOME: fixture.env.HOME } }));
+      return spawnSync(process.execPath, ["--bun", path.resolve("bin/launcher-relaunch.mjs"), "--recover-service", planFile],
+        { env: { ...fixture.env, PATH: managerDir + path.delimiter + fixture.env.PATH }, encoding: "utf8", timeout: 30_000 });
+    };
+    const restarts = () => readFileSync(asked, "utf8").trim().split("\n").filter(line => !line.includes(" show "));
+    custody(process.pid);
+    for (const unit of ["tmux.service", "gnome-terminal-server.service"]) {
+      const run = helper(unit, fixture.checkout);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("not proven to run this launcher");
+      expect(existsSync(planFile)).toBe(false);
+    }
+    expect(readFileSync(asked, "utf8").trim().split("\n")).toEqual(["tmux.service", "gnome-terminal-server.service"]
+      .map(unit => `--user show --property=ExecStart --property=WorkingDirectory --property=MainPID ${unit}`));
+    // The same unit does not prove another install.
+    expect(helper("expanded.service", path.join(fixture.root, "elsewhere")).stderr).toContain("not proven to run this launcher");
+    expect(restarts()).toEqual([]);
+    for (const unit of ["expanded.service", "relative.service"]) {
+      const run = helper(unit, fixture.checkout);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("Service recovery was refused");
+      expect(restarts().at(-1)).toBe(`--user restart ${unit}`);
+    }
+    // The bootstrap is the parent of the recorded launcher, and of nothing else.
+    expect(helper("bootstrap.service", bootRoot).stderr).toContain("not proven to run this launcher");
+    custody(child);
+    expect(helper("bootstrap.service", fixture.checkout).stderr).toContain("not proven to run this launcher");
+    expect(restarts()).toHaveLength(2);
+    const run = helper("bootstrap.service", bootRoot);
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain("not proven to run this launcher");
-    expect(existsSync(planFile)).toBe(false);
+    expect(run.stderr).toContain("Service recovery was refused");
+    expect(restarts()).toEqual(["--user restart expanded.service", "--user restart relative.service", "--user restart bootstrap.service"]);
+    expect(JSON.parse(readFileSync(path.join(control, "apply.json"), "utf8")).state).toBe("switching");
+    expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
+  } finally {
+    for (const pid of [child, bootstrap.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
   }
-  const requests = readFileSync(asked, "utf8").trim().split("\n");
-  expect(requests).toEqual(["--user show --property=MainPID --value tmux.service", "--user show --property=MainPID --value gnome-terminal-server.service"]);
-  expect(requests.some(line => line.includes("restart"))).toBe(false);
-  expect(JSON.parse(readFileSync(path.join(control, "apply.json"), "utf8")).state).toBe("switching");
-  expect(git(fixture.checkout, "rev-parse", "HEAD")).toBe(fixture.first);
 }, 60_000);

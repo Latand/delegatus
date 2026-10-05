@@ -144,7 +144,7 @@ export function install(options: { oldSupervisor?: boolean; oldServerRuntime?: b
   for (const dir of [path.join(checkout, "bin"), path.join(checkout, "node_modules", ".bin"), path.join(checkout, "dist"), home, state, cache, path.join(root, "tmp")]) {
     mkdirSync(dir, { recursive: true });
   }
-  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs", "launcher-credentials.mjs"]) {
+  for (const name of ["cli.mjs", "telemetry-notice.mjs", "agent-binaries.mjs", "server-runtime.mjs", "tailscale.mjs", "self-update-supervisor.mjs", "appDir.mjs", "envAlias.mjs", "legacySystemd.mjs", "internalService.mjs", "skillLinks.mjs", "oomPolicy.mjs", "launcher-relaunch.mjs", "launcher-adoption.mjs", "launcher-lock.mjs", "launcher-service-proof.mjs", "windows-process-identity.mjs", "viewerGateKey.mjs", "darwin-process-identity.mjs", "launcher-credentials.mjs"]) {
     copyFileSync(path.resolve("bin", name), path.join(checkout, "bin", name));
   }
   if (options.oldSupervisor) {
@@ -179,13 +179,12 @@ export function install(options: { oldSupervisor?: boolean; oldServerRuntime?: b
   };
 }
 
-/** The user's own unit file that starts this install's launcher: the proof a
-    service restart asks for. Answers the install the action is offered for. */
-export function serviceUnit(fixture: ReturnType<typeof install>, unit = "fixture.service"): { root: string } {
-  const units = path.join(fixture.env.HOME!, ".config", "systemd", "user");
-  mkdirSync(units, { recursive: true });
-  writeFileSync(path.join(units, unit), `[Service]\nExecStart=${process.execPath} --bun ${path.join(fixture.checkout, "bin", "cli.mjs")} --no-open\n`);
-  return { root: fixture.checkout };
+/** What the service manager shows for the unit that starts this install's
+    launcher: the proof a service restart asks for, in the Viewer and in the
+    recovery helper alike. A stand-in manager prints it for `show`. */
+export function serviceShown(fixture: ReturnType<typeof install>): string {
+  const start = `${process.execPath} --bun ${path.join(fixture.checkout, "bin", "cli.mjs")} --no-open`;
+  return `MainPID=0\nExecStart={ path=${process.execPath} ; argv[]=${start} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nWorkingDirectory=${fixture.checkout}\n`;
 }
 
 /** A built release of a new commit, as the Viewer's step runner leaves it. */

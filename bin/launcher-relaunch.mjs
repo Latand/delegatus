@@ -14,6 +14,7 @@ import { assertLauncherAvailable } from "./launcher-adoption.mjs";
 import "./envAlias.mjs";
 import { releaseLauncherCredentials, restoreLauncherCredentials } from "./launcher-credentials.mjs";
 import { lockLauncherStartup } from "./launcher-lock.mjs";
+import { SERVICE_UNIT, unitRunsLauncher } from "./launcher-service-proof.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
 
@@ -159,19 +160,9 @@ async function recoverService(file) {
   try { await recoverPlannedService(JSON.parse(readFileSync(file, "utf8"))); }
   finally { rmSync(file, { force: true }); }
 }
-/* The rule of `unitRunsLauncher` in src/lib/selfUpdate/actions.ts: a unit is
-   restarted only on proof that it runs this install's launcher. A cgroup can
-   name a terminal multiplexer or a terminal emulator just as well. */
-export function unitRunsLauncher(unit, root, launcherPid, home = process.env.HOME ?? "") {
-  let text = "";
-  try { text = readFileSync(join(home, ".config", "systemd", "user", unit), "utf8"); } catch { /* No unit file of the user's own. */ }
-  if (text.split("\n").some(line => line.startsWith("ExecStart=") && line.includes(join(root, "bin", "cli.mjs")))) return true;
-  const shown = spawnSync("systemctl", ["--user", "show", "--property=MainPID", "--value", unit], { encoding: "utf8", timeout: 5_000 });
-  return shown.status === 0 && Number.isInteger(launcherPid) && launcherPid > 0 && Number(shown.stdout.trim()) === launcherPid;
-}
 export async function recoverPlannedService(plan, proven = unitRunsLauncher) {
   const name = basename(plan.requestFile);
-  if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !/^[A-Za-z0-9_.@\\x-]+\.service$/.test(plan.unit) || typeof plan.root !== "string") throw new Error("Invalid recovery plan");
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name) || !SERVICE_UNIT.test(plan.unit) || typeof plan.root !== "string") throw new Error("Invalid recovery plan");
   const directory = dirname(plan.requestFile);
   // This unit starts with the service manager's environment. An access key
   // the Viewer was given is read from its protected custody; a key file is
@@ -194,7 +185,9 @@ export async function recoverPlannedService(plan, proven = unitRunsLauncher) {
     : existsSync(intent.releasePointer) && readFileSync(intent.releasePointer, "utf8") === intent.rollbackPointer;
   const revision = intent.rollbackPointer === null ? intent.rollbackHostRevision : readPointer(intent.rollbackPointer)?.sha?.slice(0, 7);
   if (!restored() || !revision || intent.rollbackWebRevision !== intent.rollbackHostRevision) throw new Error("Prior release is unverifiable; custody is retained");
-  if (!proven(plan.unit, plan.root, intent.launcherPid, environment.HOME)) throw new Error("The service is not proven to run this launcher; custody is retained");
+  // A cgroup can name a terminal multiplexer or a terminal emulator just as
+  // well: the unit is restarted only on proof that it runs this launcher.
+  if (!proven(plan.unit, plan.root, intent.launcherPid)) throw new Error("The service is not proven to run this launcher; custody is retained");
   const restart = spawnSync("systemctl", ["--user", "restart", plan.unit], { timeout: 30_000, stdio: "ignore" });
   if (restart.status !== 0) throw new Error("Service recovery was refused; custody is retained");
   const deadline = Date.now() + 60_000;

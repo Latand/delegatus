@@ -14,7 +14,7 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
-import { installAction, launcherService, runInstallAction } from "./actions";
+import { installAction, launcherService, runInstallAction, unitRunsLauncher } from "./actions";
 import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
@@ -872,6 +872,33 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(calls).toEqual([]);
     expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false);
     expect(existsSync(join(h.deps.dir, "deployments.json"))).toBe(false);
+  });
+
+  /* An ordinary systemd install: the unit is written with a specifier, and
+     after the first self-update its main process is the bootstrap whose child
+     is the recorded launcher. Either is this launcher's service. */
+  test.each(["expanded command", "bootstrap parent"] as const)("a unit proven by its %s is offered for restart and lets a seat deploy", async proof => {
+    const h = harness(); const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    const unit = "delegatus.service", entry = join(checkout, "bin", "cli.mjs"), bootstrap = 4242;
+    const shown = (start: string, main: number) => `MainPID=${main}\nExecStart={ path=${start.split(" ")[0]} ; argv[]=${start} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=${main} ; code=(null) ; status=0/0 }\nWorkingDirectory=${checkout}\n`;
+    const proven = (name: string, root: string, pid?: number) => unitRunsLauncher(name, root, pid, proof === "expanded command"
+      ? { show: () => shown(`/srv/operator/.bun/bin/bun ${entry} --no-open`, bootstrap), parent: () => null, argv: () => [], cwd: () => null }
+      : { show: () => shown("/usr/local/bin/start-delegatus", bootstrap), parent: pid => pid === record.launcher.pid ? bootstrap : null,
+        argv: () => ["/usr/bin/bun", "bin/cli.mjs", "--no-open"], cwd: () => checkout });
+    const cgroup = () => `0::/user.slice/user-1000.slice/user@1000.service/app.slice/${unit}\n`;
+    const calls: string[][] = [];
+    h.deps.install = {
+      action: decision => installAction(decision, { cgroup, ready: () => true, env: {}, proven }),
+      run: action => runInstallAction(action, args => calls.push(args), undefined, { root: checkout, launcherPid: record.launcher.pid }, proven),
+      entry: () => entry, unit: () => launcherService(record.launcher.pid, checkout, cgroup, proven),
+    };
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    expect((await snapshot()).action).toEqual({ id: "restart-service", button: true, unit });
+    await until(next => next.check.state !== "checking");
+    const receipt = await h.service.deployRevision({ revision: tipSha, idempotencyKey: `proven-unit-${proof.replace(" ", "-")}` });
+    expect(receipt).toMatchObject({ state: "accepted", revision: tipSha });
+    h.releaseBuild?.();
   });
 
   test.each(["accepted", "refused", "overlap"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {

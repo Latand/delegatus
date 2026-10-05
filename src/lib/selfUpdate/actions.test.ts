@@ -17,14 +17,18 @@ test("legacy systemd launcher offers one external restart", async () => {
 /* A launcher started in a terminal multiplexer pane, in a terminal emulator or
    by a desktop autostart entry sits in that unit's cgroup. The unit runs other
    things and would not bring the launcher back. */
-const foreignHome = mkdtempSync("/var/tmp/action-unit-proof-");
-afterAll(() => rmSync(foreignHome, { recursive: true, force: true }));
-test.each(["tmux.service", "gnome-terminal-server.service", "app-org.example.Terminal@autostart.service"])("a unit the launcher merely runs inside is never restarted: %s", async unit => {
+const shows = (start: string, main = 0, directory = "") => `MainPID=${main}\nExecStart={ path=${start.split(" ")[0]} ; argv[]=${start} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=${main} ; code=(null) ; status=0/0 }\nWorkingDirectory=${directory}\n`;
+test.each([
+  ["tmux.service", "/usr/bin/tmux new-session -d -s main"],
+  ["gnome-terminal-server.service", "/usr/libexec/gnome-terminal-server"],
+  ["app-org.example.Terminal@autostart.service", "/usr/bin/example-terminal --session"],
+])("a unit the launcher merely runs inside is never restarted: %s", async (unit, start) => {
   const cgroup = () => `0::/user.slice/user-1000.slice/user@1000.service/${unit}\n`;
   const asked: string[] = [];
-  // The service manager names another main process, and no unit file of the
-  // user's starts this install.
-  const proven = (name: string, root: string, pid?: number) => unitRunsLauncher(name, root, pid, () => 4242, foreignHome);
+  // The unit's main process is the launcher's own parent, as a terminal is of
+  // what was typed into it, and neither it nor the unit's command is this install.
+  const proven = (name: string, root: string, pid?: number) => unitRunsLauncher(name, root, pid,
+    { show: () => shows(start, 4242), parent: () => 4242, argv: () => start.split(" "), cwd: () => "/srv/checkout" });
   const action = await installAction({ mode: "checkout", record } as never, { cgroup, ready: () => true, env: {}, proven: (...proof) => { asked.push(proof[0]); return proven(...proof); } });
   expect(asked).toEqual([unit]);
   expect(action).toMatchObject({ id: "restart-terminal", button: false });
@@ -37,19 +41,53 @@ test.each(["tmux.service", "gnome-terminal-server.service", "app-org.example.Ter
   expect(() => runInstallAction(offered, command => calls.push(command))).toThrow("not proven");
   expect(calls).toEqual([]);
 });
-test("a service is accepted on proof: its unit file starts this install, or its main process is the launcher", () => {
-  const home = mkdtempSync(join(foreignHome, "home-")); const units = join(home, ".config", "systemd", "user"); mkdirSync(units, { recursive: true });
-  writeFileSync(join(units, "delegatus.service"), "[Service]\nExecStart=/usr/bin/bun --bun /srv/checkout/bin/cli.mjs --no-open\n");
-  writeFileSync(join(units, "other.service"), "[Service]\nExecStart=/usr/bin/bun --bun /srv/elsewhere/bin/cli.mjs --no-open\n");
-  const other = () => 999;
-  expect(unitRunsLauncher("delegatus.service", "/srv/checkout", 12, other, home)).toBe(true);
-  expect(unitRunsLauncher("other.service", "/srv/checkout", 12, other, home)).toBe(false);
-  expect(unitRunsLauncher("other.service", "/srv/checkout", 12, () => 12, home)).toBe(true);
-  // A start has no launcher to compare: only the unit file proves it.
-  expect(unitRunsLauncher("other.service", "/srv/checkout", undefined, () => 12, home)).toBe(false);
-  expect(unitRunsLauncher("not a unit", "/srv/checkout", 12, () => 12, home)).toBe(false);
+test("a service is accepted on proof: the manager starts this install, or its main process is the launcher or the bootstrap that started it", () => {
+  const root = "/srv/checkout", entry = "/srv/checkout/bin/cli.mjs";
+  const unit = (shown: string | null, process: { parent?: number | null; argv?: string[]; cwd?: string | null } = {}, pid: number | null = 12, name = "delegatus.service") =>
+    unitRunsLauncher(name, root, pid ?? undefined, { show: () => shown, parent: () => process.parent ?? null, argv: () => process.argv ?? [], cwd: () => process.cwd ?? null });
+  expect(unit(shows(`/usr/bin/bun --bun ${entry} --no-open`))).toBe(true);
+  expect(unit(shows("/usr/bin/bun --bun /srv/elsewhere/bin/cli.mjs --no-open"))).toBe(false);
+  expect(unit(shows("/usr/bin/bun bin/cli.mjs", 0, "/srv/checkout"))).toBe(true);
+  expect(unit(shows("/usr/bin/bun bin/cli.mjs", 0, "/srv/elsewhere"))).toBe(false);
+  expect(unit(shows("/usr/bin/bun bin/cli.mjs"))).toBe(false);
+  // A root with a space in it is one argument, though the manager prints it in two words.
+  expect(unitRunsLauncher("delegatus.service", "/srv/my checkout", undefined, { show: () => shows("/usr/bin/bun /srv/my checkout/bin/cli.mjs --no-open") })).toBe(true);
+  // The main process is the recorded launcher itself.
+  expect(unit(shows("/usr/local/bin/start", 12))).toBe(true);
+  // Or the bootstrap that started it, when the script it runs is this install's entry.
+  expect(unit(shows("/usr/local/bin/start", 40), { parent: 40, argv: ["/usr/bin/bun", "--bun", entry, "--no-open"] })).toBe(true);
+  expect(unit(shows("/usr/local/bin/start", 40), { parent: 40, argv: ["/usr/bin/bun", "bin/cli.mjs"], cwd: "/srv/checkout" })).toBe(true);
+  expect(unit(shows("/usr/local/bin/start", 40), { parent: 40, argv: ["/usr/bin/bun", "bin/cli.mjs"], cwd: "/srv/elsewhere" })).toBe(false);
+  expect(unit(shows("/usr/local/bin/start", 40), { parent: 40, argv: ["/usr/bin/bun", "/srv/elsewhere/bin/cli.mjs"] })).toBe(false);
+  // A main process that merely names the entry among its arguments runs something else.
+  expect(unit(shows("/usr/bin/tmux", 40), { parent: 40, argv: ["/usr/bin/tmux", "new-session", "bun", entry] })).toBe(false);
+  // Another process's parent proves nothing.
+  expect(unit(shows("/usr/local/bin/start", 40), { parent: 41, argv: ["/usr/bin/bun", entry] })).toBe(false);
+  // A start has no launcher to compare: only the command the unit starts proves it.
+  expect(unit(shows("/usr/local/bin/start", 12), {}, null)).toBe(false);
+  expect(unit(null)).toBe(false);
+  expect(unit(shows(`/usr/bin/bun ${entry}`), {}, 12, "not a unit")).toBe(false);
   const cgroup = () => "0::/user.slice/user-1000.slice/user@1000.service/app.slice/delegatus.service";
-  expect(launcherService(12, "/srv/checkout", cgroup, (unit, root, pid) => unitRunsLauncher(unit, root, pid, other, home))).toBe("delegatus.service");
+  expect(launcherService(12, root, cgroup, (name, at, pid) => unitRunsLauncher(name, at, pid, { show: () => shows(`/usr/bin/bun ${entry}`) }))).toBe("delegatus.service");
+});
+/* An install that is not running has no cgroup to name its unit. The user's
+   own unit files nominate candidates, and the manager proves the one. */
+test("a stopped install is started through the one unit the manager shows starting it", async () => {
+  const home = mkdtempSync("/var/tmp/action-unit-proof-"); const units = join(home, ".config", "systemd", "user"); mkdirSync(units, { recursive: true });
+  try {
+    writeFileSync(join(units, "delegatus.service"), "[Service]\nWorkingDirectory=%h/checkout\nExecStart=%h/.bun/bin/bun %h/checkout/bin/cli.mjs --no-open\n");
+    writeFileSync(join(units, "other.service"), "[Service]\nExecStart=%h/.bun/bin/bun %h/elsewhere/bin/cli.mjs --no-open\n");
+    writeFileSync(join(units, "tmux.service"), "[Service]\nExecStart=/usr/bin/tmux new-session -d\n");
+    const asked: string[] = [];
+    const proven = (unit: string, root: string, pid?: number) => { asked.push(unit); return unitRunsLauncher(unit, root, pid,
+      { show: () => shows(`/srv/operator/.bun/bin/bun /srv/operator/${unit === "other.service" ? "elsewhere" : "checkout"}/bin/cli.mjs --no-open`) }); };
+    const ports = { cgroup: () => "", ready: () => true, env: {}, proven, home };
+    expect(await installAction({ mode: "checkout", record: null, reason: null } as never, ports, "/srv/operator/checkout"))
+      .toEqual({ id: "start-service", button: true, unit: "delegatus.service" });
+    expect(asked.sort()).toEqual(["delegatus.service", "other.service"]);
+    expect(await installAction({ mode: "checkout", record: null, reason: null } as never, ports, "/srv/operator/third"))
+      .toMatchObject({ id: "start-launcher", button: false });
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 test("terminal legacy launcher gives its single command", async () => {
   expect(await installAction({ mode: "checkout", record } as never, { cgroup: () => "", ready: () => true }))
@@ -221,4 +259,82 @@ exec "$CREDENTIAL_GIT" "$@"
     writeFileSync(release, ""); await pending;
     for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
   }
+});
+
+/* An ordinary systemd install. The service manager is a stand-in on PATH that
+   answers `show` the way systemd does, with every specifier expanded, and
+   records anything else it is asked. Nothing is written under a home. */
+const managed = mkdtempSync("/var/tmp/action-service-manager-");
+afterAll(() => rmSync(managed, { recursive: true, force: true }));
+function manager(units: Record<string, { start: string; directory?: string; main?: number }>): { path: string; asked: () => string[] } {
+  const dir = mkdtempSync(join(managed, "manager-")); const log = join(dir, "asked.log");
+  const answers = Object.entries(units).map(([unit, shown]) => `  *${unit}) main=${shown.main ?? 0}
+    exec='ExecStart={ path=${shown.start.split(" ")[0]} ; argv[]=${shown.start} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=${shown.main ?? 0} ; code=(null) ; status=0/0 }'
+    directory='WorkingDirectory=${shown.directory ?? ""}' ;;`).join("\n");
+  writeFileSync(join(dir, "systemctl"), `#!/bin/sh
+case "$*" in *" show "*) ;; *) printf '%s\\n' "$*" >> '${log}'; exit 0 ;; esac
+main=0; exec=; directory=
+case "$*" in
+${answers}
+esac
+case "$*" in *--value*) printf '%s\\n' "$main" ;; *) printf 'MainPID=%s\\n%s\\n%s\\n' "$main" "$exec" "$directory" ;; esac
+`, { mode: 0o700 });
+  return { path: dir, asked: () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [] };
+}
+async function underManager<T>(dir: string, run: () => T | Promise<T>): Promise<T> {
+  const before = process.env.PATH;
+  process.env.PATH = `${dir}:${before}`;
+  try { return await run(); } finally { process.env.PATH = before; }
+}
+const serviceCgroup = (unit: string) => () => `0::/user.slice/user-1000.slice/user@1000.service/app.slice/${unit}\n`;
+test.each([
+  ["a specifier, shown expanded", { start: "/srv/operator/.bun/bin/bun /srv/checkout/bin/cli.mjs --no-open --port 8898", directory: "/srv/checkout" }],
+  ["a path relative to its working directory", { start: "/usr/bin/bun --bun bin/cli.mjs --no-open", directory: "/srv/checkout" }],
+] as const)("a unit that starts this install with %s is its service", async (_name, shown) => {
+  const unit = "delegatus-proof-expanded.service"; const service = manager({ [unit]: { ...shown, main: 999_999_999 } });
+  await underManager(service.path, async () => {
+    const action = await installAction({ mode: "checkout", record } as never, { cgroup: serviceCgroup(unit), ready: () => true, env: {} });
+    expect(action).toEqual({ id: "restart-service", button: true, unit });
+    const calls: string[][] = [];
+    runInstallAction(action!, command => calls.push(command), undefined, { root: record.checkout, launcherPid: record.launcher.pid });
+    expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", unit]);
+    // The same unit does not prove another install.
+    expect(() => runInstallAction(action!, command => calls.push(command), undefined, { root: "/srv/elsewhere", launcherPid: record.launcher.pid })).toThrow("not proven");
+  });
+  expect(service.asked()).toEqual([]);
+});
+/* After the first self-update the entry the unit starts hands off to the
+   selected release and stays as its parent: the unit's main process is the
+   bootstrap, and the recorded launcher is its child. */
+async function bootstrapped(script: (root: string) => string): Promise<{ root: string; bootstrap: number; launcher: number; stop(): void }> {
+  const root = mkdtempSync(join(managed, "install-")); mkdirSync(join(root, "bin"));
+  writeFileSync(join(root, "bin", "cli.mjs"), `import { spawn } from "node:child_process";
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+console.log(child.pid); setInterval(() => {}, 1000);
+`);
+  const parent = Bun.spawn([process.execPath, script(root), "--no-open"], { cwd: root, stdout: "pipe", stderr: "ignore" });
+  const reader = parent.stdout.getReader(); let text = "";
+  while (!text.includes("\n")) { const chunk = await reader.read(); if (chunk.done) break; text += new TextDecoder().decode(chunk.value); }
+  const launcher = Number(text.trim());
+  return { root, bootstrap: parent.pid, launcher, stop: () => { for (const pid of [launcher, parent.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } } };
+}
+test.each([
+  ["an absolute entry", (root: string) => join(root, "bin", "cli.mjs")],
+  ["an entry relative to its working directory", () => "bin/cli.mjs"],
+] as const)("a unit whose main process is the launcher's bootstrap parent is its service: %s", async (_name, script) => {
+  const tree = await bootstrapped(script);
+  try {
+    expect(tree.launcher).toBeGreaterThan(0);
+    // The unit starts a wrapper, so its command names no install.
+    const unit = "delegatus-proof-bootstrap.service"; const service = manager({ [unit]: { start: "/usr/local/bin/start-delegatus", main: tree.bootstrap } });
+    const owned = { ...record, checkout: tree.root, launcher: { pid: tree.launcher, startIdentity: "7" } };
+    await underManager(service.path, async () => {
+      const action = await installAction({ mode: "checkout", record: owned } as never, { cgroup: serviceCgroup(unit), ready: () => true, env: {} });
+      expect(action).toEqual({ id: "restart-service", button: true, unit });
+      const calls: string[][] = [];
+      runInstallAction(action!, command => calls.push(command), undefined, { root: tree.root, launcherPid: tree.launcher });
+      expect(calls[0]?.slice(-4)).toEqual(["systemctl", "--user", "restart", unit]);
+      expect(() => runInstallAction(action!, command => calls.push(command), undefined, { root: "/srv/elsewhere", launcherPid: tree.launcher })).toThrow("not proven");
+    });
+  } finally { tree.stop(); }
 });
