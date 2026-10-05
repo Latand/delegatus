@@ -1444,3 +1444,88 @@ test.each([
     expect(injections).toHaveLength(1);
   } finally { await act(async () => root.unmount()); }
 });
+
+
+test.each(["failed", "rejected", "delivered", "queued"].flatMap(status =>
+  ["network", "refused", "bad-gateway"].map(answer => ({ status, answer }))
+))("an original receipt stays authoritative when the POST later answers %j", async ({ status, answer }) => {
+  holdInjection = true;
+  const { host, root } = await mount();
+  try {
+    await type(host, "read the notes");
+    await stageFile(host, "design-notes.md", "# notes\n");
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    const key = String(injections[0]!.idempotencyKey);
+    durableReceipts = [{ conversationId: CARD, idempotencyKey: key, operationId: "inject-observed",
+      kind: "inject", status, revision: 2, at: new Date().toISOString() }];
+    await settle(() => root.render(<TmuxComposer file={{ ...file }} />));
+    const before = readOutbox(CARD).find(entry => entry.id === key)!;
+    injectAnswer = answer === "network" ? { ok: false, error: "network" }
+      : answer === "refused" ? { ok: false, status: 503, delivery: "refused", error: "refused" }
+      : { ok: false, status: 502 };
+    await settle(() => releaseInjection?.());
+    const after = readOutbox(CARD).find(entry => entry.id === key)!;
+    expect(after.state).toBe(before.state);
+    expect(after.deliveryUncertain).toBeUndefined();
+    expect(after.deliveryReceipt).toMatchObject({ status, operationId: "inject-observed" });
+    expect(textarea(host).value).toBe("");
+    if (status === "failed" || status === "rejected") {
+      await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+      expect(textarea(host).value).toBe("read the notes");
+      await settleUntil(() => sends.length > 0, () => press(textarea(host), "Enter"));
+      expect(sends[0]!.files).toMatchObject([{ name: "design-notes.md" }]);
+    } else if (status === "delivered") expect(host.textContent).not.toContain("design-notes.md");
+    else expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).not.toBeNull();
+    expect(injections).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); }
+});
+
+
+test.each(["{}", '{"operationId":"incomplete'].flatMap(body =>
+  ["not-executed", "admitted", "unknown"].map(outcome => ({ body, outcome }))
+))("a malformed successful HTTP injection answer resolves under its original key: %j", async ({ body, outcome }) => {
+  const { injectRuntimeContext: productionInject } = await import("@/hooks/useRuntime");
+  const { tmuxComposerRuntimeDependencies } = await import("@/components/tmuxComposerRuntime");
+  setTmuxComposerRuntimeDependenciesForTests({ ...tmuxComposerRuntimeDependencies(), injectRuntimeContext: productionInject });
+  const { host, root } = await mount();
+  globalThis.fetch = (async (url: unknown, init: RequestInit | undefined) => {
+    if (String(url) === "/api/runtime/inject") {
+      injections.push(JSON.parse(String(init?.body)));
+      return new Response(body, { status: 202, headers: { "content-type": "application/json" } });
+    }
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    await type(host, "read the notes");
+    await stageFile(host, "design-notes.md", "# notes\n");
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    const key = String(injections[0]!.idempotencyKey);
+    expect(readOutbox(CARD).find(entry => entry.id === key)?.deliveryUncertain).toBe(true);
+    expect(textarea(host).value).toBe("");
+    expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).not.toBeNull();
+    if (outcome === "admitted") {
+      const receipt = injectionReceipt("queued", 1);
+      admissionAnswer = { outcome, operationId: receipt.operationId, receipt };
+    } else admissionAnswer = { outcome: outcome as "not-executed" | "unknown" };
+    await settle(() => messageRowRecovery(CARD)!.check(key));
+    expect(admissionLookups).toEqual([{ conversationId: CARD, key }]);
+    if (outcome === "not-executed") {
+      expect(textarea(host).value).toBe("read the notes");
+      expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).toBeNull();
+      await settleUntil(() => sends.length > 0, () => press(textarea(host), "Enter"));
+      expect(sends[0]!.files).toMatchObject([{ name: "design-notes.md" }]);
+    } else if (outcome === "admitted") {
+      expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).not.toBeNull();
+      await confirmInjection(root);
+      expect(host.textContent).not.toContain("design-notes.md");
+    } else {
+      await type(host, "later words");
+      await settle(() => press(textarea(host), "Enter"));
+      expect(sends).toHaveLength(0);
+      expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).not.toBeNull();
+    }
+    expect(injections).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); }
+});

@@ -4617,6 +4617,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          thread, so the row stays marked unconfirmed and offers only a read. */
       const owner = contextOwnerForKey(cardId, clientMessageId);
       const rowEntry = () => readOutbox(owner).find((candidate) => candidate.id === clientMessageId);
+      const observed = rowEntry();
+      if (!observed) return; // A receipt may already have settled and retired it.
+      if (!answer.operationId && !answer.receipt && (observed.operationId || observed.deliveryReceipt)) {
+        // The original receipt owns the outcome even if its POST answers later.
+        if (payloadOwner.current === owner) setStatus(null);
+        return;
+      }
       const operationExists = Boolean(answer.operationId || answer.receipt);
       /* An unclassified conflict can describe a prior admission. Only the
          route's explicit refusal or a status it emits before admission may
@@ -4624,7 +4631,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const provenRefusal = answer.delivery === "refused" || (answer.delivery === undefined
         && (answer.status === 401 || PRE_ADMISSION_REFUSALS.has(answer.status ?? 0)));
       const answerLost = answer.error === "network" || answer.error === "receipt-identity-mismatch" || answer.delivery === "uncertain"
-        || (!answer.ok && !operationExists && !provenRefusal);
+        || (!operationExists && !provenRefusal);
       if (operationExists) {
         const entry = rowEntry();
         const patch = entry && answer.receipt ? outboxReceiptPatch(entry, answer.receipt.status, answer.receipt, nowMs()) : null;
@@ -4632,7 +4639,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ...(answer.operationId ?? answer.receipt?.operationId ? { operationId: answer.operationId ?? answer.receipt?.operationId } : {}),
           ...patch,
         });
-      } else if (!answer.ok && answerLost) {
+      } else if (answerLost) {
         updateOutbox(owner, clientMessageId, { deliveryUncertain: true });
       }
       const restoreDraft = !answer.ok && !operationExists && !answerLost;
@@ -4653,17 +4660,17 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          settles the conversation that pressed it, in its stored draft, and
          leaves the words and status on screen to their owner. */
       if (payloadOwner.current !== owner) return;
-      if (answer.ok) {
-        /* Accepted, and only that. The placement is the receipt's to report,
-           once the insertion has been observed in the thread. */
-        setStatus({ kind: "ok", text: t("inject.submitted") });
-        return;
-      }
       if (answerLost) {
         /* No draft comes back: handing the words over again would invite a
            second insertion under a new key, which the engine cannot
            deduplicate. The row says whether they arrived. */
         setStatus({ kind: "info", text: t("composer.context.unconfirmed") });
+        return;
+      }
+      if (answer.ok) {
+        /* Accepted, and only that. The placement is the receipt's to report,
+           once the insertion has been observed in the thread. */
+        setStatus({ kind: "ok", text: t("inject.submitted") });
         return;
       }
       if (operationExists) {
