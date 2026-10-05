@@ -120,7 +120,7 @@ import {
   withDismissedReceipts,
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
-import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey } from "./runtime/deliveryNotice";
+import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
 import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
@@ -467,10 +467,11 @@ export function RuntimeComposerReceipts({
       </> : null}
     </span>
   );
-  /* An earlier attempt that ended the way the current one did adds nothing to
-     read: the row's chip says it and its counter says how many times. */
-  const supersededStatusLabels = (attempts: RuntimeReceipt[], current = attempts[0] ? receiptStatusText(attempts[0]) : null): string[] => {
+  /* A cause with its own wording is said once: an earlier attempt refused for
+     it is in the row's counter, and its line would be the chip's line again. */
+  const supersededStatusLabels = (attempts: RuntimeReceipt[]): string[] => {
     const counts = new Map<string, number>();
+    const current = attempts[0] && sentenceCauseKey(attempts[0].reason) ? receiptStatusText(attempts[0]) : null;
     for (const attempt of attempts.slice(1)) {
       const label = receiptStatusText(attempt);
       if (label === current) continue;
@@ -917,7 +918,7 @@ export function RuntimeComposerReceipts({
                   ? receiptStatusText(group.current)
                   : (wait && deliveryWaitText(t, wait, group.current.queuePosition))
                     ?? receiptStatusText(group.current);
-                return [current, ...supersededStatusLabels(group.attempts, current)].join(" · ");
+                return [current, ...supersededStatusLabels(group.attempts)].join(" · ");
               }),
               ...textlessRows.map((bucket) => (bucket.length > 1
                 ? `${receiptStatusText(bucket[0]!)} ×${bucket.length}`
