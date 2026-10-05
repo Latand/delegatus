@@ -230,6 +230,27 @@ function structuredHostTurnReleased(
     && host.activeTurnRef === null;
 }
 
+/** The other half of the same statement (issue #1810): a live structured host
+    that records an active turn is inside one, whatever the transcript's last
+    record says. Between a host taking a turn and the CLI journaling its prompt
+    the file still ends on the previous turn's terminal record. The evidence
+    bar is the one above: a verified live process, never a bare row, so a host
+    that is gone holds nothing open and the transcript governs again. */
+function structuredHostTurnActive(
+  registry: AgentRegistry,
+  engine: AgentEngine,
+  generation: { id: string; path: string },
+): boolean {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId({ engine, sessionId: generation.id })];
+  const host = entry?.structuredHost;
+  if (!host || entry!.artifactPath !== generation.path) return false;
+  if (entry!.status !== "live" && entry!.status !== "idle") return false;
+  return host.activeTurnRef !== null
+    && host.process !== null
+    && host.process.startIdentity !== null
+    && procBackend.processIdentity(host.process.pid) === host.process.startIdentity;
+}
+
 /** The generation an in-flight migration is moving off, matching the source
     `advanceConversationMigration` resolves for the provider. */
 function migrationSourceGeneration(conversation: RegistryConversation) {
@@ -675,6 +696,9 @@ function completeProviderTurnObservation(
   /* A host registered between inventory and creation still owns a recovery
      tail's turn (issue #516), so its release must not reach the provider. */
   if (observed.recoveryReleased && hasActiveRegisteredHost(registry, source.path)) return false;
+  /* The transcript speaks only when no live host can: one that is inside a
+     turn has not journaled it yet, and a terminal tail is the turn before. */
+  if (structuredHostTurnActive(registry, conversation.engine, source)) return false;
   if (observed.turn.state === "terminal") return true;
 
   /* A crashed Codex rollout can retain its final task_started record forever.

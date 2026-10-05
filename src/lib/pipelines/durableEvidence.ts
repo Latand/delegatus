@@ -265,6 +265,20 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+/** Whether a Claude stage attempt ended on a provider failure the CLI gave up
+    on: its newest prompt or assistant record is a flagged API error stamped
+    with a closing stop reason. The shared turn projection keeps such a turn
+    open unless the error class is terminal for the session, because activity
+    and account migration must not read a retry as an end (#1811). A stage
+    reads it as the end of its attempt whatever the class, since the engine
+    retries the stage itself and needs the class to choose how. */
+function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
+  const newest = records.findLast((record) => record.type === "assistant" || record.type === "user");
+  if (newest?.type !== "assistant" || newest.isApiErrorMessage !== true) return false;
+  const stop = stringValue(recordValue(newest.message)?.stop_reason);
+  return stop === "end_turn" || stop === "stop_sequence";
+}
+
 /** The widest verified read spent looking for a reported attempt's prose. A
     brief is relayed at 60 KiB at most, so a window this size holds it with
     room for the tool output written after the report. */
@@ -329,10 +343,11 @@ export async function durableStageTurnEvidence(
   }
   const terminalNotice = terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs);
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
+  const terminal = nativeCut || turn.state === "terminal" || (!codex && claudeApiErrorClosedAttempt(turnRecords));
   const newest = turnRecords.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
   return {
-    turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
+    turn: terminal ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
@@ -343,9 +358,7 @@ export async function durableStageTurnEvidence(
     /* Gated on the same turn reading the rest of the engine trusts: a provider
        error the CLI may still retry inside an open turn keeps the busy
        projection (#516), and so never reads as the end of the turn here. */
-    terminalProviderMessage: nativeCut || turn.state === "terminal"
-      ? terminalNotice
-      : null,
+    terminalProviderMessage: terminal ? terminalNotice : null,
     ...(codex
       ? { backgroundTasks: [], backgroundReportedAt: null }
       : ledger
