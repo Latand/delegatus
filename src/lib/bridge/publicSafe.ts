@@ -97,7 +97,9 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
   /* A path starts a token: `/x/y`, `~/x`, `~user/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
-  ["path", /(?:^|[\s(«"'`=:])(?:~[\p{L}\p{N}_.$-]*\/|\$HOME\b|\$\{HOME\})/u],
+  /* A shell tilde prefix ends at its first slash. NSS user names can contain
+     combining marks and punctuation; Markdown can surround the prefix. */
+  ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/|\$HOME\b|\$\{HOME\})/u],
   /* Folder names are letters of any script, so `\w` would miss most of them,
      and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
      space-separated run counts only once a later slash closes the folder. */

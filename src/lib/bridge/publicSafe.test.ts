@@ -100,7 +100,7 @@ test("explicitly labeled usernames and account names need no local deny-list ent
 });
 
 test("named home paths are private and repository-relative paths stay readable", () => {
-  for (const user of ["other-user", "other_user", "інший", "other.user"]) {
+  for (const user of ["other-user", "other_user", "інший", "other.user", "दूसरा", "other+user"]) {
     expect(privateClasses(`The evidence is ${[`~${user}`, "private", "notes.txt"].join("/")}.`, undefined, { strict: true })).toContain("path");
   }
   expect(privateClasses("See src/lib/mcp/bindings.ts.", undefined, { strict: true })).toEqual([]);

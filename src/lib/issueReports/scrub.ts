@@ -90,8 +90,7 @@ const OWN_WORDS = "say what happened in your own words";
 /*
  * What a reader sees of a line once Markdown drew it: the inline markup is
  * gone and the characters on either side of it meet. `*` and `~` mark up
- * inside a word too; a home path's opening `~` stays.
- * `_` marks up only at a word's edge, which is why `issue_report`
+ * inside a word too; `_` only at a word's edge, which is why `issue_report`
  * keeps its underscore. A link shows its text; its address stays in the
  * written view, where the URL rule reads it. That holds for a reference link
  * too: its label goes, and so do the brackets of whatever is left, since a
@@ -112,7 +111,7 @@ function markdownVisible(text: string): string {
     .replace(INLINE_LINK, "$1")
     .replace(/\[([^\[\]]*)\]\[[^\[\]]*\]/g, "$1")
     .replace(/[[\]]/g, "")
-    .replace(/[*`]+|~+(?![\p{L}\p{N}_.$-]*\/)/gu, "")
+    .replace(/[*~`]+/g, "")
     .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
 }
 

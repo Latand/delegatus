@@ -327,6 +327,8 @@ test("privacy bypasses are refused before storage and rechecked before publicati
     ["quote", "Оператор написав: `перезапусти всіх агентів зараз`."],
     ["quote", "Користувач сказав: ‹перезапусти всіх агентів зараз›."],
     ["path", `The evidence is ${["~other-user", "private", "notes.txt"].join("/")}.`],
+    ["path", `The evidence is [${["~दूसरा", "private", "notes.txt"].join("/")}](#evidence).`],
+    ["path", `The evidence is <code>${["~other+user", "private", "notes.txt"].join("/")}</code>.`],
     ["path", `The evidence is [${["~other-user", "private", "notes.txt"].join("/")}](#evidence).`],
     ["usage", "The account has 1M input tokens."],
     ["usage", "The account has 1.5k output tokens."],
