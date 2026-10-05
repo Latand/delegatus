@@ -13,6 +13,17 @@ function executable(file: string) {
   fs.writeFileSync(file, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 }
 
+function installedPackage(name: string) {
+  const fixture = path.join(root, name);
+  const manifest = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  // package.json ships the whole bin directory. Keep that same module set,
+  // including future transitive imports, in the Bun-only installation probe.
+  expect(manifest.files).toContain("bin");
+  fs.cpSync(new URL("./", import.meta.url), path.join(fixture, "bin"), { recursive: true });
+  fs.copyFileSync(new URL("../package.json", import.meta.url), path.join(fixture, "package.json"));
+  return fixture;
+}
+
 test("clean machine has actionable English and Ukrainian guidance without logging in", () => {
   for (const lang of ["en", "uk"]) {
     const message = agentStartupMessage(lang, options);
@@ -60,7 +71,8 @@ test("installed launcher runs with Bun alone and no Node on PATH", () => {
   const bin = path.join(root, "bun-only");
   fs.mkdirSync(bin, { recursive: true });
   fs.symlinkSync(process.execPath, path.join(bin, "bun"));
-  const child = spawnSync(new URL("./cli.mjs", import.meta.url).pathname, ["--version"], {
+  const fixture = installedPackage("cli-package");
+  const child = spawnSync(path.join(fixture, "bin/cli.mjs"), ["--version"], {
     env: { HOME: root, PATH: bin, LLV_STATE_DIR: path.join(root, "state"), LANG: "en_US.UTF-8", NODE_ENV: "test" }, encoding: "utf8", timeout: 10_000,
   });
   expect(child.stderr).toBe("");
@@ -73,12 +85,8 @@ test("MCP entrypoint starts with Bun alone and closes on EOF", () => {
   const bin = path.join(root, "mcp-bun-only");
   fs.mkdirSync(bin);
   fs.symlinkSync(process.execPath, path.join(bin, "bun"));
-  const fixture = path.join(root, "mcp-package");
-  fs.mkdirSync(path.join(fixture, "bin"), { recursive: true });
+  const fixture = installedPackage("mcp-package");
   fs.mkdirSync(path.join(fixture, "dist"));
-  for (const name of ["mcp-server.mjs", "server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"]) {
-    fs.copyFileSync(new URL(`./${name}`, import.meta.url), path.join(fixture, "bin", name));
-  }
   const launcher = path.join(fixture, "bin/mcp-server.mjs");
   fs.chmodSync(launcher, 0o755);
   fs.writeFileSync(path.join(fixture, "dist/mcp-server.mjs"), 'process.stdout.write("Bun MCP fixture\\n"); process.stdin.resume();');
@@ -87,6 +95,6 @@ test("MCP entrypoint starts with Bun alone and closes on EOF", () => {
     input: "", encoding: "utf8", timeout: 10_000,
   });
   expect(child.stderr).not.toContain("No such file or directory");
-  expect(child.status).toBe(0);
+  expect(child.status, child.stderr).toBe(0);
   expect(child.stdout).toContain("Bun MCP fixture");
 });

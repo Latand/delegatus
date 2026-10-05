@@ -16,7 +16,7 @@ const { CodexAppServerClient } = await import("./codexAppServer");
 const { ManagedCodexRuntime } = await import("./codexRuntime");
 const { withAccountMutationLockAsync } = await import("./accountMutation");
 const { clearAccountFixture, persistedCodexLoginAttempts, seedAccountRegistry } = await import("./accountsStoreFixture");
-const { CODEX_ACCOUNTS_SOURCE } = await import("./accountsStore");
+const { accountsCollectionRevision, CODEX_ACCOUNTS_SOURCE } = await import("./accountsStore");
 const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 
 /** The persisted attempt state for one login store, since #1870 rows in the
@@ -330,6 +330,55 @@ test("child death, false completion, and account-read failure become recoverable
   // remain explicitly recoverable instead of claiming file-based auth.
   nextReadFails = true;
   await expect(runtime.loginSnapshot(work)).resolves.toEqual({ state: "stale", attemptState: "stale", deviceAuth: null });
+});
+
+test("observing a finished, authenticated login again writes nothing and leaves the accounts revision alone", async () => {
+  const children: FakeChild[] = [];
+  const runtime = new ManagedCodexRuntime({
+    startClient: async (home) => {
+      const child = new FakeChild();
+      child.authenticated = true;
+      children.push(child);
+      return CodexAppServerClient.start({ home, spawn: () => child as never });
+    },
+  });
+  const finished = account("finished", "/accounts/finished");
+  await runtime.startLogin(finished);
+  expect(runtime.loginUnsettled(finished)).toBe(true);
+  // The first observation is the real transition: pending settles as completed.
+  await expect(runtime.loginSnapshot(finished)).resolves.toEqual({ state: "authenticated", attemptState: "completed", deviceAuth: null });
+  expect(runtime.loginUnsettled(finished)).toBe(false);
+
+  const settled = accountsCollectionRevision();
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    await expect(runtime.loginSnapshot(finished)).resolves.toEqual({ state: "authenticated", attemptState: "completed", deviceAuth: null });
+    expect(accountsCollectionRevision()).toBe(settled);
+  }
+  // Each of those observations did read the account; only the write is gone.
+  expect(children).toHaveLength(4);
+});
+
+test("a login whose account read keeps failing is recorded stale once", async () => {
+  let readFails = false;
+  const runtime = new ManagedCodexRuntime({
+    startClient: async (home) => {
+      const child = new FakeChild();
+      child.readFailure = readFails;
+      return CodexAppServerClient.start({ home, spawn: () => child as never });
+    },
+  });
+  const offline = account("offline", "/accounts/offline");
+  await runtime.startLogin(offline);
+  await runtime.cancelLogin("offline");
+  readFails = true;
+  await expect(runtime.loginSnapshot(offline)).resolves.toEqual({ state: "stale", attemptState: "stale", deviceAuth: null });
+  expect(runtime.loginUnsettled(offline)).toBe(true);
+
+  const stale = accountsCollectionRevision();
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    await expect(runtime.loginSnapshot(offline)).resolves.toEqual({ state: "stale", attemptState: "stale", deviceAuth: null });
+    expect(accountsCollectionRevision()).toBe(stale);
+  }
 });
 
 test("restart reconstruction marks a pending child stale and retry owns a fresh generation", async () => {

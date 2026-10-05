@@ -121,6 +121,7 @@ interface SeatFile {
   exists: boolean;
   viewerMcpRegistered?: boolean;
   deputies?: unknown[];
+  lastFailure?: Record<string, unknown> | null;
 }
 
 let seatStatus: SeatFile;
@@ -1940,4 +1941,125 @@ test("the report log sits beside the seat's chat only where the chat keeps 1.5 t
   flushSync(() => toggle().click());
   expect(read_()).toEqual(beside);
   expect(dom.localStorage.getItem("llvReportLogBeside:atlas")).toBe("1");
+});
+
+/* ------------------------------------------------------------------------ */
+/* A failed designation says what happened and what to press, and a failed   */
+/* launch never leaves the pane on «creating».                               */
+/* ------------------------------------------------------------------------ */
+
+const INCIDENT_BUSY = "account mutation is busy; held by Codex login commit (pid 9559, age 2 ms); retry shortly";
+const failureText = (host: HTMLElement) => host.querySelector("[data-orchestrator-failure-text]")?.textContent?.trim() ?? "";
+const failureHint = (host: HTMLElement) => host.querySelector("[data-orchestrator-failure-hint]")?.textContent?.trim() ?? "";
+
+function failedCreation(error: string): Record<string, unknown> {
+  return {
+    error,
+    clientRequestId: "req-bbbbbbbb",
+    seatEpoch: 3,
+    conversationId: null,
+    designatedAt: "2026-10-05T09:00:00.000Z",
+    terminalizedAt: "2026-10-05T09:01:18.000Z",
+  };
+}
+
+test.each(["en", "uk"] as const)("a busy account store is told in plain words, with no engine and no pid (%s)", async (lang) => {
+  setLocale(lang);
+  /* The answer the seat route gives once its own waiting is spent, over an
+     intent whose launch was accepted and is therefore still pending. */
+  seatResponses = [{ status: 503, body: { error: "the account store stayed busy, so the designation could not be recorded; try again", code: "seat_store_busy", retryable: true, seat: null } }];
+  const host = mount();
+  await settle();
+  flushSync(() => confirmButton(host).click());
+  await settle();
+
+  expect(panelState(host)).toBe("intent-error");
+  expect(failureText(host)).toBe(translate(lang, "orchPanel.failureStoreBusy"));
+  expect(failureHint(host)).toBe(translate(lang, "orchPanel.failureRetrySameHint"));
+  const said = host.querySelector("[data-orchestrator-intent-error]")?.textContent ?? "";
+  expect(said).not.toMatch(/pid|Codex|mutation|held by/i);
+  expect(confirmButton(host).textContent).toContain(translate(lang, "orchPanel.confirmRetry"));
+
+  /* The same key is replayed, and the read that seated the launch retires the
+     banner: the pane and the card now name the same conversation. */
+  const key = String(seatPosts[0]!.clientRequestId);
+  seatStatus = { seat: activeSeat({ intent: { clientRequestId: key, mode: "spawn", launchId: "launch-a", error: null } }), pending: null, exists: true };
+  const live = remount([orchestratorFile]);
+  await settle();
+  flushSync(() => undefined);
+  expect(panelState(live)).toBe("live");
+  expect(live.querySelector("[data-orchestrator-intent-error]")).toBeNull();
+});
+
+test.each(["en", "uk"] as const)("a failure recorded with the lock's own diagnostic is never shown raw (%s)", async (lang) => {
+  setLocale(lang);
+  seatStatus = { seat: null, pending: null, lastFailure: failedCreation(INCIDENT_BUSY), exists: true };
+  const host = mount();
+  await settle();
+  flushSync(() => undefined);
+
+  expect(panelState(host)).toBe("intent-error");
+  expect(failureText(host)).toBe(translate(lang, "orchPanel.failureStoreBusy"));
+  expect(failureHint(host)).toBe(translate(lang, "orchPanel.failureRetryHint"));
+  expect(host.querySelector("[data-orchestrator-intent-error]")?.textContent ?? "").not.toMatch(/9559|Codex|mutation/);
+});
+
+test.each(["en", "uk"] as const)("lost response, then the launch times out: the pane leaves «creating» for one error with retry, and a reload agrees (%s)", async (lang) => {
+  setLocale(lang);
+  /* The request that began this designation never answered. */
+  seatStatus = { seat: null, pending: pendingSeat(null), exists: true };
+  const waiting = mount();
+  await settle();
+  flushSync(() => undefined);
+  expect(panelState(waiting)).toBe("creating");
+
+  /* The launch's receipt turns terminal and the seat read records it. */
+  seatStatus = { seat: null, pending: null, lastFailure: failedCreation("structured spawn transport failed: runtime host request timed out"), exists: true };
+  const failed = remount();
+  await settle();
+  flushSync(() => undefined);
+
+  expect(panelState(failed)).toBe("intent-error");
+  expect(failed.querySelector('[role="status"]')?.textContent ?? "").not.toContain(translate(lang, "orchPanel.creating"));
+  expect(failureText(failed)).toBe(translate(lang, "orchPanel.failureLaunchTimeout"));
+  expect(failureHint(failed)).toBe(translate(lang, "orchPanel.failureLaunchHint"));
+  expect(confirmButton(failed).textContent).toContain(translate(lang, "orchPanel.confirmRetry"));
+
+  const reloaded = remount();
+  await settle();
+  flushSync(() => undefined);
+  expect(panelState(reloaded)).toBe("intent-error");
+  expect(failureText(reloaded)).toBe(translate(lang, "orchPanel.failureLaunchTimeout"));
+
+  /* Retry is a fresh designation: the failed one is history. */
+  seatResponses = [{ status: 202, body: { ok: true, conversationId: "conversation_orch", launchId: "launch-b", seat: activeSeat() } }];
+  flushSync(() => confirmButton(reloaded).click());
+  await settle();
+  expect(seatPosts).toHaveLength(1);
+  expect(seatPosts[0]!.clientRequestId).not.toBe("req-bbbbbbbb");
+});
+
+test("lost response, then the launch settles: the pane shows the seated conversation after a reload", async () => {
+  seatStatus = { seat: null, pending: pendingSeat(null), exists: true };
+  const waiting = mount();
+  await settle();
+  flushSync(() => undefined);
+  expect(panelState(waiting)).toBe("creating");
+
+  seatStatus = { seat: activeSeat({ intent: { clientRequestId: "req-bbbbbbbb", mode: "spawn", launchId: "launch-a", error: null } }), pending: null, exists: true };
+  const live = remount([orchestratorFile]);
+  await settle();
+  flushSync(() => undefined);
+  expect(panelState(live)).toBe("live");
+  expect(live.querySelector("[data-orchestrator-intent-error]")).toBeNull();
+});
+
+test("a failure with no plain sentence is still shown as it was recorded", async () => {
+  seatStatus = { seat: null, pending: null, lastFailure: failedCreation("the project's folder could not be found on disk"), exists: true };
+  const host = mount();
+  await settle();
+  flushSync(() => undefined);
+
+  expect(failureText(host)).toBe("the project's folder could not be found on disk");
+  expect(failureHint(host)).toBe(translate("en", "orchPanel.errorHint"));
 });
