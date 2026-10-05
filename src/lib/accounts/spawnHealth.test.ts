@@ -636,7 +636,7 @@ for (const withFallback of [false, true]) test(`a pinned expired Claude account 
   } finally { providerReply = null; removeStateDir(); }
 });
 
-for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials"] as const) test(`a changed pin stays unreserved after ${outcome} admission`, async () => {
+for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials", "successful refresh queued rotation", "successful refresh queued removal", "successful refresh queued unreadable"] as const) test(`a changed pin stays unreserved after ${outcome} admission`, async () => {
   const { createManagedClaudeAccount } = await import("./claude");
   const { readAccountSource, writeAccountSource } = await import("./accountsStore");
   const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
@@ -664,6 +664,31 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
   let requests = 0;
   providerReply = () => {
     requests += 1;
+    if (outcome.startsWith("successful refresh")) {
+      if (requests > 1) return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+      const fresh = crypto.randomUUID();
+      const response = Response.json({ access_token: fresh, expires_in: 3600 });
+      const json = response.json.bind(response);
+      response.json = async () => {
+        const payload = await json();
+        let entered!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        holder = withAccountMutationLockAsync(async () => { entered(); await gate; });
+        await ready;
+        timer = setTimeout(() => {
+          const filename = path.join(pin.home, ".credentials.json");
+          if (outcome.endsWith("removal")) fs.unlinkSync(filename);
+          else if (outcome.endsWith("unreadable")) fs.writeFileSync(filename, "invalid-json");
+          else fs.writeFileSync(filename, JSON.stringify({ claudeAiOauth: {
+            ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+          } }), { mode: 0o600 });
+          release();
+        }, 40);
+        return payload;
+      };
+      return response;
+    }
     if (outcome.includes("queued")) {
       if (requests === 1 && outcome !== "current queued credentials") {
         const fresh = crypto.randomUUID();
@@ -686,7 +711,8 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
   let resolverStarted!: () => void;
   const started = new Promise<void>(resolve => { resolverStarted = resolve; });
   const resolve: typeof resolveHealthySpawnAccount = (...args) => { resolverStarted(); return resolveHealthySpawnAccount(...args); };
-  if (outcome.includes("queued")) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (outcome.includes("queued") && !outcome.startsWith("successful refresh")) {
     let holderEntered!: () => void;
     const entered = new Promise<void>(resolve => { holderEntered = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -714,12 +740,12 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
       method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
       body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome.replaceAll(" ", "-")}` }),
     }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount: resolve, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
-    if (holder) { await started; await Bun.sleep(8); release(); await holder; }
+    if (holder && !outcome.startsWith("successful refresh")) { await started; await Bun.sleep(8); release(); await holder; }
     const response = await pending;
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
   } finally {
-    release(); await holder;
+    clearTimeout(timer); release(); await holder;
     providerReply = null;
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
     if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;

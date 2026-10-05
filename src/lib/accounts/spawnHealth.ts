@@ -224,9 +224,13 @@ async function refreshValidityProbe(account: ClaudeAccount, retryUnrelatedRevisi
   // A rejection/unknown result can still follow an external pin change.
   // Revalidate before either branch can degrade the pin or burn its key.
   if (retryUnrelatedRevision) {
+    // Successful replacement establishes a new credential baseline. Preserve
+    // it across the queued recheck just as a rejected refresh preserves the old one.
+    const expectedAfterRefresh = refreshed === "refreshed" ? claudeProbeCredentialIdentity(current.home) : expectedCredentialIdentity;
+    if (expectedAfterRefresh === null) throw new AccountAdmissionChangedError();
     const after = await claudeAdmissionSnapshot(current, "Claude refresh recheck");
     if (claudeCatalogIdentity(after.account) !== claudeCatalogIdentity(current)) throw new AccountAdmissionChangedError();
-    if (refreshed !== "refreshed" && claudeProbeCredentialIdentity(current.home) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
+    if (claudeProbeCredentialIdentity(current.home) !== expectedAfterRefresh) throw new AccountAdmissionChangedError();
   }
   if (refreshed === "invalid") {
     return classifySpawnAccountAdmission({ enabled: true, authentication: "failed", limits: "unknown", stale: false, retryAt: null });

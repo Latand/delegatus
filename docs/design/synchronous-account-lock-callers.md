@@ -66,7 +66,8 @@ the credential replacement. An explicitly pinned Claude candidate repeats its
 live health probe at most three times when only the shared collection revision moves. Each probe retains its
 600 ms network timeout and runs outside the lock; async snapshot/recheck admission
 has a 2 s budget. A changed pinned catalog row or credential, including external
-replacement during OAuth refresh, becoming unreadable during the live probe,
+replacement during OAuth refresh or its queued post-refresh recheck,
+becoming unreadable during the live probe,
 or a Keychain change while the final recheck queues,
 refuses admission with `account_admission_changed`, as does continuous revision churn after the
 third probe. Automatic selection retains its existing retryable revision fence.
