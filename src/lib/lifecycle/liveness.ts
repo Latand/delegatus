@@ -22,6 +22,7 @@ import {
 import {
   describeTranscriptPath,
   readLivenessTranscriptEvidence,
+  transcriptFileIdentity,
   type LivenessTranscript,
   type LivenessTranscriptEvidence,
 } from "./transcript";
@@ -169,8 +170,9 @@ export interface AgentLivenessSelectionReport {
       so the newest `HOSTED_RECOVERY_MAX` of them were resolved and the rest
       were not looked at. */
   recoveryTruncated: boolean;
-  /** Active hosts the generation lacks that the answer budget ended before
-      describing. They have no row in this answer; a later call resolves them. */
+  /** Active hosts the generation lacks, or the transcripts a targeted call
+      named, that the answer budget ended before describing. They have no row
+      in this answer; a later call resolves them. */
   recoveryPending: number;
   /** Rows a transcript tail read was attempted for; `unreadable` is the subset
       of those whose tail could not be used. */
@@ -242,8 +244,9 @@ export interface AgentLivenessRequest {
    * and transcript evidence share it. When it ends, hosts not yet described are
    * counted in `recoveryPending` and rows whose tail has not answered are
    * projected from the scan (`evidenceSource: "projection"`); their reads keep
-   * running and the next call for the same transcript takes the result. Omitted,
-   * each phase keeps only its own budget.
+   * running and a later call for the same unchanged file takes the result. A
+   * targeted transcript not yet described is counted in `recoveryPending` too.
+   * Omitted, each phase keeps only its own budget.
    */
   answerBudgetMs?: number;
 }
@@ -305,6 +308,10 @@ export interface AgentLivenessSources {
     transcriptPath: string,
     options?: { signal?: AbortSignal | null },
   ): Promise<LivenessTranscriptEvidence | null>;
+  /** The file a transcript path names right now, or null when it names none.
+      Evidence read in an earlier call is reused only under the same identity.
+      Omitted, the file is stat'ed. */
+  transcriptIdentity?(transcriptPath: string): Promise<string | null>;
   probe: LivenessProbe;
 }
 
@@ -630,7 +637,7 @@ async function recoverHostedTranscripts(
   const candidates = truncated ? missing.slice(-HOSTED_RECOVERY_MAX) : missing;
   const described = await Promise.all(candidates.map(async (path) => {
     try {
-      return await answer.within(describe(path));
+      return await describeWithin(path, describe, answer);
     } catch (error) {
       if (answer.cancelled()) throw error;
       /* A host whose transcript cannot be described is not evidence of
@@ -667,6 +674,8 @@ interface AnswerBudget {
       caller cancels, without waiting for the work to notice. */
   within<T>(work: Promise<T>): Promise<T | typeof ANSWER_SPENT>;
   spent(): boolean;
+  /** Whether a clock runs at all; without one nothing is ever left behind. */
+  bounded: boolean;
   cancelled(): boolean;
   release(): void;
 }
@@ -691,6 +700,7 @@ function answerBudget(budgetMs: number | null, signal: AbortSignal | null): Answ
       return Promise.race([work, ...(ended ? [ended] : []), ...(interrupted ? [interrupted] : [])]);
     },
     spent: () => over,
+    bounded: ended !== null,
     cancelled: () => signal?.aborted === true,
     release: () => {
       if (timer) clearTimeout(timer);
@@ -699,37 +709,70 @@ function answerBudget(budgetMs: number | null, signal: AbortSignal | null): Answ
   };
 }
 
-/* A tail read the answer budget walked away from keeps running. The next call
-   for the same unchanged transcript takes its result instead of starting the
-   read again, so a tail slower than the budget still becomes evidence. */
-const CARRIED_EVIDENCE_MAX_AGE_MS = 10_000;
+/* A tail read the answer budget walked away from keeps running, and a later
+   call takes its result instead of starting the read again, so a tail slower
+   than the budget still becomes evidence. The result stays for the calls after
+   that one too: dropping it on first use sent every other call back to the head
+   of the list, where the re-read tails held all the slots and the rows behind
+   them were never reached. What makes it reusable is the file, stat'ed on every
+   call: the entry answers only for the identity it was read under. */
+const CARRIED_EVIDENCE_IDLE_MS = 60_000;
 const CARRIED_EVIDENCE_MAX = 256;
 const carriedEvidence = new Map<string, {
   read: Promise<LivenessTranscriptEvidence | null>;
-  mtimeMs: number;
-  sizeBytes: number | undefined;
-  startedAt: number;
+  /** The file as it was before the read started. A file that changed during
+      the read no longer matches, and its newer evidence is read again. */
+  identity: string;
+  usedAt: number;
 }>();
 
-function takeCarriedEvidence(entry: LivenessTranscript): { read: Promise<LivenessTranscriptEvidence | null>; startedAt: number } | null {
-  const carried = carriedEvidence.get(entry.path);
+function takeCarriedEvidence(transcriptPath: string, identity: string): Promise<LivenessTranscriptEvidence | null> | null {
+  const carried = carriedEvidence.get(transcriptPath);
   if (!carried) return null;
-  carriedEvidence.delete(entry.path);
-  /* A catalog row carries its mtime in seconds and a described one in
-     milliseconds; the same instant differs by float rounding between them. */
-  return Math.abs(carried.mtimeMs - entry.mtimeMs) < 1 && carried.sizeBytes === entry.sizeBytes
-    && performance.now() - carried.startedAt <= CARRIED_EVIDENCE_MAX_AGE_MS
-    ? carried
-    : null;
+  carriedEvidence.delete(transcriptPath);
+  if (carried.identity !== identity || performance.now() - carried.usedAt > CARRIED_EVIDENCE_IDLE_MS) return null;
+  /* Re-inserted last: the map's order is its eviction order. */
+  carriedEvidence.set(transcriptPath, { ...carried, usedAt: performance.now() });
+  return carried.read;
 }
 
-function carryEvidence(entry: LivenessTranscript, read: Promise<LivenessTranscriptEvidence | null>, startedAt: number): void {
+function carryEvidence(transcriptPath: string, identity: string, read: Promise<LivenessTranscriptEvidence | null>): void {
   for (const [path, carried] of carriedEvidence) {
-    if (carriedEvidence.size < CARRIED_EVIDENCE_MAX && performance.now() - carried.startedAt <= CARRIED_EVIDENCE_MAX_AGE_MS) break;
+    if (carriedEvidence.size < CARRIED_EVIDENCE_MAX && performance.now() - carried.usedAt <= CARRIED_EVIDENCE_IDLE_MS) break;
     carriedEvidence.delete(path);
   }
-  carriedEvidence.set(entry.path, { read, mtimeMs: entry.mtimeMs, sizeBytes: entry.sizeBytes, startedAt });
-  void read.catch(() => { if (carriedEvidence.get(entry.path)?.read === read) carriedEvidence.delete(entry.path); });
+  carriedEvidence.set(transcriptPath, { read, identity, usedAt: performance.now() });
+  const drop = () => { if (carriedEvidence.get(transcriptPath)?.read === read) carriedEvidence.delete(transcriptPath); };
+  /* An unreadable tail is no evidence to keep; the next call reads it again. */
+  void read.then((evidence) => { if (evidence === null) drop(); }, drop);
+}
+
+/* The same for a description the budget walked away from: the stat keeps
+   running and the next call for that path takes it, once. It is a snapshot of
+   the file's size and mtime, which only rank the row and charge its read. */
+const CARRIED_DESCRIPTION_MAX_AGE_MS = 10_000;
+const carriedDescriptions = new Map<string, { work: Promise<LivenessTranscript | null>; startedAt: number }>();
+
+async function describeWithin(
+  transcriptPath: string,
+  describe: AgentLivenessSources["describeTranscript"],
+  answer: AnswerBudget,
+): Promise<LivenessTranscript | null | typeof ANSWER_SPENT> {
+  const carried = carriedDescriptions.get(transcriptPath);
+  carriedDescriptions.delete(transcriptPath);
+  const { work, startedAt } = carried && performance.now() - carried.startedAt <= CARRIED_DESCRIPTION_MAX_AGE_MS
+    ? carried
+    : { work: describe(transcriptPath), startedAt: performance.now() };
+  const described = await answer.within(work);
+  if (described === ANSWER_SPENT) {
+    for (const [path, kept] of carriedDescriptions) {
+      if (carriedDescriptions.size < CARRIED_EVIDENCE_MAX && performance.now() - kept.startedAt <= CARRIED_DESCRIPTION_MAX_AGE_MS) break;
+      carriedDescriptions.delete(path);
+    }
+    carriedDescriptions.set(transcriptPath, { work, startedAt });
+    void work.catch(() => { if (carriedDescriptions.get(transcriptPath)?.work === work) carriedDescriptions.delete(transcriptPath); });
+  }
+  return described;
 }
 
 function roundMs(value: number): number {
@@ -806,10 +849,11 @@ async function livenessSnapshotWithin(
     /* The targeted branch. A caller that named a specific target gets back what
        it named and nothing else — even an empty set. Falling through to the
        catalog would turn a stale alias into an unrelated read. */
-    entries = requestedPaths.size > 0
-      ? (await Promise.all([...requestedPaths].slice(0, limit).map((path) => sources.describeTranscript(path))))
-        .filter((entry): entry is LivenessTranscript => entry !== null)
-      : [];
+    /* The description shares the answer's budget and its cancellation: a stat
+       that outlives them is reported as not yet described, never waited out. */
+    const described = await Promise.all([...requestedPaths].slice(0, limit)
+      .map((path) => describeWithin(path, sources.describeTranscript, answer)));
+    entries = described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT);
     selection = {
       scope: "targeted",
       scanned: requestedPaths.size,
@@ -817,7 +861,7 @@ async function livenessSnapshotWithin(
       selected: entries.length,
       recovered: 0,
       recoveryTruncated: false,
-      recoveryPending: 0,
+      recoveryPending: described.filter((entry) => entry === ANSWER_SPENT).length,
       generation: null,
       cacheStatus: null,
       freshScan: false,
@@ -900,18 +944,21 @@ async function livenessSnapshotWithin(
   const deadlineMs = Number.isFinite(request.evidenceDeadlineMs) && (request.evidenceDeadlineMs as number) > 0
     ? Math.floor(request.evidenceDeadlineMs as number)
     : DEFAULT_EVIDENCE_DEADLINE_MS;
+  const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
   const hydration = await hydrateWithBudget(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
       if (answer.spent()) return ANSWER_SPENT;
       try {
-        const { read, startedAt: readStartedAt } = takeCarriedEvidence(entry) ?? {
-          read: sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal }),
-          startedAt: performance.now(),
-        };
+        /* Only a bounded answer leaves reads behind, so only it pays the stat. */
+        const identity = answer.bounded ? await answer.within(identityOf(entry.path).catch(() => null)) : null;
+        if (identity === ANSWER_SPENT) return ANSWER_SPENT;
+        const carried = identity === null ? null : takeCarriedEvidence(entry.path, identity);
+        const read = carried
+          ?? sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
         const evidence = await answer.within(read);
-        if (evidence === ANSWER_SPENT) carryEvidence(entry, read, readStartedAt);
+        if (evidence === ANSWER_SPENT && identity !== null && !carried) carryEvidence(entry.path, identity, read);
         return evidence;
       } catch (error) {
         /* One bad row costs one row. Cancellation is the exception: it is the

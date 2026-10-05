@@ -30,9 +30,14 @@ environment into their own sandbox before a product module loads: `HOME`, the
 XDG directories, `TMPDIR`, `CLAUDE_CODE_TMPDIR`, the Codex and Claude homes,
 `COPILOT_HOME`, `OPENCLAW_STATE_DIR`, `GH_CONFIG_DIR` and `TMUX_TMPDIR`, with
 `TMUX` and `TMUX_PANE` removed, so no transcript, account file or tmux server
-outside the sandbox is opened. The scan's process-table refresh still reads the
-machine's `/proc`, which no variable relocates; it reads link names and opens
-none of the files they name. A row reports the first call's
+outside the sandbox is opened. No variable relocates `/proc`, so every measured
+process runs in its own PID namespace (`unshare --user --pid --mount-proc`, the
+caller's uid and gid mapped through) under a `/proc` mounted for that
+namespace. The process table the product reads lists only the sample's own
+shell, itself and its children; the command line, environment and open files
+of any other process on the machine are out of its reach. A sample refuses to
+load a product module when it can see the machine's table, and the command
+refuses to run on a host without unprivileged user namespaces. A row reports the first call's
 latency and output tokens. When that answer is pending, the sample repeats the
 call until the complete one arrives: `worstFollowUpMs` is the slowest of those
 calls and `completeAfterP50ms` the time from the first call to the complete

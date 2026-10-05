@@ -25,6 +25,28 @@ function isolateEnvironment(sandbox: string, transcriptHomes: { codex: string; c
  process.env.LLV_STATE_ACTIVATION = 'sqlite';
 }
 
+/* No variable relocates /proc, and the product reads it for real: the command
+   line, the environment and the open files of every process it lists. So each
+   measured process runs in its own PID namespace under a /proc mounted for that
+   namespace, where the only processes are its own. The uid and gid stay the
+   caller's. A machine that cannot do this runs no measurement. */
+const PRIVATE_PROC = ['unshare', '--user', `--map-user=${process.getuid!()}`, `--map-group=${process.getgid!()}`, '--pid', '--fork', '--kill-child', '--mount-proc'];
+const pidNamespace = () => fs.readlinkSync('/proc/self/ns/pid');
+function withPrivateProc(argv: string[], env: Record<string, string | undefined>) {
+ // A shell stays PID 1, so the measured process is an ordinary pid (the product skips pid 1).
+ return { argv: [...PRIVATE_PROC, 'sh', '-c', '"$@"; exit $?', 'sh', ...argv], env: { ...env, COST_HOST_PID_NAMESPACE: pidNamespace() } };
+}
+function requirePrivateProcSupport() {
+ const probe = Bun.spawnSync([...PRIVATE_PROC, 'true'], { stdout: 'pipe', stderr: 'pipe' });
+ if (probe.exitCode !== 0) throw new Error(`This benchmark needs an unprivileged PID namespace (unshare --user --pid --mount-proc) and will not read the machine's process table without one:\n${probe.stderr.toString().slice(-400)}`);
+}
+/** Refuses to load a product module unless /proc is the one mounted for this
+    process's own PID namespace, which lists nothing but what it started. */
+function assertPrivateProc() {
+ const host = process.env.COST_HOST_PID_NAMESPACE;
+ if (!host || pidNamespace() === host || fs.readlinkSync('/proc/self') !== String(process.pid)) throw new Error('This process can read the process table of the machine; refusing to measure');
+}
+
 /* A cold read is the first call a fresh MCP process answers with an empty
    state directory: no resource observation, no file-scan snapshot, nothing in
    memory. Every sample is its own process over one shared generated corpus. */
@@ -96,6 +118,7 @@ async function writeColdFixtures() {
 }
 
 async function runColdSample() {
+ assertPrivateProc();
  const scenario = process.argv[process.argv.indexOf('--cold-sample') + 1]!;
  const files = coldPaths(process.env.COLD_ROOT!), sandbox = process.env.COLD_SANDBOX!;
  isolateEnvironment(sandbox, { codex: files.codexHome, claude: files.claudeHome });
@@ -154,9 +177,8 @@ function runColdSide(checkout: string, work: string, side: string, coldRoot: str
  const samples: any[] = [];
  for (const scenario of Object.keys(COLD_SCENARIOS)) for (let i = 0; i < COLD_SAMPLES; i++) {
   const sandbox = path.join(work, `${side}-cold`, `${scenario.replace(/[^a-z0-9]+/g, '-')}-${i}`);
-  const child = Bun.spawnSync(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--cold-sample', scenario], {
-   cwd: checkout, env: { ...process.env, NODE_ENV: 'test', COLD_ROOT: coldRoot, COLD_SANDBOX: sandbox }, stdout: 'pipe', stderr: 'pipe',
-  });
+  const isolated = withPrivateProc(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--cold-sample', scenario], { ...process.env, NODE_ENV: 'test', COLD_ROOT: coldRoot, COLD_SANDBOX: sandbox });
+  const child = Bun.spawnSync(isolated.argv, { cwd: checkout, env: isolated.env, stdout: 'pipe', stderr: 'pipe' });
   if (child.exitCode !== 0) throw new Error(`${side} cold sample ${scenario} failed (exit ${child.exitCode}):\n${child.stderr.toString().slice(-700)}`);
   samples.push(JSON.parse(child.stdout.toString().trim().split('\n').at(-1)!));
   fs.rmSync(sandbox, { recursive: true, force: true });
@@ -189,6 +211,7 @@ async function runPair() {
  const script = fs.readFileSync(new URL(import.meta.url), 'utf8');
  const output: Record<string, unknown> = {};
  try {
+  requirePrivateProcSupport();
   const coldRoot = path.join(work, 'cold-fixtures');
   const fixtures = Bun.spawnSync(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--cold-fixtures'], { env: { ...process.env, COLD_ROOT: coldRoot }, stdout: 'pipe', stderr: 'pipe' });
   if (fixtures.exitCode !== 0) throw new Error(`Could not generate cold fixtures:\n${fixtures.stderr.toString().slice(-700)}`);
@@ -206,11 +229,9 @@ async function runPair() {
    fs.mkdirSync(path.join(checkout, 'scripts'), { recursive: true });
    fs.writeFileSync(path.join(checkout, 'scripts/mcp-call-cost-benchmark.ts'), script);
    fs.symlinkSync(path.resolve('node_modules'), path.join(checkout, 'node_modules'), 'dir');
-   const child = Bun.spawnSync(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--run-side'], {
-    cwd: checkout,
-    env: { ...process.env, NODE_ENV: 'test', COST_CANDIDATE: side === 'head' ? '1' : '0', AUDIT_OUTPUT: outputDir, LLV_STATE_DIR: path.join(work, `${side}-state`), COST_REPO: process.cwd() },
-    stdout: 'pipe', stderr: 'pipe',
-   });
+   const isolated = withPrivateProc(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--run-side'],
+    { ...process.env, NODE_ENV: 'test', COST_CANDIDATE: side === 'head' ? '1' : '0', AUDIT_OUTPUT: outputDir, LLV_STATE_DIR: path.join(work, `${side}-state`), COST_REPO: process.cwd() });
+   const child = Bun.spawnSync(isolated.argv, { cwd: checkout, env: isolated.env, stdout: 'pipe', stderr: 'pipe' });
    if (child.exitCode !== 0) {
     const stderr = child.stderr.toString();
     const stdout = child.stdout.toString();
@@ -255,6 +276,7 @@ if (coldFixtures) {
 } else if (!runSide) {
  await runPair();
 } else {
+assertPrivateProc();
 const root=process.env.AUDIT_OUTPUT!,runTag=String(Date.now()),candidate=process.env.COST_CANDIDATE==='1';
 fs.mkdirSync(root,{recursive:true});
 const warmSandbox=path.join(root,'sandbox-'+runTag);

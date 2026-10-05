@@ -272,6 +272,7 @@ test("a cold agent_activity over slow hosted tails answers inside a second and t
         completedFileScan: scan.read as never, signal: options.signal ?? null, budgetMs: catalog.catalogBudgetMs, lastCompletedFiles: () => null,
       }),
       describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: `conversation-${path.basename(pathname)}`, activity: "live", activityReason: null }),
+      transcriptIdentity: async () => "unchanged",
       transcriptEvidence: async () => {
         tailReads += 1;
         await new Promise((resolve) => setTimeout(resolve, 1_100));
@@ -307,7 +308,124 @@ test("a cold agent_activity over slow hosted tails answers inside a second and t
   expect(settled).not.toHaveProperty("evidence");
   expect(settled).toMatchObject({ count: 6, selection: { hydrated: 6, projected: 0, budget: "complete" } });
   expect(settled.conversations.every((row) => row.evidenceSource === "transcript" && row.turnState === "busy")).toBe(true);
-  expect(tailReads).toBeLessThanOrEqual(12);
+  /* An unchanged file is read once however many calls ask about it. */
+  expect(tailReads).toBe(6);
+}, 30_000);
+
+test("a tail read left behind is not evidence once the transcript has changed", async () => {
+  const now = Date.now();
+  const transcript = path.join(sandbox, "carried-append.jsonl");
+  fs.writeFileSync(transcript, "{\"type\":\"task_complete\"}\n");
+  /* The catalog row keeps its generation's mtime and size through the append. */
+  const row = { ...catalogRow(transcript, now / 1000), size: fs.statSync(transcript).size };
+  let tailReads = 0;
+  let turn: "idle" | "busy" = "idle";
+  let tailMs = 1_100;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => hostedRegistry([transcript], now), pipelines: () => [],
+      selectInventory: async () => ({ entries: [row], matched: 1, scanned: 1, hostedSeen: new Set([transcript]), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }),
+      describeTranscript: async () => null,
+      transcriptEvidence: async () => {
+        tailReads += 1;
+        const seen = turn;
+        await new Promise((resolve) => setTimeout(resolve, tailMs));
+        return { turn: seen, lastRecordTs: now, providerProgressAt: null };
+      },
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+  const read = (key: string) => bindings.agent_activity({ clientRequestId: key, full: true }) as Promise<{ evidence?: string; conversations: Array<{ turnState: string; evidenceSource: string }> }>;
+
+  expect(await read("append-first")).toMatchObject({ evidence: "pending", unverifiedCount: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  fs.appendFileSync(transcript, "{\"type\":\"task_started\"}\n");
+  turn = "busy";
+  tailMs = 0;
+  const second = await read("append-second");
+  expect(second).not.toHaveProperty("evidence");
+  expect(second.conversations).toMatchObject([{ turnState: "busy", evidenceSource: "transcript" }]);
+  expect(tailReads).toBe(2);
+}, 15_000);
+
+test("repeated agent_activity calls over slow tails reach every row and read each tail once", async () => {
+  const now = Date.now();
+  const rows = Array.from({ length: 24 }, (_, i) => catalogRow(`/fixtures/progress/row-${String(i).padStart(2, "0")}.jsonl`, now / 1000 - i));
+  const reads = new Map<string, number>();
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
+      selectInventory: async () => ({ entries: rows, matched: rows.length, scanned: rows.length, hostedSeen: new Set<string>(), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }),
+      describeTranscript: async () => null,
+      transcriptIdentity: async () => "unchanged",
+      transcriptEvidence: async (_engine: string, pathname: string) => {
+        reads.set(pathname, (reads.get(pathname) ?? 0) + 1);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        return { turn: "idle", lastRecordTs: now, providerProgressAt: null };
+      },
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  type Answer = { evidence?: string; unverifiedCount?: number; count: number; selection: { hydrated: number } };
+  let answer: Answer = { evidence: "pending", count: 0, selection: { hydrated: 0 } };
+  let verified = 0;
+  for (let call = 0; call < 40 && answer.evidence !== undefined; call += 1) {
+    const startedAt = performance.now();
+    answer = await bindings.agent_activity({ clientRequestId: `progress-${call}`, limit: 24, full: true }) as Answer;
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(answer.count).toBe(24);
+    /* Every answer names the rest as pending, and no call loses ground. */
+    expect(answer.selection.hydrated + (answer.unverifiedCount ?? 0)).toBe(24);
+    expect(answer.selection.hydrated).toBeGreaterThanOrEqual(verified);
+    verified = answer.selection.hydrated;
+  }
+  expect(answer).not.toHaveProperty("evidence");
+  expect(answer).toMatchObject({ selection: { hydrated: 24, projected: 0, budget: "complete" } });
+  expect([...reads.values()]).toEqual(Array.from({ length: 24 }, () => 1));
+}, 60_000);
+
+test("a targeted agent_activity with a slow description answers inside its budget and the next call returns that transcript", async () => {
+  const now = Date.now();
+  const byPath = "/fixtures/targeted/by-path.jsonl";
+  const byConversation = "/fixtures/targeted/by-conversation.jsonl";
+  let describes = 0;
+  let catalogReads = 0;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: () => ({
+      now: () => now, probe: hostedProbe(now), pipelines: () => [],
+      registrySnapshot: () => ({ entries: {}, conversations: { conversation_targeted: { id: "conversation_targeted", generations: [{ path: byConversation }] } } }),
+      selectInventory: async () => { catalogReads += 1; return { entries: [], matched: 0, scanned: 0, hostedSeen: new Set<string>(), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }; },
+      describeTranscript: async (pathname: string) => {
+        describes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        return { path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: null, activity: null, activityReason: null };
+      },
+      transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
+    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  for (const [target, transcriptPath] of [[{ transcriptPath: byPath }, byPath], [{ conversationId: "conversation_targeted" }, byConversation]] as const) {
+    const startedAt = performance.now();
+    const first = await bindings.agent_activity({ clientRequestId: `targeted-first-${transcriptPath}`, full: true, ...target });
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(first).toMatchObject({ count: 0, evidence: "pending", unverifiedCount: 0, undescribedTargetCount: 1, selection: { scope: "targeted", recoveryPending: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const followUpStartedAt = performance.now();
+    const followUp = await bindings.agent_activity({ clientRequestId: `targeted-follow-${transcriptPath}`, full: true, ...target }) as { conversations: Array<{ transcriptPath: string; evidenceSource: string }> };
+    expect(performance.now() - followUpStartedAt).toBeLessThan(1_000);
+    expect(followUp).not.toHaveProperty("evidence");
+    expect(followUp).toMatchObject({ count: 1, selection: { scope: "targeted", recoveryPending: 0 } });
+    expect(followUp.conversations).toMatchObject([{ transcriptPath, evidenceSource: "transcript" }]);
+  }
+  expect(describes).toBe(2);
+  expect(catalogReads).toBe(0);
+
+  const caller = new AbortController();
+  const cancelled = bindings.agent_activity({ clientRequestId: "targeted-cancel", transcriptPath: "/fixtures/targeted/cancelled.jsonl" }, { signal: caller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const abortedAt = performance.now();
+  caller.abort();
+  await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  expect(performance.now() - abortedAt).toBeLessThan(100);
 }, 30_000);
 
 test("cancelling agent_activity after its catalog budget releases the scan it was waiting on", async () => {

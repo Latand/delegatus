@@ -32,8 +32,11 @@ and full answers. The rest of the 800 ms describes hosts the catalog lacks and
 reads transcript tails. When it ends, `evidence: "pending"` reports
 `unverifiedCount` rows projected without their tail (`evidenceSource:
 "projection"` in the full answer) and `undescribedHostCount` live hosts with no
-row yet. The tail reads left behind keep running, and the next call for the
-same unchanged transcript takes their result. A caller that cancels at any
+row yet. A call that names a transcript or a conversation describes that file
+inside the same 800 ms and reports `undescribedTargetCount` when it could not.
+The reads left behind keep running, and later calls take their result for as
+long as the file is the one that was read: its device, inode, size and
+modification time are checked on every call, and a changed file is read again. A caller that cancels at any
 point of the call releases its own wait on the scan; an ordinary pending answer
 keeps it.
 

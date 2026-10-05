@@ -5623,7 +5623,10 @@ async function agentActivity(
       stalledConfirmedCount: conversations.filter(row => row.lifecycle === "stalled" && row.evidenceSource === "transcript").length };
     const catalog = snapshot.selection.cacheStatus;
     const unverifiedCount = conversations.filter(row => row.evidenceSource === "projection").length;
-    const undescribedHostCount = snapshot.selection.recoveryPending;
+    /* A targeted call names transcripts, hosted or not; the count says which. */
+    const undescribed = snapshot.selection.recoveryPending > 0
+      ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
+      : {};
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
@@ -5632,8 +5635,8 @@ async function agentActivity(
          registry names. `stale`: the rows are an earlier generation's while a
          newer one is still being read. */
       ...(catalog === "pending" || catalog === "stale" ? { catalog } : {}),
-      ...(unverifiedCount > 0 || undescribedHostCount > 0
-        ? { evidence: "pending", unverifiedCount, ...(undescribedHostCount > 0 ? { undescribedHostCount } : {}) }
+      ...(unverifiedCount > 0 || snapshot.selection.recoveryPending > 0
+        ? { evidence: "pending", unverifiedCount, ...undescribed }
         : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
   } finally {
