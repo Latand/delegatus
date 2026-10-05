@@ -1,0 +1,918 @@
+{
+  "commit": "04ce6d8453c547bcffaf5411c397b9fdbb3b3764",
+  "frames": {
+    "1440-en-accept-unverified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 1,
+          "text": "Not checked from here\n\nThis server could not open its own address. That is common behind a router or proxy and does not block linking.\n\nCheck it from the other machine: open https://delegatus.example.com in a browser there. If Delegatus opens, the address works. Connecting checks it again from outside.\n\nCopy"
+        }
+      }
+    },
+    "1440-en-accept-verified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "1440-en-accept-blocked": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nThe certificate is not valid."
+        }
+      }
+    },
+    "1440-en-accept-host-rewritten": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nHost carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "1440-en-accept-host-rewritten-long": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "1440-en-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nnone\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "1440-en-accept-code": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "1440-en-accept-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "1440-en-connect-start": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-en-connect-version": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-en-connect-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-en-peers-version-mismatch": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-uk-accept-unverified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 1,
+          "text": "Звідси не перевірено\n\nСервер не зміг відкрити власну адресу. Так часто буває за роутером чи проксі, і це не заважає підключенню.\n\nПеревірте з іншої машини: відкрийте там https://delegatus.example.com у браузері. Якщо відкриється Delegatus, адреса працює. Під час підключення її ще раз перевірять ззовні.\n\nКопіювати"
+        }
+      }
+    },
+    "1440-uk-accept-verified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "1440-uk-accept-blocked": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nСертифікат недійсний."
+        }
+      }
+    },
+    "1440-uk-accept-host-rewritten": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nУ Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "1440-uk-accept-host-rewritten-long": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "1440-uk-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nнемає\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "1440-uk-accept-code": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "1440-uk-accept-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "1440-uk-connect-start": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-uk-connect-version": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-uk-connect-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "1440-uk-peers-version-mismatch": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-en-accept-unverified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 1,
+          "text": "Not checked from here\n\nThis server could not open its own address. That is common behind a router or proxy and does not block linking.\n\nCheck it from the other machine: open https://delegatus.example.com in a browser there. If Delegatus opens, the address works. Connecting checks it again from outside.\n\nCopy"
+        }
+      }
+    },
+    "390-en-accept-verified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "390-en-accept-blocked": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nThe certificate is not valid."
+        }
+      }
+    },
+    "390-en-accept-host-rewritten": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nHost carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "390-en-accept-host-rewritten-long": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "390-en-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nnone\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "390-en-accept-code": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "390-en-accept-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Reachable at this address."
+        }
+      }
+    },
+    "390-en-connect-start": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-en-connect-version": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-en-connect-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-en-peers-version-mismatch": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-uk-accept-unverified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 1,
+          "text": "Звідси не перевірено\n\nСервер не зміг відкрити власну адресу. Так часто буває за роутером чи проксі, і це не заважає підключенню.\n\nПеревірте з іншої машини: відкрийте там https://delegatus.example.com у браузері. Якщо відкриється Delegatus, адреса працює. Під час підключення її ще раз перевірять ззовні.\n\nКопіювати"
+        }
+      }
+    },
+    "390-uk-accept-verified": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "390-uk-accept-blocked": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nСертифікат недійсний."
+        }
+      }
+    },
+    "390-uk-accept-host-rewritten": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nУ Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "390-uk-accept-host-rewritten-long": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "390-uk-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nнемає\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "390-uk-accept-code": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "390-uk-accept-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": "Адреса доступна."
+        }
+      }
+    },
+    "390-uk-connect-start": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-uk-connect-version": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-uk-connect-connected": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    },
+    "390-uk-peers-version-mismatch": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": false,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 0,
+          "outside": 0,
+          "controls": 0,
+          "text": ""
+        }
+      }
+    }
+  },
+  "failures": []
+}

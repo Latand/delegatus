@@ -8,7 +8,7 @@
    never an owner token) and its own temp directory. */
 import { join } from "node:path";
 
-const DROPPED_PREFIX = /^(LLV_|NEXT_|__NEXT_)/;
+const DROPPED_PREFIX = /^(LLV_|DELEGATUS_|NEXT_|__NEXT_)/;
 const DROPPED_KEYS = new Set(["PORT", "HOSTNAME", "NODE_ENV", "TMPDIR"]);
 
 export function buildEnv(scratchRoot: string, base: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {

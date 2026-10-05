@@ -1,3 +1,5 @@
+import { checkoutDeployments } from "@/lib/selfUpdate/deployments";
+import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
@@ -79,8 +81,11 @@ export function ledgerDeployments(
   limit: number,
   env: NodeJS.ProcessEnv = process.env,
 ): DeploymentLedgerRead<ViewerDeploymentStatus[]> {
+  let checkout: ViewerDeploymentStatus[];
+  try { checkout = checkoutDeployments(env.LLV_STATE_DIR ? join(env.LLV_STATE_DIR, "self-update") : statePath("self-update")); }
+  catch { return unreadable(); }
   const db = openLedger(env);
-  if (!db) return unreadable();
+  if (!db) return checkout.length ? { state: "ok", value: checkout.slice().reverse().slice(0, limit) } : unreadable();
   try {
     const rows = db.query<{ id: string; state_json: string }, [string, number]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT ?`,
@@ -91,7 +96,7 @@ export function ledgerDeployments(
       if (!status) return unreadable();
       deployments.push(status);
     }
-    return { state: "ok", value: deployments };
+    return { state: "ok", value: [...deployments, ...checkout].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit) };
   } catch {
     return unreadable();
   } finally {
@@ -143,15 +148,18 @@ const NEWEST_DEPLOYMENT_FIRST = `
 export function latestLedgerDeployment(
   env: NodeJS.ProcessEnv = process.env,
 ): DeploymentLedgerRead<ViewerDeploymentStatus | null> {
+  let checkout: ViewerDeploymentStatus | null;
+  try { checkout = checkoutDeployments(env.LLV_STATE_DIR ? join(env.LLV_STATE_DIR, "self-update") : statePath("self-update")).at(-1) ?? null; }
+  catch { return unreadable(); }
   const db = openLedger(env);
-  if (!db) return unreadable();
+  if (!db) return checkout ? { state: "ok", value: checkout } : unreadable();
   try {
     const row = db.query<{ id: string; state_json: string }, [string]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT 1`,
     ).get("deployment");
-    if (!row) return { state: "ok", value: null };
+    if (!row) return { state: "ok", value: checkout };
     const status = deploymentStatus(row.state_json, row.id);
-    return status ? { state: "ok", value: status } : unreadable();
+    return status ? { state: "ok", value: checkout && Date.parse(checkout.createdAt) > Date.parse(status.createdAt) ? checkout : status } : unreadable();
   } catch {
     return unreadable();
   } finally {
@@ -167,6 +175,10 @@ export function ledgerDeployment(
   deploymentId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): DeploymentLedgerRead<ViewerDeploymentStatus | undefined> {
+  if (deploymentId.startsWith("checkout-")) {
+    try { return { state: "ok", value: checkoutDeployments(env.LLV_STATE_DIR ? join(env.LLV_STATE_DIR, "self-update") : statePath("self-update")).find(row => row.deploymentId === deploymentId) }; }
+    catch { return unreadable(); }
+  }
   const db = openLedger(env);
   if (!db) return unreadable();
   try {

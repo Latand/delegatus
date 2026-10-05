@@ -15,6 +15,7 @@
   "files": [
     "bin",
     "dist",
+    "patches",
     "vendor"
   ],
   "engines": {
@@ -37,6 +38,7 @@
     "start": "LLV_STATE_OWNER=viewer bun --bun node_modules/.bin/next start",
     "lint": "eslint",
     "prepack": "node scripts/prepack.mjs",
+    "postpack": "node scripts/package-revision.mjs --restore",
     "privacy:check": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json LLV_PRIVACY_OCR_LANGUAGES=eng+ukr bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main",
     "privacy:fingerprints": "bun scripts/generate-privacy-known-value-fingerprints.ts",
     "privacy:github-audit": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-github-audit.ts",
@@ -106,6 +108,7 @@
     "fast-uri": "^3.1.6"
   },
   "patchedDependencies": {
-    "next@16.3.6": "patches/next-16.3.6.patch"
+    "next@16.3.6": "patches/next-16.3.6.patch",
+    "braces@3.0.3": "patches/braces-3.0.3.patch"
   }
 }
