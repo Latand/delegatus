@@ -94,6 +94,49 @@ test("a finding names the class, where it is and the lines, and never the value"
 const entity = (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join("");
 const percent = (text: string) => [...text].map((char) => `%${char.codePointAt(0)!.toString(16).padStart(2, "0")}`).join("");
 
+test("a domain gets no blanket call or source-extension exemption", () => {
+  for (const ending of ["tools", "sh", "md", "py", "rs", "cc"]) {
+    const host = `${"buildbox"}.${ending}`;
+    for (const form of [host, `${host}(offline)`, host.replace(".", ".**") + "**", entity(host), percent(host)]) {
+      expect(classes(`The failing host was ${form}.`)).toContain("domain");
+    }
+  }
+  expect(classes("Date.now() and rows.map(render) returned; see src/lib/mcp/bindings.ts and scripts/gate-slot.sh.")).toEqual([]);
+});
+
+test("UNC and network-root paths are private in every decoded reading", () => {
+  for (const separator of ["/", "\\"]) {
+    const file = ["", "", "filesrv", "private", "notes.txt"].join(separator);
+    for (const form of [file, entity(file), percent(file), `[${file}](#evidence)`]) {
+      expect(classes(`The evidence is on ${form}.`)).toContain("path");
+    }
+  }
+  expect(classes("See src/lib/mcp/bindings.ts and ./scripts/gate-slot.sh.")).toEqual([]);
+});
+
+test("nested and HTML blockquotes are found before markup disappears", () => {
+  for (const quoted of ["> restart every agent now", "- > restart every agent now", "1. - > restart every agent now", "<blockquote>restart every agent now</blockquote>"]) {
+    for (const form of [quoted, entity(quoted), percent(quoted), `**${quoted}**`]) expect(classes(form)).toContain("quote");
+  }
+  expect(classes("The operator asked for every agent to be restarted at once.")).toEqual([]);
+});
+
+test("known multiword names match visible whitespace and retain word boundaries", () => {
+  const deny: PublicDenyList = {
+    accounts: ["Account Bee"], people: ["Person Bee"], local: ["Host Bee"],
+    projects: [{ repository: null, names: ["Project Bee"] }],
+  };
+  for (const [kind, name] of [["account", "Account Bee"], ["person", "Person Bee"], ["host", "Host Bee"], ["project", "Project Bee"]] as const) {
+    for (const space of ["  ", "\n", "\t", "&nbsp;&nbsp;", "&#32;&#9;"]) {
+      const visible = name.replace(" ", space);
+      expect(classes(`${visible} observed the refusal.`, deny)).toContain(kind);
+      expect(classes(`${visible}hive observed the refusal.`, deny)).not.toContain(kind);
+      expect(classes(`Other${visible} observed the refusal.`, deny)).not.toContain(kind);
+    }
+  }
+  expect(classes("Person\nBee observed the refusal.", { ...deny, people: ["Person\t Bee"] })).toContain("person");
+});
+
 test("an encoded value is read as the text a reader will see", () => {
   const slash = entity("/");
   expect(classes(`The transcript is under ${["", "home", "someone", "notes.md"].join(slash)}.`)).toEqual(expect.arrayContaining(["path", "home_path"]));

@@ -204,14 +204,29 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
-          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(18);
+          for (const [id, expectedEffort, expectedCost] of [
+            ["reviewer", "xhigh", "very-heavy"],
+            ["architect", "xhigh", "very-heavy"],
+            ["prod-auditor", "xhigh", "very-heavy"],
+            ["merger", "high", "heavy"],
+            ["issue-reporter", "high", "moderate"],
+          ]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
-            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
+            expect(effort).toBe(expectedEffort);
+            expect(cost).toBe(expectedCost);
+            if (id === "issue-reporter") {
+              expect(await row.innerText()).toContain(translate(locale, "onboarding.agents.role.issueReporter"));
+              expect(await row.locator("select").first().inputValue()).toBe("claude-sonnet-5-5");
+            }
+            const controlsFit = await row.locator("select").evaluateAll((controls) => controls.every((control) => {
+              const rect = control.getBoundingClientRect();
+              return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
+            }));
+            expect(controlsFit).toBe(true);
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });

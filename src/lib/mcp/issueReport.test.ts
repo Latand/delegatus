@@ -189,6 +189,65 @@ test("a clean report is stored under the digest of its exact text", async () => 
   expect(h.published).toEqual([]);
 });
 
+test("domains disguised as calls or files, UNC paths, nested quotes and spaced names never create a preview", async () => {
+  const h = harness({ deny: {
+    accounts: ["Account Bee"], people: ["Person Bee"], local: [],
+    projects: [{ repository: null, names: ["Project Bee"] }],
+  } });
+  const cases: [string, string][] = [
+    ["domain", `The failing host was ${"buildbox"}.${"tools"}(offline).`],
+    ["domain", `The failing host was ${"buildbox"}.${"sh"}.`],
+    ["path", `The evidence is on ${["", "", "filesrv", "private", "notes.txt"].join("/")}.`],
+    ["path", `The evidence is on ${["", "", "filesrv", "private", "notes.txt"].join("\\")}.`],
+    ["quote", "- > restart every agent now"],
+    ["quote", "1. - > restart every agent now"],
+    ["quote", "<blockquote>restart every agent now</blockquote>"],
+  ];
+  for (const [kind, name] of [["person", "Person Bee"], ["account", "Account Bee"], ["project", "Project Bee"]]) {
+    for (const space of ["  ", "\n", "\t", "&nbsp;&nbsp;"]) cases.push([kind, `${name.replace(" ", space)} observed the refusal.`]);
+  }
+  const encodings = [
+    (text: string) => text,
+    (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join(""),
+    (text: string) => encodeURIComponent(text),
+    (text: string) => `**${text}**`,
+  ];
+  for (const [kind, body] of cases) for (const encode of encodings) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encode(body) });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  expect(h.published).toEqual([]);
+  expect(await h.call(REPORTER, {
+    action: "preview", title: REPORT.title,
+    body: `${REPORT.body}\nSee docs/design/agent-prompt-contract.md and scripts/gate-slot.sh; Date.now() and rows.map(render) returned.\nThe operator asked for every agent to be restarted at once.`,
+  })).toMatchObject({ ok: true, state: "preview" });
+});
+
+test("plan data, token usage and a one-digit port are refused before a preview", async () => {
+  const h = harness();
+  for (const [kind, body] of [
+    ["usage", "The account has a free plan."],
+    ["usage", "The account tier is free."],
+    ["usage", "The account has a free-tier subscription."],
+    ["usage", "The usage observation was 120 tokens."],
+    ["usage", "The quota remaining was 120."],
+    ["port", "The listener used port 9."],
+    ["port", "The listener used port: 9."],
+  ]) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  expect(h.published).toEqual([]);
+  expect(await h.call(REPORTER, {
+    action: "preview", title: REPORT.title,
+    body: "The usage meter never refreshed. The investigation plan is to check its update path. The listener refused a connection.",
+  })).toMatchObject({ ok: true, state: "preview" });
+});
+
 test("the seat reads the preview back, and the operator's approving reply files exactly that text, once", async () => {
   const h = harness();
   const digest = await previewed(h);

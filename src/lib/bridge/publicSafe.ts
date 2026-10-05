@@ -93,8 +93,8 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["host", /\b[\w-]+\.local\b/i],
   ["host", /\blocalhost\b/i],
   ["domain", new RegExp(`\\b(?:[a-z0-9-]+\\.)+${TLD}\\b(?![.\\w])`, "i")],
-  ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{2,5}\b/i],
-  ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)\s+\d{2,5}\b/iu],
+  ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/i],
+  ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
   /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
   ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
@@ -130,11 +130,11 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
  *  - a domain is any dotted name, in any script, ending in a top-level domain
  *    of the root zone (`buildbox.fr`, `buildbox.tools`, `buildbox.xn--p1ai`,
  *    `вузол.укр`) or a private one (`.lan`, `.internal`), and any ending in
- *    `xn--`. The endings that are source file extensions stay readable, or no
- *    report could name `bindings.ts`, and so does a call written as code
- *    writes it (`Date.now()`, `rows.map(...)`): plain identifiers and the
- *    bracket straight after them. A bracket after a space is a remark in
- *    prose (`buildbox.tools (offline)`), and a host stays a host before it;
+ *    `xn--`. A source extension that is also a TLD is allowed only in a
+ *    repository-relative path (`scripts/gate-slot.sh`) or an exact known
+ *    root file (`README.md`). A bracket after a dotted name grants no
+ *    exemption: only a verified code call whose
+ *    name ends in a TLD (`Date.now()`, `rows.map(render)`) is allowed;
  *  - a path is every token a slash opens, whatever follows: one component
  *    (`/notes.txt`), a folder with punctuation in its name (`/My's data/x`).
  *    A repository-relative path has a name before its first slash and passes;
@@ -153,15 +153,34 @@ const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "locald
 const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
 /* Labels of any script, joined by any of the dots IDNA reads as one. */
 const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\()?/giu;
-/* A call as code writes it: ASCII identifiers, dots, the bracket. */
-const CODE_CALL = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\($/;
+/* Exact code references accepted by the report contract. A caller cannot
+   turn an arbitrary domain into a code reference by appending a bracket. */
+const VERIFIED_TLD_CALLS = new Set(["Date.now(", "rows.map("]);
+const VERIFIED_ROOT_SOURCE_FILES = new Set(["README.md"]);
+/* The prefix before a source file must open a relative token and contain a
+   folder. Absolute and network-root prefixes cannot match this reading. */
+const RELATIVE_SOURCE_PREFIX = /(?:^|[\s`[(])(?:\.{1,2}\/)?[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*\/$/u;
 /* A slash that opens a token. Before it: no name (`src/lib`), no dot
    (`./x`), no slash (`//`, a URL) and no star (a comment's end). After it:
    something other than a second slash, a star, a space or the `>` of a
    self-closing tag. A closing tag (`</b>`) is markup. */
 const SLASH_OPENED_PATH = /(?<![\p{L}\p{M}\p{N}_.*\/])(?<!<(?=\/[A-Za-z][A-Za-z0-9-]*\s*>))\/(?![\/*>\s])/u;
+/* Both UNC spellings, and Windows root-relative paths. Decoding Markdown's
+   escaped backslash can reduce a UNC prefix to one backslash, which remains
+   a local path. A server/share separator distinguishes it from punctuation. */
+const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[\p{L}\p{N}_.-]+[\/\\][^\s\/\\]/u;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
+/* Counts and plan facts also disclose usage without a percentage or price.
+   Plain technical timing and a prose investigation plan remain readable. */
+const PLAN_TIER = "(?:free|paid|basic|starter|business|premium|max|pro|plus|team|enterprise)";
+const STRICT_USAGE = [
+  new RegExp(`\\b${PLAN_TIER}[\\s-]+(?:plan|tier|subscription)\\b`, "i"),
+  new RegExp(`\\b(?:plan|tier|subscription)\\s*(?:is|was|:|=)\\s*${PLAN_TIER}\\b`, "i"),
+  /\b\d+(?:[.,]\d+)?\s*(?:tokens?|credits?)\b/i,
+  /\b(?:tokens?|credits?)\s*(?::|=|(?:used|remaining)\s*)?\s*\d+\b/i,
+  new RegExp(`${LIMIT_WORD}[^.;\\n]{0,40}?\\d+(?:[.,]\\d+)?`, "iu"),
+];
 
 function topLevelDomain(ending: string): boolean {
   const lower = ending.toLowerCase();
@@ -174,7 +193,9 @@ function topLevelDomain(ending: string): boolean {
 
 function strictDomain(text: string): boolean {
   for (const match of text.matchAll(DOTTED_NAME)) {
-    if ((match[2] && CODE_CALL.test(match[0])) || SOURCE_EXTENSIONS.has(match[1].toLowerCase())) continue;
+    if (match[2] && VERIFIED_TLD_CALLS.has(match[0])) continue;
+    if (!match[2] && VERIFIED_ROOT_SOURCE_FILES.has(match[0])) continue;
+    if (SOURCE_EXTENSIONS.has(match[1].toLowerCase()) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
     if (topLevelDomain(match[1])) return true;
   }
   return false;
@@ -190,7 +211,8 @@ function escape(text: string): string {
 }
 
 function wholeWord(name: string): RegExp {
-  return new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name)}(?![\\p{L}\\p{N}_])`, "iu");
+  const words = name.split(/\s+/u).map(escape).join("\\s+");
+  return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${words}(?![\\p{L}\\p{M}\\p{N}_])`, "iu");
 }
 
 function usableName(name: string): boolean {
@@ -220,8 +242,9 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
-    if (SLASH_OPENED_PATH.test(text)) found.add("path");
+    if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
+    if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
   }
   if (namesHit(text, deny.accounts, usable)) found.add("account");
   if (namesHit(text, deny.people, usable)) found.add("person");
