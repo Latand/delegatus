@@ -33,7 +33,7 @@ export function spawnTaskProjectError(taskId: unknown, cwd: string, readTasks: t
 /** Roles with zero child-spawn capability (#393). A hardcoded contract
     constant: role overrides only carry config/promptScaffold, so no
     persisted preset can widen this set. */
-export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer", "merger"]);
+export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer", "merger", "issue-reporter"]);
 
 export function isSpawnDeniedRole(role: string | null | undefined): boolean {
   return typeof role === "string" && SPAWN_DENIED_ROLE_IDS.includes(role);

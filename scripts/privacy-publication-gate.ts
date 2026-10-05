@@ -9,6 +9,7 @@ import { inflateSync } from "node:zlib";
 
 import { decodeHTMLStrict } from "entities";
 import { preparedPrivacyText } from "./privacy-text-preparation";
+import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
 
 import {
   compactSensitiveText,
@@ -76,12 +77,6 @@ const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile"
 const maxPublicationBytes = 32 * 1024 * 1024;
 const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
-const credentialInputPattern = new RegExp([
-  String.raw`<in`,
-  String.raw`put\b(?=[^>]*(?:type\s*=\s*["']?password|name\s*=\s*["']?(?:api[_-]?key|password|secret|token)))`,
-  String.raw`(?=[^>]*value\s*=\s*(?:["'][^"']{4,}["']|[^\s"'=<>]{4,}))[^>]*>`,
-].join(""), "i");
-
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
 // Entries require explicit operator approval; see docs/privacy-publication.md.
@@ -1710,64 +1705,10 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   const { error, searchable: searchableText } = normalized;
   if (prepared.staticFindings === undefined) {
     if (error || known.error) findings.add("inspection_error");
-    const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
-    for (let match = unixHomePattern.exec(searchableText); match; match = unixHomePattern.exec(searchableText)) {
-      if (match[1].toLowerCase() === "user") continue;
-      findings.add("home_path");
-      break;
-    }
-    const windowsHomePattern = /(?:^|[\s"'(])[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|$)/gim;
-    for (let match = windowsHomePattern.exec(searchableText); match; match = windowsHomePattern.exec(searchableText)) {
-      if (match[1].toLowerCase() === "user") continue;
-      findings.add("home_path");
-      break;
-    }
     // Decode encoded boundaries without removing their default-ignorable code
     // points. Both the original and decoded characters must meet the unit rule.
     if (emailTextViews(text).some((view) => hasEmailAddress(view.text, view.source))) findings.add("email_address");
-    const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
-    if (credentialAssignmentPattern.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/.test(searchableText)) {
-      findings.add("credential");
-    }
-    const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
-    const splitTokenPrefix = new RegExp([
-      `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
-      `g${separator}h${separator}[pousr]`,
-      `x${separator}o${separator}x${separator}[baprs]`,
-      `s${separator}k`,
-    ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
-    for (const line of searchableText.split(/\r?\n/)) {
-      splitTokenPrefix.lastIndex = 0;
-      for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
-        const compactTail = compactSensitiveText(line.slice(match.index));
-        if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
-          findings.add("credential");
-          break;
-        }
-      }
-      if (findings.has("credential")) break;
-    }
-    if (/\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/https?:\/\/[^\s/@:]+:[^\s/@]+@/i.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (credentialInputPattern.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/.test(searchableText)) {
-      findings.add("private_network");
-    }
-    if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(searchableText)) {
-      findings.add("resource_identifier");
-    }
-    if (/(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im.test(searchableText)) {
-      findings.add("transcript_content");
-    }
+    for (const finding of staticSensitiveClasses(searchableText)) findings.add(finding);
     prepared.staticFindings = [...findings];
   }
   let matchesKnownValue = knownValueMatches.get(prepared);

@@ -60,7 +60,11 @@
  * reviewer and a fix stage, briefs never name how an agent ends, nothing names
  * a language, a tool or this product's own code, a GitHub issue is optional,
  * and the seat has a personality: warm, teasing a little, speaking the
- * operator's way, and proactive inside the work the operator accepted. */
+ * operator's way, and proactive inside the work the operator accepted. v40
+ * (#2518) gives a seat a sanctioned way to report a Delegatus failure: it
+ * asks first, a read-only reporter writes a scrubbed preview, and only the
+ * operator's yes to that exact text publishes it. The same section sends
+ * another project's work to that project's seat. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -88,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 39;
+export const ORCHESTRATOR_PROMPT_VERSION = 40;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -247,6 +251,28 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
+
+/** Identifies the section below inside a mandate, however its body was edited. */
+export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
+
+/**
+ * Two rules every seat carries (#2518), delivered like the sections above so
+ * a bespoke or older mandate receives them at its next spawn, adoption or
+ * rotation.
+ *
+ * The first is the only sanctioned way a seat reports a Delegatus failure.
+ * Each step is the operator's: the question, then the yes to the exact text.
+ * `issue_report` holds the other half: publication takes a preview's digest
+ * and never a text, from a seat that read the preview back.
+ *
+ * The second keeps one manager per board. `create_task`, `create_pipeline`
+ * and `spawn_agent` refuse a seat acting on a project that has its own seat
+ * (`refuseCrossProjectFromSeat` in `mcp/bindings.ts`); the operator's explicit
+ * request, quoted in `crossProjectRequest`, is what lifts that.
+ */
+export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
+When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask again. Publish (issue_report publish, the digest, their words) only on an explicit yes to that text in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
+Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context. Never create tasks or pipelines on its board, spawn agents there or message its workers; only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -442,6 +468,8 @@ Set finishesTask: true on create_pipeline (or pipeline_action link-task with fin
 When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, putting the work in motion without a confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. The explicit draft request may come in your own conversation or through the gateway; both channels carry the same authority.
 Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.
 
+${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
+
 ## Fences
 - Operate exclusively through the Delegatus MCP tools (tasks, pipelines, spawns, conversations, board reads). No direct process or runtime manipulation.
 - The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents, and wins where the two disagree about that.
@@ -535,12 +563,13 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
+  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
   { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
 /** Every seat receives the initial-status contract, the clock handover with
-    the seat tick contract (#2030), the board report section AND the
-    task-ownership section (#1720),
+    the seat tick contract (#2030), the board report section, the bug report
+    and other-project section (#2518) AND the task-ownership section (#1720),
     whatever mandate it holds. Each is appended
     at the seat lifecycle moments that deliver a mandate — a spawn, an adoption,
     a rotation — so a seat that is already running receives it at its next one.

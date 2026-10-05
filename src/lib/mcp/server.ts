@@ -103,6 +103,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_media",
   "telegram_bot_send_document",
   "telegram_bot_messages",
+  "issue_report",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -182,6 +183,9 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  /* Records a preview and files one issue (#2518). A replayed clientRequestId
+     must answer with the issue the first call filed, never file a second. */
+  "issue_report",
 ]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
@@ -2935,6 +2939,11 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
+          /* #2518: issue_report's refusals and the cross-project refusal name
+             their code too, and say whether the same call can succeed later. */
+          const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
+            && (typedTool === "issue_report" || error.details.code === "cross_project_refused")
+            ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -2949,9 +2958,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? botRefusal?.code ?? "tool_failed",
+            taskCode ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            botRefusal ? botRefusal.retryable : taskCode === null,
+            botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -3185,6 +3194,13 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every write is recorded with who made it and when, on the setting and in the Update dialog's history. Idempotent by clientRequestId.",
   ].join(" "),
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
+  issue_report: [
+    "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
+    "action preview takes `title` and `body` and checks both against what a public report never carries: hosts, domains, addresses, ports, local paths, emails, ids, usage or plan data, credentials, lines copied from a conversation, quoted blocks, embedded images, and the names this machine knows (accounts, people, other projects, the local user). A report with any of them is refused with `issue_report_private_data` and `findings` (class, meaning, title or body, lines) and nothing is stored; reword those lines and preview again. A clean report is stored and answered with its `digest`. Any identified session may preview.",
+    "action show takes `digest` and answers the stored `title` and `body` exactly. An orchestrator seat shows that text to the operator in chat, unchanged, and asks for approval with suggest_replies.",
+    "action publish takes `digest` and `approval`, the operator's approving words from the seat's own conversation, and files the stored text as one issue. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused and nothing is sent. A changed title or body is a new preview with a new digest and needs a new approval. The answer carries `issueUrl`.",
+    "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
+  ].join(" "),
   telegram_bot_chats: [
     "List the chats the operator's connected Telegram bot knows: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the bot's `receiving` state and note.",
     "A chat appears once the bot has been added to it or has received a message there. Only chats the operator allowlisted with an alias accept posts. Left or removed chats are hidden unless includeInactive is true.",
@@ -3427,6 +3443,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     project: z.string().optional()
       .describe("Optional. The target project is resolved server-side from cwd; a value that contradicts it is refused before anything is claimed or dispatched."),
     allowSubagents: z.boolean().optional(),
+    crossProjectRequest: z.string().optional()
+      .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     notifyLauncher: z.boolean().optional()
       .describe("Default true: each time a turn of the new agent ends, you receive one message from it with its final message. false turns that off for this launch."),
     mcpServers: z.array(z.string().regex(/^[^\s\u0000-\u001f\u007f]{1,128}$/u))
@@ -3451,6 +3469,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
     project: z.string().min(1),
+    crossProjectRequest: z.string().optional()
+      .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
     hold: taskHoldInputSchema.optional(),
     steps: taskStepsInputSchema.optional(),
@@ -3537,6 +3557,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     finishesTask: z.union([z.boolean(), z.array(z.string())]).optional()
       .describe("#2187: true marks every task in taskIds as one this pipeline finishes; a list marks those ids, and an id outside taskIds is dropped and named in the answer's finishesTaskDropped. A marked lane's task moves to Done when the lane completes (merge setting off) or when its PR merges (on), once no other started pipeline on the task is open. pipeline_action link-task with finishes changes it later."),
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
+    crossProjectRequest: z.string().optional()
+      .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
     baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),
@@ -4034,6 +4056,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema.optional(),
     engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
+  }).passthrough(),
+  issue_report: z.object({
+    clientRequestId: clientRequestIdSchema,
+    action: z.enum(["preview", "show", "publish"]).describe("preview: check and store a title and body. show: read a stored preview back. publish: file an approved preview."),
+    title: z.string().optional().describe("preview only: the issue title, one line."),
+    body: z.string().optional().describe("preview only: the issue body in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
+    digest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("show and publish: the digest a preview answered."),
+    approval: z.string().optional().describe("publish only: the operator's approving words, quoted from the seat's own conversation."),
   }).passthrough(),
   telegram_bot_chats: z.object({
     clientRequestId: clientRequestIdSchema,

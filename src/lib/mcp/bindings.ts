@@ -84,6 +84,10 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { delegatusIssueRepository, issueReportPublisher, type IssueReportPublisher } from "@/lib/issueReports/publish";
+import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
+import { markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, saveIssueReportPreview, type IssueReportPreview } from "@/lib/issueReports/store";
+import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { renderPlain, renderReport, type TaskChanges } from "@/lib/bridge/reportRender";
 import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
 import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
@@ -855,6 +859,14 @@ export interface ViewerMcpDomainDependencies {
   recoveryPredecessors?(project: string, conversationId: string): readonly string[];
   /** #1582: read one request-bound spawn admission fence. */
   readSpawnAdmissionFence?(clientAttemptId: string): SpawnAdmissionFence | null;
+  /** #2518: files an approved bug report. Absent means production, which
+      goes through the engine's GitHub write seam. */
+  issueReportPublisher?: IssueReportPublisher;
+  /** #2518: `owner/name` the report is filed in. Absent means the repository
+      Delegatus's own manifest names. */
+  issueReportRepository?(): string | null;
+  /** #2518: where previews are stored. Absent means the state directory. */
+  issueReportsDir?(): string;
 }
 
 /**
@@ -1387,7 +1399,7 @@ export function defaultMcpSpawnRoleParams(
 export function spawnDispatchBody(args: McpToolArgs, clientAttemptId: string, launcherConversationId: string | null = null): Record<string, unknown> {
   /* The launcher is the server's attribution of the caller, never an
      argument: a caller-supplied value is dropped before the route sees it. */
-  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId"]);
+  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId", "crossProjectRequest"]);
   const roleParams = defaultMcpSpawnRoleParams(args);
   return {
     ...body,
@@ -1475,6 +1487,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
      calls a recoverable spawn with one on each first dispatch, and a replay is
      answered from the receipt without reaching this function. */
   if (dependencies) refuseMcpSpawnSizing(args, dependencies);
+  refuseCrossProjectFromSeat("spawn_agent", () => (text(args.cwd) ? projectForCwd(spawnCwd(args)) : null), args, dependencies);
   /* #1490: the persisted downstream key wins over a recomputation — it is the
      key the claim was bound to and the one recovery will look up. */
   const clientAttemptId = context?.binding?.downstreamKey ?? spawnAttemptId(requestId(args));
@@ -1667,6 +1680,154 @@ function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task
   }
 }
 
+/**
+ * Cross-project work goes seat to seat (#2518).
+ *
+ * A project's designated seat is the one manager that tracks what runs on its
+ * board, so another project's seat does not put a task, a pipeline or an agent
+ * there by itself: it hands the work over with send_message_to_orchestrator.
+ * The call is refused. A warning would arrive with the work already on the
+ * other board and its seat already bypassed; a refusal costs one more call.
+ *
+ * Two things lift it. The operator asked for exactly this, which the seat
+ * states by quoting the request in `crossProjectRequest`; or the target has no
+ * designated seat, so there is nobody to hand over to and a seat cannot
+ * create one. Only a seat is judged: a worker, a stage and the operator's own
+ * session launch as they did.
+ */
+function refuseCrossProjectFromSeat(
+  tool: "create_task" | "create_pipeline" | "spawn_agent",
+  /* Read only for a seat: resolving a directory's project is not free, and a
+     launch that names none is refused by its own tool. */
+  targetOf: () => string | null,
+  args: McpToolArgs,
+  dependencies: ViewerMcpDomainDependencies | undefined,
+): void {
+  if (!dependencies || text(args.crossProjectRequest)) return;
+  let caller: CallerAttribution;
+  try { caller = attributionOf(dependencies); } catch { return; }
+  if (caller.kind !== "manager" || !caller.conversationId) return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const own = seats.find((seat) => seat.conversationId === caller.conversationId)?.project;
+  if (!own) return;
+  let target: string | null = null;
+  try { target = targetOf(); } catch { /* An unreadable target is the tool's own refusal. */ }
+  if (target === null || !target) return;
+  const named: string = target;
+  const seatProject = canonicalOrchestratorProject(own);
+  const targetProject = canonicalOrchestratorProject(named);
+  if (seatProject === targetProject) return;
+  if (!seats.some((seat) => !!seat.project && canonicalOrchestratorProject(seat.project) === targetProject)) return;
+  throw new McpToolRefusal(
+    `${tool} from an orchestrator seat onto another project's board is refused: that project's own seat manages its board. `
+    + "Hand the work over with send_message_to_orchestrator, giving that project and the task context. "
+    + "When the operator explicitly asked you to act on that project directly, repeat the call with crossProjectRequest quoting their request.",
+    { code: "cross_project_refused", status: 403, retryable: false, tool, seatProject, targetProject, use: "send_message_to_orchestrator" },
+  );
+}
+
+/** The names a Delegatus bug report is checked against: everything a public
+    manager report is, with Delegatus itself as the one project it may name. */
+async function issueReportDenyList(control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<PublicDenyList> {
+  let own: string | null = null;
+  try { own = (dependencies.viewerProjects?.() ?? viewerOwnProjects())[0] ?? null; } catch { /* No project is exempt. */ }
+  if (dependencies.publicDenyList) return dependencies.publicDenyList(own);
+  const deny = await productionPublicDenyList(own, control, true);
+  const delegatus = delegatusIssueRepository(viewerPackageManifest.repository.url)?.toLowerCase() ?? null;
+  return { ...deny, projects: deny.projects.filter((project) => !delegatus || project.repository?.toLowerCase() !== delegatus) };
+}
+
+/**
+ * issue_report (#2518): a Delegatus bug report from preview to publication.
+ *
+ * - `preview` refuses a report that carries private data and stores a clean
+ *   one under the digest of its text;
+ * - `show` answers the stored text, and notes that a seat read it;
+ * - `publish` takes a digest and never a text. It files what is stored under
+ *   that digest, only for a seat that read it back, and only once.
+ *
+ * So the text an operator approved and the text that is filed are one stored
+ * value, and an edit cannot ride an old approval: it has another digest.
+ */
+async function issueReportTool(args: McpToolArgs, control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const action = text(args.action);
+  const caller = attributionOf(dependencies);
+  const directory = dependencies.issueReportsDir?.();
+  const refuse = (message: string, code: string, extra: McpToolPayload = {}) => new McpToolRefusal(message, { code, status: 400, retryable: false, ...extra });
+  if (action === "preview") {
+    if (caller.kind === "unidentified" || !caller.conversationId) throw refuse("a preview needs an identified calling session", "issue_report_caller_unidentified", { status: 403 });
+    const title = typeof args.title === "string" ? args.title.trim() : "";
+    const body = typeof args.body === "string" ? args.body.trim() : "";
+    if (!title || !body) throw refuse("preview needs a title and a body", "issue_report_invalid");
+    if (/[\r\n]/.test(title) || title.length > ISSUE_REPORT_MAX_TITLE_CHARS) throw refuse(`the title is one line of at most ${ISSUE_REPORT_MAX_TITLE_CHARS} characters`, "issue_report_invalid", { field: "title" });
+    if (body.length > ISSUE_REPORT_MAX_BODY_CHARS) throw refuse(`the body is at most ${ISSUE_REPORT_MAX_BODY_CHARS} characters`, "issue_report_invalid", { field: "body" });
+    const findings = scrubIssueReport({ title, body }, await issueReportDenyList(control, dependencies));
+    if (findings.length) {
+      throw refuse(
+        `the report carries private data and was not stored: ${findings.map((finding) => `${finding.label} (${finding.where} line ${finding.lines.join(", ")})`).join("; ")}. Reword those lines and preview again.`,
+        "issue_report_private_data", { findings },
+      );
+    }
+    const preview = recordIssueReportPreview({ title, body }, caller.conversationId, { directory });
+    return {
+      state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
+      ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
+      next: "Return this digest with the title and body as your PREVIEW. Publication is the orchestrator seat's, after the operator approves this exact text.",
+    };
+  }
+  const digest = text(args.digest);
+  if (!digest) throw refuse(`${action} needs the digest a preview answered`, "issue_report_invalid", { field: "digest" });
+  const stored = readIssueReportPreview(digest, directory);
+  if (!stored) {
+    throw refuse(
+      "no stored preview has this digest, so nothing was published: only the previewed text is ever filed. Preview the report again and ask the operator to approve that text.",
+      "issue_report_digest_mismatch", { status: 409 },
+    );
+  }
+  const seat = caller.kind === "manager" && !caller.via ? caller.conversationId : null;
+  const view = (preview: IssueReportPreview): McpToolPayload => ({
+    state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
+    ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
+  });
+  if (action === "show") return view(seat ? markIssueReportShown(digest, seat, directory) ?? stored : stored);
+  if (action !== "publish") throw refuse("action is preview, show or publish", "issue_report_invalid", { field: "action" });
+  if (!seat) {
+    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
+  }
+  if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
+  const approval = text(args.approval);
+  if (!approval) throw refuse("publish needs approval: the operator's approving words from your own conversation", "issue_report_approval_required", { field: "approval" });
+  if (!stored.shownTo.includes(seat)) {
+    throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
+  }
+  if (stored.state === "publishing") {
+    throw refuse("an earlier publication of this preview did not report its outcome; look for the issue in the repository before anything is filed again", "issue_report_outcome_unknown", { status: 409 });
+  }
+  const findings = scrubIssueReport(stored, await issueReportDenyList(control, dependencies));
+  if (findings.length) throw refuse("the stored preview no longer passes the private data check and was not published; preview a reworded report", "issue_report_private_data", { findings });
+  const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
+  if (!repository) throw refuse("this Delegatus install names no GitHub repository to file a report in", "issue_report_repository_unknown");
+  const startedAt = new Date().toISOString();
+  saveIssueReportPreview({ ...stored, state: "publishing", publication: { by: seat, approval, startedAt } }, directory);
+  let issueUrl: string;
+  try {
+    issueUrl = await (dependencies.issueReportPublisher ?? issueReportPublisher())({ title: stored.title, body: stored.body }, repository);
+  } catch (error) {
+    /* A command the system stopped may have reached the forge; anything else
+       ended before an issue existed, so the preview can be published again. */
+    const failure = error as { killed?: unknown; signal?: unknown; stderr?: unknown; message?: unknown };
+    if (failure.killed || failure.signal) throw new McpDispatchUncertainError("the publication was interrupted and its outcome is unknown; look for the issue in the repository before anything is filed again");
+    saveIssueReportPreview(stored, directory);
+    const reason = error instanceof ForgeAppWriteRefused
+      ? error.message
+      : `${typeof failure.stderr === "string" && failure.stderr.trim() ? failure.stderr.trim().split("\n")[0] : String(failure.message ?? "the forge refused the issue")}`;
+    throw refuse(`the report was not published: ${reason}`, "issue_report_publish_failed", { status: 502, retryable: true });
+  }
+  const published = { ...stored, state: "published" as const, publication: { by: seat, approval, startedAt, publishedAt: new Date().toISOString(), issueUrl } };
+  saveIssueReportPreview(published, directory);
+  return { ...view(published), published: true };
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -1676,8 +1837,9 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
   assertMaintenanceWrite(maintainer, args, undefined, true);
+  refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
-    ...args,
+    ...withoutKeys(args, ["crossProjectRequest"]),
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
@@ -1845,7 +2007,8 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
 
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
-  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+  refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
+  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -6268,6 +6431,7 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
   return {
@@ -6493,9 +6657,13 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      bind: (args) => ({ caller: recoveryCaller(domainDependencies),
-        target: { project: projectForCwd(required(args, "repoDir")), identity: path.resolve(required(args, "repoDir")) },
-        downstreamKey: `create_pipeline:${requestId(args)}` }),
+      bind: (args) => {
+        const project = projectForCwd(required(args, "repoDir"));
+        refuseCrossProjectFromSeat("create_pipeline", () => project, args, domainDependencies);
+        return { caller: recoveryCaller(domainDependencies),
+          target: { project, identity: path.resolve(required(args, "repoDir")) },
+          downstreamKey: `create_pipeline:${requestId(args)}` };
+      },
       recover: async (binding, options): Promise<McpRecoveryEvidence> => {
         if (options.legacy) return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "creation has no caller-bound receipt", ids: {}, ownership: "unknown" };
         const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
@@ -6603,5 +6771,6 @@ export function viewerMcpBindings(
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
+    issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
 }

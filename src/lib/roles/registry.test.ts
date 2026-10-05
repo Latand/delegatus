@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, PROCESS_CLEANUP_MARKER } from "./defaults";
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
@@ -30,7 +30,7 @@ test("maintainer preserves review and release ownership and treats retired seats
   expect(resolved.value.prompt).toContain("Hide only a confirmed retired orchestrator seat card");
 });
 
-test("role registry exposes the ten role ids and campaign-ready orchestrator config", () => {
+test("role registry exposes the eleven role ids and campaign-ready orchestrator config", () => {
   const roles = listRoles();
 
   expect(roles.map((role) => role.id)).toEqual([
@@ -44,6 +44,7 @@ test("role registry exposes the ten role ids and campaign-ready orchestrator con
     "deployer",
     "merger",
     "maintainer",
+    "issue-reporter",
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
@@ -56,6 +57,7 @@ test("role registry exposes the ten role ids and campaign-ready orchestrator con
     maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
     merger: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
     deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
+    "issue-reporter": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
   });
 
   const orchestrator = resolveRole("orchestrator", {
@@ -124,7 +126,7 @@ test("role registry rejects unknown and missing required parameters with bounded
   });
   expect(resolveRole("no-such-role", {})).toEqual({
     ok: false,
-    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer)",
+    error: "unknown role: no-such-role (allowed: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter)",
   });
 });
 
@@ -160,7 +162,7 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
    only if every registry role renders it, so assert the whole registry. */
 test("every registry role scaffold carries the process-cleanup rule", () => {
   const roles = listRoles();
-  expect(roles.length).toBe(10);
+  expect(roles.length).toBe(11);
   for (const definition of roles) {
     /* The renderer both the spawn path and the pipeline stage lookup call, so
        a role whose required params are unset (a stage resolves them to registry
@@ -392,4 +394,26 @@ test("a role spawn ends with the verdict line, and a seat or a role-less spawn d
   expect(child).not.toContain(SPAWN_COMPLETION);
   expect(roleSpawnPrompt(null, "Just this.")).toBe("Just this.");
   expect(SPAWN_COMPLETION).toContain("Verdict: pass, Verdict: fail or Verdict: needs_decision");
+});
+
+/* #2518: the reporter is read-only, cannot publish, and carries the scrub
+   rules in the words the issue lists them. */
+test("the issue-reporter preset is read-only, previews and never publishes, and states every scrub rule", () => {
+  const resolved = resolveRole("issue-reporter", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  expect(resolved.value.definition.capabilities).toEqual(["read-only"]);
+  const text = resolved.value.prompt;
+  expect(text).toContain(ISSUE_REPORT_SCRUB_RULE);
+  for (const rule of [
+    "hostnames", "domains", "IP addresses", "ports", "local paths", "usernames", "account names", "emails",
+    "project or repository names other than Delegatus", "conversation, task or pipeline ids", "people's names", "secrets",
+    "usage or plan data", "quotes from the operator's conversations",
+  ]) expect(ISSUE_REPORT_SCRUB_RULE).toContain(rule);
+  expect(ISSUE_REPORT_SCRUB_RULE).toContain("a screenshot may follow once the operator has redacted it");
+  for (const section of ["Symptom", "Observed evidence", "Impact", "Expected behaviour", "Suggested investigation"]) expect(text).toContain(section);
+  expect(text).toContain("Search the open issues of Delegatus's own repository");
+  expect(text).toContain('Call issue_report with action "preview"');
+  expect(text).toContain("You never publish.");
+  expect(text).toContain("no edits, staging, commits, pushes, service restarts, forge comments or issues");
+  expect(text).toContain("the only write is issue_report with action preview");
 });

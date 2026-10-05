@@ -98,6 +98,14 @@ App holds no permission for (an issue, a workflow dispatch, a run rerun, a
 release, a comment) is not on the list, is not rerouted, and runs as it always
 did. Adding a kind is a decision about the App's permissions.
 
+One issue is filed by Delegatus itself: the bug report an operator approved
+(`issue_report`, `src/lib/issueReports/publish.ts`). In a declared App
+repository it goes out as the App on a token asked for `issues: write` and
+`metadata: read` alone (`FORGE_APP_ISSUE_PERMISSIONS`), so the App needs the
+`issues` permission granted before a report can be filed there; without it the
+report is refused and nothing is sent as a person. An agent's own
+`gh issue create` is not covered and runs as it always did.
+
 One action has one classification in every spelling `gh` accepts: `pr new`
 for `pr create`, a pull request given as its URL (which names the repository
 from any directory, before `--repo`), a REST path or its absolute
