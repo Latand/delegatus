@@ -4,8 +4,12 @@
  *
  * These are normalized application events. The simulator emits them from a
  * script; a future official-realtime adapter derives them from provider,
- * playback and delivery/report events. The window consumes one reducer over
- * this stream and has no branch for either source.
+ * playback and delivery/report events. The companion consumes one reducer
+ * over this stream and has no branch for either source.
+ *
+ * Transcript events carry the text the model generated. Generation runs ahead
+ * of playback and carries no word timing, so a transcript says nothing about
+ * which words were heard; playback events alone say how much audio played.
  *
  * Pure and dependency-free: the reducer runs in the browser and in tests.
  */
@@ -51,6 +55,8 @@ export type Payload =
   | { type: "playback.started"; responseId: Id; itemId: Id }
   | { type: "playback.level"; responseId: Id; itemId: Id; rms: number; playedMs: number }
   | { type: "playback.stopped"; responseId: Id; itemId: Id; playedMs: number; reason: "ended" | "interrupted" | "muted" | "closed" }
+  | { type: "tool.called"; callId: Id; name: string; summary: string }
+  | { type: "tool.result"; callId: Id; status: "done" | "failed"; summary: string }
   | { type: "delegation.tool.called"; callId: Id; sourceItemId: Id; instruction: string }
   | { type: "delegation.confirmation.required"; proposal: Proposal }
   | { type: "delegation.confirmed"; proposalId: Id; via: "tap" | "speech"; confirmationItemId?: Id }

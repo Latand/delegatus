@@ -1,13 +1,12 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion&delivered=1",
-  "pane": "production LogFeed (seat panel on the desktop, the conversation view on the phone)",
+  "pane": "production LogFeed in the orchestrator seat panel",
   "required": {
     "contrast": 4.5
   },
   "cases": [
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "light",
@@ -23,13 +22,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "light",
@@ -45,13 +40,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "dark",
@@ -67,13 +58,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "dark",
@@ -89,13 +76,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "light",
@@ -111,13 +94,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "light",
@@ -133,13 +112,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "dark",
@@ -155,13 +130,9 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "desktop",
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "dark",
@@ -177,14 +148,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 34,
-      "clipped": 0,
-      "gapToInternal": 93
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "en",
       "scheme": "light",
       "seatEngine": "claude",
@@ -199,14 +166,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "en",
       "scheme": "light",
       "seatEngine": "codex",
@@ -221,14 +184,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "en",
       "scheme": "dark",
       "seatEngine": "claude",
@@ -243,14 +202,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "en",
       "scheme": "dark",
       "seatEngine": "codex",
@@ -265,14 +220,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "uk",
       "scheme": "light",
       "seatEngine": "claude",
@@ -287,14 +238,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "uk",
       "scheme": "light",
       "seatEngine": "codex",
@@ -309,14 +256,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "uk",
       "scheme": "dark",
       "seatEngine": "claude",
@@ -331,14 +274,10 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     },
     {
-      "surface": "phone",
-      "viewport": "390x844",
+      "viewport": "1000x800",
       "lang": "uk",
       "scheme": "dark",
       "seatEngine": "codex",
@@ -353,10 +292,7 @@
       "authorAgentLabel": false,
       "relayRows": 1,
       "insidePane": true,
-      "authorWraps": 1,
-      "headerHeight": 41,
-      "clipped": 0,
-      "gapToInternal": 110
+      "clipped": 0
     }
   ]
 }

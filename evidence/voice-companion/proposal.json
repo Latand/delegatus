@@ -1,0 +1,367 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&script=proposal",
+  "rule": "the instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 2,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 3,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 1,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 3,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 2,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 3,
+      "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Cancel",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 86,
+          "height": 30
+        },
+        {
+          "label": "Send",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 76,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 1,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 3,
+      "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
+      "scrollHeight": 66,
+      "clientHeight": 66,
+      "instructionInside": true,
+      "elementInside": true,
+      "lines": 4,
+      "buttons": [
+        {
+          "label": "Скасувати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 109,
+          "height": 30
+        },
+        {
+          "label": "Надіслати",
+          "inside": true,
+          "reachable": true,
+          "clipped": false,
+          "width": 108,
+          "height": 30
+        }
+      ]
+    }
+  ]
+}

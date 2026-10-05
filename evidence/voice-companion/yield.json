@@ -1,141 +1,119 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion",
-  "behaviour": "the window follows the pointer while held; on the drop it moves to the nearest free rectangle, or docks when none exists",
-  "desktop": {
+  "behaviour": "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses",
+  "drag": {
     "before": {
-      "x": 1120,
-      "y": 328,
-      "width": 304,
-      "height": 300
+      "block": {
+        "x": 904,
+        "y": 384,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 614,
+        "y": 172,
+        "width": 280,
+        "height": 360
+      }
     },
     "overComposer": {
       "heldOverControls": true,
       "held": {
-        "x": 505,
-        "y": 600,
-        "width": 304,
-        "height": 300
+        "x": 546,
+        "y": 632,
+        "width": 132,
+        "height": 148
       },
       "dropped": {
-        "layout": "float",
-        "phase": "offline",
-        "bounds": {
+        "block": {
           "x": 544,
-          "y": 344,
-          "width": 304,
-          "height": 300
+          "y": 496,
+          "width": 132,
+          "height": 148
         },
-        "insideViewport": true,
-        "controls": 80,
-        "overlapArea": 0,
-        "covered": [],
-        "minClearance": 10,
-        "pointerHits": 0,
-        "clipped": [],
-        "reserve": null,
-        "surfaceHeight": 900,
-        "pageOverflows": false
+        "lane": {
+          "x": 686,
+          "y": 284,
+          "width": 280,
+          "height": 360
+        },
+        "side": "right",
+        "direction": "up",
+        "layout": "expanded",
+        "overlapArea": 0
       }
     },
     "overToolbar": {
       "heldOverControls": true,
       "held": {
-        "x": 827,
-        "y": 5,
-        "width": 304,
-        "height": 300
+        "x": 126,
+        "y": 0,
+        "width": 132,
+        "height": 148
       },
       "dropped": {
-        "layout": "float",
-        "phase": "offline",
-        "bounds": {
-          "x": 592,
+        "block": {
+          "x": 248,
           "y": 48,
-          "width": 304,
-          "height": 300
+          "width": 132,
+          "height": 148
         },
-        "insideViewport": true,
-        "controls": 80,
-        "overlapArea": 0,
-        "covered": [],
-        "minClearance": 9,
-        "pointerHits": 0,
-        "clipped": [],
-        "reserve": null,
-        "surfaceHeight": 900,
-        "pageOverflows": false
+        "lane": {
+          "x": 390,
+          "y": 48,
+          "width": 280,
+          "height": 360
+        },
+        "side": "right",
+        "direction": "down",
+        "layout": "expanded",
+        "overlapArea": 0
       }
     },
     "nudged": {
-      "x": 528,
+      "x": 248,
       "y": 48,
-      "width": 304,
-      "height": 300
+      "width": 132,
+      "height": 148
     },
     "home": {
-      "x": 1120,
-      "y": 328,
-      "width": 304,
-      "height": 300
-    }
-  },
-  "phone": {
-    "before": {
-      "x": 0,
-      "y": 784,
-      "width": 390,
-      "height": 60
-    },
-    "beforeLayout": "dock",
-    "heldOverControls": true,
-    "held": {
-      "x": 0,
-      "y": 255,
-      "width": 176,
-      "height": 52
-    },
-    "dropped": {
-      "layout": "dock",
-      "phase": "offline",
-      "bounds": {
-        "x": 0,
-        "y": 784,
-        "width": 390,
-        "height": 60
-      },
-      "insideViewport": true,
-      "controls": 18,
-      "overlapArea": 0,
-      "covered": [],
-      "minClearance": 6,
-      "pointerHits": 0,
-      "clipped": [],
-      "reserve": "60px",
-      "surfaceHeight": 784,
-      "pageOverflows": false
+      "x": 872,
+      "y": 496,
+      "width": 132,
+      "height": 148
     }
   },
   "collapsedProposal": {
     "flagged": {
-      "x": 1360,
-      "y": 560,
-      "width": 64,
-      "height": 64
+      "x": 948,
+      "y": 582,
+      "width": 56,
+      "height": 56
     },
     "cancel": {
-      "dispatches": 0,
-      "delivered": false,
-      "answers": 0
+      "dispatches": 0
     },
     "ended": {
-      "bounds": {
-        "x": 1360,
-        "y": 560,
-        "width": 64,
-        "height": 64
+      "block": {
+        "x": 948,
+        "y": 582,
+        "width": 56,
+        "height": 56
       },
       "phase": "offline"
     }
+  },
+  "noRoom": {
+    "surface": "buttons 20x20 every 100 px",
+    "layout": "collapsed",
+    "yielded": true,
+    "block": {
+      "x": 1372,
+      "y": 832,
+      "width": 52,
+      "height": 52
+    },
+    "askedToOpen": "collapsed"
   }
 }

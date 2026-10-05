@@ -15,7 +15,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 
 import { percentile, playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { CONTROL_SELECTOR } from "@/lib/voiceCompanion/placement";
-import { DEMO_IDS, demoAnswer, demoInstruction } from "@/lib/voiceCompanion/demoScript";
+import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS } from "@/lib/voiceCompanion/scenarios";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
@@ -17956,18 +17956,20 @@ describe("parallel ask idle fallback", () => {
   }, 120_000);
 });
 
+
 /*
- * The floating voice companion (#2519, docs/design/voice-companion-research.md).
- * A prototype: the window is mounted by the fixture alone (`?scenario=voice-companion`)
- * and talks through the simulator, which emits the event contract a real backend
- * adapter will. Nothing here starts a voice session, reads a key or reaches an
- * orchestrator.
+ * The floating voice companion (#2519, docs/design/voice-companion-research.md §9).
+ * A prototype: the fixture alone mounts it (`?scenario=voice-companion`), and it talks
+ * through the simulator, which emits the event contract a real backend adapter will.
+ * Nothing here starts a voice session, reads a key or reaches an orchestrator. Desktop only.
  *
- * What is read: that the window's default placement covers no control (expanded and
- * collapsed, three numbered variants, desktop and phone, en and uk, both themes); that a
- * window dropped on a control is the one that moves; the delegated message's own tint in
- * the production conversation pane beside the purple internal one; and the scripted
- * conversation end to end, with frame times during the rising lines and the hand-off.
+ * What is read: that the character and the lane it reserves for its bubbles cover no
+ * control by default (three numbered variants, open and collapsed, 1440 and 1000 wide,
+ * en and uk, both themes); that the lane flips at every edge and no bubble leaves the
+ * viewport; that a click anywhere in the lane but on a bubble reaches the page; that a
+ * companion dropped on a control is the one that moves; that the proposal's whole text
+ * and both buttons can be read; the delegated message's own tint in the production
+ * conversation pane; and the eight scripted scenarios, each measured and then recorded.
  *
  * `LLV_VOICE_COMPANION_HANDOFF=<dir>` is where the recordings and screenshots go (they
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
@@ -17977,24 +17979,36 @@ describe("floating voice companion", () => {
   const HANDOFF = process.env.LLV_VOICE_COMPANION_HANDOFF?.trim() || OUT;
   const EVIDENCE = "evidence/voice-companion";
   const DRIVER = "src/components/kanban/kanbanBoard.browser.test.tsx";
-  const PHONE = { width: 390, height: 844 } as const;
-  const SURFACES = [["desktop", VIEWPORT, false], ["phone", PHONE, true]] as const;
-  const PROTECT = `${CONTROL_SELECTOR},.kb .card,[data-phone-card]`;
+  const NARROW = { width: 1000, height: 800 } as const;
+  const SIZES = [VIEWPORT, NARROW] as const;
+  const PROTECT = `${CONTROL_SELECTOR},.kb .card`;
   const record = (name: string, body: unknown) => {
     fs.mkdirSync(EVIDENCE, { recursive: true });
     fs.writeFileSync(path.join(EVIDENCE, name), `${JSON.stringify(body, null, 2)}\n`);
   };
+  type Voice = { dispatches: number; delivered: boolean; finished: boolean; events: Array<{ type: string; atMs: number; responseId?: string; itemId?: string; speaker?: string }> };
+  const voiceOf = (page: Page) => page.evaluate(() => {
+    const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion;
+    return { dispatches: v.dispatches, finished: v.finished, events: v.events.map((event) => ({ type: event.type, atMs: Math.round(event.atMs), itemId: event.itemId, speaker: event.speaker })) };
+  });
 
-  /* A browser this block started, with the process ids it owns: Playwright detaches Chromium into its own
-     session, so the ids are found by a mark in the environment the browser inherited. `close` waits for every
-     one of them to exit and stops, by its recorded id, any that did not. */
+  /* A browser this block started, with the process ids it owns: the browser and its helpers descend from this
+     test process, and the crash handlers Chromium detaches are found by a mark in the environment they inherited
+     (the browser itself rewrites its own environment block, so the mark alone misses it). `close` waits for
+     every recorded id to exit and stops, by that id, any that did not. */
   const launchOwned = async () => {
     const mark = `voice-companion-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     process.env.LLV_VOICE_COMPANION_BROWSER = mark;
     const browser = await chromium.launch(LAUNCH);
-    const pids = fs.existsSync("/proc") ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name) && Number(name) !== process.pid).filter((pid) => {
-      try { return fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`LLV_VOICE_COMPANION_BROWSER=${mark}`); } catch { return false; }
-    }).map(Number) : [];
+    const all = fs.existsSync("/proc") ? fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name)).map(Number).filter((pid) => pid !== process.pid) : [];
+    const parentOf = (pid: number) => { try { const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); return Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]); } catch { return -1; } };
+    const marked = all.filter((pid) => { try { return fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`LLV_VOICE_COMPANION_BROWSER=${mark}`); } catch { return false; } });
+    const descendants = new Set<number>();
+    for (let grown = true; grown;) {
+      grown = false;
+      for (const pid of all) if (!descendants.has(pid) && (parentOf(pid) === process.pid || descendants.has(parentOf(pid)))) { descendants.add(pid); grown = true; }
+    }
+    const pids = [...new Set([...descendants, ...marked])];
     const alive = (pid: number) => { try { process.kill(pid, 0); return !fs.readFileSync(`/proc/${pid}/stat`, "utf8").includes(") Z "); } catch { return false; } };
     const close = async () => {
       await browser.close();
@@ -18007,36 +18021,36 @@ describe("floating voice companion", () => {
   };
 
   const openVoice = async (browser: Browser, base: string, query: string, options: {
-    viewport: { width: number; height: number }; touch: boolean; scheme: Scheme; lang: "en" | "uk"; motion?: "no-preference" | "reduce"; video?: string; hash?: string;
+    viewport: { width: number; height: number }; scheme: Scheme; lang: "en" | "uk"; motion?: "no-preference" | "reduce"; video?: string; surface?: "underlay" | "buttons";
   }) => {
     const context = await browser.newContext({
       viewport: options.viewport, colorScheme: options.scheme, reducedMotion: options.motion ?? "no-preference",
-      ...(options.touch ? { hasTouch: true, isMobile: true } : {}),
       ...(options.video ? { recordVideo: { dir: options.video, size: options.viewport } } : {}),
     });
     await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(options.lang)}); } catch {}`);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
-    await page.goto(`${base}?scenario=voice-companion${query}${options.hash ?? ""}`);
+    await page.goto(`${base}?scenario=voice-companion${query}${options.surface ? `&surface=${options.surface}` : ""}`);
     await page.waitForSelector("[data-voice-companion]", { timeout: 20_000 });
-    await page.waitForSelector(options.hash ? "[data-mobile-message], [data-voice-relay]" : options.touch ? "[data-phone-card]" : card("t-search"), { timeout: 20_000 }).catch(() => undefined);
-    /* The board arrives after the window's first placement; the window re-reads the page 250 ms after it changes. */
+    if (!options.surface) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
+    /* The board arrives after the first placement; the companion re-reads the page 250 ms after it changes. */
     await page.waitForTimeout(1_400);
     return { context, page, pageErrors };
   };
 
-  /** The window's rectangle against every control on the page, read independently of the window's own code. */
-  const readPlacement = (page: Page) => page.evaluate((selector) => {
-    const element = document.querySelector<HTMLElement>("[data-voice-companion]")!;
-    const box = element.getBoundingClientRect();
-    let controls = 0;
-    let overlapArea = 0;
-    let clearance = Number.POSITIVE_INFINITY;
-    const covered: string[] = [];
+  /** The companion against every control on the page, read independently of the component's own code. */
+  const readCompanion = (page: Page) => page.evaluate((selector) => {
+    const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+    const round = (box: DOMRect) => ({ x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) });
+    const block = root.querySelector<HTMLElement>(".vc-block, .vc-shape")!;
+    const lane = root.querySelector<HTMLElement>("[data-companion-lane]");
+    const reserved = [block, ...(lane ? [lane] : [])].map((element) => element.getBoundingClientRect());
+    const floaters = [...root.querySelectorAll<HTMLElement>("[data-floater] > *")];
+    /* The reachable part of every control: a card scrolled under the composer is not under the companion. */
+    const controls: Array<{ rect: { left: number; top: number; right: number; bottom: number }; name: string }> = [];
     for (const node of document.querySelectorAll<HTMLElement>(selector)) {
-      if (element.contains(node)) continue;
-      /* The part of the control that can be reached: a card scrolled under the composer is not under the window. */
+      if (root.contains(node)) continue;
       const full = node.getBoundingClientRect();
       const rect = { left: Math.max(full.left, 0), top: Math.max(full.top, 0), right: Math.min(full.right, innerWidth), bottom: Math.min(full.bottom, innerHeight) };
       for (let parent = node.parentElement; parent; parent = parent.parentElement) {
@@ -18048,60 +18062,119 @@ describe("floating voice companion", () => {
       if (rect.right - rect.left < 1 || rect.bottom - rect.top < 1) continue;
       const style = getComputedStyle(node);
       if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
-      controls += 1;
-      const width = Math.min(box.right, rect.right) - Math.max(box.left, rect.left);
-      const height = Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top);
-      if (width > 0 && height > 0) { overlapArea += width * height; covered.push(`${node.tagName.toLowerCase()}.${String(node.getAttribute("class") ?? "").split(" ")[0]}`); }
-      else clearance = Math.min(clearance, Math.hypot(Math.max(rect.left - box.right, box.left - rect.right, 0), Math.max(rect.top - box.bottom, box.top - rect.bottom, 0)));
+      controls.push({ rect, name: `${node.tagName.toLowerCase()}.${String(node.getAttribute("class") ?? "").split(" ")[0]}` });
     }
-    /* A second reading that shares nothing with the selector: with the window out of the hit test, no point
-       under it lands on something that takes a click (a pointer cursor) or matches a control. */
-    element.style.pointerEvents = "none";
+    let overlapArea = 0;
+    let clearance = Number.POSITIVE_INFINITY;
+    const covered: string[] = [];
+    for (const box of [...reserved, ...floaters.map((element) => element.getBoundingClientRect())]) for (const control of controls) {
+      const width = Math.min(box.right, control.rect.right) - Math.max(box.left, control.rect.left);
+      const height = Math.min(box.bottom, control.rect.bottom) - Math.max(box.top, control.rect.top);
+      if (width > 0 && height > 0) { overlapArea += width * height; covered.push(control.name); }
+      else clearance = Math.min(clearance, Math.hypot(Math.max(control.rect.left - box.right, box.left - control.rect.right, 0), Math.max(control.rect.top - box.bottom, box.top - control.rect.bottom, 0)));
+    }
+    /* A click anywhere in the lane lands on a bubble or a call element, or passes through the companion. */
+    let trapped = 0;
+    let passed = 0;
+    if (lane) {
+      const box = lane.getBoundingClientRect();
+      for (let x = box.left + 3; x < box.right; x += 10) for (let y = box.top + 3; y < box.bottom; y += 10) {
+        const under = document.elementFromPoint(x, y);
+        if (!under || !root.contains(under)) { passed += 1; continue; }
+        if (!floaters.some((floater) => floater.contains(under))) trapped += 1;
+      }
+    }
+    /* A second reading that shares nothing with the selector: with the companion out of the hit test, no point
+       of what it reserves lands on something that takes a click (a pointer cursor) or matches a control. */
+    root.style.visibility = "hidden";
     let pointerHits = 0;
-    for (let x = box.left + 2; x < box.right; x += 12) for (let y = box.top + 2; y < box.bottom; y += 12) {
+    for (const box of reserved) for (let x = box.left + 2; x < box.right; x += 12) for (let y = box.top + 2; y < box.bottom; y += 12) {
       const under = document.elementFromPoint(x, y) as HTMLElement | null;
       if (under && (under.closest(selector) || getComputedStyle(under).cursor === "pointer")) pointerHits += 1;
     }
-    element.style.pointerEvents = "";
-    const clipped = [...element.querySelectorAll<HTMLElement>(".vc-phase, .vc-name, .vc-act, .vc-talk, .vc-sim")]
+    root.style.visibility = "";
+    const inside = (box: DOMRect) => box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight;
+    const laneBox = lane?.getBoundingClientRect();
+    const bubbles = [...root.querySelectorAll<HTMLElement>("[data-floater] > .vc-bubble")].map((bubble) => {
+      const text = bubble.querySelector(".vc-text")!;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const tops = new Set([...range.getClientRects()].map((line) => Math.round(line.top)));
+      return { lines: tops.size, width: Math.round(bubble.getBoundingClientRect().width) };
+    });
+    const clipped = [...root.querySelectorAll<HTMLElement>(".vc-phase, .vc-sim, .vc-act, .vc-talk, .vc-call-state, .vc-deleg-title, .vc-deleg-engine, .vc-shape-label")]
       .filter((node) => node.offsetParent !== null && node.scrollWidth > node.clientWidth + 1).map((node) => node.className);
     return {
-      layout: element.dataset.layout, phase: element.dataset.phase,
-      bounds: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
-      insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
-      controls, overlapArea, covered, minClearance: Number.isFinite(clearance) ? Math.round(clearance) : null, pointerHits, clipped,
-      reserve: document.documentElement.style.getPropertyValue("--voice-companion-reserve") || null,
-      surfaceHeight: Math.round(document.getElementById("root")!.getBoundingClientRect().height),
-      pageOverflows: document.documentElement.scrollWidth > innerWidth,
+      layout: root.dataset.layout, yielded: root.dataset.yielded !== undefined, phase: root.dataset.phase,
+      side: lane?.dataset.side ?? null, direction: lane?.dataset.direction ?? null,
+      block: round(block.getBoundingClientRect()), lane: laneBox ? round(laneBox) : null,
+      floaters: floaters.length, bubbles, calls: root.querySelectorAll("[data-floater] > .vc-call").length,
+      insideViewport: [...reserved, ...floaters.map((element) => element.getBoundingClientRect())].every(inside),
+      floatersInsideLane: !laneBox || floaters.every((floater) => { const box = floater.getBoundingClientRect(); return box.left >= laneBox.left - 1 && box.right <= laneBox.right + 1 && box.top >= laneBox.top - 1 && box.bottom <= laneBox.bottom + 1; }),
+      controls: controls.length, overlapArea: Math.round(overlapArea), covered, minClearance: Number.isFinite(clearance) ? Math.round(clearance) : null,
+      pointerHits, trapped, passed, clipped, pageOverflows: document.documentElement.scrollWidth > innerWidth,
     };
   }, PROTECT);
-  const expectFree = (reading: Awaited<ReturnType<typeof readPlacement>>, label: string) => {
+  type Reading = Awaited<ReturnType<typeof readCompanion>>;
+  const expectFree = (reading: Reading, label: string) => {
     expect(reading.overlapArea, `${label}: area over controls (${reading.covered.join(", ")})`).toBe(0);
-    expect(reading.pointerHits, `${label}: clickable points under the window`).toBe(0);
+    expect(reading.pointerHits, `${label}: clickable points under what the companion reserves`).toBe(0);
     expect(reading.insideViewport, `${label}: inside the viewport`).toBe(true);
+    expect(reading.trapped, `${label}: lane points that trap a click`).toBe(0);
     expect(reading.clipped, `${label}: clipped labels`).toEqual([]);
     expect(reading.pageOverflows, `${label}: horizontal overflow`).toBe(false);
-    if (reading.layout === "float") expect(reading.minClearance ?? 8, `${label}: clearance`).toBeGreaterThanOrEqual(8);
-    else expect(reading.surfaceHeight, `${label}: the surface gives up the docked strip`).toBe(reading.bounds.y);
+    expect(reading.minClearance ?? 8, `${label}: clearance`).toBeGreaterThanOrEqual(8);
   };
 
-  browserTest("by default the window covers no control: three variants, expanded and collapsed, desktop and phone, en and uk, both themes", async () => {
+  /* A page-side sampler for the recorded runs: every 120 ms, where every bubble and call element is. */
+  const startSampler = (page: Page) => page.evaluate((selector) => {
+    const summary = { samples: 0, maxBubbles: 0, maxCalls: 0, maxFloaters: 0, maxBubbleLines: 0, maxBubbleWidth: 0, samplesOutsideViewport: 0, samplesOutsideLane: 0, samplesOverControls: 0 };
+    (window as unknown as { __voiceSampler: typeof summary }).__voiceSampler = summary;
+    const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+    const timer = setInterval(() => {
+      const lane = root.querySelector<HTMLElement>("[data-companion-lane]")?.getBoundingClientRect();
+      const floaters = [...root.querySelectorAll<HTMLElement>("[data-floater] > *")].map((element) => ({ element, box: element.getBoundingClientRect() }));
+      const bubbles = floaters.filter(({ element }) => element.classList.contains("vc-bubble"));
+      summary.samples += 1;
+      summary.maxBubbles = Math.max(summary.maxBubbles, bubbles.length);
+      summary.maxCalls = Math.max(summary.maxCalls, floaters.length - bubbles.length);
+      summary.maxFloaters = Math.max(summary.maxFloaters, floaters.length);
+      for (const { element, box } of bubbles) {
+        const range = document.createRange();
+        range.selectNodeContents(element.querySelector(".vc-text")!);
+        summary.maxBubbleLines = Math.max(summary.maxBubbleLines, new Set([...range.getClientRects()].map((line) => Math.round(line.top))).size);
+        summary.maxBubbleWidth = Math.max(summary.maxBubbleWidth, Math.round(box.width));
+      }
+      if (floaters.some(({ box }) => box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight)) summary.samplesOutsideViewport += 1;
+      if (lane && floaters.some(({ box }) => box.left < lane.left - 1 || box.right > lane.right + 1 || box.top < lane.top - 1 || box.bottom > lane.bottom + 1)) summary.samplesOutsideLane += 1;
+      const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter((node) => !root.contains(node)).map((node) => node.getBoundingClientRect()).filter((box) => box.width >= 1 && box.height >= 1);
+      if (floaters.some(({ box }) => controls.some((control) => Math.min(box.right, control.right) > Math.max(box.left, control.left) && Math.min(box.bottom, control.bottom) > Math.max(box.top, control.top)))) summary.samplesOverControls += 1;
+    }, 120);
+    (window as unknown as { __voiceSamplerStop: () => void }).__voiceSamplerStop = () => clearInterval(timer);
+  }, PROTECT);
+  const stopSampler = (page: Page) => page.evaluate(() => {
+    (window as unknown as { __voiceSamplerStop: () => void }).__voiceSamplerStop();
+    return (window as unknown as { __voiceSampler: Record<string, number> }).__voiceSampler;
+  });
+
+  browserTest("by default the character and its lane cover no control: three variants, open and collapsed, 1440 and 1000, en and uk, both themes", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
     const cases: unknown[] = [];
     let processes = { started: 0, leftAfterClose: 0 };
     try {
-      for (const [surface, viewport, touch] of SURFACES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         for (const variant of [1, 2, 3]) for (const collapsed of [false, true]) {
-          const label = `${surface}-${lang}-${scheme}-v${variant}-${collapsed ? "collapsed" : "expanded"}`;
-          const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}${collapsed ? "&collapsed=1" : ""}`, { viewport, touch, scheme, lang, motion: "reduce" });
+          const label = `${viewport.width}-${lang}-${scheme}-v${variant}-${collapsed ? "collapsed" : "open"}`;
+          const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}${collapsed ? "&collapsed=1" : ""}`, { viewport, scheme, lang, motion: "reduce" });
           try {
-            const reading = await readPlacement(page);
+            const reading = await readCompanion(page);
             expectFree(reading, label);
             expect(await page.locator("[data-companion-variant-number]").innerText(), `${label}: printed number`).toBe(String(variant));
+            if (!collapsed) expect(reading.lane, `${label}: the lane is reserved`).not.toBeNull();
             expect(pageErrors, label).toEqual([]);
-            cases.push({ surface, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, state: collapsed ? "collapsed" : "expanded", ...reading });
+            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, state: collapsed ? "collapsed" : "open", ...reading });
             await page.screenshot({ path: path.join(HANDOFF, `placement-${label}.png`) });
           } finally { await context.close(); }
         }
@@ -18110,142 +18183,281 @@ describe("floating voice companion", () => {
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("placement.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion", browser: "Chromium (headless)",
-      rule: "float in the free rectangle nearest the bottom-right corner with 8 px clearance; with none, dock into a strip the surface reflows around",
-      controls: PROTECT, required: { overlapArea: 0, pointerHits: 0 }, cases,
+      rule: "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; a shorter lane is tried before the companion collapses",
+      controls: PROTECT, required: { overlapArea: 0, pointerHits: 0, trappedLanePoints: 0 }, cases,
     });
   }, 900_000);
 
-  browserTest("dropped on a control, the window is the one that moves; it collapses, raises a flag for a proposal, and never leaves", async () => {
+  browserTest("at every edge the lane flips so nothing leaves the viewport, and a click outside a bubble reaches the page", async () => {
+    fs.mkdirSync(HANDOFF, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const cases: unknown[] = [];
+    const clicks: unknown[] = [];
+    let processes = { started: 0, leftAfterClose: 0 };
+    try {
+      for (const viewport of SIZES) {
+        const positions = (block: { width: number; height: number }) => {
+          const right = viewport.width - block.width - 16;
+          const bottom = viewport.height - block.height - 16;
+          const midX = Math.round((viewport.width - block.width) / 2);
+          const midY = Math.round((viewport.height - block.height) / 2);
+          return [["top-left", 16, 16], ["top", midX, 16], ["top-right", right, 16], ["right", right, midY], ["bottom-right", right, bottom], ["bottom", midX, bottom], ["bottom-left", 16, bottom], ["left", 16, midY]] as const;
+        };
+        for (const [index, variant] of [1, 2, 3].entries()) {
+          for (const [name, x, y] of positions({ width: 132, height: 150 })) {
+            if ((["top-left", "top", "top-right", "right", "bottom-right", "bottom", "bottom-left", "left"].indexOf(name) + index) % 3 !== 0 && name !== "bottom-right") continue;
+            const label = `${viewport.width}-v${variant}-${name}`;
+            const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}&script=edge`, { viewport, scheme: index === 1 ? "dark" : "light", lang: index === 2 ? "uk" : "en", surface: "underlay" });
+            try {
+              const figure = (await page.locator("[data-voice-companion] .vc-figure").boundingBox())!;
+              const block = (await page.locator("[data-voice-companion] .vc-block").boundingBox())!;
+              const grab = { x: figure.x + figure.width / 2, y: figure.y + figure.height / 2 };
+              await page.mouse.move(grab.x, grab.y);
+              await page.mouse.down();
+              await page.mouse.move(grab.x + x - block.x, grab.y + y - block.y, { steps: 14 });
+              await page.mouse.up();
+              await page.waitForTimeout(500);
+              await startSampler(page);
+              await page.locator("[data-companion-talk]").click();
+              let peak: Reading | null = null;
+              let clicked = false;
+              for (let turn = 0; turn < 120; turn += 1) {
+                await page.waitForTimeout(150);
+                const reading = await readCompanion(page);
+                if (!peak || reading.floaters > peak.floaters) {
+                  peak = reading;
+                  if (!clicked && reading.floaters >= 3 && name === "bottom-right" && variant === 1) {
+                    clicked = true;
+                    /* Clicks: three points of the lane between and beside the elements reach the cells under them;
+                       a click on a bubble stays with the bubble. */
+                    const points = await page.evaluate(() => {
+                      const lane = document.querySelector<HTMLElement>("[data-companion-lane]")!.getBoundingClientRect();
+                      const floaters = [...document.querySelectorAll<HTMLElement>("[data-floater] > *")].map((element) => element.getBoundingClientRect());
+                      const free: Array<{ x: number; y: number }> = [];
+                      for (let y = lane.top + 4; y < lane.bottom && free.length < 3; y += 23) for (let x = lane.left + 4; x < lane.right && free.length < 3; x += 41) {
+                        if (!floaters.some((box) => x >= box.left - 2 && x <= box.right + 2 && y >= box.top - 2 && y <= box.bottom + 2)) free.push({ x, y });
+                      }
+                      const bubble = document.querySelector<HTMLElement>("[data-floater] > .vc-bubble")!.getBoundingClientRect();
+                      return { free, bubble: { x: bubble.left + bubble.width / 2, y: bubble.top + bubble.height / 2 } };
+                    });
+                    const cellAt = (point: { x: number; y: number }) => page.evaluate(({ x, y }) => {
+                      const companion = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+                      companion.style.visibility = "hidden";
+                      const cell = (document.elementFromPoint(x, y) as HTMLElement | null)?.dataset.underlayCell ?? null;
+                      companion.style.visibility = "";
+                      return cell;
+                    }, point);
+                    const count = (cell: string | null) => page.evaluate((key) => (window as unknown as { voiceUnderlayClicks: Record<string, number> }).voiceUnderlayClicks[key ?? ""] ?? 0, cell);
+                    for (const point of points.free) {
+                      const cell = await cellAt(point);
+                      const before = await count(cell);
+                      await page.mouse.click(point.x, point.y);
+                      clicks.push({ viewport: viewport.width, point, where: "lane, outside every element", cell, reachedPage: (await count(cell)) === before + 1 });
+                    }
+                    const cell = await cellAt(points.bubble);
+                    const before = await count(cell);
+                    await page.mouse.click(points.bubble.x, points.bubble.y);
+                    clicks.push({ viewport: viewport.width, point: points.bubble, where: "on a bubble", cell, reachedPage: (await count(cell)) !== before });
+                    await page.screenshot({ path: path.join(HANDOFF, `edges-${viewport.width}-click-through.png`) });
+                  }
+                  if (reading.floaters >= 4) await page.screenshot({ path: path.join(HANDOFF, `edges-${label}.png`) });
+                }
+                if ((await voiceOf(page)).finished) break;
+              }
+              const samples = await stopSampler(page);
+              expect(peak, label).not.toBeNull();
+              expect(samples.samplesOutsideViewport, `${label}: samples with an element outside the viewport`).toBe(0);
+              expect(samples.samplesOutsideLane, `${label}: samples with an element outside its lane`).toBe(0);
+              expect(peak!.insideViewport, `${label}: inside the viewport at the peak`).toBe(true);
+              expect(peak!.trapped, `${label}: lane points that trap a click`).toBe(0);
+              expect(Math.abs(peak!.block.x - x) <= 8 && Math.abs(peak!.block.y - y) <= 8, `${label}: the character is where it was put (${JSON.stringify(peak!.block)})`).toBe(true);
+              expect(pageErrors, label).toEqual([]);
+              cases.push({ viewport: `${viewport.width}x${viewport.height}`, variant, position: name, side: peak!.side, direction: peak!.direction, block: peak!.block, lane: peak!.lane, peakFloaters: peak!.floaters, samples });
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { processes = await close(); server.stop(); }
+    expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
+    expect(clicks.length, "click-through cases").toBe(8);
+    for (const entry of clicks as Array<{ where: string; reachedPage: boolean }>) expect(entry.reachedPage, entry.where).toBe(entry.where !== "on a bubble");
+    record("edges.json", {
+      driver: DRIVER, fixture: "?scenario=voice-companion&surface=underlay&script=edge",
+      rule: "the lane faces the middle of the screen and flips to the other side at an edge; bubbles rise unless the lane would leave the top, and then run downward",
+      surface: "a field of plain cells that count the clicks reaching them, so the character stays where it is dropped",
+      cases, clicks,
+    });
+  }, 900_000);
+
+  browserTest("dropped on a control, the companion is the one that moves; collapsed it stays, flags a proposal and sends nothing; with no room it collapses", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
     const readings: Record<string, unknown> = {};
     let processes = { started: 0, leftAfterClose: 0 };
     try {
-      /* Desktop: drag the expanded card onto the seat's composer, then onto the toolbar. */
       {
-        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=1", { viewport: VIEWPORT, touch: false, scheme: "light", lang: "en" });
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=1", { viewport: VIEWPORT, scheme: "light", lang: "en" });
         try {
           const dragTo = async (target: { x: number; y: number }, name: string) => {
-            const handle = (await page.locator("[data-voice-companion] .vc-name").boundingBox())!;
-            const from = { x: handle.x + 4, y: handle.y + 6 };
+            const figure = (await page.locator("[data-voice-companion] .vc-figure").boundingBox())!;
+            const from = { x: figure.x + figure.width / 2, y: figure.y + figure.height / 2 };
             await page.mouse.move(from.x, from.y);
             await page.mouse.down();
             await page.mouse.move(from.x + 3, from.y + 3, { steps: 2 });
             expect(await page.locator("[data-voice-companion][data-dragging]").count(), `${name}: 4 px is a click in waiting`).toBe(0);
             await page.mouse.move(target.x, target.y, { steps: 24 });
             await page.waitForTimeout(80);
-            const held = await readPlacement(page);
+            const held = await readCompanion(page);
             await page.screenshot({ path: path.join(HANDOFF, `yield-${name}-held.png`) });
             await page.mouse.up();
-            await page.waitForTimeout(700);
-            const dropped = await readPlacement(page);
+            await page.waitForTimeout(800);
+            const dropped = await readCompanion(page);
             expectFree(dropped, `${name}: after the drop`);
             await page.screenshot({ path: path.join(HANDOFF, `yield-${name}-dropped.png`) });
-            return { heldOverControls: held.overlapArea > 0, held: held.bounds, dropped };
+            return { heldOverControls: held.overlapArea > 0, held: held.block, dropped: { block: dropped.block, lane: dropped.lane, side: dropped.side, direction: dropped.direction, layout: dropped.layout, overlapArea: dropped.overlapArea } };
           };
-          const before = await readPlacement(page);
+          const before = await readCompanion(page);
           const composer = (await page.locator("textarea").first().boundingBox())!;
-          const overComposer = await dragTo({ x: composer.x + composer.width / 2, y: composer.y + composer.height / 2 }, "desktop-composer");
-          expect(overComposer.heldOverControls, "the held window was over the composer").toBe(true);
-          /* The composer under the drop still takes the click. */
+          const overComposer = await dragTo({ x: composer.x + composer.width / 2, y: composer.y + composer.height / 2 }, "composer");
+          expect(overComposer.heldOverControls, "the held character was over the composer").toBe(true);
           expect(await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.tagName, [composer.x + composer.width / 2, composer.y + composer.height / 2]), "the composer is hit-testable").toBe("TEXTAREA");
-          const add = (await page.locator('header button, [data-kanban-toolbar] button, button').filter({ hasText: /^$/ }).nth(4).boundingBox()) ?? { x: 1014, y: 23, width: 0, height: 0 };
-          const overToolbar = await dragTo({ x: add.x + add.width / 2, y: add.y + add.height / 2 + 30 }, "desktop-toolbar");
-          /* Keyboard: the grip moves it by arrows, and Home sends it back to its default place. */
-          await page.locator("[data-voice-companion] [data-grip]").focus();
+          const toolbar = (await page.locator("header button, [data-kanban-toolbar] button").first().boundingBox()) ?? { x: 700, y: 20, width: 0, height: 0 };
+          const overToolbar = await dragTo({ x: toolbar.x + toolbar.width / 2, y: toolbar.y + toolbar.height / 2 }, "toolbar");
+          expect(overToolbar.heldOverControls, "the held character was over the toolbar").toBe(true);
+          await page.locator("[data-voice-companion] .vc-figure").focus();
           for (let press = 0; press < 3; press += 1) await page.keyboard.press("Shift+ArrowLeft");
           await page.waitForTimeout(600);
-          const nudged = await readPlacement(page);
+          const nudged = await readCompanion(page);
           expectFree(nudged, "after arrow keys");
           await page.keyboard.press("Home");
           await page.waitForTimeout(600);
-          const home = await readPlacement(page);
+          const home = await readCompanion(page);
           expectFree(home, "after Home");
-          expect(home.bounds, "Home returns the default placement").toEqual(before.bounds);
+          /* Home applies the default rule again to the page as it is now: the free place nearest the corner. */
+          const fromCorner = (block: Reading["block"]) => Math.hypot(VIEWPORT.width - (block.x + block.width), VIEWPORT.height - (block.y + block.height));
+          expect(fromCorner(home.block), `Home returns to the default rule (${JSON.stringify(home.block)} against ${JSON.stringify(before.block)})`).toBeLessThanOrEqual(fromCorner(before.block) + 1);
           expect(pageErrors).toEqual([]);
-          readings.desktop = { before: before.bounds, overComposer, overToolbar, nudged: nudged.bounds, home: home.bounds };
-        } finally { await context.close(); }
-      }
-      /* Phone: the docked capsule is lifted onto a card; it finds a free place or returns to the dock. */
-      {
-        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=2&collapsed=1", { viewport: PHONE, touch: true, scheme: "dark", lang: "uk" });
-        try {
-          const before = await readPlacement(page);
-          const shape = (await page.locator("[data-companion-expand]").boundingBox())!;
-          const cardBox = (await page.locator("[data-phone-card]").nth(1).boundingBox())!;
-          await page.mouse.move(shape.x + shape.width / 2, shape.y + shape.height / 2);
-          await page.mouse.down();
-          await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2, { steps: 20 });
-          await page.waitForTimeout(80);
-          const held = await readPlacement(page);
-          await page.screenshot({ path: path.join(HANDOFF, "yield-phone-card-held.png") });
-          await page.mouse.up();
-          await page.waitForTimeout(700);
-          const dropped = await readPlacement(page);
-          await page.screenshot({ path: path.join(HANDOFF, "yield-phone-card-dropped.png") });
-          expectFree(dropped, `phone: after the drop on a card (${JSON.stringify(dropped.bounds)}, ${dropped.layout}, reserve ${dropped.reserve})`);
-          expect(await page.locator("[data-voice-companion][data-collapsed]").count(), "the drop did not expand it").toBe(1);
-          expect(pageErrors).toEqual([]);
-          readings.phone = { before: before.bounds, beforeLayout: before.layout, heldOverControls: held.overlapArea > 0, held: held.bounds, dropped };
+          readings.drag = { before: { block: before.block, lane: before.lane }, overComposer, overToolbar, nudged: nudged.block, home: home.block };
         } finally { await context.close(); }
       }
       /* Collapsed while a proposal arrives: the shape stays, flags it, and cancel sends nothing. Ending the
          conversation leaves the shape where it was. Under reduced motion. */
       {
-        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=3", { viewport: VIEWPORT, touch: false, scheme: "dark", lang: "uk", motion: "reduce" });
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=3&script=proposal", { viewport: VIEWPORT, scheme: "dark", lang: "uk", motion: "reduce" });
         try {
-          const companion = page.locator("[data-voice-companion]");
           await page.locator("[data-companion-talk]").click();
-          await page.waitForSelector('[data-voice-companion][data-phase="speaking"]', { timeout: 20_000 });
-          await page.screenshot({ path: path.join(HANDOFF, "states-speaking-reduced-motion.png") });
+          await page.waitForSelector('[data-voice-companion][data-phase="speaking"]', { timeout: 20_000 }).catch(() => undefined);
           await page.locator("[data-companion-collapse]").click();
           await page.waitForSelector("[data-voice-companion][data-collapsed]");
           await page.waitForSelector("[data-companion-flag]", { timeout: 60_000 });
-          const flagged = await readPlacement(page);
+          const flagged = await readCompanion(page);
           expectFree(flagged, "collapsed with a proposal waiting");
           await page.screenshot({ path: path.join(HANDOFF, "states-collapsed-proposal-flag.png") });
-          expect(await page.evaluate(() => (window as unknown as { voiceCompanion: { dispatches: number } }).voiceCompanion.dispatches), "nothing sent while collapsed").toBe(0);
+          expect((await voiceOf(page)).dispatches, "nothing sent while collapsed").toBe(0);
           await page.locator("[data-companion-expand]").click();
           await page.locator("[data-companion-cancel]").click();
           await page.waitForSelector('[data-voice-companion][data-delegation-stage="cancelled"]', { timeout: 20_000 });
-          await page.waitForFunction(() => (window as unknown as { voiceCompanion: { events: Array<{ type: string; responseId?: string }> } }).voiceCompanion.events.some((event) => event.type === "playback.stopped" && event.responseId === "resp_cancel"), null, { timeout: 30_000, polling: 100 });
-          const voice = await page.evaluate(() => { const v = (window as unknown as { voiceCompanion: { dispatches: number; delivered: boolean; events: Array<{ type: string }> } }).voiceCompanion; return { dispatches: v.dispatches, delivered: v.delivered, answers: v.events.filter((event) => event.type === "orchestrator.answer").length }; });
-          expect(voice, "cancel sent nothing").toEqual({ dispatches: 0, delivered: false, answers: 0 });
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+          const voice = await voiceOf(page);
+          expect({ dispatches: voice.dispatches, answers: voice.events.filter((event) => event.type === "orchestrator.answer").length }, "cancel sent nothing").toEqual({ dispatches: 0, answers: 0 });
           expect(await page.locator("[data-voice-relay]").count(), "no delegated row in the conversation").toBe(0);
           await page.screenshot({ path: path.join(HANDOFF, "states-cancelled.png") });
           await page.locator("[data-companion-end]").click();
           await page.waitForSelector('[data-voice-companion][data-phase="offline"]');
-          /* Ended is a state of the window: the way to talk again is back, and what was said stays readable. */
           expect(await page.locator("[data-companion-talk]").count(), "Talk is offered again").toBe(1);
-          expect(await page.locator("[data-companion-transcript] li").count(), "the transcript is kept").toBeGreaterThan(3);
+          expect(await page.locator("[data-companion-transcript] li").count(), "the transcript is kept").toBeGreaterThan(1);
           await page.locator("[data-companion-collapse]").click();
           await page.waitForTimeout(500);
-          expect(await companion.count(), "the shape is still there after the conversation ended").toBe(1);
-          const ended = await readPlacement(page);
+          expect(await page.locator("[data-voice-companion]").count(), "the shape is still there after the conversation ended").toBe(1);
+          const ended = await readCompanion(page);
           expectFree(ended, "collapsed after the end");
           await page.screenshot({ path: path.join(HANDOFF, "states-ended-collapsed.png") });
           expect(pageErrors).toEqual([]);
-          readings.collapsedProposal = { flagged: flagged.bounds, cancel: voice, ended: { bounds: ended.bounds, phase: ended.phase } };
+          readings.collapsedProposal = { flagged: flagged.block, cancel: { dispatches: voice.dispatches }, ended: { block: ended.block, phase: ended.phase } };
+        } finally { await context.close(); }
+      }
+      /* No free place holds any lane (small buttons every 100 px): the open companion collapses where its shape is
+         free, and asking it to open again changes nothing while there is no room. */
+      {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&variant=1", { viewport: VIEWPORT, scheme: "light", lang: "en", motion: "reduce", surface: "buttons" });
+        try {
+          const reading = await readCompanion(page);
+          expect(reading.layout, "collapsed for want of room").toBe("collapsed");
+          expect(reading.yielded, "marked as yielded").toBe(true);
+          expectFree(reading, "no room");
+          await page.locator("[data-companion-expand]").click();
+          await page.waitForTimeout(500);
+          const again = await readCompanion(page);
+          expect([again.layout, again.yielded], "still collapsed after asking to open").toEqual(["collapsed", true]);
+          expectFree(again, "no room, asked to open");
+          await page.screenshot({ path: path.join(HANDOFF, "states-no-room.png") });
+          expect(pageErrors).toEqual([]);
+          readings.noRoom = { surface: "buttons 20x20 every 100 px", layout: reading.layout, yielded: reading.yielded, block: reading.block, askedToOpen: again.layout };
         } finally { await context.close(); }
       }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
-    record("yield.json", { driver: DRIVER, fixture: "?scenario=voice-companion", behaviour: "the window follows the pointer while held; on the drop it moves to the nearest free rectangle, or docks when none exists", ...readings });
+    record("yield.json", { driver: DRIVER, fixture: "?scenario=voice-companion", behaviour: "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses", ...readings });
   }, 300_000);
 
-  browserTest("the delegated message has its own tint beside the internal one, in the production conversation pane: light and dark, en and uk, desktop and phone, Claude and Codex seats", async () => {
+  browserTest("the proposal shows its whole text and both buttons: three variants, 1440 and 1000, en and uk", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
     const cases: unknown[] = [];
     let processes = { started: 0, leftAfterClose: 0 };
     try {
-      for (const [surface, viewport, touch] of SURFACES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const engine of ["claude", "codex"] as const) {
-        const label = `${surface}-${lang}-${scheme}-${engine}`;
-        const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=1&collapsed=1&delivered=1${engine === "codex" ? "&engine=codex" : ""}`, {
-          viewport, touch, scheme, lang, motion: "reduce", ...(touch ? { hash: `#c=${engine === "codex" ? "conversation_seat_voice" : "conversation_orchestrator"}` } : {}),
-        });
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const variant of [1, 2, 3]) {
+        const scheme: Scheme = variant === 2 ? "dark" : "light";
+        const label = `${viewport.width}-${lang}-${scheme}-v${variant}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}&script=proposal`, { viewport, scheme, lang, motion: "reduce" });
+        try {
+          await page.locator("[data-companion-talk]").click();
+          await page.locator("[data-companion-send]").waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(400);
+          const reading = await page.evaluate(() => {
+            const instruction = document.querySelector<HTMLElement>("[data-companion-instruction]")!;
+            const element = document.querySelector<HTMLElement>("[data-companion-delegation]")!;
+            const inside = (box: DOMRect) => box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight;
+            const buttons = [...element.querySelectorAll<HTMLElement>("[data-companion-send], [data-companion-cancel]")].map((button) => {
+              const box = button.getBoundingClientRect();
+              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+              return { label: button.innerText.trim(), inside: inside(box), reachable: !!hit && button.contains(hit), clipped: button.scrollWidth > button.clientWidth + 1, width: Math.round(box.width), height: Math.round(box.height) };
+            });
+            return {
+              text: instruction.innerText.trim(), scrollHeight: instruction.scrollHeight, clientHeight: instruction.clientHeight,
+              instructionInside: inside(instruction.getBoundingClientRect()), elementInside: inside(element.getBoundingClientRect()),
+              lines: Math.round(instruction.scrollHeight / parseFloat(getComputedStyle(instruction).lineHeight)), buttons,
+            };
+          });
+          expect(reading.text, `${label}: the whole frozen text`).toBe(demoInstruction(lang));
+          expect(reading.scrollHeight, `${label}: nothing of it hidden`).toBeLessThanOrEqual(reading.clientHeight + 1);
+          expect(reading.instructionInside && reading.elementInside, `${label}: inside the viewport`).toBe(true);
+          expect(reading.buttons.map((button) => button.label), `${label}: both buttons`).toEqual([translate(lang, "voiceCompanion.cancel"), translate(lang, "voiceCompanion.send")]);
+          for (const button of reading.buttons) expect(button.inside && button.reachable && !button.clipped, `${label}: ${button.label} readable and reachable`).toBe(true);
+          expect((await voiceOf(page)).dispatches, `${label}: nothing sent while asking`).toBe(0);
+          expect(pageErrors, label).toEqual([]);
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, ...reading });
+          await page.screenshot({ path: path.join(HANDOFF, `proposal-${label}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { processes = await close(); server.stop(); }
+    expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
+    record("proposal.json", { driver: DRIVER, fixture: "?scenario=voice-companion&script=proposal", rule: "the instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus", cases });
+  }, 600_000);
+
+  browserTest("the delegated message has its own tint beside the internal one, in the production conversation pane: 1440 and 1000, light and dark, en and uk, Claude and Codex seats", async () => {
+    fs.mkdirSync(HANDOFF, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const cases: unknown[] = [];
+    let processes = { started: 0, leftAfterClose: 0 };
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const engine of ["claude", "codex"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}-${engine}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=1&collapsed=1&delivered=1${engine === "codex" ? "&engine=codex" : ""}`, { viewport, scheme, lang, motion: "reduce" });
         try {
           await page.waitForSelector("[data-voice-relay]", { timeout: 20_000 });
           await page.waitForSelector("[data-agent-author]", { timeout: 20_000 });
@@ -18275,9 +18487,7 @@ describe("floating voice companion", () => {
               authorAgentLabel: relay.querySelector("[data-agent-author]") !== null,
               relayRows: document.querySelectorAll("[data-voice-relay]").length,
               insidePane: box.left >= pane.getBoundingClientRect().left - 1 && box.right <= pane.getBoundingClientRect().right + 1 && box.right <= innerWidth,
-              authorWraps: author.getClientRects().length, headerHeight: Math.round(author.parentElement!.getBoundingClientRect().height),
               clipped: [author, tag].filter((node) => node.scrollWidth > node.clientWidth + 1).length,
-              gapToInternal: Math.round(box.top - internal.getBoundingClientRect().bottom),
             };
           });
           expect(reading.author, label).toBe(translate(lang, "render.voiceDelegatusLabel"));
@@ -18289,102 +18499,107 @@ describe("floating voice companion", () => {
           expect(reading.insidePane, `${label}: inside the pane`).toBe(true);
           expect(reading.clipped, `${label}: clipped`).toBe(0);
           for (const key of ["authorContrast", "tagContrast", "textContrast"] as const) expect(reading[key], `${label}: ${key}`).toBeGreaterThanOrEqual(4.5);
-          /* The orchestrator's answer follows the delegated row in the same pane. */
           expect(await page.getByText(demoAnswer(lang), { exact: true }).count(), `${label}: the answer`).toBeGreaterThan(0);
           expect(pageErrors, label).toEqual([]);
-          cases.push({ surface, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, seatEngine: engine, ...reading });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, seatEngine: engine, ...reading });
           await page.locator("[data-voice-relay]").scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(HANDOFF, `tint-${label}.png`) });
         } finally { await context.close(); }
       }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
-    record("tint.json", { driver: DRIVER, fixture: "?scenario=voice-companion&delivered=1", pane: "production LogFeed (seat panel on the desktop, the conversation view on the phone)", required: { contrast: 4.5 }, cases });
+    record("tint.json", { driver: DRIVER, fixture: "?scenario=voice-companion&delivered=1", pane: "production LogFeed in the orchestrator seat panel", required: { contrast: 4.5 }, cases });
   }, 600_000);
 
-  /* The scripted conversation. Each case runs twice: once measured (no recording, no screenshot, so the frame
-     clock reads the page alone) and once recorded as a video with key-frame screenshots. */
-  browserTest("the scripted conversation runs on the event contract; the lines and the hand-off hold the display rate at 1440 and 390", async () => {
+  /* The eight scripted scenarios at 1440 and 1000. Each runs twice: once measured (no recording, no screenshot,
+     no sampler, so the frame clock reads the page alone) and once recorded as a video with screenshots and the
+     geometry sampler. Every measured run comes before the first recording. */
+  browserTest("every scripted scenario runs on the event contract, recorded, with frame times while bubbles rise and arrive together", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
     const version = browser.version();
     const cases: Array<Record<string, unknown>> = [];
     let processes = { started: 0, leftAfterClose: 0 };
-    type Voice = { dispatches: number; delivered: boolean; answered: boolean; events: Array<{ type: string; atMs: number; responseId?: string; itemId?: string; speaker?: string }> };
-    const voiceOf = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion; return { dispatches: v.dispatches, events: v.events.map((event) => ({ type: event.type, atMs: Math.round(event.atMs), itemId: event.itemId, speaker: event.speaker })) }; });
-    const RUNS = [
-      ["desktop", VIEWPORT, false, "en", "light", 1], ["desktop", VIEWPORT, false, "uk", "dark", 2], ["desktop", VIEWPORT, false, "en", "light", 3],
-      ["phone", PHONE, true, "uk", "light", 1], ["phone", PHONE, true, "en", "dark", 2], ["phone", PHONE, true, "uk", "light", 3],
-    ] as const;
+    const runs = SIZES.flatMap((viewport, sizeIndex) => SCENARIOS.map((name, index) => {
+      const variant = ((index + sizeIndex) % 3) + 1;
+      return { viewport, name, variant, lang: (index + sizeIndex) % 2 === 0 ? "en" as const : "uk" as const, scheme: (Math.floor(index / 2) + sizeIndex) % 2 === 0 ? "light" as const : "dark" as const };
+    }));
     try {
-      /* Every measured run comes before the first recording, so no encoder is at work while a frame clock is read. */
-      for (const recorded of [false, true]) for (const [surface, viewport, touch, lang, scheme, variant] of RUNS) {
-        const label = `${surface}-${viewport.width}-${lang}-${scheme}-v${variant}`;
-        const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}`, { viewport, touch, scheme, lang, ...(recorded ? { video: path.join(OUT, "video") } : {}) });
+      for (const recorded of [false, true]) for (const run of runs) {
+        const { viewport, name, variant, lang, scheme } = run;
+        const label = `${name}-${viewport.width}-${lang}-${scheme}-v${variant}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}&script=${name}`, { viewport, scheme, lang, ...(recorded ? { video: path.join(OUT, "video") } : {}) });
         try {
-          const shot = async (name: string) => { if (recorded) await page.screenshot({ path: path.join(HANDOFF, `demo-${label}-${name}.png`) }); };
-          await page.evaluate(() => {
+          const shots: string[] = [];
+          const shot = async (step: string) => { if (!recorded) return; const file = `scenario-${label}-${step}.png`; await page.screenshot({ path: path.join(HANDOFF, file) }); shots.push(file); };
+          if (!recorded) await page.evaluate(() => {
             const meter = { stamps: [] as number[], hidden: 0 };
             (window as unknown as { __voiceMeter: typeof meter }).__voiceMeter = meter;
             const tick = (now: number) => { meter.stamps.push(now); if (document.visibilityState !== "visible") meter.hidden += 1; requestAnimationFrame(tick); };
             requestAnimationFrame(tick);
           });
           const idleFrom = await page.evaluate(() => performance.now());
-          await page.waitForTimeout(2_000);
+          await page.waitForTimeout(1_500);
           const idleTo = await page.evaluate(() => performance.now());
-          await shot("1-not-connected");
+          if (recorded) await startSampler(page);
           await page.locator("[data-companion-talk]").click();
-          await page.waitForSelector('[data-voice-companion][data-phase="listening"]', { timeout: 20_000 });
-          await shot("2-listening");
-          await page.waitForSelector('[data-voice-companion][data-phase="speaking"]', { timeout: 20_000 });
-          await page.waitForTimeout(500);
-          await shot("3-speaking");
-          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.events.some((event) => event.type === "playback.started" && event.responseId === "resp_2"), null, { timeout: 60_000, polling: 100 });
-          await page.waitForTimeout(2_600);
-          await shot("4-lines-rising");
-          await page.locator("[data-companion-send]").waitFor({ timeout: 60_000 });
-          await page.waitForTimeout(900);
-          const before = await voiceOf(page);
-          const ask = before.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
-          expect(ask, `${label}: the explicit request was heard`).toBeGreaterThan(0);
-          expect(before.events.slice(0, ask).filter((event) => event.type.startsWith("delegation.") || event.type === "orchestrator.answer"), `${label}: no delegation before the request`).toEqual([]);
-          expect(before.dispatches, `${label}: nothing sent before the confirmation`).toBe(0);
-          expect(await page.locator("[data-voice-relay]").count(), `${label}: no delegated row before the confirmation`).toBe(0);
-          expect((await page.locator("[data-companion-instruction]").innerText()).trim(), `${label}: the proposal shows the instruction`).toBe(demoInstruction(lang));
-          await shot("5-proposal");
-          await page.locator("[data-companion-send]").click();
-          await page.waitForSelector('[data-voice-companion][data-delegation-stage="sending"]', { timeout: 10_000 });
-          await page.waitForTimeout(450);
-          await shot("6-sending");
-          await page.waitForSelector('[data-voice-companion][data-delegation-stage="delivered"]', { timeout: 20_000 });
-          await shot("7-delivered");
-          await page.waitForSelector('[data-voice-companion][data-delegation-stage="answered"]', { timeout: 30_000 });
-          await page.waitForTimeout(350);
-          await shot("8-answer-arriving");
-          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.events.some((event) => event.type === "playback.stopped" && event.responseId === "resp_5"), null, { timeout: 60_000, polling: 100 });
-          await page.waitForTimeout(900);
-          await shot("9-explained");
-          const after = await voiceOf(page);
-          expect(after.dispatches, `${label}: sent exactly once`).toBe(1);
-          expect(after.events.filter((event) => event.type.startsWith("delegation.") || event.type === "orchestrator.answer").map((event) => event.type), `${label}: delegation order`)
-            .toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
-          if (!touch) {
-            /* The delegated message is in the seat's conversation, tinted, and the answer follows it. */
-            await page.waitForSelector("[data-voice-relay]", { timeout: 20_000 });
-            expect(await page.locator("[data-voice-relay]").count(), `${label}: one delegated row`).toBe(1);
-            await page.getByText(demoAnswer(lang), { exact: true }).first().waitFor({ timeout: 20_000 });
-            await shot("10-conversation");
+          let peak = 0;
+          let proposal: unknown = null;
+          for (let turn = 0; turn < 900; turn += 1) {
+            await page.waitForTimeout(recorded ? 250 : 400);
+            if (name === "delegation" && proposal === null && await page.locator("[data-companion-send]").count()) {
+              const before = await voiceOf(page);
+              const ask = before.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
+              expect(ask, `${label}: the explicit request was heard`).toBeGreaterThan(0);
+              expect(before.events.slice(0, ask).filter((event) => event.type.startsWith("delegation.")), `${label}: no delegation before the request`).toEqual([]);
+              expect(before.dispatches, `${label}: nothing sent before the confirmation`).toBe(0);
+              expect(await page.locator("[data-voice-relay]").count(), `${label}: no delegated row before the confirmation`).toBe(0);
+              expect((await page.locator("[data-companion-instruction]").innerText()).trim(), `${label}: the proposal shows the whole instruction`).toBe(demoInstruction(lang));
+              await page.waitForTimeout(600);
+              await shot("proposal");
+              proposal = { dispatchesBefore: before.dispatches };
+              await page.locator("[data-companion-send]").click();
+              await page.waitForSelector('[data-voice-companion][data-delegation-stage="sending"]', { timeout: 10_000 });
+              await page.waitForTimeout(400);
+              await shot("sending");
+            }
+            if (recorded) {
+              const count = await page.locator("[data-floater]").count();
+              if (count > peak) { peak = count; if (count >= 2) await shot(`peak-${count}`); }
+              if (name === "delegation" && !shots.some((file) => file.endsWith("answered.png")) && await page.locator('[data-voice-companion][data-delegation-stage="answered"]').count()) await shot("answered");
+              if (name === "interrupt" && !shots.some((file) => file.endsWith("cut.png")) && await page.locator("[data-companion-cut]").count()) await shot("cut");
+            }
+            if ((await voiceOf(page)).finished) break;
           }
+          const after = await voiceOf(page);
+          expect(after.finished, `${label}: the script played out`).toBe(true);
+          await page.waitForTimeout(700);
+          await shot("end");
+          expect(after.dispatches, `${label}: sends`).toBe(name === "delegation" ? 1 : 0);
+          if (name === "delegation") {
+            expect(after.events.filter((event) => event.type.startsWith("delegation.") || event.type === "orchestrator.answer").map((event) => event.type), `${label}: delegation order`)
+              .toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
+            await page.waitForSelector("[data-voice-relay]", { timeout: 20_000 });
+            await page.getByText(demoAnswer(lang), { exact: true }).first().waitFor({ timeout: 20_000 });
+            await shot("conversation");
+          } else expect(after.events.some((event) => event.type.startsWith("delegation.")), `${label}: no delegation`).toBe(false);
+          if (name === "interrupt") expect(await page.locator("[data-companion-cut]").count() + (await page.locator("[data-companion-transcript] li").allInnerTexts()).filter((text) => text.includes(translate(lang, "voiceCompanion.cutAfter", { s: "" }).split(" ")[0]!)).length, `${label}: the cut is marked`).toBeGreaterThan(0);
           expect(pageErrors, label).toEqual([]);
-          const placement = await readPlacement(page);
-          expectFree(placement, `${label}: after the conversation`);
+          const placement = await readCompanion(page);
+          expectFree(placement, `${label}: after the scenario`);
           if (recorded) {
+            const samples = await stopSampler(page);
+            expect(samples.samplesOutsideViewport, `${label}: an element outside the viewport`).toBe(0);
+            expect(samples.samplesOutsideLane, `${label}: an element outside its lane`).toBe(0);
+            expect(samples.samplesOverControls, `${label}: an element over a control`).toBe(0);
+            expect(samples.maxBubbleLines, `${label}: bubble lines`).toBeLessThanOrEqual(4);
+            expect(samples.maxBubbleWidth, `${label}: bubble width`).toBeLessThanOrEqual(280);
             const video = page.video()!;
             await context.close();
-            await video.saveAs(path.join(HANDOFF, `demo-${label}.webm`));
+            await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            cases.find((entry) => entry.label === label)!.recording = `demo-${label}.webm`;
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -18406,37 +18621,52 @@ describe("floating voice companion", () => {
               withinTarget: deltas.length > 0 && p95 <= frame * 1.5 && max <= frame * 4 && missedShare <= 0.01,
             };
           };
-          const windows = Object.fromEntries(["vc:caption-rise", "vc:delegation-out", "vc:delegation-in"].map((name) => {
-            const marks = meter.marks.filter((entry) => entry.name === name);
-            return [name.slice(3), { marks: marks.length, ...read(marks.flatMap((entry) => deltasIn(entry.at, entry.at + entry.durationMs))) }];
-          }));
+          /* Each window is the union of the stated durations after its marks, so overlapping marks count a frame once. */
+          const union = (names: string[]) => {
+            const spans = meter.marks.filter((entry) => names.includes(entry.name)).map((entry) => [entry.at, entry.at + entry.durationMs] as const).sort((a, b) => a[0] - b[0]);
+            const merged: Array<[number, number]> = [];
+            for (const [from, to] of spans) { const last = merged.at(-1); if (last && from <= last[1]) last[1] = Math.max(last[1], to); else merged.push([from, to]); }
+            return { marks: spans.length, ...read(merged.flatMap(([from, to]) => deltasIn(from, to))) };
+          };
+          const windows = {
+            bubblesRising: union(["vc:bubble-in", "vc:rise"]),
+            arrivingTogether: union(["vc:together"]),
+            leaving: union(["vc:bubble-out"]),
+            calls: union(["vc:call-in"]),
+            delegation: union(["vc:delegation-out", "vc:delegation-in"]),
+          };
           expect(meter.hidden, `${label}: no frame sampled in a hidden tab`).toBe(0);
-          expect(windows["caption-rise"]!.marks, `${label}: the lines rose`).toBeGreaterThan(10);
-          expect(windows["delegation-out"]!.marks, `${label}: one outgoing hand-off`).toBe(1);
-          expect(windows["delegation-in"]!.marks, `${label}: one incoming answer`).toBe(1);
+          expect(windows.bubblesRising.marks, `${label}: bubbles rose`).toBeGreaterThan(0);
           cases.push({
-            label, surface, viewport: `${viewport.width}x${viewport.height}`, deviceEmulation: touch ? "touch, mobile viewport" : "none", lang, scheme, variant,
-            layout: placement.layout, motion: "no-preference", recordingDuringMeasurement: false,
+            label, scenario: name, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, motion: "no-preference", recordingDuringMeasurement: false,
             idle: { frames: idle.length, medianMs: two(frame), p95Ms: two(percentile(idle, 0.95)), maxMs: two(Math.max(...idle)) },
             windows, conversation: read(deltasIn(idleTo, meter.stamps.at(-1)!)), hiddenTabSamples: meter.hidden,
-            contract: { dispatchesBeforeConfirmation: before.dispatches, dispatchesAfter: after.dispatches, delegationEventsBeforeRequest: 0, events: after.events.length },
+            contract: { dispatches: after.dispatches, events: after.events.length, proposal },
           });
         } finally { await context.close().catch(() => undefined); }
       }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
-    record("demo-smoothness.json", {
-      driver: DRIVER, fixture: "?scenario=voice-companion", browser: `Chromium ${version} (headless)`,
-      method: "requestAnimationFrame intervals in the foreground page; T is the median interval of a 2 s idle reference on the same page; a window is the stated duration after each performance mark the component sets when an animation starts",
+    record("scenarios.json", {
+      driver: DRIVER, fixture: "?scenario=voice-companion&script=<scenario>", browser: `Chromium ${version} (headless)`, browserProcesses: processes,
+      method: "requestAnimationFrame intervals in the foreground page; T is the median interval of a 1.5 s idle reference on the same page; a window is the union of the stated durations after each performance mark the component sets when an animation starts",
+      windows: {
+        bubblesRising: "a bubble or call entering (260 ms) and the stack rising under it (340 ms)",
+        arrivingTogether: "two or more elements entering in one commit, or one within 400 ms of the previous",
+        leaving: "an older bubble drifting away and fading (420 ms)",
+        calls: "a call element entering",
+        delegation: "the hand-off pellet going out (900 ms) and the answer coming back (700 ms)",
+      },
       target: { p95: "<= 1.5 T", max: "<= 4 T", missedShare: "<= 0.01" },
       missedFramesEstimate: "sum over intervals of max(0, round(dt / T) - 1); an estimate of missed animation opportunities, read from the frame clock; no compositor trace and no video frame counter was taken",
+      limits: { bubbleMaxWidthPx: 280, bubbleMaxLines: 4, bubbleMaxChars: 116, speechBubblesShown: 4, callElementsShown: 4, laneHeightsPx: [360, 260, 180] },
       limitations: [
-        "Headless Chromium on the build machine with a software compositor: no physical display, no phone hardware, no CPU throttling.",
-        "The mouth follows a synthetic level envelope; there is no audio, so lip sync against real speech is untested.",
-        "The recordings are a separate run of the same script, made after every measured run; no frame number in this file was taken while recording.",
-        "The board behind the window is the fixture's, with its own animations running.",
+        "Headless Chromium on the build machine with a software compositor: no physical display, no CPU throttling.",
+        "The mouth follows a synthetic level envelope and the bubbles a nominal speaking pace; there is no audio.",
+        "The recordings, screenshots and geometry samples come from a separate run of the same script, made after every measured run; no frame number in this file was taken while recording.",
+        "The board behind the companion is the fixture's, with its own animations running.",
       ],
       cases,
     });
-  }, 1_500_000);
+  }, 2_400_000);
 });

@@ -13,7 +13,7 @@ import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
 import { VoiceCompanion, type CompanionVariant } from "@/components/voiceCompanion/VoiceCompanion";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
-import { DEMO_IDS, demoAnswer, demoInstruction, demoScript } from "@/lib/voiceCompanion/demoScript";
+import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
@@ -106,12 +106,15 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
-/* The floating voice companion (#2519, docs/design/voice-companion-research.md): the default board with the
-   companion's window over it, driven by the simulator on the shared event contract. `&variant=1|2|3` picks the
-   numbered window, `&collapsed=1` starts it as its small shape, `&delivered=1` opens with the delegated message
-   and the orchestrator's answer already in the seat's conversation, and `&engine=codex` seats a Codex orchestrator. */
+/* The floating voice companion (#2519, docs/design/voice-companion-research.md §9): the default board with the
+   character over it, driven by the simulator on the shared event contract. `&script=<scenario>` picks the scripted
+   scenario (delegation by default), `&variant=1|2|3` the numbered variant, `&collapsed=1` starts it as its small
+   shape, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
+   conversation, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
+   plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
+   with small real buttons every 100 px, where no lane fits. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, events: [] as CompanionEvent[] };
+const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[] };
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
 const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
 const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
@@ -3140,8 +3143,9 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
 function voiceCompanionScene() {
   const params = new URLSearchParams(location.search);
   const variant = (Number(params.get("variant")) || 1) as CompanionVariant;
+  const script = params.get("script");
   const adapter = createSimulatedCompanion({
-    script: demoScript(UK ? "uk" : "en"),
+    script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
     recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
     dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
   });
@@ -3149,12 +3153,30 @@ function voiceCompanionScene() {
     if (event.type !== "playback.level") voice.events.push(event);
     if (event.type === "orchestrator.answer") voice.answered = true;
   });
+  void adapter.finished.then(() => { voice.finished = true; });
   Object.assign(window, { voiceCompanion: voice });
+  /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
+     the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
+  const underlay = params.get("surface") === "underlay";
+  const buttons = params.get("surface") === "buttons";
+  const clicks: Record<string, number> = {};
+  Object.assign(window, { voiceUnderlayClicks: clicks });
   return (
     <>
-      <style>{"#root { height: calc(100dvh - var(--voice-companion-reserve, 0px)) !important; }"}</style>
-      <Viewer />
-      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card, [data-phone-card]" />
+      {underlay ? (
+        <div data-voice-underlay style={{ position: "fixed", inset: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, 40px)", gridAutoRows: 40, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 40) * Math.ceil(innerHeight / 40) }, (_, index) => (
+            <div key={index} data-underlay-cell={index} style={{ border: "1px solid var(--color-border)", opacity: 0.6 }} onClick={() => { clicks[index] = (clicks[index] ?? 0) + 1; }} />
+          ))}
+        </div>
+      ) : buttons ? (
+        <div data-voice-buttons style={{ position: "fixed", inset: 0, background: "var(--color-canvas)" }}>
+          {Array.from({ length: Math.ceil(innerWidth / 100) * Math.ceil(innerHeight / 100) }, (_, index) => (
+            <button key={index} type="button" aria-label={`cell ${index}`} style={{ position: "absolute", left: (index % Math.ceil(innerWidth / 100)) * 100 + 40, top: Math.floor(index / Math.ceil(innerWidth / 100)) * 100 + 40, width: 20, height: 20, borderRadius: 4, border: "1px solid var(--color-border)", background: "var(--color-raised)" }} />
+          ))}
+        </div>
+      ) : <Viewer />}
+      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card" />
     </>
   );
 }

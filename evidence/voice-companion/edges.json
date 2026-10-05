@@ -1,0 +1,710 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&surface=underlay&script=edge",
+  "rule": "the lane faces the middle of the screen and flips to the other side at an edge; bubbles rise unless the lane would leave the top, and then run downward",
+  "surface": "a field of plain cells that count the clicks reaching them, so the character stays where it is dropped",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "variant": 1,
+      "position": "top-left",
+      "side": "right",
+      "direction": "down",
+      "block": {
+        "x": 16,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 54,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 1,
+      "position": "right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 375,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 163,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 55,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 1,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 736,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 1002,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 72,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 1,
+      "position": "bottom-left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 734,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 522,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 69,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 2,
+      "position": "top-right",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 1292,
+        "y": 16,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 1002,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 50,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 2,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 734,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 1002,
+        "y": 508,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 73,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 2,
+      "position": "bottom",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 654,
+        "y": 734,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 364,
+        "y": 508,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 69,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 3,
+      "position": "top",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 654,
+        "y": 16,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 364,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 48,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 3,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 1292,
+        "y": 734,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 1002,
+        "y": 524,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 68,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "variant": 3,
+      "position": "left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 375,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 158,
+        "y": 165,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 51,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 1,
+      "position": "top-left",
+      "side": "right",
+      "direction": "down",
+      "block": {
+        "x": 16,
+        "y": 16,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 59,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 1,
+      "position": "right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 325,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 113,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 62,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 1,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 636,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 562,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 71,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 1,
+      "position": "bottom-left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 634,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 158,
+        "y": 422,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 68,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 2,
+      "position": "top-right",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 852,
+        "y": 16,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 562,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 58,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 2,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 634,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 562,
+        "y": 408,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 67,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 2,
+      "position": "bottom",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 434,
+        "y": 634,
+        "width": 132,
+        "height": 134
+      },
+      "lane": {
+        "x": 144,
+        "y": 408,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 71,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 217,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 3,
+      "position": "top",
+      "side": "left",
+      "direction": "down",
+      "block": {
+        "x": 434,
+        "y": 16,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 144,
+        "y": 16,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 59,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 3,
+      "position": "bottom-right",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 852,
+        "y": 634,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 562,
+        "y": 424,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 70,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "variant": 3,
+      "position": "left",
+      "side": "right",
+      "direction": "up",
+      "block": {
+        "x": 16,
+        "y": 325,
+        "width": 132,
+        "height": 150
+      },
+      "lane": {
+        "x": 158,
+        "y": 115,
+        "width": 280,
+        "height": 360
+      },
+      "peakFloaters": 6,
+      "samples": {
+        "samples": 66,
+        "maxBubbles": 4,
+        "maxCalls": 2,
+        "maxFloaters": 6,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    }
+  ],
+  "clicks": [
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1006,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "493",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1047,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "494",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1088,
+        "y": 528
+      },
+      "where": "lane, outside every element",
+      "cell": "495",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1440,
+      "point": {
+        "x": 1250.3203125,
+        "y": 722.7925415039062
+      },
+      "where": "on a bubble",
+      "cell": "679",
+      "reachedPage": false
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 566,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "264",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 607,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "265",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 648,
+        "y": 428
+      },
+      "where": "lane, outside every element",
+      "cell": "266",
+      "reachedPage": true
+    },
+    {
+      "viewport": 1000,
+      "point": {
+        "x": 810.3203125,
+        "y": 629.8412475585938
+      },
+      "where": "on a bubble",
+      "cell": "395",
+      "reachedPage": false
+    }
+  ]
+}

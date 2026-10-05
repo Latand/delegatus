@@ -1,0 +1,1759 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&script=<scenario>",
+  "browser": "Chromium 151.0.7922.34 (headless)",
+  "browserProcesses": {
+    "started": 8,
+    "leftAfterClose": 0
+  },
+  "method": "requestAnimationFrame intervals in the foreground page; T is the median interval of a 1.5 s idle reference on the same page; a window is the union of the stated durations after each performance mark the component sets when an animation starts",
+  "windows": {
+    "bubblesRising": "a bubble or call entering (260 ms) and the stack rising under it (340 ms)",
+    "arrivingTogether": "two or more elements entering in one commit, or one within 400 ms of the previous",
+    "leaving": "an older bubble drifting away and fading (420 ms)",
+    "calls": "a call element entering",
+    "delegation": "the hand-off pellet going out (900 ms) and the answer coming back (700 ms)"
+  },
+  "target": {
+    "p95": "<= 1.5 T",
+    "max": "<= 4 T",
+    "missedShare": "<= 0.01"
+  },
+  "missedFramesEstimate": "sum over intervals of max(0, round(dt / T) - 1); an estimate of missed animation opportunities, read from the frame clock; no compositor trace and no video frame counter was taken",
+  "limits": {
+    "bubbleMaxWidthPx": 280,
+    "bubbleMaxLines": 4,
+    "bubbleMaxChars": 116,
+    "speechBubblesShown": 4,
+    "callElementsShown": 4,
+    "laneHeightsPx": [
+      360,
+      260,
+      180
+    ]
+  },
+  "limitations": [
+    "Headless Chromium on the build machine with a software compositor: no physical display, no CPU throttling.",
+    "The mouth follows a synthetic level envelope and the bubbles a nominal speaking pace; there is no audio.",
+    "The recordings, screenshots and geometry samples come from a separate run of the same script, made after every measured run; no frame number in this file was taken while recording.",
+    "The board behind the companion is the fixture's, with its own animations running."
+  ],
+  "cases": [
+    {
+      "label": "short-1440-en-light-v1",
+      "scenario": "short",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 1,
+          "frames": 15,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 218,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 33.3,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0046,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 12,
+        "proposal": null
+      },
+      "recording": "scenario-short-1440-en-light-v1.webm",
+      "screenshots": [
+        "scenario-short-1440-en-light-v1-end.png"
+      ],
+      "geometry": {
+        "samples": 28,
+        "maxBubbles": 1,
+        "maxCalls": 0,
+        "maxFloaters": 1,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 219,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "three-1440-uk-light-v2",
+      "scenario": "three",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 5,
+          "frames": 55,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 387,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 26,
+        "proposal": null
+      },
+      "recording": "scenario-three-1440-uk-light-v2.webm",
+      "screenshots": [
+        "scenario-three-1440-uk-light-v2-peak-2.png",
+        "scenario-three-1440-uk-light-v2-peak-3.png",
+        "scenario-three-1440-uk-light-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 53,
+        "maxBubbles": 3,
+        "maxCalls": 0,
+        "maxFloaters": 3,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 244,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "paragraph-1440-en-dark-v3",
+      "scenario": "paragraph",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 3,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 5,
+          "frames": 55,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 1,
+          "frames": 25,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 1075,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 54,
+        "proposal": null
+      },
+      "recording": "scenario-paragraph-1440-en-dark-v3.webm",
+      "screenshots": [
+        "scenario-paragraph-1440-en-dark-v3-peak-2.png",
+        "scenario-paragraph-1440-en-dark-v3-peak-3.png",
+        "scenario-paragraph-1440-en-dark-v3-end.png"
+      ],
+      "geometry": {
+        "samples": 148,
+        "maxBubbles": 3,
+        "maxCalls": 0,
+        "maxFloaters": 3,
+        "maxBubbleLines": 3,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "long-1440-uk-dark-v1",
+      "scenario": "long",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 1,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 13,
+          "frames": 136,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 5,
+          "frames": 125,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 2552,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 113,
+        "proposal": null
+      },
+      "recording": "scenario-long-1440-uk-dark-v1.webm",
+      "screenshots": [
+        "scenario-long-1440-uk-dark-v1-peak-2.png",
+        "scenario-long-1440-uk-dark-v1-peak-3.png",
+        "scenario-long-1440-uk-dark-v1-end.png"
+      ],
+      "geometry": {
+        "samples": 354,
+        "maxBubbles": 3,
+        "maxCalls": 0,
+        "maxFloaters": 3,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "many-1440-en-light-v2",
+      "scenario": "many",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 19,
+          "frames": 198,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 6,
+          "frames": 151,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 608,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 61,
+        "proposal": null
+      },
+      "recording": "scenario-many-1440-en-light-v2.webm",
+      "screenshots": [
+        "scenario-many-1440-en-light-v2-peak-2.png",
+        "scenario-many-1440-en-light-v2-peak-3.png",
+        "scenario-many-1440-en-light-v2-peak-4.png",
+        "scenario-many-1440-en-light-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 87,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 155,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "burst-1440-uk-light-v3",
+      "scenario": "burst",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 3,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 15,
+          "frames": 215,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 3,
+          "frames": 31,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "leaving": {
+          "marks": 5,
+          "frames": 123,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 4,
+          "frames": 32,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 801,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 49,
+        "proposal": null
+      },
+      "recording": "scenario-burst-1440-uk-light-v3.webm",
+      "screenshots": [
+        "scenario-burst-1440-uk-light-v3-peak-2.png",
+        "scenario-burst-1440-uk-light-v3-peak-4.png",
+        "scenario-burst-1440-uk-light-v3-peak-6.png",
+        "scenario-burst-1440-uk-light-v3-end.png"
+      ],
+      "geometry": {
+        "samples": 112,
+        "maxBubbles": 2,
+        "maxCalls": 4,
+        "maxFloaters": 6,
+        "maxBubbleLines": 3,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "delegation-1440-en-dark-v1",
+      "scenario": "delegation",
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 1,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 32,
+          "frames": 425,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 1,
+          "frames": 20,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "leaving": {
+          "marks": 9,
+          "frames": 225,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 1,
+          "frames": 16,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation": {
+          "marks": 2,
+          "frames": 96,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2156,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 33.3,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0005,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 1,
+        "events": 138,
+        "proposal": {
+          "dispatchesBefore": 0
+        }
+      },
+      "recording": "scenario-delegation-1440-en-dark-v1.webm",
+      "screenshots": [
+        "scenario-delegation-1440-en-dark-v1-peak-2.png",
+        "scenario-delegation-1440-en-dark-v1-peak-3.png",
+        "scenario-delegation-1440-en-dark-v1-peak-4.png",
+        "scenario-delegation-1440-en-dark-v1-proposal.png",
+        "scenario-delegation-1440-en-dark-v1-sending.png",
+        "scenario-delegation-1440-en-dark-v1-answered.png",
+        "scenario-delegation-1440-en-dark-v1-end.png",
+        "scenario-delegation-1440-en-dark-v1-conversation.png"
+      ],
+      "geometry": {
+        "samples": 300,
+        "maxBubbles": 4,
+        "maxCalls": 1,
+        "maxFloaters": 4,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "interrupt-1440-uk-dark-v2",
+      "scenario": "interrupt",
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 10,
+          "frames": 129,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.4,
+          "framesOver1_5T": 3,
+          "missedFramesEstimate": 3,
+          "missedShare": 0.0227,
+          "withinTarget": false
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 551,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 50.1,
+        "framesOver1_5T": 14,
+        "missedFramesEstimate": 17,
+        "missedShare": 0.0299,
+        "withinTarget": false
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 62,
+        "proposal": null
+      },
+      "recording": "scenario-interrupt-1440-uk-dark-v2.webm",
+      "screenshots": [
+        "scenario-interrupt-1440-uk-dark-v2-peak-2.png",
+        "scenario-interrupt-1440-uk-dark-v2-cut.png",
+        "scenario-interrupt-1440-uk-dark-v2-peak-3.png",
+        "scenario-interrupt-1440-uk-dark-v2-peak-4.png",
+        "scenario-interrupt-1440-uk-dark-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 78,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "short-1000-uk-dark-v2",
+      "scenario": "short",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 1,
+          "frames": 16,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 193,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 13,
+        "proposal": null
+      },
+      "recording": "scenario-short-1000-uk-dark-v2.webm",
+      "screenshots": [
+        "scenario-short-1000-uk-dark-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 26,
+        "maxBubbles": 1,
+        "maxCalls": 0,
+        "maxFloaters": 1,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 197,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "three-1000-en-dark-v3",
+      "scenario": "three",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 3,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 5,
+          "frames": 57,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 367,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 50,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 2,
+        "missedShare": 0.0054,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 28,
+        "proposal": null
+      },
+      "recording": "scenario-three-1000-en-dark-v3.webm",
+      "screenshots": [
+        "scenario-three-1000-en-dark-v3-peak-2.png",
+        "scenario-three-1000-en-dark-v3-peak-3.png",
+        "scenario-three-1000-en-dark-v3-end.png"
+      ],
+      "geometry": {
+        "samples": 52,
+        "maxBubbles": 3,
+        "maxCalls": 0,
+        "maxFloaters": 3,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 205,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "paragraph-1000-uk-light-v1",
+      "scenario": "paragraph",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 1,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 5,
+          "frames": 56,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 1,
+          "frames": 25,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 1196,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 49,
+        "proposal": null
+      },
+      "recording": "scenario-paragraph-1000-uk-light-v1.webm",
+      "screenshots": [
+        "scenario-paragraph-1000-uk-light-v1-peak-2.png",
+        "scenario-paragraph-1000-uk-light-v1-peak-3.png",
+        "scenario-paragraph-1000-uk-light-v1-end.png"
+      ],
+      "geometry": {
+        "samples": 164,
+        "maxBubbles": 3,
+        "maxCalls": 0,
+        "maxFloaters": 3,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "long-1000-en-light-v2",
+      "scenario": "long",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 15,
+          "frames": 157,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 6,
+          "frames": 150,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 2791,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 146,
+        "proposal": null
+      },
+      "recording": "scenario-long-1000-en-light-v2.webm",
+      "screenshots": [
+        "scenario-long-1000-en-light-v2-peak-2.png",
+        "scenario-long-1000-en-light-v2-peak-3.png",
+        "scenario-long-1000-en-light-v2-peak-4.png",
+        "scenario-long-1000-en-light-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 387,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "many-1000-uk-dark-v3",
+      "scenario": "many",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 3,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 19,
+          "frames": 197,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 6,
+          "frames": 151,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 581,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 58,
+        "proposal": null
+      },
+      "recording": "scenario-many-1000-uk-dark-v3.webm",
+      "screenshots": [
+        "scenario-many-1000-uk-dark-v3-peak-2.png",
+        "scenario-many-1000-uk-dark-v3-peak-3.png",
+        "scenario-many-1000-uk-dark-v3-peak-4.png",
+        "scenario-many-1000-uk-dark-v3-end.png"
+      ],
+      "geometry": {
+        "samples": 81,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 1,
+        "maxBubbleWidth": 147,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "burst-1000-en-dark-v1",
+      "scenario": "burst",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 1,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 15,
+          "frames": 169,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 3,
+          "frames": 31,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "leaving": {
+          "marks": 5,
+          "frames": 98,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 4,
+          "frames": 32,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 800,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 55,
+        "proposal": null
+      },
+      "recording": "scenario-burst-1000-en-dark-v1.webm",
+      "screenshots": [
+        "scenario-burst-1000-en-dark-v1-peak-2.png",
+        "scenario-burst-1000-en-dark-v1-peak-4.png",
+        "scenario-burst-1000-en-dark-v1-peak-6.png",
+        "scenario-burst-1000-en-dark-v1-peak-7.png",
+        "scenario-burst-1000-en-dark-v1-end.png"
+      ],
+      "geometry": {
+        "samples": 111,
+        "maxBubbles": 3,
+        "maxCalls": 4,
+        "maxFloaters": 7,
+        "maxBubbleLines": 2,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "delegation-1000-uk-light-v2",
+      "scenario": "delegation",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 32,
+          "frames": 401,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 50,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 2,
+          "missedShare": 0.005,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 1,
+          "frames": 21,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "leaving": {
+          "marks": 9,
+          "frames": 221,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 50,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 2,
+          "missedShare": 0.009,
+          "withinTarget": true
+        },
+        "calls": {
+          "marks": 1,
+          "frames": 16,
+          "medianMs": 16.6,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation": {
+          "marks": 2,
+          "frames": 96,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 50,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 2,
+          "missedShare": 0.0204,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 2051,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 50,
+        "framesOver1_5T": 2,
+        "missedFramesEstimate": 3,
+        "missedShare": 0.0015,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 1,
+        "events": 110,
+        "proposal": {
+          "dispatchesBefore": 0
+        }
+      },
+      "recording": "scenario-delegation-1000-uk-light-v2.webm",
+      "screenshots": [
+        "scenario-delegation-1000-uk-light-v2-peak-2.png",
+        "scenario-delegation-1000-uk-light-v2-peak-3.png",
+        "scenario-delegation-1000-uk-light-v2-peak-4.png",
+        "scenario-delegation-1000-uk-light-v2-proposal.png",
+        "scenario-delegation-1000-uk-light-v2-sending.png",
+        "scenario-delegation-1000-uk-light-v2-answered.png",
+        "scenario-delegation-1000-uk-light-v2-end.png",
+        "scenario-delegation-1000-uk-light-v2-conversation.png"
+      ],
+      "geometry": {
+        "samples": 286,
+        "maxBubbles": 4,
+        "maxCalls": 1,
+        "maxFloaters": 4,
+        "maxBubbleLines": 4,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    },
+    {
+      "label": "interrupt-1000-en-light-v3",
+      "scenario": "interrupt",
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 3,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 89,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 9,
+          "frames": 115,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 580,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 69,
+        "proposal": null
+      },
+      "recording": "scenario-interrupt-1000-en-light-v3.webm",
+      "screenshots": [
+        "scenario-interrupt-1000-en-light-v3-peak-2.png",
+        "scenario-interrupt-1000-en-light-v3-cut.png",
+        "scenario-interrupt-1000-en-light-v3-peak-3.png",
+        "scenario-interrupt-1000-en-light-v3-peak-4.png",
+        "scenario-interrupt-1000-en-light-v3-end.png"
+      ],
+      "geometry": {
+        "samples": 80,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 3,
+        "maxBubbleWidth": 280,
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      }
+    }
+  ]
+}

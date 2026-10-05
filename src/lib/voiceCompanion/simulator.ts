@@ -1,4 +1,5 @@
 import type { CompanionCommand, CompanionEvent, Delivery, Id, Payload, Proposal, Recipient, VoiceCompanionAdapter } from "./contract";
+import { admitDelegationProposal, type OperatorInput } from "./gate";
 
 /**
  * The simulated voice companion (#2519, design note §6): a scripted
@@ -6,7 +7,8 @@ import type { CompanionCommand, CompanionEvent, Delivery, Id, Payload, Proposal,
  * normalized events a real backend adapter produces. It touches no provider
  * endpoint, no microphone, no key, no state directory and no orchestrator:
  * the one effect a delegation has is a call to the `dispatch` seam it was
- * given, and that call happens only after a `confirmation` command says send.
+ * given, and that call happens only after the explicit-request gate admitted
+ * the proposal and a `confirmation` command said send.
  *
  * Time comes from a clock, so the same script runs on virtual time in a unit
  * test and on `requestAnimationFrame` in a browser capture.
@@ -37,14 +39,21 @@ export function virtualClock(frameMs = 1000 / 60): SimClock {
   };
 }
 
+export interface ScriptedCall { callId: Id; name: string; summary: string; durationMs: number; outcome: "done" | "failed"; result: string }
+
 export type ScriptStep =
   | { kind: "pause"; ms: number }
   | { kind: "operator"; itemId: Id; text: string }
-  | { kind: "companion"; itemId: Id; responseId: Id; text: string }
-  /** The model proposes a delegation; the application asks for confirmation. */
+  /** The companion answers. `bargeIn` has the operator start speaking once
+      that much audio has played, which cuts the playback. */
+  | { kind: "companion"; itemId: Id; responseId: Id; text: string; bargeIn?: { afterMs: number; itemId: Id; text: string } }
+  /** Read-only tool calls, started together and finished each on its own time. */
+  | { kind: "tools"; calls: readonly ScriptedCall[] }
+  /** The model proposes a delegation; the application gate decides whether
+      the operator is asked to confirm it. */
   | { kind: "propose"; callId: Id; proposalId: Id; sourceItemId: Id; instruction: string }
   /** Waits for the `confirmation` command. Send continues the script; cancel
-      plays `cancelled` and ends it. */
+      plays `cancelled` and ends it. A refused proposal skips this step. */
   | { kind: "confirm"; clientMessageId: Id; operationId: Id; settleAfterMs: number; cancelled: ScriptStep[] }
   | { kind: "answer"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number };
 
@@ -63,15 +72,18 @@ export interface SimulatedCompanion extends VoiceCompanionAdapter {
   readonly finished: Promise<void>;
 }
 
-/* Speech pacing of the synthetic voice: one character per this many ms. */
-const MS_PER_CHAR = 58;
+/* Pacing of the synthetic voice. Playback: one character per this many ms.
+   Generation runs several times faster and starts first, as a real response
+   does, so the transcript is complete long before the audio ends. */
+export const MS_PER_CHAR = 58;
+const GENERATION_MS_PER_CHAR = 14;
+const FIRST_AUDIO_MS = 260;
 const OPERATOR_MS_PER_CHAR = 46;
 const VOWELS = new Set("aeiouyаеєиіїоуюяы");
 
 /** The played-audio level of the synthetic voice at `playedMs` into `text`:
     open on vowels, nearly closed on consonants, shut on pauses. It exercises
-    the mouth's animation and its synchronization with the captions; it proves
-    nothing about phonetic accuracy. */
+    the mouth's animation; it proves nothing about phonetic accuracy. */
 export function syntheticLevel(text: string, playedMs: number): number {
   const char = text[Math.floor(playedMs / MS_PER_CHAR)]?.toLowerCase();
   if (!char) return 0;
@@ -110,60 +122,106 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
     for (const listener of [...listeners]) listener(event);
   };
 
-  async function speakOperator(step: Extract<ScriptStep, { kind: "operator" }>, mine: number) {
-    emit({ type: "input.speech.started", itemId: step.itemId });
-    for (const word of words(step.text)) {
+  /* What the gate reads: the operator's inputs of this generation, as heard. */
+  let inputs: OperatorInput[] = [];
+  const heard = (itemId: Id, change: Partial<OperatorInput>) => {
+    const index = inputs.findIndex((input) => input.itemId === itemId);
+    if (index === -1) inputs.push({ itemId, text: "", final: false, ...change });
+    else inputs[index] = { ...inputs[index]!, ...change };
+  };
+
+  async function speakOperator(itemId: Id, text: string, mine: number, started = false) {
+    if (!started) emit({ type: "input.speech.started", itemId });
+    heard(itemId, {});
+    let sofar = "";
+    for (const word of words(text)) {
       await clock.sleep(word.length * OPERATOR_MS_PER_CHAR);
       if (gone(mine)) return;
-      emit({ type: "transcript.delta", speaker: "operator", itemId: step.itemId, delta: word });
+      sofar += word;
+      heard(itemId, { text: sofar });
+      emit({ type: "transcript.delta", speaker: "operator", itemId, delta: word });
     }
     await clock.sleep(180);
     if (gone(mine)) return;
-    emit({ type: "input.speech.stopped", itemId: step.itemId });
-    emit({ type: "transcript.final", speaker: "operator", itemId: step.itemId, text: step.text });
+    emit({ type: "input.speech.stopped", itemId });
+    heard(itemId, { text, final: true });
+    emit({ type: "transcript.final", speaker: "operator", itemId, text });
   }
 
+  /**
+   * One response. Generation and playback run side by side on one frame loop:
+   * the transcript streams at generation speed and is final (then the response
+   * is generated) while the audio still plays, as the provider's lifecycle
+   * orders them. Playback alone decides the mouth, and a cut playback leaves
+   * the generated transcript as it was.
+   */
   async function speakCompanion(step: Extract<ScriptStep, { kind: "companion" }>, mine: number) {
-    const { itemId, responseId, text } = step;
+    const { itemId, responseId, text, bargeIn } = step;
     emit({ type: "response.started", responseId, itemId });
-    await clock.sleep(280);
-    if (gone(mine)) return;
-    emit({ type: "playback.started", responseId, itemId });
-    playing = responseId;
     const chunks = words(text);
-    const totalMs = text.length * MS_PER_CHAR;
-    const playbackStart = clock.now();
-    let spoken = 0;
-    let chars = 0;
+    const audioMs = text.length * MS_PER_CHAR;
+    const startedAt = clock.now();
+    let streamed = 0;
+    let streamedChars = 0;
     let generated = false;
+    let playbackAt: number | null = null;
     for (;;) {
       await clock.frame();
       if (gone(mine)) return;
-      const playedMs = clock.now() - playbackStart;
-      if (interrupted === responseId || muted) {
-        if (!generated) emit({ type: "response.generated", responseId, status: "cancelled" });
-        emit({ type: "playback.stopped", responseId, itemId, playedMs, reason: muted ? "muted" : "interrupted" });
-        interrupted = null;
-        playing = null;
-        return;
+      const elapsed = clock.now() - startedAt;
+      while (!generated && streamed < chunks.length && streamedChars <= elapsed / GENERATION_MS_PER_CHAR) {
+        emit({ type: "transcript.delta", speaker: "companion", itemId, responseId, delta: chunks[streamed]! });
+        streamedChars += chunks[streamed]!.length;
+        streamed += 1;
       }
-      /* A word is captioned when the voice reaches it. */
-      while (spoken < chunks.length && chars <= playedMs / MS_PER_CHAR) {
-        emit({ type: "transcript.delta", speaker: "companion", itemId, responseId, delta: chunks[spoken]! });
-        chars += chunks[spoken]!.length;
-        spoken += 1;
-      }
-      /* Generation runs ahead of playback, as a real response does. */
-      if (!generated && playedMs >= totalMs * 0.6) {
+      if (!generated && streamed === chunks.length) {
         generated = true;
+        emit({ type: "transcript.final", speaker: "companion", itemId, responseId, text });
         emit({ type: "response.generated", responseId, status: "completed" });
       }
-      if (playedMs >= totalMs) break;
+      if (playbackAt === null) {
+        if (elapsed < FIRST_AUDIO_MS) continue;
+        playbackAt = clock.now();
+        playing = responseId;
+        emit({ type: "playback.started", responseId, itemId });
+      }
+      const playedMs = clock.now() - playbackAt;
+      const bargedIn = !!bargeIn && playedMs >= bargeIn.afterMs;
+      if (bargedIn) emit({ type: "input.speech.started", itemId: bargeIn.itemId });
+      if (bargedIn || interrupted === responseId || muted) {
+        /* The player stops; what was generated stays generated. */
+        if (!generated) emit({ type: "response.generated", responseId, status: "cancelled" });
+        emit({ type: "playback.stopped", responseId, itemId, playedMs, reason: muted && !bargedIn ? "muted" : "interrupted" });
+        interrupted = null;
+        playing = null;
+        if (bargedIn) await speakOperator(bargeIn.itemId, bargeIn.text, mine, true);
+        return;
+      }
+      if (playedMs >= audioMs) break;
       emit({ type: "playback.level", responseId, itemId, rms: syntheticLevel(text, playedMs), playedMs });
     }
     playing = null;
-    emit({ type: "playback.stopped", responseId, itemId, playedMs: totalMs, reason: "ended" });
-    emit({ type: "transcript.final", speaker: "companion", itemId, responseId, text });
+    emit({ type: "playback.stopped", responseId, itemId, playedMs: audioMs, reason: "ended" });
+  }
+
+  async function runTools(step: Extract<ScriptStep, { kind: "tools" }>, mine: number) {
+    const startedAt = clock.now();
+    const open = new Map<Id, ScriptedCall>();
+    for (const call of step.calls) {
+      emit({ type: "tool.called", callId: call.callId, name: call.name, summary: call.summary });
+      open.set(call.callId, call);
+      await clock.sleep(90);
+      if (gone(mine)) return;
+    }
+    while (open.size) {
+      await clock.frame();
+      if (gone(mine)) return;
+      for (const call of [...open.values()]) {
+        if (clock.now() - startedAt < call.durationMs) continue;
+        open.delete(call.callId);
+        emit({ type: "tool.result", callId: call.callId, status: call.outcome, summary: call.result });
+      }
+    }
   }
 
   async function play(steps: readonly ScriptStep[], mine: number): Promise<void> {
@@ -171,12 +229,20 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
     for (const step of steps) {
       if (gone(mine)) return;
       if (step.kind === "pause") await clock.sleep(step.ms);
-      else if (step.kind === "operator") await speakOperator(step, mine);
+      else if (step.kind === "operator") await speakOperator(step.itemId, step.text, mine);
       else if (step.kind === "companion") await speakCompanion(step, mine);
+      else if (step.kind === "tools") await runTools(step, mine);
       else if (step.kind === "propose") {
         emit({ type: "delegation.tool.called", callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction });
-        pendingProposal = { proposalId: step.proposalId, callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction, recipient: options.recipient };
         decided = null;
+        /* The gate, before anything is shown: only an explicit request becomes a proposal. */
+        const verdict = admitDelegationProposal({ sourceItemId: step.sourceItemId, instruction: step.instruction, inputs });
+        if (!verdict.admit) {
+          pendingProposal = null;
+          emit({ type: "delegation.tool.result", callId: step.callId, result: { status: "refused", code: verdict.reason } });
+          continue;
+        }
+        pendingProposal = { proposalId: step.proposalId, callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction, recipient: options.recipient };
         emit({ type: "delegation.confirmation.required", proposal: pendingProposal });
       } else if (step.kind === "confirm") {
         const proposal = pendingProposal;
@@ -220,6 +286,7 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       seq = 0;
       muted = false;
       interrupted = playing = pendingProposal = decided = null;
+      inputs = [];
       startedAt = clock.now();
       const mine = generation;
       const done = finish;
