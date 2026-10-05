@@ -137,6 +137,7 @@ describe("shared memory settings", () => {
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.PORT;
+    delete process.env.LLV_STAGING;
     const out = path.resolve(".artifacts/shared-memory-settings"); fs.mkdirSync(out, { recursive: true });
     let failKeyWrite = false;
     const server = await serveEvidenceFixture(out, undefined, {
@@ -241,6 +242,55 @@ describe("shared memory settings", () => {
           await page.getByText(translate(lang, "providerKey.env"), { exact: true }).waitFor();
           expect(await page.locator("[data-provider-key] input").count()).toBe(0);
           await measure("environment");
+          process.env.LLV_STAGING = "1";
+          for (const source of ["env", "file"] as const) {
+            if (source === "file") delete process.env.OPENROUTER_API_KEY;
+            await page.reload();
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+            await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
+            expect(await page.locator("[data-provider-key] form").count()).toBe(0);
+            expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+            await measure(`staging-${source}`);
+          }
+          delete process.env.LLV_STAGING;
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.locator("[data-provider-key] input").waitFor();
+          const stateRoot = process.env.LLV_STATE_DIR!;
+          const spendFile = path.join(stateRoot, "operator-asks.json");
+          const spendBefore = fs.readFileSync(spendFile, "utf8");
+          const pendingDirectory = path.join(stateRoot, "memory-injection-pending");
+          for (const broken of ["spend", "pending"] as const) {
+            if (broken === "spend") fs.writeFileSync(spendFile, "broken");
+            else {
+              fs.mkdirSync(pendingDirectory, { recursive: true });
+              fs.writeFileSync(path.join(pendingDirectory, "a".repeat(64) + ".json"), "{}");
+            }
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+            await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.failed"));
+            const control = page.locator("[data-memory-setting] [role=switch]");
+            expect(await control.isEnabled()).toBe(true);
+            const wasEnabled = await control.isChecked();
+            await control.click();
+            await page.waitForFunction(enabled => {
+              const input = document.querySelector<HTMLInputElement>("[data-memory-setting] input");
+              return input && !input.disabled && input.checked === enabled;
+            }, !wasEnabled);
+            expect(await control.isChecked()).toBe(!wasEnabled);
+            expect(await page.locator("[data-memory-counts]").count()).toBe(0);
+            expect(await page.locator("[data-memory-setting]").textContent()).not.toContain("$");
+            await measure(`unavailable-${broken}`);
+            if (broken === "spend") fs.writeFileSync(spendFile, spendBefore);
+            else fs.rmSync(pendingDirectory, { recursive: true });
+          }
+          const settingFile = path.join(stateRoot, "shared-memory-settings.json");
+          const settingBefore = fs.readFileSync(settingFile, "utf8");
+          fs.writeFileSync(settingFile, "broken");
+          await page.locator("[data-memory-setting] [role=switch]").click();
+          await page.getByText(translate(lang, "memory.save.failed"), { exact: true }).waitFor();
+          expect(await page.locator("[data-memory-setting] [role=switch]").isEnabled()).toBe(true);
+          await measure("memory-write-failed");
+          fs.writeFileSync(settingFile, settingBefore);
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
         // The next language/viewport starts with no file key.
@@ -254,7 +304,7 @@ describe("shared memory settings", () => {
       await browser?.close(); await launched?.close(); server.stop();
       fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
       memoryIndex().close();
-      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "OPENROUTER_API_KEY", "PORT"]) {
+      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "OPENROUTER_API_KEY", "PORT", "LLV_STAGING"]) {
         if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
       }
       fs.rmSync(root, { recursive: true, force: true });

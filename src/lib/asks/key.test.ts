@@ -14,10 +14,11 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-key-write-"));
   process.env.XDG_CONFIG_HOME = path.join(root, "config");
   delete process.env.OPENROUTER_API_KEY;
+  delete process.env.LLV_STAGING;
 });
 afterEach(() => {
   setCallerConversationResolverForTests(null);
-  for (const key of ["XDG_CONFIG_HOME", "OPENROUTER_API_KEY"]) {
+  for (const key of ["XDG_CONFIG_HOME", "OPENROUTER_API_KEY", "LLV_STAGING", "LLV_STATE_DIR"]) {
     if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
   }
   fs.rmSync(root, { recursive: true, force: true });
@@ -25,6 +26,23 @@ afterEach(() => {
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new NextRequest("http://localhost/api/asks-you/key", { method: "PUT", headers: { host: "localhost", origin: "http://localhost", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
+for (const existing of [false, true]) test(`staging refuses before reading the body and preserves the shared key (${existing})`, async () => {
+  const filename = openRouterKeyPath();
+  if (existing) expect((await PUT(request({ key: "fixture-production-key" }))).status).toBe(200);
+  const before = fs.existsSync(path.dirname(filename)) ? fs.readdirSync(path.dirname(filename)) : [];
+  process.env.LLV_STAGING = "1";
+  process.env.LLV_STATE_DIR = path.join(root, "config/delegatus/state-staging");
+  const req = request({ key: "fixture-staging-typed-key" });
+  const response = await PUT(req);
+  expect(response.status).toBe(409);
+  expect(req.bodyUsed).toBe(false);
+  expect(await response.json()).toEqual({ present: existing, source: existing ? "file" : null, staging: true, error: "staging" });
+  expect(openRouterKeyPath()).toBe(filename);
+  expect(fs.existsSync(filename)).toBe(existing);
+  if (existing) expect(fs.readFileSync(filename, "utf8")).toBe("fixture-production-key");
+  expect(fs.existsSync(path.dirname(filename)) ? fs.readdirSync(path.dirname(filename)) : []).toEqual(before);
+  expect(await (await GET()).json()).toEqual({ present: existing, source: existing ? "file" : null, staging: true });
+});
 test("operator writes and replaces the existing owner-only file; responses never echo", async () => {
   for (const key of ["fixture-first-key", "fixture-second-key"]) {
     const response = await PUT(request({ key }));

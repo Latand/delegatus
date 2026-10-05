@@ -2,7 +2,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 
-type KeyView = { present: boolean; source: "env" | "file" | null };
+type KeyView = { present: boolean; source: "env" | "file" | null; staging?: boolean };
 /** One installation key, shared by Asks-you and memory. Never read into an input. */
 export function OpenRouterKeySetting() {
   const { t } = useLocale();
@@ -38,9 +38,10 @@ export function OpenRouterKeySetting() {
   };
   return <div data-provider-key className="mt-5 border-t border-border pt-4">
     <label htmlFor={id} className="text-sm font-semibold">{t("providerKey.label")}</label>
-    <p role="status" className="mt-2 text-[13px] leading-relaxed text-muted">{view ? t(view.source === "env" ? "providerKey.env" : view.present ? "providerKey.file" : "providerKey.missing") : t("providerKey.loading")}</p>
+    <p role="status" className="mt-2 text-[13px] leading-relaxed text-muted">{view ? t(view.source === "env" ? "providerKey.env" : view.present ? view.staging ? "providerKey.fileStatus" : "providerKey.file" : view.staging ? "providerKey.missingStatus" : "providerKey.missing") : t("providerKey.loading")}</p>
     <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.shared")}</p>
-    {view?.source !== "env" && <form className="mt-2 flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); void save(); }}>
+    {view?.staging && <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.staging")}</p>}
+    {!view?.staging && view?.source !== "env" && <form className="mt-2 flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); void save(); }}>
       <input id={id} type="password" autoComplete="off" spellCheck={false} ref={input} maxLength={4096}
         disabled={!view || busy} onChange={e => { setHasKey(Boolean(e.target.value.trim())); setSaved(false); }}
         className="min-h-11 min-w-0 flex-1 rounded border border-border bg-canvas px-3" />

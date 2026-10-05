@@ -3,18 +3,50 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { installActEnv } from "@/test-helpers/actEnv";
-import { translate } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { MemorySetting } from "./MemorySetting";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator,
-  Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, Event: dom.Event });
+  localStorage: dom.localStorage, Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, Event: dom.Event });
 installActEnv();
 const originalFetch = globalThis.fetch;
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
   globalThis.fetch = originalFetch; document.body.innerHTML = "";
+  localStorage.clear(); setLocale("en");
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: unavailable status keeps the saved switch usable through GET and PUT`, async () => {
+  setLocale(lang);
+  let enabled = true;
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    if (init?.method === "PUT") enabled = JSON.parse(String(init.body)).enabled;
+    return Response.json({ enabled, status: "unavailable" });
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySetting project="fixture-project" />); });
+  const control = host.querySelector<HTMLInputElement>("[role=switch]")!;
+  expect(control.disabled).toBe(false); expect(control.checked).toBe(true);
+  await act(async () => { control.click(); });
+  expect(enabled).toBe(false); expect(control.checked).toBe(false); expect(control.disabled).toBe(false);
+  expect(host.querySelector("[data-memory-status]")?.textContent).toBe(translate(lang, "memory.status.failed"));
+  expect(host.querySelector("[data-memory-counts]")).toBeNull();
+  expect(host.textContent).not.toContain("$");
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: a failed PUT explains saving and retains the saved switch`, async () => {
+  setLocale(lang);
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => init?.method === "PUT"
+    ? Response.json({ error: "write_failed" }, { status: 500 })
+    : Response.json({ enabled: true, status: "unavailable" })) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySetting project="fixture-project" />); });
+  const control = host.querySelector<HTMLInputElement>("[role=switch]")!;
+  await act(async () => { control.click(); });
+  expect(control.disabled).toBe(false); expect(control.checked).toBe(true);
+  expect(host.querySelector("[role=alert]")?.textContent).toBe(translate(lang, "memory.save.failed"));
 });
 
 for (const enabled of [true, false]) test(`a previous release response keeps the project switch usable (${enabled})`, async () => {

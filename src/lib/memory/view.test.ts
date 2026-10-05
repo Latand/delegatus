@@ -6,10 +6,10 @@ import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { mutateOperatorAsks } from "@/lib/asks/store";
-import { setSharedMemoryEnabled } from "./settings";
+import { setSharedMemoryEnabled, sharedMemoryEnabled } from "./settings";
 import { memoryIndex } from "./service";
 import { memorySettingView } from "./view";
-import { GET } from "@/app/api/memory/settings/route";
+import { GET, PUT } from "@/app/api/memory/settings/route";
 const previous = { ...process.env };
 const now = new Date("2026-10-05T12:00:00Z");
 let root: string;
@@ -66,9 +66,34 @@ test("current month ledger counts decisions separately from confirmed turns, wit
   expect(text).not.toContain(entries[0].title);
   expect(text).not.toContain(process.env.OPENROUTER_API_KEY!);
 });
-test("unreadable spend reports status unavailable", async () => {
-  fs.writeFileSync(path.join(root, "operator-asks.json"), "broken");
-  expect((await GET(new NextRequest("http://localhost/api/memory/settings?project=fixture-project"))).status).toBe(503);
+for (const broken of ["spend", "pending"]) test(`unreadable ${broken} preserves the saved switch independently of status`, async () => {
+  if (broken === "spend") fs.writeFileSync(path.join(root, "operator-asks.json"), "broken");
+  else {
+    fs.mkdirSync(path.join(root, "memory-injection-pending"));
+    fs.writeFileSync(path.join(root, "memory-injection-pending", "a".repeat(64) + ".json"), "{}");
+  }
+  const get = () => GET(new NextRequest("http://localhost/api/memory/settings?project=fixture-project"));
+  expect(await (await get()).json()).toEqual({ enabled: true, status: "unavailable" });
+  for (const enabled of [false, true]) {
+    const response = await PUT(new NextRequest("http://localhost/api/memory/settings", {
+      method: "PUT", headers: { host: "localhost", origin: "http://localhost", "content-type": "application/json" },
+      body: JSON.stringify({ project: "fixture-project", enabled }),
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ enabled, status: "unavailable" });
+    expect(sharedMemoryEnabled("fixture-project")).toBe(enabled);
+    const read = await get(); expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({ enabled, status: "unavailable" });
+  }
+});
+test("failed setting persistence reports a write error", async () => {
+  fs.writeFileSync(path.join(root, "shared-memory-settings.json"), "broken");
+  const response = await PUT(new NextRequest("http://localhost/api/memory/settings", {
+    method: "PUT", headers: { host: "localhost", origin: "http://localhost" },
+    body: JSON.stringify({ project: "fixture-project", enabled: false }),
+  }));
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({ error: "write_failed" });
 });
 
 test("contended activity stays in process and flushes on the next successful write", () => {

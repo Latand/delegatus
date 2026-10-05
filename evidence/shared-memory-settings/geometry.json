@@ -481,6 +481,283 @@
     },
     {
       "lang": "en",
+      "width": 1440,
+      "state": "staging-env",
+      "left": 464,
+      "right": 976,
+      "top": 84.6875,
+      "bottom": 815.3125,
+      "overflow": 0,
+      "scrollHeight": 729,
+      "height": 729,
+      "rows": [
+        {
+          "top": 309.0625,
+          "bottom": 582.5625,
+          "height": 273.5,
+          "overflow": 0
+        },
+        {
+          "top": 602.5625,
+          "bottom": 794.3125,
+          "height": 191.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 105.6875,
+          "bottom": 149.6875
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 255.0625,
+          "bottom": 279.0625
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 336.0625,
+          "bottom": 360.0625
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-file",
+      "left": 464,
+      "right": 976,
+      "top": 95.25,
+      "bottom": 804.75,
+      "overflow": 0,
+      "scrollHeight": 708,
+      "height": 708,
+      "rows": [
+        {
+          "top": 319.625,
+          "bottom": 593.125,
+          "height": 273.5,
+          "overflow": 0
+        },
+        {
+          "top": 613.125,
+          "bottom": 783.75,
+          "height": 170.625,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 116.25,
+          "bottom": 160.25
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 265.625,
+          "bottom": 289.625
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 346.625,
+          "bottom": 370.625
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "unavailable-spend",
+      "left": 464,
+      "right": 976,
+      "top": 164.9375,
+      "bottom": 735.0625,
+      "overflow": 0,
+      "scrollHeight": 568,
+      "height": 568,
+      "rows": [
+        {
+          "top": 389.3125,
+          "bottom": 521.6875,
+          "height": 132.375,
+          "overflow": 0
+        },
+        {
+          "top": 541.6875,
+          "bottom": 714.0625,
+          "height": 172.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 185.9375,
+          "bottom": 229.9375
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 335.3125,
+          "bottom": 359.3125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 416.3125,
+          "bottom": 440.3125
+        },
+        {
+          "left": 485,
+          "right": 863.40625,
+          "top": 670.0625,
+          "bottom": 714.0625
+        },
+        {
+          "left": 871.40625,
+          "right": 955,
+          "top": 670.0625,
+          "bottom": 714.0625
+        }
+      ],
+      "status": "Could not read injection status. Reopen Settings to retry.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "unavailable-pending",
+      "left": 464,
+      "right": 976,
+      "top": 164.9375,
+      "bottom": 735.0625,
+      "overflow": 0,
+      "scrollHeight": 568,
+      "height": 568,
+      "rows": [
+        {
+          "top": 389.3125,
+          "bottom": 521.6875,
+          "height": 132.375,
+          "overflow": 0
+        },
+        {
+          "top": 541.6875,
+          "bottom": 714.0625,
+          "height": 172.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 185.9375,
+          "bottom": 229.9375
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 335.3125,
+          "bottom": 359.3125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 416.3125,
+          "bottom": 440.3125
+        },
+        {
+          "left": 485,
+          "right": 863.40625,
+          "top": 670.0625,
+          "bottom": 714.0625
+        },
+        {
+          "left": 871.40625,
+          "right": 955,
+          "top": 670.0625,
+          "bottom": 714.0625
+        }
+      ],
+      "status": "Could not read injection status. Reopen Settings to retry.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "memory-write-failed",
+      "left": 464,
+      "right": 976,
+      "top": 167.5,
+      "bottom": 732.5,
+      "overflow": 0,
+      "scrollHeight": 563,
+      "height": 563,
+      "rows": [
+        {
+          "top": 391.875,
+          "bottom": 519.125,
+          "height": 127.25,
+          "overflow": 0
+        },
+        {
+          "top": 539.125,
+          "bottom": 711.5,
+          "height": 172.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 188.5,
+          "bottom": 232.5
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 337.875,
+          "bottom": 361.875
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 418.875,
+          "bottom": 442.875
+        },
+        {
+          "left": 485,
+          "right": 863.40625,
+          "top": 667.5,
+          "bottom": 711.5
+        },
+        {
+          "left": 871.40625,
+          "right": 955,
+          "top": 667.5,
+          "bottom": 711.5
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
       "width": 390,
       "state": "missing-key",
       "left": 16,
@@ -955,6 +1232,283 @@
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-env",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 877,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 648.5,
+          "height": 336.875,
+          "overflow": 0
+        },
+        {
+          "top": 668.5,
+          "bottom": 902.5,
+          "height": 234,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-file",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 834,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 648.5,
+          "height": 336.875,
+          "overflow": 0
+        },
+        {
+          "top": 668.5,
+          "bottom": 860.25,
+          "height": 191.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "unavailable-spend",
+      "left": 16,
+      "right": 374,
+      "top": 112.125,
+      "bottom": 787.875,
+      "overflow": 0,
+      "scrollHeight": 674,
+      "height": 674,
+      "rows": [
+        {
+          "top": 378.75,
+          "bottom": 553.375,
+          "height": 174.625,
+          "overflow": 0
+        },
+        {
+          "top": 573.375,
+          "bottom": 766.875,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 133.125,
+          "bottom": 177.125
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 324.75,
+          "bottom": 348.75
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 405.75,
+          "bottom": 429.75
+        },
+        {
+          "left": 37,
+          "right": 261.40625,
+          "top": 722.875,
+          "bottom": 766.875
+        },
+        {
+          "left": 269.40625,
+          "right": 353,
+          "top": 722.875,
+          "bottom": 766.875
+        }
+      ],
+      "status": "Could not read injection status. Reopen Settings to retry.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "unavailable-pending",
+      "left": 16,
+      "right": 374,
+      "top": 112.125,
+      "bottom": 787.875,
+      "overflow": 0,
+      "scrollHeight": 674,
+      "height": 674,
+      "rows": [
+        {
+          "top": 378.75,
+          "bottom": 553.375,
+          "height": 174.625,
+          "overflow": 0
+        },
+        {
+          "top": 573.375,
+          "bottom": 766.875,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 133.125,
+          "bottom": 177.125
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 324.75,
+          "bottom": 348.75
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 405.75,
+          "bottom": 429.75
+        },
+        {
+          "left": 37,
+          "right": 261.40625,
+          "top": 722.875,
+          "bottom": 766.875
+        },
+        {
+          "left": 269.40625,
+          "right": 353,
+          "top": 722.875,
+          "bottom": 766.875
+        }
+      ],
+      "status": "Could not read injection status. Reopen Settings to retry.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "memory-write-failed",
+      "left": 16,
+      "right": 374,
+      "top": 113.25,
+      "bottom": 786.75,
+      "overflow": 0,
+      "scrollHeight": 672,
+      "height": 672,
+      "rows": [
+        {
+          "top": 379.875,
+          "bottom": 552.25,
+          "height": 172.375,
+          "overflow": 0
+        },
+        {
+          "top": 572.25,
+          "bottom": 765.75,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 134.25,
+          "bottom": 178.25
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 325.875,
+          "bottom": 349.875
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 406.875,
+          "bottom": 430.875
+        },
+        {
+          "left": 37,
+          "right": 261.40625,
+          "top": 721.75,
+          "bottom": 765.75
+        },
+        {
+          "left": 269.40625,
+          "right": 353,
+          "top": 721.75,
+          "bottom": 765.75
+        }
+      ],
       "pageErrors": []
     },
     {
@@ -1437,6 +1991,283 @@
     },
     {
       "lang": "uk",
+      "width": 1440,
+      "state": "staging-env",
+      "left": 464,
+      "right": 976,
+      "top": 63.5625,
+      "bottom": 836.4375,
+      "overflow": 0,
+      "scrollHeight": 771,
+      "height": 771,
+      "rows": [
+        {
+          "top": 287.9375,
+          "bottom": 582.5625,
+          "height": 294.625,
+          "overflow": 0
+        },
+        {
+          "top": 602.5625,
+          "bottom": 815.4375,
+          "height": 212.875,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 84.5625,
+          "bottom": 128.5625
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 233.9375,
+          "bottom": 257.9375
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 314.9375,
+          "bottom": 338.9375
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "staging-file",
+      "left": 464,
+      "right": 976,
+      "top": 74.125,
+      "bottom": 825.875,
+      "overflow": 0,
+      "scrollHeight": 750,
+      "height": 750,
+      "rows": [
+        {
+          "top": 298.5,
+          "bottom": 593.125,
+          "height": 294.625,
+          "overflow": 0
+        },
+        {
+          "top": 613.125,
+          "bottom": 804.875,
+          "height": 191.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 95.125,
+          "bottom": 139.125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 244.5,
+          "bottom": 268.5
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 325.5,
+          "bottom": 349.5
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "unavailable-spend",
+      "left": 464,
+      "right": 976,
+      "top": 143.8125,
+      "bottom": 756.1875,
+      "overflow": 0,
+      "scrollHeight": 610,
+      "height": 610,
+      "rows": [
+        {
+          "top": 368.1875,
+          "bottom": 521.6875,
+          "height": 153.5,
+          "overflow": 0
+        },
+        {
+          "top": 541.6875,
+          "bottom": 735.1875,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 164.8125,
+          "bottom": 208.8125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 314.1875,
+          "bottom": 338.1875
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 395.1875,
+          "bottom": 419.1875
+        },
+        {
+          "left": 485,
+          "right": 826.15625,
+          "top": 691.1875,
+          "bottom": 735.1875
+        },
+        {
+          "left": 834.15625,
+          "right": 955,
+          "top": 691.1875,
+          "bottom": 735.1875
+        }
+      ],
+      "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "unavailable-pending",
+      "left": 464,
+      "right": 976,
+      "top": 143.8125,
+      "bottom": 756.1875,
+      "overflow": 0,
+      "scrollHeight": 610,
+      "height": 610,
+      "rows": [
+        {
+          "top": 368.1875,
+          "bottom": 521.6875,
+          "height": 153.5,
+          "overflow": 0
+        },
+        {
+          "top": 541.6875,
+          "bottom": 735.1875,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 164.8125,
+          "bottom": 208.8125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 314.1875,
+          "bottom": 338.1875
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 395.1875,
+          "bottom": 419.1875
+        },
+        {
+          "left": 485,
+          "right": 826.15625,
+          "top": 691.1875,
+          "bottom": 735.1875
+        },
+        {
+          "left": 834.15625,
+          "right": 955,
+          "top": 691.1875,
+          "bottom": 735.1875
+        }
+      ],
+      "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "memory-write-failed",
+      "left": 464,
+      "right": 976,
+      "top": 144.9375,
+      "bottom": 755.0625,
+      "overflow": 0,
+      "scrollHeight": 608,
+      "height": 608,
+      "rows": [
+        {
+          "top": 369.3125,
+          "bottom": 520.5625,
+          "height": 151.25,
+          "overflow": 0
+        },
+        {
+          "top": 540.5625,
+          "bottom": 734.0625,
+          "height": 193.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 165.9375,
+          "bottom": 209.9375
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 315.3125,
+          "bottom": 339.3125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 396.3125,
+          "bottom": 420.3125
+        },
+        {
+          "left": 485,
+          "right": 826.15625,
+          "top": 690.0625,
+          "bottom": 734.0625
+        },
+        {
+          "left": 834.15625,
+          "right": 955,
+          "top": 690.0625,
+          "bottom": 734.0625
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
       "width": 390,
       "state": "missing-key",
       "left": 16,
@@ -1911,6 +2742,283 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-env",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 1003,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 711.875,
+          "height": 400.25,
+          "overflow": 0
+        },
+        {
+          "top": 731.875,
+          "bottom": 1029.25,
+          "height": 297.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-file",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 940,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 711.875,
+          "height": 400.25,
+          "overflow": 0
+        },
+        {
+          "top": 731.875,
+          "bottom": 965.875,
+          "height": 234,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "unavailable-spend",
+      "left": 16,
+      "right": 374,
+      "top": 91,
+      "bottom": 809,
+      "overflow": 0,
+      "scrollHeight": 716,
+      "height": 716,
+      "rows": [
+        {
+          "top": 357.625,
+          "bottom": 532.25,
+          "height": 174.625,
+          "overflow": 0
+        },
+        {
+          "top": 552.25,
+          "bottom": 788,
+          "height": 235.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 112,
+          "bottom": 156
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 303.625,
+          "bottom": 327.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 384.625,
+          "bottom": 408.625
+        },
+        {
+          "left": 37,
+          "right": 224.15625,
+          "top": 744,
+          "bottom": 788
+        },
+        {
+          "left": 232.15625,
+          "right": 353,
+          "top": 744,
+          "bottom": 788
+        }
+      ],
+      "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "unavailable-pending",
+      "left": 16,
+      "right": 374,
+      "top": 91,
+      "bottom": 809,
+      "overflow": 0,
+      "scrollHeight": 716,
+      "height": 716,
+      "rows": [
+        {
+          "top": 357.625,
+          "bottom": 532.25,
+          "height": 174.625,
+          "overflow": 0
+        },
+        {
+          "top": 552.25,
+          "bottom": 788,
+          "height": 235.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 112,
+          "bottom": 156
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 303.625,
+          "bottom": 327.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 384.625,
+          "bottom": 408.625
+        },
+        {
+          "left": 37,
+          "right": 224.15625,
+          "top": 744,
+          "bottom": 788
+        },
+        {
+          "left": 232.15625,
+          "right": 353,
+          "top": 744,
+          "bottom": 788
+        }
+      ],
+      "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "memory-write-failed",
+      "left": 16,
+      "right": 374,
+      "top": 92.125,
+      "bottom": 807.875,
+      "overflow": 0,
+      "scrollHeight": 714,
+      "height": 714,
+      "rows": [
+        {
+          "top": 358.75,
+          "bottom": 531.125,
+          "height": 172.375,
+          "overflow": 0
+        },
+        {
+          "top": 551.125,
+          "bottom": 786.875,
+          "height": 235.75,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 113.125,
+          "bottom": 157.125
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 304.75,
+          "bottom": 328.75
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 385.75,
+          "bottom": 409.75
+        },
+        {
+          "left": 37,
+          "right": 224.15625,
+          "top": 742.875,
+          "bottom": 786.875
+        },
+        {
+          "left": 232.15625,
+          "right": 353,
+          "top": 742.875,
+          "bottom": 786.875
+        }
+      ],
       "pageErrors": []
     }
   ]
