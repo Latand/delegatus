@@ -197,3 +197,7 @@ The native compatibility harness also pins the closed control URL. Its existing
 voice HTTP fixture now overrides that URL with its own port-0 stub and restores
 it after each case. With the closed URL, the original fixture failed seven of
 eight tests; the corrected fixture passes all eight.
+The unchanged 25 MiB replay fixture exceeded its original 30-second test limit
+in a combined pinned-runtime run. Exact-case isolation passed on both base
+(22.2 seconds) and head (25.3 seconds). Its test-only deadline is now 60 seconds
+to accommodate concurrent gates; the replay assertions remain unchanged.
