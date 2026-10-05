@@ -227,6 +227,16 @@ Three consequences worth keeping:
   the generations it starts.
 <!-- END:runtime-host-verification -->
 
+# Host deploy command and team authentication
+
+`scripts/rebuild.sh [full-commit-sha]` uses `scripts/rebuild-http.ts` for both
+admission and status polling. The client reads the existing host control key to
+authenticate as `controller`, plus the Viewer access key when required. It
+creates no key, sends no member cookie or agent identity, validates and pins a
+resolved loopback address, and refuses redirects. Keep secrets inside that
+process and out of arguments and output. Tests run the real command against an
+isolated port-0 server; never use a live installation for a regression test.
+
 # Rendered evidence: call the driver that exists, do not write a new one
 
 A rendered surface is part of correctness, so new UI work still owes rendered

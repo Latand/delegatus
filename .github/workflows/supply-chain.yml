@@ -67,6 +67,9 @@ jobs:
       - name: Install production and development dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify installed braces mitigation
+        run: bun test scripts/braces-patch.test.ts
+
       - name: Verify audit retry behavior
         env:
           HOME: ${{ runner.temp }}/audit-tests/home
