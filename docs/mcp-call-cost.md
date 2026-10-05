@@ -16,6 +16,26 @@ digests. Changed delivery, publish, takeover and retry replies retain ownership.
 totals and freshness. `full:true` / `compact:false` restores session rows with
 stale evidence. The summary has the same collection cost; it saves response size.
 
+A process that holds no resource observation answers an ordinary `resources`
+read within 750 ms. Its first collection takes the scan's scope and none of its
+enrichment; when even that outlives the wait, the answer carries the current
+system block, an empty session table, and `freshness.pending: true` with reason
+`collecting`, and a later call returns the table. `fresh:true` still waits for
+the completed observation.
+
+`agent_activity` waits 700 ms for a conversation catalog. A process that holds
+none answers with the hosts the registry names and `catalog: "pending"`, and
+the scan keeps running for the next call; a process that holds an older one
+answers from it with `selection.cacheStatus: "stale"`.
+
+`get_conversation` returns a summary inside a text budget: 40,000 characters of
+messages and 24,000 of tools, newest kept, each record cut to `maxChars` (4,000
+for messages, 1,000 for tools) after secret redaction and marked
+`truncated: true`. `omitted` counts the older records left out. With
+`tailLines`, a raw line longer than `maxChars` keeps its head and ends in
+`… [+N chars]`, and `tail.cutLines` counts them. `full:true` returns complete
+records and lines; `conversation_messages` pages them.
+
 `search_transcripts` keeps corpus counts and pagination; `full:true` includes
 static tokenizer/field statistics. `conversation_messages` keeps source records,
 authors, redaction, truncation and cursors; `includeMetadata:true` / `full:true`

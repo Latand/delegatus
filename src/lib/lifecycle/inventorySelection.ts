@@ -1,4 +1,4 @@
-import { completedFileScan, type CachedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, type CachedFileScan } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
 /**
@@ -82,8 +82,12 @@ export interface ConversationSelection {
    * which ones those are without a second pass over the corpus.
    */
   hostedSeen: ReadonlySet<string>;
-  generation: number;
-  cacheStatus: CachedFileScan["cacheStatus"];
+  /** Null when the budget ended the wait: the rows, if any, are the last
+      completed ones and their generation was not read. */
+  generation: number | null;
+  /** `pending`: no generation has completed in this process and the budget
+      ended the wait for the first one, so there are no rows to select from. */
+  cacheStatus: CachedFileScan["cacheStatus"] | "pending";
   /** Always false: a selection consumes a completed generation, never a sweep. */
   freshScan: boolean;
   selectionMs: number;
@@ -148,6 +152,48 @@ export type CompletedGenerationRead = (
 export interface CompletedGenerationSelectionDependencies {
   completedFileScan: CompletedGenerationRead;
   signal?: AbortSignal | null;
+  /**
+   * The longest this selection waits for the generation. A process that holds
+   * no generation waits for a whole-corpus scan otherwise: 2.9 s over 2,500
+   * transcripts. Past the budget the selection answers from the last completed
+   * rows as `stale`, or as `pending` with none, and the wait is left subscribed
+   * so the scan finishes for the next read.
+   */
+  budgetMs?: number;
+  /** The last completed rows, never starting a scan. */
+  lastCompletedFiles?: () => readonly FileEntry[] | null;
+}
+
+const BUDGET_SPENT = Symbol("catalog-budget-spent");
+
+/** The generation, or `BUDGET_SPENT` when the budget ended first. A caller that
+    cancels releases its subscription; a spent budget keeps it. */
+async function generationWithinBudget(
+  dependencies: CompletedGenerationSelectionDependencies,
+  budgetMs: number,
+): Promise<CachedFileScan | typeof BUDGET_SPENT> {
+  const caller = dependencies.signal ?? null;
+  const subscription = new AbortController();
+  const read = dependencies.completedFileScan({ signal: subscription.signal });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      read,
+      new Promise<typeof BUDGET_SPENT>((resolve) => { timer = setTimeout(() => resolve(BUDGET_SPENT), Math.max(0, budgetMs)); }),
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => {
+          subscription.abort(caller?.reason);
+          reject(abortError(caller?.reason));
+        };
+        caller?.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) caller?.removeEventListener("abort", onAbort);
+    void read.catch(() => undefined);
+  }
 }
 
 /**
@@ -161,8 +207,20 @@ export async function completedGenerationSelection(
 ): Promise<ConversationSelection> {
   const startedAt = performance.now();
   if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
-  const scan = await dependencies.completedFileScan({ signal: dependencies.signal ?? null });
+  const scan = dependencies.budgetMs === undefined
+    ? await dependencies.completedFileScan({ signal: dependencies.signal ?? null })
+    : await generationWithinBudget(dependencies, dependencies.budgetMs);
   if (dependencies.signal?.aborted) throw abortError(dependencies.signal.reason);
+  if (scan === BUDGET_SPENT) {
+    const completed = (dependencies.lastCompletedFiles ?? lastScannedFiles)();
+    return {
+      ...selectConversationEntries(completed ?? [], request),
+      generation: null,
+      cacheStatus: completed ? "stale" : "pending",
+      freshScan: false,
+      selectionMs: performance.now() - startedAt,
+    };
+  }
   const selected = selectConversationEntries(scan.snapshot.files, request);
   return {
     ...selected,

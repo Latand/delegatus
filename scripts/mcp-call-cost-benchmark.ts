@@ -5,6 +5,143 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- generated fixture records cross many domain unions. */
 const runSide = process.argv.includes('--run-side');
+const coldFixtures = process.argv.includes('--cold-fixtures');
+const coldSample = process.argv.includes('--cold-sample');
+const COLD_SAMPLES = 5;
+const COLD_CORPUS = { projects: 40, claudePerProject: 45, codex: 700 };
+const COLD_LONG = { codexBytes: 100 * 1024 * 1024, claudeBytes: 30 * 1024 * 1024 };
+
+/* A cold read is the first call a fresh MCP process answers with an empty
+   state directory: no resource observation, no file-scan snapshot, nothing in
+   memory. Every sample is its own process over one shared generated corpus. */
+/** A session id in the shape the scanners expect, minted here so no literal one is committed. */
+const coldId = (digit: string) => `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-a${digit.repeat(3)}-${digit.repeat(12)}`;
+function coldPaths(root: string) {
+ const codexHome = path.join(root, 'codex-home'), claudeHome = path.join(root, 'claude-home');
+ return {
+  codexHome, claudeHome,
+  codexLong: path.join(codexHome, 'sessions', '2026', '08', '30', `rollout-2026-08-30T10-00-00-${coldId('1')}.jsonl`),
+  claudeLong: path.join(claudeHome, 'projects', '-workspace-fixture', `${coldId('2')}.jsonl`),
+ };
+}
+const COLD_SCENARIOS: Record<string, (files: ReturnType<typeof coldPaths>, key: string) => [string, Record<string, unknown>]> = {
+ 'resources/no-observation': () => ['resources', {}],
+ 'agent_activity/no-catalog': (_files, key) => ['agent_activity', { clientRequestId: key }],
+ 'get_conversation/claude-long': files => ['get_conversation', { transcriptPath: files.claudeLong }],
+ 'get_conversation/codex-long': files => ['get_conversation', { transcriptPath: files.codexLong }],
+ 'get_conversation/claude-long-tail40': files => ['get_conversation', { transcriptPath: files.claudeLong, tailLines: 40 }],
+ 'get_conversation/codex-long-tail40': files => ['get_conversation', { transcriptPath: files.codexLong, tailLines: 40 }],
+ 'get_conversation/claude-long-full': files => ['get_conversation', { transcriptPath: files.claudeLong, full: true }],
+ 'conversation_messages/claude-long': files => ['conversation_messages', { transcriptPath: files.claudeLong }],
+ 'conversation_messages/codex-long': files => ['conversation_messages', { transcriptPath: files.codexLong }],
+ 'conversation_messages/codex-long-capped-scan': files => ['conversation_messages', { transcriptPath: files.codexLong, roles: ['user'], limit: 200 }],
+};
+
+async function writeColdFixtures() {
+ const files = coldPaths(process.env.COLD_ROOT!);
+ const { generateCodexRollout, generateClaudeTranscript } = await import('./conversation-messages-fixture');
+ fs.mkdirSync(path.dirname(files.codexLong), { recursive: true });
+ fs.mkdirSync(path.dirname(files.claudeLong), { recursive: true });
+ generateCodexRollout(files.codexLong, COLD_LONG.codexBytes, 1311);
+ generateClaudeTranscript(files.claudeLong, COLD_LONG.claudeBytes, 1311, coldId('2'));
+ let seed = 7;
+ const turns = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return 20 + seed % 381; };
+ let count = 0;
+ for (let project = 0; project < COLD_CORPUS.projects; project++) {
+  const directory = path.join(files.claudeHome, 'projects', `-workspace-project-${project}`);
+  fs.mkdirSync(directory, { recursive: true });
+  for (let index = 0; index < COLD_CORPUS.claudePerProject; index++) {
+   const id = `${project.toString(16).padStart(8, '0')}-${index.toString(16).padStart(4, '0')}-4000-a000-${(count++).toString(16).padStart(12, '0')}`;
+   const lines: string[] = [];
+   for (let turn = 0, total = turns(); turn < total; turn++) {
+    const timestamp = `2026-09-${String(1 + turn % 28).padStart(2, '0')}T10:${String(turn % 60).padStart(2, '0')}:00.000Z`;
+    lines.push(JSON.stringify({ type: 'user', uuid: `u${count}-${turn}`, timestamp, sessionId: id, cwd: `/workspace/project-${project}`, message: { role: 'user', content: [{ type: 'text', text: 'Turn ' + 'word '.repeat(60) }] } }));
+    lines.push(JSON.stringify({ type: 'assistant', uuid: `a${count}-${turn}`, timestamp, sessionId: id, message: { role: 'assistant', content: [{ type: 'text', text: 'Answer ' + 'word '.repeat(200) }] } }));
+   }
+   fs.writeFileSync(path.join(directory, `${id}.jsonl`), lines.join('\n') + '\n');
+  }
+ }
+ for (let index = 0; index < COLD_CORPUS.codex; index++) {
+  const day = String(1 + index % 28).padStart(2, '0');
+  const directory = path.join(files.codexHome, 'sessions', '2026', '09', day);
+  fs.mkdirSync(directory, { recursive: true });
+  const id = `${index.toString(16).padStart(8, '0')}-1111-4111-a111-${index.toString(16).padStart(12, '0')}`;
+  const lines = [JSON.stringify({ timestamp: '2026-09-01T10:00:00.000Z', type: 'session_meta', payload: { id, cwd: `/workspace/project-${index % COLD_CORPUS.projects}` } })];
+  for (let turn = 0, total = turns(); turn < total; turn++) lines.push(JSON.stringify({ timestamp: '2026-09-01T10:00:00.000Z', type: 'response_item', payload: { type: 'message', role: turn % 2 ? 'assistant' : 'user', content: [{ type: 'output_text', text: 'text ' + 'word '.repeat(150) }] } }));
+  fs.writeFileSync(path.join(directory, `rollout-2026-09-${day}T10-00-00-${id}.jsonl`), lines.join('\n') + '\n');
+ }
+ process.stdout.write(JSON.stringify({ transcripts: count + COLD_CORPUS.codex + 2, codexLongBytes: fs.statSync(files.codexLong).size, claudeLongBytes: fs.statSync(files.claudeLong).size }) + '\n');
+}
+
+async function runColdSample() {
+ const scenario = process.argv[process.argv.indexOf('--cold-sample') + 1]!;
+ const files = coldPaths(process.env.COLD_ROOT!), sandbox = process.env.COLD_SANDBOX!;
+ for (const key of Object.keys(process.env)) if (key.startsWith('LLV_')) delete process.env[key];
+ for (const key of ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'LLV_STATE_DIR', 'TMPDIR', 'CLAUDE_CODE_TMPDIR']) { process.env[key] = path.join(sandbox, key); fs.mkdirSync(process.env[key]!, { recursive: true }); }
+ process.env.CODEX_HOME = process.env.LLV_CODEX_HOME = files.codexHome;
+ process.env.CLAUDE_CONFIG_DIR = process.env.LLV_CLAUDE_HOME = files.claudeHome;
+ process.env.LLV_STATE_ACTIVATION = 'sqlite';
+ // A closed port: nothing in a cold sample may reach a running Viewer.
+ process.env.LLV_VIEWER_CONTROL_URL = 'http://127.0.0.1:9';
+ const serverMod = await import('@/lib/mcp/server');
+ const { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, viewerMcpToolPolicy } = await import('@/lib/mcp/bindings');
+ const { agentRegistry } = await import('@/lib/agent/registry');
+ const { beginLegacySpawnFixture } = await import('@/lib/agent/registryTestFixtures');
+ const { runAsMcpHttpCaller } = await import('@/lib/mcp/callerContext');
+ const registry = agentRegistry();
+ const begun = beginLegacySpawnFixture(registry, { engine: 'codex', cwd: sandbox, role: 'builder', origin: { kind: 'operator' } });
+ if (begun.kind !== 'created') throw new Error('fixture admission');
+ const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+ const receipts = new serverMod.SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, 'audit-receipts.sqlite'));
+ const service = serverMod.createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), productionDomainDependencies), receipts, viewerMcpToolPolicy(productionDomainDependencies));
+ const mcp = serverMod.createViewerMcpServer(service);
+ const client = new Client({ name: 'private-audit', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair(); await Promise.all([client.connect(a), mcp.connect(b)]);
+ let seq = 0;
+ const call = async () => {
+  const [tool, args] = COLD_SCENARIOS[scenario]!(files, `cold-${++seq}`);
+  const start = performance.now();
+  const answer: any = await runAsMcpHttpCaller({ capability }, () => client.callTool({ name: tool, arguments: args }));
+  const ms = performance.now() - start;
+  const result = answer.structuredContent ?? JSON.parse(answer.content[0].text);
+  const pending = result.freshness?.pending === true || result.catalog === 'pending';
+  return { ms, outTok: JSON.stringify(result).length / 4, ok: result.ok === true, pending };
+ };
+ const first = await call();
+ // A pending first answer is followed until the complete one arrives, so the
+ // table shows what the caller waits for in total and per call.
+ let completeAfterMs: number | null = null, followUps = 0, worstFollowUpMs = 0;
+ if (first.pending) {
+  const started = performance.now() - first.ms;
+  while (followUps < 40) {
+   const next = await call(); followUps++; worstFollowUpMs = Math.max(worstFollowUpMs, next.ms);
+   if (!next.pending) { completeAfterMs = performance.now() - started; break; }
+  }
+ }
+ process.stdout.write(JSON.stringify({ scenario, ms: first.ms, outTok: first.outTok, ok: first.ok, pending: first.pending, followUps, worstFollowUpMs, completeAfterMs }) + '\n');
+ await client.close(); await mcp.close(); receipts.close();
+ process.exit(0);
+}
+
+function runColdSide(checkout: string, work: string, side: string, coldRoot: string) {
+ const samples: any[] = [];
+ for (const scenario of Object.keys(COLD_SCENARIOS)) for (let i = 0; i < COLD_SAMPLES; i++) {
+  const sandbox = path.join(work, `${side}-cold`, `${scenario.replace(/[^a-z0-9]+/g, '-')}-${i}`);
+  const child = Bun.spawnSync(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--cold-sample', scenario], {
+   cwd: checkout, env: { ...process.env, NODE_ENV: 'test', COLD_ROOT: coldRoot, COLD_SANDBOX: sandbox }, stdout: 'pipe', stderr: 'pipe',
+  });
+  if (child.exitCode !== 0) throw new Error(`${side} cold sample ${scenario} failed (exit ${child.exitCode}):\n${child.stderr.toString().slice(-700)}`);
+  samples.push(JSON.parse(child.stdout.toString().trim().split('\n').at(-1)!));
+  fs.rmSync(sandbox, { recursive: true, force: true });
+ }
+ const q = (values: number[], p: number) => values.toSorted((x, y) => x - y)[Math.max(0, Math.ceil(values.length * p) - 1)]!;
+ return Object.keys(COLD_SCENARIOS).map(key => {
+  const rows = samples.filter(sample => sample.scenario === key);
+  const complete = rows.filter(row => row.completeAfterMs !== null).map(row => row.completeAfterMs);
+  return { key, n: rows.length, ok: rows.filter(row => row.ok).length, pending: rows.filter(row => row.pending).length,
+   p50ms: +q(rows.map(row => row.ms), .5).toFixed(2), maxMs: +Math.max(...rows.map(row => row.ms)).toFixed(2), outTokP50: q(rows.map(row => row.outTok), .5),
+   ...(complete.length ? { worstFollowUpMs: +Math.max(...rows.map(row => row.worstFollowUpMs)).toFixed(2), completeAfterP50ms: +q(complete, .5).toFixed(2) } : {}) };
+ });
+}
 const OPTIONAL_READ_KEY_TOOLS = new Set([
  'message_receipt', 'list_conversations', 'search_transcripts', 'get_conversation',
  'conversation_deliverability', 'conversation_messages', 'get_pipeline', 'board_snapshot',
@@ -23,6 +160,10 @@ async function runPair() {
  const script = fs.readFileSync(new URL(import.meta.url), 'utf8');
  const output: Record<string, unknown> = {};
  try {
+  const coldRoot = path.join(work, 'cold-fixtures');
+  const fixtures = Bun.spawnSync(['bun', 'run', 'scripts/mcp-call-cost-benchmark.ts', '--cold-fixtures'], { env: { ...process.env, COLD_ROOT: coldRoot }, stdout: 'pipe', stderr: 'pipe' });
+  if (fixtures.exitCode !== 0) throw new Error(`Could not generate cold fixtures:\n${fixtures.stderr.toString().slice(-700)}`);
+  const coldSeed = JSON.parse(fixtures.stdout.toString().trim());
   for (const [side, revision] of [['base', baseCommit], ['head', head]] as const) {
    const checkout = path.join(work, side);
    const outputDir = path.join(work, `${side}-output`);
@@ -50,6 +191,7 @@ async function runPair() {
    output[side] = {
     profile: JSON.parse(fs.readFileSync(path.join(outputDir, 'profile.json'), 'utf8')),
     faults: JSON.parse(fs.readFileSync(path.join(outputDir, 'faults.json'), 'utf8')),
+    cold: runColdSide(checkout, work, side, coldRoot),
    };
    process.stdout.write(`${side} ${revision}: ${child.stdout.toString().trim()}\n`);
   }
@@ -63,14 +205,24 @@ async function runPair() {
    if (!paired || paired.n !== row.n || paired.inputKeys.join(',') !== row.inputKeys.join(',') || paired.inTokP50 !== row.inTokP50) throw new Error(`Healthy request shape or input token count differs between revisions for ${row.key}`);
   }
   const faultRows = [...(output.base as any).faults, ...(output.head as any).faults];
-  if (faultRows.length !== 18 || faultRows.some(row => row.ok || row.attempts !== (row.side === 'base' ? 11 : 1))) throw new Error('Expected three failed-verdict fault scenarios, n=3 per side, with 11 to 1 HTTP attempts');
-  process.stdout.write(JSON.stringify({ base: baseCommit, head, healthyCallsPerSide: 303, scenarios: baseRows.length, profiles: { base: baseRows, head: headRows }, faultRows }, null, 2) + '\n');
+  // A base that predates the bounded search failure (#2478) makes eleven
+  // attempts; a later one already makes one. The head always makes one.
+  if (faultRows.length !== 18 || faultRows.some(row => row.ok || (row.side === 'head' ? row.attempts !== 1 : row.attempts !== 1 && row.attempts !== 11))) throw new Error('Expected three failed-verdict fault scenarios, n=3 per side, with one HTTP attempt on the head');
+  const cold = { base: (output.base as any).cold as any[], head: (output.head as any).cold as any[] };
+  if ([...cold.base, ...cold.head].some(row => row.ok !== row.n)) throw new Error('A cold fixture call failed');
+  const fullKey = 'get_conversation/claude-long-full';
+  if (cold.base.find(row => row.key === fullKey)!.outTokP50 !== cold.head.find(row => row.key === fullKey)!.outTokP50) throw new Error('get_conversation full:true no longer returns the complete answer');
+  process.stdout.write(JSON.stringify({ base: baseCommit, head, healthyCallsPerSide: 303, scenarios: baseRows.length, profiles: { base: baseRows, head: headRows }, faultRows, coldSeed: { ...coldSeed, samplesPerScenario: COLD_SAMPLES }, cold }, null, 2) + '\n');
  } finally {
   fs.rmSync(work, { recursive: true, force: true });
  }
 }
 
-if (!runSide) {
+if (coldFixtures) {
+ await writeColdFixtures();
+} else if (coldSample) {
+ await runColdSample();
+} else if (!runSide) {
  await runPair();
 } else {
 const root=process.env.AUDIT_OUTPUT!,runTag=String(Date.now()),candidate=process.env.COST_CANDIDATE==='1';
@@ -216,8 +368,7 @@ try{
   faults.push({side:candidate?'head':'base',scenario,ms:+(performance.now()-started).toFixed(2),attempts:routeRequests,ok:result.ok===true,outputTokens:JSON.stringify(result).length/4});
  }
  } finally { console.error=originalConsoleError; }
- const expectedAttempts=candidate?1:11;
  fs.writeFileSync(path.join(root,'faults.json'),JSON.stringify(faults,null,2));
- if(faults.some(row=>row.ok||row.attempts!==expectedAttempts))throw new Error(`Fault acceptance failed; expected failed verdict and ${expectedAttempts} route attempt(s): ${JSON.stringify(faults)}`);
+ if(faults.some(row=>row.ok||(candidate&&row.attempts!==1)))throw new Error(`Fault acceptance failed; expected a failed verdict and one route attempt on the head: ${JSON.stringify(faults)}`);
 }finally{await client.close();await mcp.close();viewer.stop(true);receipts.close();restoreTick();}
 }

@@ -382,6 +382,54 @@ function stamped(payload: ResourcesPayload, capturedAt: number, stale: boolean):
   return { ...payload, sessionsCapturedAt: new Date(capturedAt).toISOString(), sessionsStale: stale };
 }
 
+function gatedInProcessReader() {
+  const payload: ResourcesPayload = { system: null, sessions: [] };
+  const diagnostic = { fresh: false, status: "complete" as const, durationMs: 0, phases: {
+    systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+  } };
+  let builds = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const reader = createResourcesReader(async () => {
+    builds += 1;
+    await gate;
+    return payload;
+  }, () => null, Date.now, () => diagnostic, { inProcess: true, collectorId: "pending-fixture", initial: null, persist: () => true });
+  return { reader, release, builds: () => builds };
+}
+
+test("a bounded ordinary read reports a first collection as pending and the next read serves it", async () => {
+  const { reader, release, builds } = gatedInProcessReader();
+
+  const pending = await reader.read(false, { waitMs: 5 });
+  expect(pending.diagnostic).toMatchObject({ status: "pending", cache: { status: "miss" } });
+  expect(pending.diagnostic).not.toHaveProperty("degradedReason");
+  expect(pending.payload).toMatchObject({ sessions: [], sessionsCapturedAt: null, sessionsStale: true });
+
+  /* The wait ended; the collection did not. A second caller joins it. */
+  const again = await reader.read(false, { waitMs: 5 });
+  expect(again.diagnostic.status).toBe("pending");
+  expect(builds()).toBe(1);
+
+  release();
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const served = await reader.read(false, { waitMs: 5 });
+  expect(served.diagnostic).toMatchObject({ status: "complete", cache: { status: "memory" } });
+  expect(served.payload.sessionsStale).toBe(false);
+  expect(builds()).toBe(1);
+});
+
+test("a fresh read waits for its observation whatever the ordinary budget", async () => {
+  const { reader, release } = gatedInProcessReader();
+  let settled = false;
+  const fresh = reader.read(true, { waitMs: 1 }).then((read) => { settled = true; return read; });
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  expect(settled).toBe(false);
+  release();
+  expect((await fresh).diagnostic).toMatchObject({ status: "complete", fresh: true });
+});
+
 function workerTestReader(options: Parameters<typeof createResourcesReader>[4] = {}) {
   const payload: ResourcesPayload = { system: null, sessions: [] };
   const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {

@@ -297,7 +297,7 @@ export interface AgentLivenessSources {
 }
 
 export function productionLivenessSources(
-  dependencies: { completedFileScan?: CompletedGenerationRead } = {},
+  dependencies: { completedFileScan?: CompletedGenerationRead; catalogBudgetMs?: number } = {},
 ): AgentLivenessSources {
   const read = dependencies.completedFileScan ?? completedFileScan;
   return {
@@ -307,6 +307,7 @@ export function productionLivenessSources(
     selectInventory: (request, options) => completedGenerationSelection(request, {
       completedFileScan: read,
       signal: options?.signal ?? null,
+      ...(dependencies.catalogBudgetMs === undefined ? {} : { budgetMs: dependencies.catalogBudgetMs }),
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),

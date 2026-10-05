@@ -135,6 +135,60 @@ test("routine actions omit unchanged delivery and digests; graph edits and full 
   expect(takeover).toHaveProperty("delivery");
 });
 
+test("resources hands its one-second budget to the reader and reports a first collection as pending", async () => {
+  const waits: Array<{ fresh: boolean; waitMs: number | undefined }> = [];
+  const diagnostic = { fresh: false, durationMs: 750, phases: {}, generation: 1, startedAt: "2026-10-01T00:00:00Z", completedAt: "2026-10-01T00:00:01Z", collectorId: "fixture", cache: { status: "miss" } };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    readResourcesWithDiagnostic: async (fresh: boolean, options: { waitMs?: number } = {}) => {
+      waits.push({ fresh, waitMs: options.waitMs });
+      return fresh
+        ? { payload: { system: null, sessions: [], sessionsCapturedAt: "2026-10-01T00:00:01Z", sessionsStale: false }, diagnostic: { ...diagnostic, fresh: true, status: "complete" } }
+        : { payload: { system: null, sessions: [], sessionsCapturedAt: null, sessionsStale: true }, diagnostic: { ...diagnostic, status: "pending" } };
+    },
+  } as never);
+
+  const pending = await bindings.resources({}) as { sessionSummary: { count: number }; freshness: Record<string, unknown> };
+  expect(pending.sessionSummary.count).toBe(0);
+  expect(pending.freshness).toMatchObject({ pending: true, reason: "collecting", cache: "miss", sessionsStale: true, sessionsCapturedAt: null, refreshSucceeded: null });
+  const fresh = await bindings.resources({ fresh: true }) as { freshness: Record<string, unknown> };
+  expect(fresh.freshness).not.toHaveProperty("pending");
+  expect(fresh.freshness).toMatchObject({ reason: null, refreshSucceeded: true });
+  expect(waits.map((wait) => wait.waitMs)).toEqual([750, 750]);
+  expect(waits[0]!.waitMs).toBeLessThan(1_000);
+});
+
+test("agent_activity with no completed catalog names the hosted conversations and says the catalog is pending", async () => {
+  const now = Date.now();
+  const hosted = Array.from({ length: 3 }, (_, i) => `/fixtures/hosted-${i}.jsonl`);
+  const entries = Object.fromEntries(hosted.map((artifactPath, i) => [`entry-${i}`, {
+    key: { engine: "codex", accountId: null, sessionId: `session-${i}` }, artifactPath,
+    status: "live", host: null, accountId: null,
+    structuredHost: { process: { pid: 1000 + i, startIdentity: `identity-${i}` } },
+    updatedAt: new Date(now).toISOString(),
+  }]));
+  const budgets: Array<number | undefined> = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    livenessSources: (catalog: { catalogBudgetMs?: number } = {}) => {
+      budgets.push(catalog.catalogBudgetMs);
+      return {
+        now: () => now,
+        probe: { now: () => now, pidAlive: () => true, processIdentity: (pid: number) => `identity-${pid - 1000}` },
+        registrySnapshot: () => ({ entries, conversations: {} }), pipelines: () => [],
+        /* What the selection answers once its budget is spent with nothing completed. */
+        selectInventory: async () => ({ entries: [], matched: 0, scanned: 0, hostedSeen: new Set<string>(), generation: null, cacheStatus: "pending", freshScan: false, selectionMs: 700 }),
+        describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: pathname.slice(pathname.lastIndexOf("/") + 1), engine: "codex", mtimeMs: now, conversationId: `conversation-${pathname.slice(pathname.lastIndexOf("/") + 1)}`, activity: "live", activityReason: null }),
+        transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
+      };
+    }, refreshLifecycleJournal: () => ({ appended: 0 }),
+  } as never);
+
+  const compact = await bindings.agent_activity({ clientRequestId: "pending-compact" });
+  expect(compact).toMatchObject({ catalog: "pending", count: 3 });
+  const full = await bindings.agent_activity({ clientRequestId: "pending-full", full: true });
+  expect(full).toMatchObject({ catalog: "pending", selection: { cacheStatus: "pending", generation: null, scanned: 0, recovered: 3 } });
+  expect(budgets).toEqual([700, 700]);
+});
+
 test("resource summaries retain stale/freshness evidence; full rows remain available", async () => {
   const sessions = [{ target: "fixture", panePid: 1, path: null, engine: "codex", title: "worker", project: "fixture", activity: null, lastActiveAt: null, cwd: null, rssBytes: 123, swapBytes: 45, procCount: 2 }];
   const bindings = viewerMcpBindings(undefined, undefined, { readResourcesWithDiagnostic: undefined,
