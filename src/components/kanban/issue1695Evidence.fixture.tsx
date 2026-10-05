@@ -2105,8 +2105,9 @@ const evidence = {
     tasks[index] = { ...row, text: `${title}\n${description}`, updatedAt: new Date().toISOString(), revision: REV(revision++) } as BoardTask;
   },
   /* How long each catalog read takes to answer. The answer is what the store
-     held when the read began, as a slow poll would carry. */
-  filesDelayMs: 0,
+     held when the read began, as a slow poll would carry. `?files-pending=1`
+     holds the first read, so a frame shows the loading board. */
+  filesDelayMs: params.has("files-pending") ? 600_000 : 0,
   /* Reads of the orchestrator seat route. */
   seatReads: 0,
   /* A conversation starts waiting on the operator, arriving on the next read. */

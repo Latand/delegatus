@@ -17965,15 +17965,20 @@ describe("interface redesign, numbered design variants", () => {
    * Earlier designs were rejected for lying on top of the interface and for
    * adding chrome, so each state is measured: every control a variant draws is
    * hit-tested at its centre and four corners, intersected with every other
-   * control a pointer can reach, and held inside the window; the resting frame
-   * counts its controls the way the audit counted today's; an open menu reports
-   * its box, its controls and whether it scrolls. The glass variants are
-   * compared with today's frame control by control (nothing may move) and their
-   * text is read against the pixels behind it for WCAG AA, light and dark.
+   * control a pointer can reach, and held inside the window; every real
+   * control today's frame lets a pointer reach is still reachable in the
+   * variant, and the attention notice answers at all fifteen points of a grid
+   * over it; the resting frame counts its controls the way the audit counted
+   * today's; an open menu reports its box, its controls and whether it
+   * scrolls. Every variant's own text is read against the pixels behind it for
+   * WCAG AA, and its icon controls, switch tracks and chosen segments for 3:1,
+   * light and dark; the glass variants are also compared with today's frame
+   * control by control (nothing may move).
    *
    * Frames go to `LLV_INTERFACE_REDESIGN_OUT` (default
    * `.artifacts/interface-redesign/`, never committed); the measurements to
-   * `evidence/interface-redesign/measurements.json`.
+   * `evidence/interface-redesign/measurements.json` and the keyboard and phone
+   * sheet walk to `evidence/interface-redesign/interaction.json`.
    * `LLV_INTERFACE_REDESIGN_ONLY=1,7`, `..._FRAMES=390` and `..._LANGS=uk`
    * narrow a run, and a narrowed run writes no evidence.
    */
@@ -17990,7 +17995,7 @@ describe("interface redesign, numbered design variants", () => {
     { name: "390", width: 390, height: 844, phone: true },
   ] as const;
   const LANGS = ["en", "uk"] as const;
-  /* The glass variants are drawn beside today's frame and judged in both schemes. */
+  /* The glass variants are drawn beside today's frame. */
   const GLASS = [6, 7];
 
   type Box = [x: number, y: number, width: number, height: number];
@@ -18007,7 +18012,16 @@ describe("interface redesign, numbered design variants", () => {
     missed: string[];
     intersecting: string[];
     outside: string[];
-    surface: { name: string; box: Box; mounted: number; visible: number; scrolls: boolean; insideWindow: boolean } | null;
+    surface: { name: string; view: string | null; box: Box; mounted: number; visible: number; scrolls: boolean; insideWindow: boolean } | null;
+    /** The attention notice: how many of fifteen points over it answer with it, and whether its title does. */
+    notice: { points: number; hit: number; title: boolean } | null;
+    /** Real controls (not the variant's) shown in the window, and those a pointer meets at their centre and four corners. */
+    realShown: string[];
+    realReachable: string[];
+    /** Real controls only the product's own attention notice lies over (a transient notice the operator dismisses). */
+    realUnderNotice: string[];
+    /** Real controls only their own pane's content lies over (the pane's resize grip under its composer row), as in today's frame at another width. */
+    realUnderOwnPane: string[];
     boxes: Record<string, Box>;
   }
 
@@ -18036,11 +18050,52 @@ describe("interface redesign, numbered design variants", () => {
       const text = element.getAttribute("data-ir-control") ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
       return `${element.tagName.toLowerCase()}:${text}`;
     };
+    /* Clocks and counters tick between two frames; the key names the control without them. */
+    const keyed = (elements: Element[]) => {
+      const seen = new Map<string, number>();
+      return elements.map((element) => {
+        const key = name(element).replace(/\d+/g, "#");
+        const count = (seen.get(key) ?? 0) + 1;
+        seen.set(key, count);
+        return [count > 1 ? `${key} #${count}` : key, element] as const;
+      });
+    };
+    /* A control's centre and four corners, inset by a third of its radius. */
+    const pointsOf = (control: Element) => {
+      const rect = visible(control);
+      const inset = Math.min(Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1, Math.floor(Math.min(rect.width, rect.height) / 2 - 1));
+      return [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+    };
+    /** What lies over a control that does not answer: the product's notice, its own pane, or anything else. */
+    const coverOf = (control: Element) => {
+      for (const [x, y] of pointsOf(control)) {
+        const at = document.elementFromPoint(x, y);
+        if (!at || control.contains(at) || at.contains(control)) continue;
+        if (at.closest("[data-attention-toast], [data-attention-island]")) return "notice";
+        const pane = control.closest(".kb .seat");
+        return pane && pane.contains(at) && !at.closest("[data-ir-control], [data-ir-layer], [data-ir-own]") ? "own pane" : "other";
+      }
+      return "none";
+    };
+    const answers = (control: Element) => {
+      return pointsOf(control).every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && (control.contains(at) || at.contains(control) && at.tagName === "LABEL"); });
+    };
     const INTERACTIVE = 'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="switch"], [tabindex]:not([tabindex="-1"])';
     const interactive = Array.from(document.querySelectorAll<HTMLElement>(INTERACTIVE)).filter(shown);
-    const surface = document.querySelector<HTMLElement>("[data-ir-surface]")
+    /* The open surface: a sheet the variant drew (the product's MobileSheet), a menu or dialog it drew, or the product's own. */
+    const ownSheet = document.querySelector<HTMLElement>("[data-ir-own] [data-mobile2-sheet]");
+    const surface = ownSheet
+      ?? document.querySelector<HTMLElement>("[data-ir-surface]")
       ?? document.querySelector<HTMLElement>("[data-rail-menu-panel], [data-bar-more-menu], [data-mobile2-sheet]")
       ?? Array.from(document.querySelectorAll<HTMLElement>(".kb .menu")).find(shown) ?? null;
+    const surfaceName = (element: HTMLElement) => element === ownSheet
+      ? element.querySelector<HTMLElement>("[data-ir-sheet-name]")?.dataset.irSheetName ?? "sheet"
+      : element.dataset.irSurface
+        ?? (element.hasAttribute("data-mobile2-sheet") ? `sheet:${element.dataset.mobile2Sheet}${element.querySelector("[data-mobile2-pipeline-menu]") ? " (pipeline)" : element.querySelector("[data-phone-task-menu-sheet]") ? " (task)" : ""}` : element.hasAttribute("data-rail-menu-panel") ? "rail menu" : element.hasAttribute("data-bar-more-menu") ? "board menu" : "card menu");
     /* Under an open menu only what is in it can be met. */
     const reachable = surface ? interactive.filter((element) => surface.contains(element)) : interactive;
     const drawn = Array.from(document.querySelectorAll<HTMLElement>("[data-ir-control]")).filter(shown).filter((control) => !surface || surface.contains(control));
@@ -18050,16 +18105,30 @@ describe("interface redesign, numbered design variants", () => {
       const rect = visible(control);
       const own = control.getBoundingClientRect();
       if (!smallest || own.width * own.height < smallest[0] * smallest[1]) smallest = [round(own.width), round(own.height)];
-      const inset = Math.min(Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1, Math.floor(Math.min(rect.width, rect.height) / 2 - 1));
-      const points = [
-        [rect.left + rect.width / 2, rect.top + rect.height / 2],
-        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
-        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
-      ] as const;
-      if (!points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && (control.contains(at) || at.contains(control) && at.tagName === "LABEL"); })) missed.push(name(control));
+      if (!answers(control)) missed.push(name(control));
       const over = reachable.filter((other) => other !== control && !other.contains(control) && !control.contains(other) && cut(rect, visible(other)) > 1).map(name);
       if (over.length) intersecting.push(`${name(control)} x ${over.join(", ")}`);
       if (own.left < -0.5 || own.top < -0.5 || own.right > innerWidth + 0.5 || (rect.height === own.height && own.bottom > innerHeight + 0.5)) outside.push(name(control));
+    }
+    /* Real controls outside the board's columns and the feed, which scroll and are laid out anew at every width. */
+    const real = keyed(interactive.filter((element) => !element.closest("[data-ir-control], [data-ir-layer], [data-ir-own], .kb .column, [data-log-feed-scroller], [data-phone-kanban]")));
+    const realShown = surface ? [] : real.map(([key]) => key);
+    const realReachable = surface ? [] : real.filter(([, element]) => answers(element)).map(([key]) => key);
+    const realUnderNotice = surface ? [] : real.filter(([key, element]) => !realReachable.includes(key) && coverOf(element) === "notice").map(([key]) => key);
+    const realUnderOwnPane = surface ? [] : real.filter(([key, element]) => !realReachable.includes(key) && coverOf(element) === "own pane").map(([key]) => key);
+    /* The notice the board header hosts (desktop) or the banner (phone): a 5 × 3 grid over it. */
+    const noticeRoot = document.querySelector<HTMLElement>("[data-attention-toast], [data-mobile2-arrival]");
+    let notice: Reading["notice"] = null;
+    if (noticeRoot && noticeRoot.getBoundingClientRect().width > 0) {
+      const rect = noticeRoot.getBoundingClientRect();
+      let hit = 0;
+      for (let row = 0; row < 3; row++) for (let column = 0; column < 5; column++) {
+        const at = document.elementFromPoint(rect.left + 3 + (rect.width - 6) * column / 4, rect.top + 3 + (rect.height - 6) * row / 2);
+        if (at && noticeRoot.contains(at)) hit++;
+      }
+      const title = noticeRoot.querySelector("[data-attention-toast-title]")?.getBoundingClientRect();
+      const atTitle = title ? document.elementFromPoint(title.left + title.width / 2, title.top + title.height / 2) : null;
+      notice = { points: 15, hit, title: Boolean(atTitle && noticeRoot.contains(atTitle)) };
     }
     const realRail = document.querySelector<HTMLElement>("[data-ir-stage] > div > aside");
     const ownRail = document.querySelector<HTMLElement>(".ir-rail");
@@ -18072,18 +18141,10 @@ describe("interface redesign, numbered design variants", () => {
           projectControls: inside(ownRail).filter((element) => /:(overview|project|crown|archived)/.test(element.dataset.irControl ?? "")).length }
         : slots.length ? { kind: "two controls in the board header", width: 0, controls: slots.length, projectControls: 1 } : null;
     const main = document.querySelector<HTMLElement>("main");
-    const header = document.querySelector<HTMLElement>('[data-bar="project"], [data-mobile2-bar]');
+    const header = document.querySelector<HTMLElement>('[data-bar="project"], [data-bar="overview"], [data-project-bar], [data-mobile2-bar]');
     const scrollers = surface ? [surface, ...Array.from(surface.querySelectorAll<HTMLElement>("*"))].filter((element) => element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY)) : [];
     const boxes: Record<string, [number, number, number, number]> = {};
-    const seen = new Map<string, number>();
-    for (const element of interactive) {
-      if (element.closest("[data-log-feed-scroller]")) continue;
-      /* Clocks and counters tick between two frames; the key names the control without them. */
-      const key = name(element).replace(/\d+/g, "#");
-      const count = (seen.get(key) ?? 0) + 1;
-      seen.set(key, count);
-      boxes[count > 1 ? `${key} #${count}` : key] = boxOf(element.getBoundingClientRect());
-    }
+    for (const [key, element] of keyed(interactive.filter((element) => !element.closest("[data-log-feed-scroller]")))) boxes[key] = boxOf(element.getBoundingClientRect());
     return {
       overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
       visibleControls: reachable.length,
@@ -18094,89 +18155,144 @@ describe("interface redesign, numbered design variants", () => {
       smallest,
       missed, intersecting, outside,
       surface: surface ? {
-        name: surface.dataset.irSurface ?? (surface.hasAttribute("data-mobile2-sheet") ? `sheet:${surface.dataset.mobile2Sheet}` : surface.hasAttribute("data-rail-menu-panel") ? "rail menu" : surface.hasAttribute("data-bar-more-menu") ? "board menu" : "card menu"),
+        name: surfaceName(surface),
+        view: surface.querySelector<HTMLElement>("[data-ir-menu-view]")?.dataset.irMenuView ?? null,
         box: boxOf(surface.getBoundingClientRect()),
         mounted: Array.from(surface.querySelectorAll<HTMLElement>(INTERACTIVE)).filter((element) => element.getBoundingClientRect().width > 0).length,
         visible: inside(surface).length,
         scrolls: scrollers.length > 0,
         insideWindow: surface.getBoundingClientRect().left >= -0.5 && surface.getBoundingClientRect().top >= -0.5 && surface.getBoundingClientRect().right <= innerWidth + 0.5 && surface.getBoundingClientRect().bottom <= innerHeight + 0.5,
       } : null,
+      notice,
+      realShown, realReachable, realUnderNotice, realUnderOwnPane,
       boxes,
     };
   });
 
-  /* Text on the glass layer, read against the pixels actually behind it. */
-  interface TextTarget { text: string; where: string; box: Box; color: [number, number, number, number]; large: boolean }
+  /* Text and functional marks, read against the pixels actually behind them. */
+  interface Target { text: string; where: string; box: Box; color: [number, number, number, number]; floor: number; kind: "text" | "mark" | "overlaid" }
   const GLASS_LAYER = "[data-ir-stage] > div > aside, .ir-rail, .kb .bar, .kb .col-head, [data-mobile2-bar], [data-mobile2-dock], .kb .menu, [data-bar-more-menu], [data-rail-menu-panel], .ir-surface, [data-mobile2-sheet]";
-  const textTargets = (frame: import("playwright-core").Frame) => frame.evaluate((layer): TextTarget[] => {
-    const out: TextTarget[] = [];
+  /* What every variant draws itself, glass or not. */
+  const OWN_LAYER = ".ir-surface, [data-ir-own] [data-mobile2-sheet], .ir-rail, .ir-restore, .ir-switch-title, .ir-system-chip";
+  /** Texts (4.5:1, 3:1 when large) or marks (3:1): an icon control's glyph, a switch track, a chosen segment's edge. */
+  const targetsOf = (frame: import("playwright-core").Frame, layer: string, kind: "text" | "mark") => frame.evaluate(({ layer, kind }): Target[] => {
+    const out: Target[] = [];
     const parse = (value: string): [number, number, number, number] => {
       const parts = value.match(/[\d.]+(?:e-?\d+)?/g)?.map(Number) ?? [0, 0, 0, 1];
       /* A mixed colour computes to `color(srgb r g b / a)`, in fractions. */
       const scale = value.startsWith("color(") ? 255 : 1;
       return [(parts[0] ?? 0) * scale, (parts[1] ?? 0) * scale, (parts[2] ?? 0) * scale, parts[3] ?? 1];
     };
-    for (const root of Array.from(document.querySelectorAll<HTMLElement>(layer))) {
-      if (root.getBoundingClientRect().width === 0) continue;
-      const where = root.dataset.irSurface ?? (root.className && typeof root.className === "string" ? root.className.split(" ")[0]! : root.tagName.toLowerCase());
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const text = (node.textContent ?? "").trim();
-        const element = node.parentElement;
-        if (!text || !element || element.closest("[disabled], [aria-disabled='true'], .card, [data-orchestrator-panel]")) continue;
-        const style = getComputedStyle(element);
-        if (style.visibility === "hidden" || style.display === "none") continue;
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        const rect = range.getBoundingClientRect();
-        if (rect.width < 2 || rect.height < 2 || rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
-        const at = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        if (!at || !(element.contains(at) || at.contains(element))) continue;
-        let alpha = 1;
-        for (let up: HTMLElement | null = element; up; up = up.parentElement) alpha *= parseFloat(getComputedStyle(up).opacity || "1");
-        const color = parse(style.color);
-        const size = parseFloat(style.fontSize);
-        out.push({ text: text.slice(0, 32), where, box: [rect.left, rect.top, rect.width, rect.height], color: [color[0], color[1], color[2], color[3] * alpha], large: size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700) });
+    const opacity = (element: Element) => { let alpha = 1; for (let up: Element | null = element; up; up = up.parentElement) alpha *= parseFloat(getComputedStyle(up).opacity || "1"); return alpha; };
+    const onScreen = (rect: DOMRect) => rect.width >= 2 && rect.height >= 2 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+    const meets = (element: Element, x: number, y: number) => { const at = document.elementFromPoint(x, y); return Boolean(at && (element.contains(at) || at.contains(element))); };
+    const met = (element: Element, rect: DOMRect) => meets(element, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    /* A text another surface lies over in part (the product's notice over a column head) has another surface's pixels in its box: it is listed, not read. */
+    const clear = (element: Element, rect: DOMRect) => [[rect.left + 1, rect.top + 1], [rect.right - 1, rect.top + 1], [rect.left + 1, rect.bottom - 1], [rect.right - 1, rect.bottom - 1]].every(([x, y]) => meets(element, x!, y!));
+    const roots = Array.from(document.querySelectorAll<HTMLElement>(layer)).filter((root) => root.getBoundingClientRect().width > 0 && !Array.from(document.querySelectorAll(layer)).some((other) => other !== root && other.contains(root)));
+    for (const root of roots) {
+      const where = root.dataset.irSurface ?? (root.closest("[data-ir-own]") ? root.closest<HTMLElement>("[data-ir-own]")!.dataset.irLayer! : root.className && typeof root.className === "string" ? root.className.split(" ")[0]! : root.tagName.toLowerCase());
+      if (kind === "text") {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const text = (node.textContent ?? "").trim();
+          const element = node.parentElement;
+          if (!text || !element || element.closest("[disabled], [aria-disabled='true'], .card, [data-orchestrator-panel]")) continue;
+          const style = getComputedStyle(element);
+          if (style.visibility === "hidden" || style.display === "none") continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          if (!onScreen(rect) || !met(element, rect)) continue;
+          if (!clear(element, rect)) { out.push({ text: text.slice(0, 32), where, box: [rect.left, rect.top, rect.width, rect.height], color: [0, 0, 0, 0], floor: 0, kind: "overlaid" }); continue; }
+          const color = parse(style.color);
+          const size = parseFloat(style.fontSize);
+          const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+          out.push({ text: text.slice(0, 32), where, box: [rect.left, rect.top, rect.width, rect.height], color: [color[0], color[1], color[2], color[3] * opacity(element)], floor: large ? 3 : 4.5, kind });
+        }
+        continue;
+      }
+      /* An icon is functional when it is all its control says: no text beside it. */
+      for (const svg of Array.from(root.querySelectorAll<SVGElement>("[data-ir-control] svg"))) {
+        const control = svg.closest<HTMLElement>("[data-ir-control]")!;
+        if ((control.textContent ?? "").trim() || control.hasAttribute("disabled")) continue;
+        const rect = svg.getBoundingClientRect();
+        if (!onScreen(rect) || !met(control, rect)) continue;
+        const color = parse(getComputedStyle(svg).color);
+        out.push({ text: `${control.dataset.irControl} icon${control.getAttribute("aria-pressed") === "true" ? " (on)" : ""}`, where, box: [rect.left, rect.top, rect.width, rect.height], color: [color[0], color[1], color[2], color[3] * opacity(svg)], floor: 3, kind });
+      }
+      for (const track of Array.from(root.querySelectorAll<HTMLElement>(".ir-switch"))) {
+        const rect = track.getBoundingClientRect();
+        if (!onScreen(rect)) continue;
+        const color = parse(getComputedStyle(track).backgroundColor);
+        out.push({ text: `${track.parentElement?.dataset.irControl} switch${track.parentElement?.getAttribute("aria-checked") === "true" ? " (on)" : ""}`, where, box: [rect.left + 4, rect.top + 4, rect.width - 8, rect.height - 8], color: [color[0], color[1], color[2], color[3] * opacity(track)], floor: 3, kind });
+      }
+      for (const chosen of Array.from(root.querySelectorAll<HTMLElement>('.ir-segment button[aria-pressed="true"]'))) {
+        const rect = chosen.getBoundingClientRect();
+        if (!onScreen(rect)) continue;
+        const ring = getComputedStyle(chosen).boxShadow.match(/rgba?\([^)]*\)|color\([^)]*\)/)?.[0];
+        if (!ring) continue;
+        const color = parse(ring);
+        out.push({ text: `${chosen.dataset.irControl} chosen edge`, where, box: [rect.left + rect.width / 2 - 6, rect.top + rect.height / 2 - 4, 12, 8], color: [color[0], color[1], color[2], color[3] * opacity(chosen)], floor: 3, kind });
       }
     }
     return out;
-  }, GLASS_LAYER);
+  }, { layer, kind });
   const luminance = (r: number, g: number, b: number) => {
     const channel = (value: number) => { const s = value / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
     return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
   };
-  /** The lowest contrast any pixel behind a text gives it; the text is hidden while the picture is taken. */
-  async function contrastOf(page: Page, frame: import("playwright-core").Frame, look: number) {
-    const targets = await textTargets(frame);
-    const hide = await frame.addStyleTag({ content: "*, *::placeholder { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }" });
-    await page.waitForTimeout(120);
-    const picture = await page.locator(`[data-ir-frame="${look}"]`).screenshot();
-    await hide.evaluate((node) => (node as HTMLElement).remove());
-    const { data, info } = await sharp(picture).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
-    const readings = targets.map((target) => {
-      const [x, y, width, height] = target.box;
-      let lowest = 21;
-      for (let py = Math.max(0, Math.floor(y)); py < Math.min(info.height, Math.ceil(y + height)); py += 2) for (let px = Math.max(0, Math.floor(x)); px < Math.min(info.width, Math.ceil(x + width)); px += 2) {
-        const at = (py * info.width + px) * 4;
-        const [r, g, b] = [data[at]!, data[at + 1]!, data[at + 2]!];
-        const alpha = target.color[3];
-        const ink = luminance(target.color[0] * alpha + r * (1 - alpha), target.color[1] * alpha + g * (1 - alpha), target.color[2] * alpha + b * (1 - alpha));
-        const ground = luminance(r, g, b);
-        lowest = Math.min(lowest, (Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05));
+  /**
+   * The lowest contrast any pixel behind a target gives it. Texts are made
+   * transparent while the picture is taken; marks are taken away whole (an
+   * icon, a switch track, a chosen segment), so the ground is what is under them.
+   */
+  async function contrastOf(page: Page, frame: import("playwright-core").Frame, look: number, layer: string) {
+    const readings: { text: string; where: string; ratio: number; floor: number; kind: string }[] = [];
+    for (const kind of ["text", "mark"] as const) {
+      const found = await targetsOf(frame, layer, kind);
+      for (const entry of found.filter((target) => target.kind === "overlaid")) readings.push({ text: entry.text, where: entry.where, ratio: 21, floor: 0, kind: "overlaid" });
+      const targets = found.filter((target) => target.kind !== "overlaid");
+      if (!targets.length) continue;
+      const hide = await frame.addStyleTag({ content: kind === "text"
+        ? "*, *::placeholder { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }"
+        : '[data-ir-control] svg, .ir-switch, .ir-segment button[aria-pressed="true"] { visibility: hidden !important; } * { caret-color: transparent !important; }' });
+      await page.waitForTimeout(120);
+      const picture = await page.locator(`[data-ir-frame="${look}"]`).screenshot();
+      await hide.evaluate((node) => (node as HTMLElement).remove());
+      const { data, info } = await sharp(picture).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+      for (const target of targets) {
+        const [x, y, width, height] = target.box;
+        let lowest = 21;
+        const step = kind === "text" ? 2 : 1;
+        for (let py = Math.max(0, Math.floor(y)); py < Math.min(info.height, Math.ceil(y + height)); py += step) for (let px = Math.max(0, Math.floor(x)); px < Math.min(info.width, Math.ceil(x + width)); px += step) {
+          const at = (py * info.width + px) * 4;
+          const [r, g, b] = [data[at]!, data[at + 1]!, data[at + 2]!];
+          const alpha = target.color[3];
+          const ink = luminance(target.color[0] * alpha + r * (1 - alpha), target.color[1] * alpha + g * (1 - alpha), target.color[2] * alpha + b * (1 - alpha));
+          const ground = luminance(r, g, b);
+          lowest = Math.min(lowest, (Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05));
+        }
+        readings.push({ text: target.text, where: target.where, ratio: Math.round(lowest * 100) / 100, floor: target.floor, kind });
       }
-      return { text: target.text, where: target.where, ratio: Math.round(lowest * 100) / 100, floor: target.large ? 3 : 4.5 };
-    });
+    }
     return readings;
   }
 
   type Inner = ReturnType<Page["frameLocator"]>;
   type Act = (inner: Inner, page: Page) => Promise<void>;
+  /** A state: what to press from the resting frame, and the page it starts on when that is not the board of `stages`. */
+  interface Spec { act?: Act; scenario?: string; query?: string; hash?: string; ready?: string; expect?: string; expectNot?: string }
   const press = (control: string): Act => async (inner) => { await inner.locator(`[data-ir-control="${control}"]`).first().click(); };
   const real = (selector: string): Act => async (inner) => { await inner.locator(selector).first().click(); };
   const chain = (...acts: Act[]): Act => async (inner, page) => { for (const act of acts) { await act(inner, page); await page.waitForTimeout(250); } };
   const toConversation: Act = async (inner) => {
     await inner.locator("[data-mobile2-board-dock]").click();
     await inner.locator('[data-mobile2-screen]:not([data-mobile2-screen="board"])').first().waitFor();
+  };
+  const toTask: Act = async (inner) => {
+    await inner.locator('[data-phone-card^="task:"]').first().click();
+    await inner.locator('[data-mobile2-screen="task"]').waitFor();
   };
   const RAIL_MENU = real("[data-rail-menu]");
   const BOARD_MENU = real("[data-bar-more]");
@@ -18187,106 +18303,172 @@ describe("interface redesign, numbered design variants", () => {
   };
   const PHONE_MENU = real('[data-mobile2-open="menu"]');
   const PHONE_TITLE = real("[data-mobile2-title][data-mobile2-open]");
+  const OVERVIEW: Spec = { scenario: "issue1820" };
+  const EMPTY: Spec = { scenario: "issue1820-empty" };
+  const LOADING: Spec = { query: "&files-pending=1" };
+  const PIPELINE: Spec = { hash: "#pipeline=p-search", ready: '[data-mobile2-screen="pipeline"]' };
+  const own = (sheet: string) => `[data-ir-own] [data-ir-sheet-name="${sheet}"]`;
   /* What each variant is judged on: the resting frame, then each surface it changes. */
-  const STATES: Record<number, { desktop: Record<string, Act | null>; phone: Record<string, Act | null> }> = {
+  const STATES: Record<number, { desktop: Record<string, Spec>; phone: Record<string, Spec> }> = {
     0: {
-      desktop: { rest: null, "rail-menu": RAIL_MENU, "board-menu": BOARD_MENU, "card-menu": CARD_MENU },
-      phone: { rest: null, "board-menu": PHONE_MENU, projects: PHONE_TITLE, conversation: toConversation, "conversation-menu": chain(toConversation, PHONE_MENU) },
+      desktop: { rest: {}, "rail-menu": { act: RAIL_MENU }, "board-menu": { act: BOARD_MENU }, "card-menu": { act: CARD_MENU }, overview: OVERVIEW, empty: EMPTY, loading: LOADING },
+      phone: {
+        rest: {}, "board-menu": { act: PHONE_MENU }, projects: { act: PHONE_TITLE }, conversation: { act: toConversation }, "conversation-menu": { act: chain(toConversation, PHONE_MENU) },
+        "task-menu": { act: chain(toTask, PHONE_MENU), expect: "[data-phone-task-menu-sheet]" }, "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]" },
+      },
     },
-    1: { desktop: { rest: null, palette: press("shell:project"), "palette-settings": chain(press("shell:project"), press("palette:settings")), system: press("shell:system") }, phone: { rest: null, projects: PHONE_TITLE } },
-    2: { desktop: { rest: null, system: press("rail:system"), settings: press("rail:settings") }, phone: { rest: null, projects: PHONE_TITLE } },
-    3: { desktop: { rest: null, open: press("rail:toggle"), system: press("rail:system"), settings: press("rail:settings") }, phone: { rest: null, projects: PHONE_TITLE } },
+    1: {
+      desktop: {
+        rest: {}, palette: { act: press("shell:project") }, "palette-settings": { act: chain(press("shell:project"), press("palette:settings")) }, "palette-system": { act: chain(press("shell:project"), press("palette:system")) }, system: { act: press("shell:system") },
+        overview: { ...OVERVIEW, expect: '[data-ir-control="shell:system"]' }, "overview-palette": { ...OVERVIEW, act: press("shell:project") }, empty: { ...EMPTY, expect: '[data-ir-control="shell:project"]' }, loading: { ...LOADING, expect: '[data-ir-control="shell:project"]' },
+      },
+      phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") }, "projects-system": { act: chain(PHONE_TITLE, press("palette:system")) } },
+    },
+    2: { desktop: { rest: {}, system: { act: press("rail:system") }, settings: { act: press("rail:settings") } }, phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") } } },
+    3: { desktop: { rest: {}, open: { act: press("rail:toggle") }, system: { act: press("rail:system") }, settings: { act: press("rail:settings") } }, phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") } } },
     4: {
-      desktop: { "board-menu": BOARD_MENU, "board-menu-policies": chain(BOARD_MENU, press("board:policies")), "rail-menu": RAIL_MENU, "rail-menu-setup": chain(RAIL_MENU, press("rail:setup")), "card-menu": CARD_MENU, "card-menu-lane": chain(CARD_MENU, press("card:lane-Search fix")) },
-      phone: { "board-menu": PHONE_MENU, "board-menu-delegatus": chain(PHONE_MENU, press("phoneBoard:delegatus")), "conversation-menu": chain(toConversation, PHONE_MENU), "conversation-agents": chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+      desktop: {
+        "board-menu": { act: BOARD_MENU }, "board-menu-policies": { act: chain(BOARD_MENU, press("board:policies")) }, "rail-menu": { act: RAIL_MENU }, "rail-menu-setup": { act: chain(RAIL_MENU, press("rail:setup")) },
+        "card-menu": { act: CARD_MENU }, "card-menu-details": { act: chain(CARD_MENU, press("card:details")) }, "card-menu-lane": { act: chain(CARD_MENU, press("card:lane-Search fix")) },
+      },
+      phone: {
+        "board-menu": { act: PHONE_MENU, expect: own("menu-phoneBoard") }, "board-menu-delegatus": { act: chain(PHONE_MENU, press("phoneBoard:delegatus")) },
+        "conversation-menu": { act: chain(toConversation, PHONE_MENU), expect: own("menu-phoneConversation") }, "conversation-agents": { act: chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+        "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "task-menu-colour": { act: chain(toTask, PHONE_MENU, press("phoneTask:colour")) }, "task-menu-board": { act: chain(toTask, PHONE_MENU, press("phoneTask:board")), expect: own("menu-phoneBoard") },
+        "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" }, "pipeline-menu-board": { ...PIPELINE, act: chain(PHONE_MENU, real('[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]')), expect: own("menu-phoneBoard") },
+      },
     },
     5: {
-      desktop: { "board-menu": BOARD_MENU, settings: chain(BOARD_MENU, press("board:settings-project")), "settings-delegatus": RAIL_MENU, "card-menu": CARD_MENU },
-      phone: { "board-menu": PHONE_MENU, settings: chain(PHONE_MENU, press("phoneBoard:settings")), "settings-section": chain(PHONE_MENU, press("phoneBoard:settings"), press("settings:section:notifications")), "conversation-menu": chain(toConversation, PHONE_MENU), "conversation-agents": chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+      desktop: { "board-menu": { act: BOARD_MENU }, settings: { act: chain(BOARD_MENU, press("board:settings-project")) }, "settings-delegatus": { act: RAIL_MENU }, "card-menu": { act: CARD_MENU }, "card-menu-details": { act: chain(CARD_MENU, press("card:details")) } },
+      phone: {
+        "board-menu": { act: PHONE_MENU, expect: own("menu-phoneBoard") }, settings: { act: chain(PHONE_MENU, press("phoneBoard:settings")), expect: own("settings") }, "settings-section": { act: chain(PHONE_MENU, press("phoneBoard:settings"), press("settings:section:notifications")) },
+        "conversation-menu": { act: chain(toConversation, PHONE_MENU), expect: own("menu-phoneConversation") }, "conversation-agents": { act: chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+        "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "task-menu-board": { act: chain(toTask, PHONE_MENU, press("phoneTask:board")), expect: own("menu-phoneBoard") },
+        "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" },
+      },
     },
-    6: { desktop: { rest: null, "rail-menu": RAIL_MENU, "board-menu": BOARD_MENU, "card-menu": CARD_MENU }, phone: { rest: null, "board-menu": PHONE_MENU, conversation: toConversation } },
+    6: { desktop: { rest: {}, "rail-menu": { act: RAIL_MENU }, "board-menu": { act: BOARD_MENU }, "card-menu": { act: CARD_MENU } }, phone: { rest: {}, "board-menu": { act: PHONE_MENU }, conversation: { act: toConversation } } },
     7: {
-      desktop: { rest: null, palette: press("shell:project"), system: press("shell:system"), "board-menu": BOARD_MENU, settings: chain(BOARD_MENU, press("board:settings-project")), "card-menu": CARD_MENU },
-      phone: { rest: null, projects: PHONE_TITLE, "board-menu": PHONE_MENU, settings: chain(PHONE_MENU, press("phoneBoard:settings")), conversation: toConversation, "conversation-menu": chain(toConversation, PHONE_MENU) },
+      desktop: {
+        rest: {}, palette: { act: press("shell:project") }, system: { act: press("shell:system") }, "board-menu": { act: BOARD_MENU }, settings: { act: chain(BOARD_MENU, press("board:settings-project")) }, "card-menu": { act: CARD_MENU },
+        overview: { ...OVERVIEW, expect: '[data-ir-control="shell:system"]' }, "overview-palette": { ...OVERVIEW, act: press("shell:project") }, empty: { ...EMPTY, expect: '[data-ir-control="shell:project"]' }, loading: { ...LOADING, expect: '[data-ir-control="shell:project"]' },
+      },
+      phone: {
+        rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") }, "board-menu": { act: PHONE_MENU }, settings: { act: chain(PHONE_MENU, press("phoneBoard:settings")), expect: own("settings") }, conversation: { act: toConversation },
+        "conversation-menu": { act: chain(toConversation, PHONE_MENU) }, "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" },
+      },
     },
   };
 
-  browserTest("every variant renders at three widths in both languages; what it draws covers nothing, and glass keeps AA", async () => {
+  browserTest("every variant renders at three widths in both languages; what it draws covers nothing, and its text and marks keep AA", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     const served = await serveEvidenceFixture(OUT);
     let browser: Browser | undefined;
     const failures: string[] = [];
     const states: Record<string, unknown> = {};
+    const contrast: Record<string, unknown> = {};
     const glass: Record<string, unknown> = {};
+    /* Today's reachable real controls, per frame, language and state: the variants are held to them. */
+    const baseline = new Map<string, string[]>();
     try {
       browser = await chromium.launch(LAUNCH);
-      for (const variant of [0, 1, 2, 3, 4, 5, 6, 7]) for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of GLASS.includes(variant) ? ["light", "dark"] as const : ["light"] as const) {
+      for (const variant of [0, 1, 2, 3, 4, 5, 6, 7]) for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of variant === 0 ? ["light"] as const : ["light", "dark"] as const) {
         if (ONLY && !ONLY.includes(variant)) continue;
         if (ONLY_FRAMES && !ONLY_FRAMES.includes(frame.name)) continue;
         if (ONLY_LANGS && !ONLY_LANGS.includes(lang)) continue;
-        /* The glass variants in dark are judged in one language: the colours do not depend on it. */
+        /* Dark is judged in one language: the colours do not depend on it. */
         if (scheme === "dark" && lang === "en") continue;
         const beside = GLASS.includes(variant);
-        const url = `${served.base}?scenario=stages&redesign=${variant}&frame=${frame.width}x${frame.height}${beside ? "&beside=0" : ""}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: beside ? frame.width * 2 + 12 : frame.width, height: frame.height + STRIP }, scheme, lang, "reduce", frame.phone);
+        const { context, page, pageErrors } = await openFixture(browser, served.base, { width: beside ? frame.width * 2 + 12 : frame.width, height: frame.height + STRIP }, scheme, lang, "reduce", frame.phone);
         try {
           const inner = page.frameLocator(`[data-ir-frame="${variant}"]`);
           const today = page.frameLocator('[data-ir-frame="0"]');
-          for (const [state, act] of Object.entries(STATES[variant]![frame.phone ? "phone" : "desktop"])) {
+          for (const [state, spec] of Object.entries(STATES[variant]![frame.phone ? "phone" : "desktop"])) {
             const where = `v${variant}-${frame.name}-${lang}${scheme === "dark" ? "-dark" : ""}-${state}`;
             const fail = (what: string) => failures.push(`${where}: ${what}`);
             try {
+              const url = `${served.base}?scenario=${spec.scenario ?? "stages"}${spec.query ?? ""}&redesign=${variant}&frame=${frame.width}x${frame.height}${beside ? "&beside=0" : ""}${spec.hash ?? ""}`;
+              /* A URL that differs from the last one only in its fragment would not reload the frames. */
+              await page.goto("about:blank");
               await page.goto(url);
-              const ready = frame.phone ? "[data-mobile2-bar]" : '[data-bar="project"]';
+              const ready = frame.phone ? "[data-mobile2-bar]" : '[data-bar="project"], [data-bar="overview"], [data-project-bar], main h1, [data-ir-control="shell:project"]';
               await inner.locator(`[data-ir-inner="${variant}"]`).waitFor();
-              await inner.locator(ready).waitFor();
-              if (beside) await today.locator(ready).waitFor();
+              await inner.locator(`${spec.ready ?? ready} >> visible=true`).first().waitFor();
+              if (beside) await today.locator(`${spec.ready ?? ready} >> visible=true`).first().waitFor();
               await page.waitForTimeout(900);
               expect(await page.locator("[data-ir-variant-number]").last().textContent()).toBe(String(variant));
               expect((await page.locator("[data-ir-variant-number]").last().boundingBox())!.height).toBeGreaterThanOrEqual(24);
-              if (act) {
-                await act(inner, page);
+              if (spec.act) {
+                await spec.act(inner, page);
                 /* Today's frame beside a glass one is put in the same state, when it has that state. */
-                if (variant === 6) await act(today, page);
+                if (variant === 6) await spec.act(today, page);
                 await page.waitForTimeout(450);
               }
+              if (spec.expect && !(await inner.locator(spec.expect).first().isVisible())) fail(`${spec.expect} is not on screen`);
+              if (spec.expectNot && (await inner.locator(spec.expectNot).count())) fail(`${spec.expectNot} is on screen`);
               await page.screenshot({ path: path.join(OUT, `${where}.png`) });
               const handle = await page.locator(`[data-ir-frame="${variant}"]`).elementHandle();
               const content = (await handle!.contentFrame())!;
               const reading = await measure(content);
-              const { boxes, ...kept } = reading;
-              states[where] = kept;
+              const { boxes, realShown, realReachable, realUnderNotice, realUnderOwnPane, ...kept } = reading;
+              /* Recorded only where today's frame reaches the control: what the variant's layout put under them. */
+              const today0 = baseline.get(`${frame.name}-${lang}-${state}`) ?? [];
+              const newly = (list: string[]) => list.filter((control) => today0.includes(control));
+              states[where] = {
+                ...kept, realControls: realShown.length, realReachable: realReachable.length,
+                ...(variant !== 0 && newly(realUnderNotice).length ? { underTheNotice: newly(realUnderNotice) } : {}),
+                ...(variant !== 0 && newly(realUnderOwnPane).length ? { underItsOwnPane: newly(realUnderOwnPane) } : {}),
+              };
               for (const control of reading.missed) fail(`${control} is not what a pointer meets at its centre and corners`);
               for (const pair of reading.intersecting) fail(`intersects: ${pair}`);
               for (const control of reading.outside) fail(`${control} leaves the window`);
               if (reading.overflowX) fail(`the page scrolls sideways by ${reading.overflowX}`);
               if (reading.smallest && frame.phone && (reading.smallest[0] < 44 || reading.smallest[1] < 44)) fail(`a drawn control is ${reading.smallest[0]} x ${reading.smallest[1]}, under 44 px`);
               if (reading.smallest && !frame.phone && (reading.smallest[0] < 24 || reading.smallest[1] < 24)) fail(`a drawn control is ${reading.smallest[0]} x ${reading.smallest[1]}, under 24 px`);
-              if (reading.surface?.name.startsWith("menu-") && reading.surface.scrolls && !state.endsWith("agents")) fail("a regrouped menu scrolls in its first view");
+              /* A list one level in (38 agents, the phone's Delegatus group) may scroll; the first view may not. */
+              if (reading.surface?.name.startsWith("menu-") && reading.surface.scrolls && reading.surface.view === "first") fail("a regrouped menu scrolls in its first view");
               if (reading.surface && !reading.surface.insideWindow && variant !== 0) fail("the open surface leaves the window");
+              /* An open menu may cover the notice, as today's do; at rest nothing may. */
+              if (!reading.surface && reading.notice && (reading.notice.hit < reading.notice.points || !reading.notice.title)) fail(`the attention notice answers at ${reading.notice.hit} of ${reading.notice.points} points${reading.notice.title ? "" : ", and its title is covered"}`);
+              /* Nothing the variant adds lies on a real control today's frame lets a pointer reach. */
+              const key = `${frame.name}-${lang}-${state}`;
+              if (variant === 0 && !reading.surface) baseline.set(key, realReachable);
+              else if (!reading.surface && baseline.has(key)) {
+                /* The product's own notice is transient and dismissed by the operator; what it alone lies over is recorded, not failed. */
+                const covered = baseline.get(key)!.filter((control) => realShown.includes(control) && !realReachable.includes(control) && !realUnderNotice.includes(control) && !realUnderOwnPane.includes(control));
+                for (const control of covered) fail(`${control} is reachable in today's frame and covered in this one`);
+              }
+              if (variant !== 0) {
+                const layer = GLASS.includes(variant) ? `${GLASS_LAYER}, ${OWN_LAYER}` : OWN_LAYER;
+                const mine = await contrastOf(page, content, variant, layer);
+                const under = mine.filter((entry) => entry.ratio < entry.floor);
+                const lowest = (kind: string) => mine.filter((entry) => entry.kind === kind).reduce<(typeof mine)[number] | null>((low, entry) => (!low || entry.ratio < low.ratio ? entry : low), null);
+                contrast[where] = { texts: mine.filter((entry) => entry.kind === "text").length, overlaid: mine.filter((entry) => entry.kind === "overlaid").map((entry) => `${entry.where}|${entry.text}`), marks: mine.filter((entry) => entry.kind === "mark").length, lowestText: lowest("text"), lowestMark: lowest("mark"), under };
+                for (const entry of under) fail(`${entry.kind} "${entry.text}" on ${entry.where} reads ${entry.ratio}:1, under ${entry.floor}:1`);
+              }
               if (beside) {
                 const todayFrame = (await (await page.locator('[data-ir-frame="0"]').elementHandle())!.contentFrame())!;
                 const record: Record<string, unknown> = (glass[where] = {});
                 if (variant === 6) {
                   /* Glass alone restyles: every control keeps today's box. */
-                  const base = (await measure(todayFrame)).boxes;
-                  const moved = Object.keys({ ...base, ...boxes }).filter((key) => !base[key] || !boxes[key] || base[key]!.some((value, index) => Math.abs(value - boxes[key]![index]!) > 0.5));
+                  const differ = (a: Record<string, Box>, b: Record<string, Box>) => Object.keys({ ...a, ...b }).filter((key) => !a[key] || !b[key] || a[key]!.some((value, index) => Math.abs(value - b[key]![index]!) > 0.5));
+                  let base = (await measure(todayFrame)).boxes;
+                  let moved = differ(base, boxes);
+                  /* The limits footer settles on its own clock; a difference is read once more after it has. */
+                  if (moved.length) {
+                    await page.waitForTimeout(1500);
+                    base = (await measure(todayFrame)).boxes;
+                    moved = differ(base, (await measure(content)).boxes);
+                  }
                   record.controlsCompared = Object.keys(base).length;
                   record.moved = moved;
                   if (moved.length) fail(`glass moved ${moved.length} controls: ${moved.slice(0, 4).join(" | ")}`);
                 }
-                const mine = await contrastOf(page, content, variant);
-                const theirs = await contrastOf(page, todayFrame, 0);
-                const under = mine.filter((entry) => entry.ratio < entry.floor);
-                const todayUnder = new Set(theirs.filter((entry) => entry.ratio < entry.floor).map((entry) => `${entry.where}|${entry.text}`));
-                const added = under.filter((entry) => !todayUnder.has(`${entry.where}|${entry.text}`));
-                record.texts = mine.length;
-                record.lowest = mine.reduce((low, entry) => (entry.ratio < low.ratio ? entry : low), { text: "", where: "", ratio: 21, floor: 4.5 });
+                /* The same surfaces today, for the comparison in the note. */
+                const theirs = await contrastOf(page, todayFrame, 0, GLASS_LAYER);
                 record.todayTexts = theirs.length;
-                record.todayLowest = theirs.reduce((low, entry) => (entry.ratio < low.ratio ? entry : low), { text: "", where: "", ratio: 21, floor: 4.5 });
-                record.underAA = under;
-                record.underAAToday = [...todayUnder];
-                for (const entry of added) fail(`text "${entry.text}" on ${entry.where} reads ${entry.ratio}:1, under ${entry.floor}:1, and today's frame has no such failure`);
+                record.todayLowest = theirs.reduce((low, entry) => (entry.ratio < low.ratio ? entry : low), { text: "", where: "", ratio: 21, floor: 4.5, kind: "text" });
+                record.underAAToday = theirs.filter((entry) => entry.ratio < entry.floor).map((entry) => `${entry.where}|${entry.text}|${entry.ratio}`);
               }
             } catch (error) { fail((error as Error).message.split("\n")[0]!); }
           }
@@ -18297,12 +18479,278 @@ describe("interface redesign, numbered design variants", () => {
     if (!NARROWED) {
       fs.mkdirSync(EVIDENCE, { recursive: true });
       fs.writeFileSync(path.join(EVIDENCE, "measurements.json"), `${JSON.stringify({
-        fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=stages&redesign=<n>",
+        fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=<stages|issue1820|issue1820-empty>&redesign=<n>",
         frames: FRAMES.map(({ name, width, height }) => ({ name, width, height })),
-        counting: "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control.",
-        states, glass, failures,
+        counting: "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control. realControls / realReachable: the product's own controls outside the board's columns and the feed, and those a pointer meets at their centre and four corners; each one reachable in today's frame must stay reachable unless only the product's own attention notice lies over it (listed as underTheNotice) or only its own pane's content does (underItsOwnPane: the orchestrator pane's 14 px resize grip, whose top corners lie under the pane's composer row at some widths in today's frame as well). notice: a 5 x 3 grid of points over the attention notice and the centre of its title.",
+        contrastMethod: "Texts: computed ink and opacity against every second pixel of the frame behind the text's box, the text made transparent while the picture is taken; 4.5:1, 3:1 for large text. Marks: an icon-only control's glyph ink, a switch track's fill and a chosen segment's accent edge against every pixel behind them, the mark hidden while the picture is taken; 3:1.",
+        states, contrast, glass, failures,
       }, null, 2)}\n`);
     }
     expect(failures).toEqual([]);
-  }, 2_400_000);
+  }, 3_600_000);
+
+  browserTest("the new surfaces work from the keyboard, and a phone surface is a sheet Back closes first", async () => {
+    const served = await serveEvidenceFixture(OUT);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const cases: Record<string, unknown> = {};
+    const STAGES = "scenario=stages";
+    const focusOf = (page: Page) => page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      const label = active ? (active.getAttribute("aria-label") ?? active.getAttribute("placeholder") ?? (active.textContent ?? "").trim()).slice(0, 40) : "";
+      return {
+        control: active?.dataset.irControl ?? (active?.hasAttribute("data-bar-more") ? "[data-bar-more]" : active?.hasAttribute("data-rail-menu") ? "[data-rail-menu]" : active?.hasAttribute("data-menu") ? "card [data-menu]" : active?.tagName ?? null),
+        inside: Boolean(active?.closest("[data-ir-surface], [data-ir-own]")),
+        label,
+      };
+    });
+    const surfaceOf = (page: Page) => page.evaluate(() => {
+      const surface = document.querySelector<HTMLElement>("[data-ir-surface]") ?? document.querySelector<HTMLElement>("[data-ir-own] [data-mobile2-sheet]");
+      return surface ? { name: surface.dataset.irSurface ?? surface.querySelector<HTMLElement>("[data-ir-sheet-name]")?.dataset.irSheetName ?? "sheet", modal: surface.getAttribute("aria-modal"), label: surface.getAttribute("aria-label") } : null;
+    });
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const lang of LANGS) {
+        if (ONLY_LANGS && !ONLY_LANGS.includes(lang)) continue;
+        /* Desktop, 1440: open from the keyboard, walk Tab both ways inside, close with Escape, land on the entry. */
+        const desk = async (variant: number, name: string, search: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>) => {
+          if (ONLY && !ONLY.includes(variant)) return;
+          const where = `v${variant}-1440-${lang}-${name}`;
+          const record: Record<string, unknown> = (cases[where] = {});
+          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?${search}&redesign=${variant}&inner=1`, { width: 1440, height: 900 }, "light", lang, "reduce");
+          try {
+            await page.locator(`[data-ir-inner="${variant}"]`).waitFor();
+            await page.waitForTimeout(1200);
+            await run(page, record);
+            if (pageErrors.length) failures.push(`${where}: ${pageErrors.join(" | ")}`);
+          } catch (error) { failures.push(`${where}: ${(error as Error).message.split("\n")[0]}`); } finally { await context.close(); }
+        };
+        const walk = async (page: Page, where: string, record: Record<string, unknown>) => {
+          const stops: string[] = [];
+          for (const key of ["Tab", "Shift+Tab"]) for (let index = 0; index < 40; index++) {
+            await page.keyboard.press(key);
+            const focus = await focusOf(page);
+            stops.push(`${key === "Tab" ? "→" : "←"} ${focus.control}`);
+            if (!focus.inside) { failures.push(`${where}: ${key} left the surface for ${focus.control}`); break; }
+            if (!focus.label) failures.push(`${where}: ${focus.control} has no accessible name`);
+          }
+          record.tabStops = new Set(stops).size;
+        };
+        const opensAndReturns = async (page: Page, where: string, record: Record<string, unknown>, entry: string, expected: string, entryName: string, first?: string) => {
+          await page.locator(entry).first().focus();
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(350);
+          const surface = await surfaceOf(page);
+          const focus = await focusOf(page);
+          record.opened = surface;
+          record.focusOnOpen = focus.control;
+          if (surface?.name !== expected) failures.push(`${where}: Enter on ${entry} opened ${surface?.name ?? "nothing"}, not ${expected}`);
+          if (surface && surface.modal !== "true") failures.push(`${where}: the surface is not aria-modal`);
+          if (!focus.inside) failures.push(`${where}: focus stayed outside the surface on ${focus.control}`);
+          if (first && focus.control !== first) failures.push(`${where}: focus opened on ${focus.control}, not ${first}`);
+          await walk(page, where, record);
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(300);
+          const after = await focusOf(page);
+          record.focusAfterEscape = after.control;
+          if (await surfaceOf(page)) failures.push(`${where}: Escape left the surface open`);
+          if (after.control !== entryName) failures.push(`${where}: focus went to ${after.control} after Escape, not back to ${entryName}`);
+        };
+        const drill = async (page: Page, where: string, record: Record<string, unknown>, row: string, back: string) => {
+          await page.locator(`[data-ir-control="${row}"]`).focus();
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(250);
+          const inside = (await focusOf(page)).control;
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(250);
+          const out = (await focusOf(page)).control;
+          record.drill = { in: inside, out };
+          if (inside !== back) failures.push(`${where}: drilling into ${row} put focus on ${inside}, not ${back}`);
+          if (out !== row) failures.push(`${where}: coming back put focus on ${out}, not ${row}`);
+        };
+        for (const variant of [1, 7]) {
+          await desk(variant, "ctrl-k", STAGES, async (page, record) => {
+            await page.keyboard.press("Control+k");
+            await page.waitForTimeout(350);
+            record.opened = await surfaceOf(page);
+            record.focusOnOpen = (await focusOf(page)).control;
+            if (record.focusOnOpen !== "palette:field") failures.push(`v${variant}-${lang}: Ctrl+K focused ${record.focusOnOpen}, not the palette's field`);
+            await walk(page, `v${variant}-${lang}-ctrl-k`, record);
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+            record.focusAfterEscape = (await focusOf(page)).control;
+            if (record.focusAfterEscape !== "shell:project") failures.push(`v${variant}-${lang}: after Escape focus is on ${record.focusAfterEscape}, not the project title`);
+          });
+          await desk(variant, "title", STAGES, (page, record) => opensAndReturns(page, `v${variant}-${lang}-title`, record, '[data-ir-control="shell:project"]', "palette", "shell:project", "palette:field"));
+          await desk(variant, "system", STAGES, (page, record) => opensAndReturns(page, `v${variant}-${lang}-system`, record, '[data-ir-control="shell:system"]', "system", "shell:system"));
+          await desk(variant, "palette-system", STAGES, async (page, record) => {
+            await page.keyboard.press("Control+k");
+            await page.waitForTimeout(300);
+            await drill(page, `v${variant}-${lang}-palette-system`, record, "palette:system", "palette:back");
+          });
+          for (const [state, search] of [["overview", "scenario=issue1820"], ["empty", "scenario=issue1820-empty"], ["loading", `${STAGES}&files-pending=1`]] as const) {
+            await desk(variant, state, search, async (page, record) => {
+              const leads = await page.evaluate(() => ["shell:project", "shell:system"].map((control) => { const element = document.querySelector<HTMLElement>(`[data-ir-control="${control}"]`); return element && element.getBoundingClientRect().width > 0 ? `${control} in ${element.closest<HTMLElement>("[data-bar]")?.dataset.bar ?? (element.closest("[data-project-bar]") ? "dashboard bar" : "overview title row")}` : null; }));
+              record.leads = leads;
+              if (leads.some((lead) => !lead)) failures.push(`v${variant}-${lang}-${state}: the header has ${leads.filter(Boolean).join(", ") || "no lead"}`);
+              await opensAndReturns(page, `v${variant}-${lang}-${state}`, record, '[data-ir-control="shell:project"]', "palette", "shell:project", "palette:field");
+            });
+          }
+        }
+        await desk(2, "rail-settings", STAGES, (page, record) => opensAndReturns(page, `v2-${lang}-rail-settings`, record, '[data-ir-control="rail:settings"]', "menu-rail", "rail:settings"));
+        await desk(3, "slash", STAGES, async (page, record) => {
+          await page.keyboard.press("/");
+          await page.waitForTimeout(300);
+          record.focus = (await focusOf(page)).control;
+          if (record.focus !== "rail:field") failures.push(`v3-${lang}: / put focus on ${record.focus}, not the rail's field`);
+        });
+        await desk(3, "toggle", STAGES, async (page, record) => {
+          await page.locator('[data-ir-control="rail:toggle"]').focus();
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(300);
+          record.focus = (await focusOf(page)).control;
+          if (record.focus !== "rail:toggle") failures.push(`v3-${lang}: after opening the rail focus is on ${record.focus}, not its toggle`);
+        });
+        for (const variant of [4, 5, 7]) {
+          await desk(variant, "board-menu", STAGES, async (page, record) => {
+            await opensAndReturns(page, `v${variant}-${lang}-board-menu`, record, "[data-bar-more]", "menu-board", "[data-bar-more]");
+            if (variant === 4) {
+              await page.locator("[data-bar-more]").first().focus();
+              await page.keyboard.press("Enter");
+              await page.waitForTimeout(300);
+              await drill(page, `v4-${lang}-board-menu`, record, "board:policies", "board:back");
+            }
+          });
+          await desk(variant, "card-menu", STAGES, async (page, record) => {
+            await page.locator('.kb .column[data-status="assigned"] .card [data-menu]').first().scrollIntoViewIfNeeded();
+            await opensAndReturns(page, `v${variant}-${lang}-card-menu`, record, '.kb .column[data-status="assigned"] .card [data-menu]', "menu-card", "card [data-menu]");
+          });
+        }
+        await desk(5, "rail-settings", STAGES, (page, record) => opensAndReturns(page, `v5-${lang}-rail-settings`, record, "[data-rail-menu]", "settings", "[data-rail-menu]"));
+
+        /* The phone, 390: every surface is a sheet; Back closes it first, the handle drags it shut, × and the scrim close it. */
+        const phone = async (variant: number, name: string, hash: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>) => {
+          if (ONLY && !ONLY.includes(variant)) return;
+          const where = `v${variant}-390-${lang}-${name}`;
+          const record: Record<string, unknown> = (cases[where] = {});
+          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?scenario=stages&redesign=${variant}&inner=1${hash}`, { width: 390, height: 844 }, "light", lang, "reduce", true);
+          try {
+            await page.locator("[data-mobile2-bar]").waitFor();
+            await page.waitForTimeout(1000);
+            await run(page, record);
+            if (pageErrors.length) failures.push(`${where}: ${pageErrors.join(" | ")}`);
+          } catch (error) { failures.push(`${where}: ${(error as Error).message.split("\n")[0]}`); } finally { await context.close(); }
+        };
+        const shape = (page: Page) => page.evaluate(() => {
+          const sheet = document.querySelector<HTMLElement>("[data-ir-own] [data-mobile2-sheet]") ?? Array.from(document.querySelectorAll<HTMLElement>("[data-mobile2-sheet]")).find((element) => element.getBoundingClientRect().height > 0) ?? null;
+          const scroller = Array.from(document.querySelectorAll<HTMLElement>("[data-mobile2-body] *")).find((element) => element.scrollHeight > element.clientHeight + 40 && /auto|scroll/.test(getComputedStyle(element).overflowY) && !element.closest("[data-mobile2-sheet]"));
+          return {
+            screen: Array.from(document.querySelectorAll<HTMLElement>("[data-mobile2-screen]")).map((element) => element.dataset.mobile2Screen).join(","),
+            sheet: sheet ? (sheet.closest("[data-ir-own]") ? sheet.querySelector<HTMLElement>("[data-ir-sheet-name]")?.dataset.irSheetName ?? "own" : `product:${sheet.dataset.mobile2Sheet}${sheet.querySelector("[data-mobile2-pipeline-menu]") ? " (pipeline)" : ""}`) : null,
+            history: history.length,
+            scroll: scroller ? Math.round(scroller.scrollTop) : null,
+          };
+        });
+        const expectSheet = (variant: number, regrouped: string) => (variant === 0 ? "product:menu" : regrouped);
+        const sheetCase = (variant: number, name: string, setup: (page: Page) => Promise<void>, sheet: string) => phone(variant, name, "", async (page, record) => {
+          await setup(page);
+          /* The reading position behind the sheet is kept. */
+          await page.evaluate(() => {
+            const scroller = Array.from(document.querySelectorAll<HTMLElement>("[data-mobile2-body] *")).find((element) => element.scrollHeight > element.clientHeight + 40 && /auto|scroll/.test(getComputedStyle(element).overflowY));
+            if (scroller) scroller.scrollTop = 40;
+          });
+          const before = await shape(page);
+          const openIt = async () => { await page.locator('[data-mobile2-open="menu"]').first().click(); await page.waitForTimeout(450); };
+          await openIt();
+          const opened = await shape(page);
+          if (!opened.sheet?.startsWith(sheet)) failures.push(`v${variant}-${lang}-${name}: the menu opened as ${opened.sheet}, not ${sheet}`);
+          if (opened.history !== before.history + 1) failures.push(`v${variant}-${lang}-${name}: opening the sheet took history from ${before.history} to ${opened.history}`);
+          await page.goBack();
+          await page.waitForTimeout(450);
+          const back = await shape(page);
+          if (back.sheet || back.screen !== before.screen) failures.push(`v${variant}-${lang}-${name}: Back left ${back.sheet ?? "no sheet"} on ${back.screen}, expected no sheet on ${before.screen}`);
+          if (back.scroll !== before.scroll) failures.push(`v${variant}-${lang}-${name}: the page behind moved from ${before.scroll} to ${back.scroll}`);
+          const drag = async (distance: number) => {
+            const grab = (await page.locator("[data-mobile2-grab]").last().boundingBox())!;
+            await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2 + distance, { steps: 8 });
+            await page.mouse.up();
+            await page.waitForTimeout(450);
+            return (await shape(page)).sheet;
+          };
+          await openIt();
+          const short = await drag(40);
+          const long = await drag(110);
+          if (!short) failures.push(`v${variant}-${lang}-${name}: a 40 px drag closed the sheet`);
+          if (long) failures.push(`v${variant}-${lang}-${name}: a 110 px drag left ${long} open`);
+          await openIt();
+          await page.locator("[data-mobile2-sheet] [data-mobile2-close]").last().click();
+          await page.waitForTimeout(450);
+          const closeButton = (await shape(page)).sheet;
+          if (closeButton) failures.push(`v${variant}-${lang}-${name}: × left ${closeButton} open`);
+          await openIt();
+          await page.mouse.click(195, 20);
+          await page.waitForTimeout(450);
+          const scrim = await shape(page);
+          if (scrim.sheet) failures.push(`v${variant}-${lang}-${name}: the scrim left ${scrim.sheet} open`);
+          if (scrim.screen !== before.screen) failures.push(`v${variant}-${lang}-${name}: closing moved the screen to ${scrim.screen}`);
+          Object.assign(record, { before, opened, back, shortDrag: short, longDrag: long, closeButton, scrim });
+        });
+        for (const variant of [0, 4, 5, 7]) {
+          await sheetCase(variant, "board-menu", async () => {}, expectSheet(variant, "menu-phoneBoard"));
+          await sheetCase(variant, "task-menu", async (page) => {
+            await page.locator('[data-phone-card^="task:"]').first().click();
+            await page.locator('[data-mobile2-screen="task"]').waitFor();
+            await page.waitForTimeout(300);
+          }, expectSheet(variant, "menu-phoneTask"));
+          await sheetCase(variant, "conversation-menu", async (page) => {
+            await page.locator("[data-mobile2-board-dock]").click();
+            await page.locator('[data-mobile2-screen]:not([data-mobile2-screen="board"])').first().waitFor();
+            await page.waitForTimeout(300);
+          }, expectSheet(variant, "menu-phoneConversation"));
+          await phone(variant, "pipeline-menu", "#pipeline=p-search", async (page, record) => {
+            await page.locator('[data-mobile2-screen="pipeline"]').waitFor();
+            await page.locator('[data-mobile2-open="menu"]').first().click();
+            await page.waitForTimeout(450);
+            const opened = await shape(page);
+            if (opened.sheet !== "product:menu (pipeline)") failures.push(`v${variant}-${lang}-pipeline-menu: the pipeline's menu opened as ${opened.sheet}`);
+            await page.locator('[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]').click();
+            await page.waitForTimeout(450);
+            const board = await shape(page);
+            if (variant !== 0 && board.sheet !== "menu-phoneBoard") failures.push(`v${variant}-${lang}-pipeline-menu: its board row opened ${board.sheet}`);
+            await page.goBack();
+            await page.waitForTimeout(450);
+            const back = await shape(page);
+            if (back.sheet || back.screen !== "pipeline") failures.push(`v${variant}-${lang}-pipeline-menu: Back left ${back.sheet ?? "no sheet"} on ${back.screen}`);
+            Object.assign(record, { opened, board, back });
+          });
+        }
+        for (const variant of [0, 1, 7]) {
+          await phone(variant, "projects", "", async (page, record) => {
+            const before = await shape(page);
+            await page.locator("[data-mobile2-title][data-mobile2-open]").first().click();
+            await page.waitForTimeout(450);
+            const opened = await shape(page);
+            if (variant !== 0 && opened.sheet !== "palette") failures.push(`v${variant}-${lang}-projects: the title opened ${opened.sheet}`);
+            if (opened.history !== before.history + 1) failures.push(`v${variant}-${lang}-projects: opening took history from ${before.history} to ${opened.history}`);
+            await page.goBack();
+            await page.waitForTimeout(450);
+            const back = await shape(page);
+            if (back.sheet || back.screen !== before.screen) failures.push(`v${variant}-${lang}-projects: Back left ${back.sheet ?? "no sheet"} on ${back.screen}`);
+            Object.assign(record, { before, opened, back });
+          });
+        }
+      }
+    } finally { await browser?.close(); served.stop(); }
+    if (!NARROWED) {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "interaction.json"), `${JSON.stringify({
+        fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=<stages|issue1820|issue1820-empty>&redesign=<n>&inner=1",
+        method: "Desktop 1440: each surface is opened by Enter on its entry (or Ctrl+K, /), Tab and Shift+Tab are pressed 40 times each and every stop must stay inside the surface and carry a name, Escape must close it and put focus back on the entry. Phone 390 with touch: a sheet must add one history entry, Back must close it before the screen and keep the reading position behind it, a 40 px drag of the handle must leave it open and a 110 px drag close it, and × and the scrim must close it.",
+        cases, failures,
+      }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 1_800_000);
 });

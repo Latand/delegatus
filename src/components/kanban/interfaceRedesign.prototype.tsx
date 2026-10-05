@@ -19,13 +19,23 @@
  * regrouped menu; and it restyles the real surfaces through one stylesheet.
  * Every project, count and limit drawn by the prototype's own chrome is
  * invented.
+ *
+ * The prototype's surfaces use the product's own contracts, so a build inherits
+ * them: a desktop menu or dialog is a `useModalLayer` layer (Tab stays inside,
+ * Escape closes, focus goes in on open and back to the control that opened
+ * it); a phone surface is the product's `MobileSheet`, opened and closed
+ * through `mobileNav`, so Back closes it first, its handle drags it shut and
+ * its × and scrim close it. Product actions behind the rows stay inert.
  */
 
 import { Archive, ChevronDown, ChevronLeft, ChevronRight, Crown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings as Gear, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { LAYER } from "@/components/layers";
+import { MobileSheet } from "@/components/mobile/MobileSheet";
+import { useMobileNav, useMobileNavStore } from "@/components/mobile/mobileNav";
+import { useModalLayer } from "@/components/modalLayer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 import {
@@ -63,7 +73,7 @@ const COPY = {
   en: {
     goTo: "Go to a project, an agent or a setting", filter: "Filter projects", overview: "Overview", archived: "Archived", newProject: "New project",
     settings: "Settings", system: "System", quiet: "all quiet", back: "Back", close: "Close", projects: "Projects", left: (n: number) => `${n}% left`,
-    switchProject: (name: string) => `Project ${name}: switch project or go to anything`, systemAria: (left: number) => `System: tightest limit ${left}% left`,
+    switchProject: (name: string) => `${name}: switch project or go to anything`, systemAria: (left: number) => `System: tightest limit ${left}% left`,
     ram: "RAM", swap: "Swap", free: "9.0 GiB free", used: "1.0 GiB used", sessions: "3 agent sessions", stopIdle: "Stop idle", accounts: "Accounts", telegram: "Telegram", notConnected: "Not connected",
     thisProject: "This project", delegatus: "Delegatus", hide: "Hide the sidebar (B)", expand: "Open the sidebar (B)", collapse: "Collapse the sidebar (B)",
     crown: (name: string) => `Pin ${name}`, agent: (n: number) => `Agent ${n}`, roles: ["builder", "reviewer", "critic", "researcher"], rename: "Rename", crownConv: "Crown",
@@ -72,7 +82,7 @@ const COPY = {
   uk: {
     goTo: "Перейти до проєкту, агента чи налаштування", filter: "Фільтр проєктів", overview: "Огляд", archived: "Архів", newProject: "Новий проєкт",
     settings: "Налаштування", system: "Система", quiet: "усе спокійно", back: "Назад", close: "Закрити", projects: "Проєкти", left: (n: number) => `лишилось ${n}%`,
-    switchProject: (name: string) => `Проєкт ${name}: перемкнути проєкт або перейти будь-куди`, systemAria: (left: number) => `Система: найтісніший ліміт, лишилось ${left}%`,
+    switchProject: (name: string) => `${name}: перемкнути проєкт або перейти будь-куди`, systemAria: (left: number) => `Система: найтісніший ліміт, лишилось ${left}%`,
     ram: "RAM", swap: "Swap", free: "9.0 GiB вільно", used: "1.0 GiB зайнято", sessions: "3 сесії агентів", stopIdle: "Зупинити неактивні", accounts: "Акаунти", telegram: "Telegram", notConnected: "Не підключено",
     thisProject: "Цей проєкт", delegatus: "Delegatus", hide: "Сховати панель (B)", expand: "Відкрити панель (B)", collapse: "Згорнути панель (B)",
     crown: (name: string) => `Закріпити ${name}`, agent: (n: number) => `Агент ${n}`, roles: ["будівник", "рев’юер", "критик", "дослідник"], rename: "Перейменувати", crownConv: "Коронувати",
@@ -82,6 +92,8 @@ const COPY = {
 
 const STRIP = 36;
 export const REDESIGN_STRIP_HEIGHT = STRIP;
+/** The Viewer draws the board header's island (attention badge and notice) on layer 50 (`Viewer.tsx`). */
+const BAR_ISLAND_LAYER = 50;
 
 export function parseRedesign(search: string): { variant: RedesignVariant; inner: boolean } | null {
   const params = new URLSearchParams(search);
@@ -130,8 +142,11 @@ export function InterfaceRedesignHost({ variant }: { variant: RedesignVariant })
 
 /* ── Hooks into the real shell ─────────────────────────────────────────── */
 
-/** Answer an existing control's press with the prototype's own surface. */
-function useIntercept(enabled: boolean, selector: string, handler: (trigger: HTMLElement) => void) {
+/**
+ * Answer an existing control's press with the prototype's own surface. The
+ * handler returns false to let the press through to the product.
+ */
+function useIntercept(enabled: boolean, selector: string, handler: (trigger: HTMLElement) => boolean | void) {
   const latest = useRef(handler);
   useEffect(() => { latest.current = handler; });
   useEffect(() => {
@@ -139,9 +154,9 @@ function useIntercept(enabled: boolean, selector: string, handler: (trigger: HTM
     const onClick = (event: MouseEvent) => {
       const trigger = (event.target as Element | null)?.closest<HTMLElement>(selector);
       if (!trigger) return;
+      if (latest.current(trigger) === false) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      latest.current(trigger);
     };
     /* On the window, in capture: ahead of the root container React listens on. */
     window.addEventListener("click", onClick, true);
@@ -149,41 +164,71 @@ function useIntercept(enabled: boolean, selector: string, handler: (trigger: HTM
   }, [enabled, selector]);
 }
 
-/** A node kept inside a real element, for the two controls variant 1 puts in the board header. */
-function useSlot(enabled: boolean, parentSelector: string, place: "first" | "after"): HTMLElement | null {
+/**
+ * A node kept inside a real element, for the two controls variants 1 and 7 put
+ * in a header. The first candidate present wins; `host` names where it landed.
+ */
+function useSlot(enabled: boolean, candidates: readonly (readonly [selector: string, place: "first" | "after", host: string])[]): [HTMLElement | null, string | null] {
   const [slot] = useState<HTMLElement | null>(() => {
     if (!enabled) return null;
     const node = document.createElement("span");
-    node.dataset.irSlot = place;
+    node.dataset.irSlot = "";
     node.style.display = "contents";
     return node;
   });
+  const [host, setHost] = useState<string | null>(null);
   useEffect(() => {
     if (!slot) return;
     const attach = () => {
-      const parent = document.querySelector(parentSelector);
-      if (!parent) return;
-      if (place === "first" && parent.firstChild !== slot) parent.insertBefore(slot, parent.firstChild);
-      if (place === "after" && parent.nextSibling !== slot) parent.parentNode?.insertBefore(slot, parent.nextSibling);
+      for (const [selector, place, where] of candidates) {
+        const parent = document.querySelector(selector);
+        if (!parent) continue;
+        if (place === "first" && parent.firstChild !== slot) parent.insertBefore(slot, parent.firstChild);
+        if (place === "after" && parent.nextSibling !== slot) parent.parentNode?.insertBefore(slot, parent.nextSibling);
+        setHost(where);
+        return;
+      }
+      setHost(null);
     };
     attach();
     const observer = new MutationObserver(attach);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => { observer.disconnect(); slot.remove(); };
-  }, [slot, parentSelector, place]);
-  return slot;
+    // The candidates are constants of the caller.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slot]);
+  return [slot, host];
 }
+
+/** The overview's title row: its heading followed by its status line. */
+const OVERVIEW_TITLE_ROW = "div:has(> h1 + span[data-reach])";
+const LEADS = [
+  ['[data-bar="project"] [data-bar-group="where"]', "first", "project"],
+  ['[data-project-bar] [data-bar-group="where"]', "first", "project"],
+  [OVERVIEW_TITLE_ROW, "first", "overview"],
+] as const;
+const STATUS_SLOTS = [
+  ['[data-bar="project"] [data-bar-group="status"]', "after", "project"],
+  ['[data-project-bar] [data-bar-group="status"]', "after", "project"],
+  [`${OVERVIEW_TITLE_ROW} > span[data-reach]`, "after", "overview"],
+] as const;
+
+const TABBABLE = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+const firstTabbable = (root: ParentNode | null) => root?.querySelector<HTMLElement>(TABBABLE) ?? null;
 
 /* ── Rows and menus ────────────────────────────────────────────────────── */
 
 type Open =
-  | { kind: "menu"; menu: string; anchor: DOMRect }
-  | { kind: "palette" | "system" | "settings"; anchor: DOMRect | null; scope?: "project" | "delegatus" }
+  | { kind: "menu"; menu: string; anchor: DOMRect; returnTo: HTMLElement | null }
+  | { kind: "palette" | "system" | "settings"; anchor: DOMRect | null; scope?: "project" | "delegatus"; returnTo: HTMLElement | null }
   | null;
 
-function RowView({ entry, lang, name, onInto, promoted }: { entry: Row; lang: Lang; name: string; onInto: (entry: Row) => void; promoted?: boolean }) {
+/** What a row does beyond its own state: a drill-in, another sheet face, the Settings place. False when it does nothing (an inert product action). */
+type RowAction = (entry: Row) => boolean;
+
+function RowView({ entry, lang, name, onRow, promoted }: { entry: Row; lang: Lang; name: string; onRow: RowAction; promoted?: boolean }) {
   const [on, setOn] = useState(entry.key === "sound" || entry.key === "reports" || entry.key === "push");
-  const [picked, setPicked] = useState(entry.key === "status" ? 1 : entry.key.startsWith("priority") ? 1 : 0);
+  const [picked, setPicked] = useState(entry.key === "status" ? 1 : entry.key.startsWith("priority") ? 1 : entry.key.startsWith("colour") ? 3 : 0);
   const label = entry.label[lang];
   if (entry.kind === "segment" || entry.kind === "chips") {
     return (
@@ -193,13 +238,13 @@ function RowView({ entry, lang, name, onInto, promoted }: { entry: Row; lang: La
           {entry.choices!.map((choice, index) => (
             <button
               key={index} type="button" data-ir-control={`${name}:${entry.key}:${index}`}
-              aria-pressed={entry.kind === "segment" ? picked === index : undefined}
-              aria-label={entry.key === "colour" ? `${label} ${index + 1}` : undefined}
-              className={entry.key === "colour" ? "ir-swatch" : undefined}
-              style={entry.key === "colour" ? { "--ir-hue": `${index * 40}` } as CSSProperties : undefined}
+              aria-pressed={picked === index}
+              aria-label={entry.key.startsWith("colour") ? (index === 0 ? `${label}: ${lang === "uk" ? "без кольору" : "none"}` : `${label} ${index}`) : undefined}
+              className={entry.key.startsWith("colour") ? "ir-swatch" : undefined}
+              style={entry.key.startsWith("colour") ? { "--ir-hue": `${index * 40}` } as CSSProperties : undefined}
               onClick={() => setPicked(index)}
             >
-              {entry.key === "colour" ? null : choice[lang]}
+              {entry.key.startsWith("colour") ? null : choice[lang]}
             </button>
           ))}
         </span>
@@ -214,26 +259,49 @@ function RowView({ entry, lang, name, onInto, promoted }: { entry: Row; lang: La
       </button>
     );
   }
+  const leads = Boolean(entry.into || entry.face);
   return (
     <button
       type="button" className={`ir-row ${promoted ? "ir-promoted" : ""} ${entry.kind === "danger" ? "ir-danger" : ""}`} data-ir-control={`${name}:${entry.key}`}
-      onClick={() => { if (entry.into) onInto(entry); }}
+      onClick={() => onRow(entry)}
     >
       <span className="ir-row-label">{label}</span>
       {entry.trail ? <span className="ir-trail">{entry.trail[lang]}</span> : null}
-      {entry.into ? <ChevronRight className="ir-chev" aria-hidden /> : null}
+      {leads ? <ChevronRight className="ir-chev" aria-hidden /> : null}
     </button>
   );
 }
 
-function MenuView({ menu, name, lang, titleRow }: { menu: Menu; name: string; lang: Lang; titleRow?: ReactNode }) {
+/** Focus follows a drill-in: in, onto the Back row; out, onto the row it came from. */
+function useDrillFocus(body: RefObject<HTMLElement | null>, inside: string | null, name: string) {
+  const from = useRef<string | null>(null);
+  useEffect(() => {
+    const root = body.current;
+    if (!root) return;
+    if (inside) {
+      from.current = inside;
+      root.querySelector<HTMLElement>(".ir-back")?.focus();
+    } else if (from.current) {
+      root.querySelector<HTMLElement>(`[data-ir-control="${name}:${from.current}"]`)?.focus();
+      from.current = null;
+    }
+  }, [body, inside, name]);
+}
+
+function MenuView({ menu, name, lang, onRow }: { menu: Menu; name: string; lang: Lang; onRow: RowAction }) {
   const [into, setInto] = useState<Row | null>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useDrillFocus(body, into?.key ?? null, name);
   const t = COPY[lang];
+  const act: RowAction = (entry) => {
+    if (entry.into) { setInto(entry); return true; }
+    return onRow(entry);
+  };
   if (into) {
     const agents = into.key === "agents";
     return (
-      <div className="ir-menu-body" data-ir-menu-view={into.key}>
-        <button type="button" className="ir-row ir-back" data-ir-control={`${name}:back`} onClick={() => setInto(null)}>
+      <div ref={body} className="ir-menu-body" data-ir-menu={name} data-ir-menu-view={into.key}>
+        <button type="button" className="ir-row ir-back" data-ir-control={`${name}:back`} aria-label={`${t.back}: ${into.label[lang]}`} onClick={() => setInto(null)}>
           <ChevronLeft className="ir-chev" aria-hidden />
           <span className="ir-row-label">{into.label[lang]}</span>
         </button>
@@ -245,7 +313,7 @@ function MenuView({ menu, name, lang, titleRow }: { menu: Menu; name: string; la
                 <span className="ir-trail">{t.roles[index % t.roles.length]}</span>
               </button>
             ))
-            : into.into!.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={`${name}:${into.key}`} onInto={() => {}} />)}
+            : into.into!.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={`${name}:${into.key}`} onRow={act} />)}
         </div>
       </div>
     );
@@ -253,35 +321,48 @@ function MenuView({ menu, name, lang, titleRow }: { menu: Menu; name: string; la
   const wide = menu.promoted.filter((entry) => entry.kind === "segment");
   const buttons = menu.promoted.filter((entry) => entry.kind !== "segment");
   return (
-    <div className="ir-menu-body" data-ir-menu-view="first">
-      {titleRow}
-      {wide.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onInto={setInto} promoted />)}
+    <div ref={body} className="ir-menu-body" data-ir-menu={name} data-ir-menu-view="first">
+      {wide.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onRow={act} promoted />)}
       {buttons.length ? (
         <div className="ir-promoted-row" style={{ gridTemplateColumns: `repeat(${buttons.length}, minmax(0, 1fr))` }}>
-          {buttons.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onInto={setInto} promoted />)}
+          {buttons.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onRow={act} promoted />)}
         </div>
       ) : null}
       {menu.promoted.length ? <div className="ir-rule" /> : null}
-      {menu.rows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onInto={setInto} />)}
+      {menu.rows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={name} onRow={act} />)}
     </div>
   );
 }
 
 /* ── Surfaces ──────────────────────────────────────────────────────────── */
 
-function Surface({ open, phone, width, label, onClose, children, name, tall }: {
-  open: Exclude<Open, null>; phone: boolean; width: number; label: string; onClose: () => void; children: ReactNode; name: string; tall?: boolean;
+/**
+ * A desktop menu or dialog. It is a modal layer: a scrim takes every press
+ * outside it, Tab stays inside it, Escape closes it, focus starts on its field
+ * or its first control and goes back to the control that opened it.
+ */
+function Surface({ open, width, label, onClose, children, name }: {
+  open: Exclude<Open, null>; width: number; label: string; onClose: () => void; children: ReactNode; name: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = open.anchor;
+  const centred = !anchor || open.kind === "settings";
+  useModalLayer({ containerRef: ref, onClose, lockScroll: centred, manageFocus: false });
+  /* The product listens for Escape too (a reader, a selection); the open layer answers it alone. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
-  const anchor = open.anchor;
+  const returnTo = open.returnTo;
+  useEffect(() => {
+    const node = ref.current;
+    (node?.querySelector<HTMLElement>("[data-ir-autofocus]") ?? firstTabbable(node) ?? node)?.focus();
+    return () => { if (returnTo?.isConnected) returnTo.focus(); };
+  }, [returnTo]);
   /* A menu opened low on the page moves up by what would hang below the window. */
   const [lift, setLift] = useState(0);
-  const below = !phone && anchor !== null && open.kind !== "settings" && anchor.top <= innerHeight * 0.6;
+  const below = anchor !== null && !centred && anchor.top <= innerHeight * 0.6;
   const base = anchor ? anchor.bottom + 6 : 0;
   useLayoutEffect(() => {
     const node = ref.current;
@@ -297,20 +378,16 @@ function Surface({ open, phone, width, label, onClose, children, name, tall }: {
     observer.observe(node, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [below, base]);
-  const centred = !phone && (!anchor || open.kind === "settings");
-  const style: CSSProperties = phone
-    ? { zIndex: LAYER.overlay }
-    : centred
-      ? { zIndex: LAYER.overlay, width, left: Math.max(8, (innerWidth - width) / 2), top: Math.max(8, Math.min(96, innerHeight * 0.1)), maxHeight: innerHeight - 2 * Math.max(8, Math.min(96, innerHeight * 0.1)) }
-      : anchor!.top > innerHeight * 0.6
-        /* A trigger at the foot of the rail opens its panel beside itself, growing upward. */
-        ? { zIndex: LAYER.popover, width, left: Math.min(anchor!.right + 8, innerWidth - width - 8), bottom: Math.max(8, innerHeight - anchor!.bottom), maxHeight: innerHeight - 16 }
-        : { zIndex: LAYER.popover, width, left: Math.max(8, Math.min(anchor!.left, innerWidth - width - 8)), top: anchor!.bottom + 6 - lift, maxHeight: innerHeight - (anchor!.bottom + 6 - lift) - 8 };
+  const style: CSSProperties = centred
+    ? { zIndex: LAYER.overlay, width, left: Math.max(8, (innerWidth - width) / 2), top: Math.max(8, Math.min(96, innerHeight * 0.1)), maxHeight: innerHeight - 2 * Math.max(8, Math.min(96, innerHeight * 0.1)) }
+    : anchor!.top > innerHeight * 0.6
+      /* A trigger at the foot of the rail opens its panel beside itself, growing upward. */
+      ? { zIndex: LAYER.popover, width, left: Math.min(anchor!.right + 8, innerWidth - width - 8), bottom: Math.max(8, innerHeight - anchor!.bottom), maxHeight: innerHeight - 16 }
+      : { zIndex: LAYER.popover, width, left: Math.max(8, Math.min(anchor!.left, innerWidth - width - 8)), top: anchor!.bottom + 6 - lift, maxHeight: innerHeight - (anchor!.bottom + 6 - lift) - 8 };
   return createPortal(
     <div data-ir-layer={name}>
-      <div className={`ir-scrim ${phone || centred ? "ir-scrim-dim" : ""}`} style={{ zIndex: phone || centred ? LAYER.modal : LAYER.popover - 1 }} data-ir-scrim="" onClick={onClose} />
-      <div ref={ref} role="dialog" aria-modal={phone || centred} aria-label={label} data-ir-surface={name} className={`ir-surface ${phone ? "ir-sheet" : "ir-pop"} ${tall ? "ir-tall" : ""}`} style={style}>
-        {phone ? <div className="ir-grab" aria-hidden /> : null}
+      <div className={`ir-scrim ${centred ? "ir-scrim-dim" : ""}`} style={{ zIndex: centred ? LAYER.modal : LAYER.popover - 1 }} data-ir-scrim="" onClick={onClose} />
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} data-ir-surface={name} className="ir-surface ir-pop" style={style}>
         {children}
       </div>
     </div>,
@@ -365,42 +442,59 @@ function ProjectRows({ lang, name, query, compact, withCrown = true }: { lang: L
   );
 }
 
-function Field({ lang, name, value, onChange, placeholder, hint }: { lang: Lang; name: string; value: string; onChange: (value: string) => void; placeholder: string; hint?: boolean }) {
+function Field({ lang, name, value, onChange, placeholder, hint, autoFocus }: { lang: Lang; name: string; value: string; onChange: (value: string) => void; placeholder: string; hint?: boolean; autoFocus?: boolean }) {
   return (
     <label className="ir-field">
       <Search className="ir-ico" aria-hidden />
-      <input data-ir-control={`${name}:field`} value={value} placeholder={placeholder} aria-label={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <input data-ir-control={`${name}:field`} data-ir-autofocus={autoFocus ? "" : undefined} value={value} placeholder={placeholder} aria-label={placeholder} onChange={(event) => onChange(event.target.value)} />
       {hint ? <kbd>{COPY[lang].hint}</kbd> : null}
     </label>
   );
 }
 
-/** Variant 1's one finder: projects first, then everything the rail's menu held. */
-function Palette({ lang, phone, onSettings, onSystem, settingsRows }: { lang: Lang; phone: boolean; onSettings: () => void; onSystem: () => void; settingsRows: Row[] | null }) {
+/** A drill-in's first row: back to the list it came from. */
+function BackRow({ name, label, lang, onBack }: { name: string; label: string; lang: Lang; onBack: () => void }) {
+  return (
+    <button type="button" className="ir-row ir-back" data-ir-control={`${name}:back`} aria-label={`${COPY[lang].back}: ${label}`} onClick={onBack}>
+      <ChevronLeft className="ir-chev" aria-hidden /><span className="ir-row-label">{label}</span>
+    </button>
+  );
+}
+
+/** Variant 1's one finder: projects first, then the system and everything the rail's menu held. */
+function Palette({ lang, phone, onSettings, settingsRows }: { lang: Lang; phone: boolean; onSettings: () => void; settingsRows: Row[] | null }) {
   const t = COPY[lang];
   const [query, setQuery] = useState("");
-  const [settings, setSettings] = useState(false);
-  if (settingsRows && settings) {
+  const [view, setView] = useState<"list" | "settings" | "system">("list");
+  const body = useRef<HTMLDivElement>(null);
+  useDrillFocus(body, view === "list" ? null : view, "palette");
+  if (view === "settings" && settingsRows) {
     return (
-      <div className="ir-menu-body" data-ir-menu-view="palette-settings">
-        <button type="button" className="ir-row ir-back" data-ir-control="palette:back" onClick={() => setSettings(false)}><ChevronLeft className="ir-chev" aria-hidden /><span className="ir-row-label">{t.settings}</span></button>
-        {settingsRows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name="palette:settings" onInto={() => {}} />)}
+      <div ref={body} className="ir-menu-body" data-ir-menu="palette" data-ir-menu-view="palette-settings">
+        <BackRow name="palette" label={t.settings} lang={lang} onBack={() => setView("list")} />
+        {settingsRows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name="palette:settings" onRow={() => false} />)}
+      </div>
+    );
+  }
+  if (view === "system") {
+    return (
+      <div ref={body} className="ir-menu-body" data-ir-menu="palette" data-ir-menu-view="palette-system">
+        <BackRow name="palette" label={t.system} lang={lang} onBack={() => setView("list")} />
+        <SystemRows lang={lang} />
       </div>
     );
   }
   return (
-    <div className="ir-menu-body" data-ir-menu-view="palette">
-      <Field lang={lang} name="palette" value={query} onChange={setQuery} placeholder={phone ? t.filter : t.goTo} hint={!phone} />
+    <div ref={body} className="ir-menu-body" data-ir-menu="palette" data-ir-menu-view="palette">
+      <Field lang={lang} name="palette" value={query} onChange={setQuery} placeholder={phone ? t.filter : t.goTo} hint={!phone} autoFocus />
       <div className="ir-head">{t.projects}</div>
       <ProjectRows lang={lang} name="palette" query={query} />
       <button type="button" className="ir-row" data-ir-control="palette:new-project"><Plus className="ir-ico" aria-hidden /><span className="ir-row-label">{t.newProject}</span></button>
       <div className="ir-rule" />
-      {phone ? (
-        <button type="button" className="ir-row" data-ir-control="palette:system" onClick={onSystem}>
-          <Ring left={tightestLimit()} /><span className="ir-row-label">{t.system}</span><span className="ir-trail">{t.left(tightestLimit())}</span><ChevronRight className="ir-chev" aria-hidden />
-        </button>
-      ) : null}
-      <button type="button" className="ir-row" data-ir-control="palette:settings" onClick={() => (settingsRows ? setSettings(true) : onSettings())}>
+      <button type="button" className="ir-row" data-ir-control="palette:system" onClick={() => setView("system")}>
+        <Ring left={tightestLimit()} /><span className="ir-row-label">{t.system}</span><span className="ir-trail">{t.left(tightestLimit())}</span><ChevronRight className="ir-chev" aria-hidden />
+      </button>
+      <button type="button" className="ir-row" data-ir-control="palette:settings" onClick={() => (settingsRows ? setView("settings") : onSettings())}>
         <Gear className="ir-ico" aria-hidden /><span className="ir-row-label">{t.settings}</span><ChevronRight className="ir-chev" aria-hidden />
       </button>
     </div>
@@ -411,11 +505,10 @@ function Ring({ left }: { left: number }) {
   return <i className="ir-ring" style={{ "--ir-left": `${left}%` } as CSSProperties} aria-hidden />;
 }
 
-function SystemPanel({ lang }: { lang: Lang }) {
+function SystemRows({ lang }: { lang: Lang }) {
   const t = COPY[lang];
   return (
-    <div className="ir-menu-body" data-ir-menu-view="system">
-      <div className="ir-head">{t.system}</div>
+    <>
       <button type="button" className="ir-row ir-meter-row" data-ir-control="system:resources">
         <span className="ir-meter"><b>{t.ram}</b><span>{t.free}</span><i style={{ "--ir-fill": "72%" } as CSSProperties} /></span>
         <span className="ir-meter"><b>{t.swap}</b><span>{t.used}</span><i style={{ "--ir-fill": "12%" } as CSSProperties} /></span>
@@ -440,18 +533,35 @@ function SystemPanel({ lang }: { lang: Lang }) {
       ))}
       <div className="ir-rule" />
       <button type="button" className="ir-row" data-ir-control="system:telegram"><span className="ir-row-label">{t.telegram}</span><span className="ir-trail">{t.notConnected}</span><ChevronRight className="ir-chev" aria-hidden /></button>
+    </>
+  );
+}
+
+function SystemPanel({ lang }: { lang: Lang }) {
+  return (
+    <div className="ir-menu-body" data-ir-menu-view="system">
+      <div className="ir-head">{COPY[lang].system}</div>
+      <SystemRows lang={lang} />
     </div>
   );
 }
 
-/** Direction B's one Settings place. */
-function SettingsPlace({ lang, phone, scope, onClose }: { lang: Lang; phone: boolean; scope: "project" | "delegatus"; onClose: () => void }) {
+/** Direction B's one Settings place. On the phone it is the content of a sheet, whose header carries the title and the ×. */
+function SettingsPlace({ lang, phone, scope, onClose, onBack, backLabel }: { lang: Lang; phone: boolean; scope: "project" | "delegatus"; onClose: () => void; onBack?: () => void; backLabel?: string }) {
   const t = COPY[lang];
   const first = SETTINGS.find((section) => section.scope === scope)!.key;
   const [key, setKey] = useState<string | null>(phone ? null : first);
   const section = SETTINGS.find((entry) => entry.key === key) ?? null;
+  const body = useRef<HTMLDivElement>(null);
+  const from = useRef<string | null>(null);
+  useEffect(() => {
+    if (!phone || !body.current) return;
+    if (key) { from.current = key; body.current.querySelector<HTMLElement>(".ir-back")?.focus(); }
+    else if (from.current) { body.current.querySelector<HTMLElement>(`[data-ir-control="settings:section:${from.current}"]`)?.focus(); from.current = null; }
+  }, [key, phone]);
   const list = (
     <nav className="ir-settings-nav" aria-label={t.settings}>
+      {phone && onBack ? <BackRow name="settings:menu" label={backLabel ?? t.back} lang={lang} onBack={onBack} /> : null}
       {(["project", "delegatus"] as const).map((group) => (
         <div key={group}>
           <div className="ir-head">{group === "project" ? `${t.thisProject}: atlas` : t.delegatus}</div>
@@ -467,32 +577,35 @@ function SettingsPlace({ lang, phone, scope, onClose }: { lang: Lang; phone: boo
   );
   const rows = section ? (
     <div className="ir-settings-rows" data-ir-settings-section={section.key}>
-      {phone ? (
-        <button type="button" className="ir-row ir-back" data-ir-control="settings:back" onClick={() => setKey(null)}><ChevronLeft className="ir-chev" aria-hidden /><span className="ir-row-label">{section.title[lang]}</span></button>
-      ) : <div className="ir-settings-title">{section.title[lang]}</div>}
-      {section.rows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={`settings:${section.key}`} onInto={() => {}} />)}
+      {phone ? <BackRow name="settings" label={section.title[lang]} lang={lang} onBack={() => setKey(null)} /> : <div className="ir-settings-title">{section.title[lang]}</div>}
+      {section.rows.map((entry) => <RowView key={entry.key} entry={entry} lang={lang} name={`settings:${section.key}`} onRow={() => false} />)}
     </div>
   ) : null;
+  if (phone) return <div ref={body} className="ir-settings ir-settings-phone" data-ir-menu-view="settings">{section ? rows : list}</div>;
   return (
-    <div className={`ir-settings ${phone ? "ir-settings-phone" : ""}`} data-ir-menu-view="settings">
+    <div className="ir-settings" data-ir-menu-view="settings">
       <div className="ir-settings-bar">
         <span className="ir-settings-title">{t.settings}</span>
         <button type="button" className="ir-icon" aria-label={t.close} data-ir-control="settings:close" onClick={onClose}><X aria-hidden /></button>
       </div>
-      {phone ? (section ? rows : list) : <div className="ir-settings-panes">{list}{rows}</div>}
+      <div className="ir-settings-panes">{list}{rows}</div>
     </div>
   );
 }
 
 /** Variants 2 and 3: the rail as a layout sibling of the Viewer. */
-function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings }: {
-  lang: Lang; collapsible: boolean; open: boolean; onToggle: () => void; onSystem: (anchor: DOMRect) => void; onSettings: (anchor: DOMRect) => void;
+function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusField }: {
+  lang: Lang; collapsible: boolean; open: boolean; onToggle: () => void; onSystem: (trigger: HTMLElement) => void; onSettings: (trigger: HTMLElement) => void; focusField: number;
 }) {
   const t = COPY[lang];
   const [query, setQuery] = useState("");
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (focusField && open) ref.current?.querySelector<HTMLElement>('[data-ir-control="rail:field"]')?.focus();
+  }, [focusField, open]);
   if (!open) {
     return (
-      <nav className="ir-rail ir-rail-closed" data-ir-rail="closed" aria-label={t.projects}>
+      <nav ref={ref} className="ir-rail ir-rail-closed" data-ir-rail="closed" aria-label={t.projects}>
         <button type="button" className="ir-tile" aria-label={t.overview} title={t.overview} data-ir-control="rail:overview"><LayoutGrid aria-hidden /></button>
         <div className="ir-rail-rule" />
         {[...PROJECTS].sort((a, b) => Number(b.crowned) - Number(a.crowned)).map((project) => (
@@ -503,28 +616,55 @@ function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings }: {
         ))}
         <button type="button" className="ir-tile" aria-label={t.newProject} title={t.newProject} data-ir-control="rail:new-project"><Plus aria-hidden /></button>
         <span className="ir-grow" />
-        <button type="button" className="ir-tile" aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget.getBoundingClientRect())}><Ring left={tightestLimit()} /></button>
-        <button type="button" className="ir-tile" aria-label={t.settings} title={t.settings} data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget.getBoundingClientRect())}><Gear aria-hidden /></button>
+        <button type="button" className="ir-tile" aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}><Ring left={tightestLimit()} /></button>
+        <button type="button" className="ir-tile" aria-label={t.settings} title={t.settings} data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear aria-hidden /></button>
         <button type="button" className="ir-tile" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={onToggle}><PanelLeftOpen aria-hidden /></button>
       </nav>
     );
   }
   return (
-    <nav className="ir-rail" data-ir-rail="open" aria-label={t.projects}>
+    <nav ref={ref} className="ir-rail" data-ir-rail="open" aria-label={t.projects}>
       <div className="ir-rail-top">
         <Field lang={lang} name="rail" value={query} onChange={setQuery} placeholder={t.filter} />
         <button type="button" className="ir-icon" aria-label={t.newProject} title={t.newProject} data-ir-control="rail:new-project"><Plus aria-hidden /></button>
       </div>
       <div className="ir-rail-list"><ProjectRows lang={lang} name="rail" query={query} /></div>
-      <button type="button" className="ir-row ir-status" aria-label={t.systemAria(tightestLimit())} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget.getBoundingClientRect())}>
+      <button type="button" className="ir-row ir-status" aria-label={t.systemAria(tightestLimit())} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}>
         <Ring left={tightestLimit()} />
         <span className="ir-row-label">{t.system}<span className="ir-sub">{LIMITS.map((limit) => `${limit.engine} ${Math.min(...limit.windows.map((window) => window.left))}%`).join(" · ")}</span></span>
       </button>
       <div className="ir-rail-foot">
-        <button type="button" className="ir-row" data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget.getBoundingClientRect())}><Gear className="ir-ico" aria-hidden /><span className="ir-row-label">{t.settings}</span></button>
+        <button type="button" className="ir-row" data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear className="ir-ico" aria-hidden /><span className="ir-row-label">{t.settings}</span></button>
         <button type="button" className="ir-icon" aria-label={collapsible ? t.collapse : t.hide} title={collapsible ? t.collapse : t.hide} data-ir-control="rail:toggle" onClick={onToggle}><PanelLeftClose aria-hidden /></button>
       </div>
     </nav>
+  );
+}
+
+/* ── The phone's sheets ────────────────────────────────────────────────── */
+
+/** What the prototype draws in a phone sheet: a regrouped menu, the project palette, or Settings opened from either. */
+type PhoneSheetState = { sheet: "menu" | "projects"; menu: string | null; view: "settings" | null; scope: "project" | "delegatus" };
+
+/**
+ * The product's `MobileSheet`, opened through `mobileNav` under the name the
+ * product itself uses ("menu", "projects"). The product renders its own sheet
+ * for that name too; the prototype's stylesheet hides it while this one is up.
+ * This one mounts a commit later, so it is the top modal layer and owns Tab and
+ * Escape.
+ */
+function PhoneSheet({ state, title, extra, onClose, children }: { state: PhoneSheetState; title: string; extra?: ReactNode; onClose: () => void; children: ReactNode }) {
+  useLayoutEffect(() => {
+    document.documentElement.dataset.irPhoneSheet = state.sheet;
+    return () => { delete document.documentElement.dataset.irPhoneSheet; };
+  }, [state.sheet]);
+  return createPortal(
+    <div data-ir-own="" data-ir-layer={`sheet-${state.menu ?? state.sheet}`}>
+      <MobileSheet name={state.sheet} title={title} extra={extra} onClose={onClose}>
+        <div data-ir-sheet-name={state.view === "settings" ? "settings" : state.menu ? `menu-${state.menu}` : "palette"}>{children}</div>
+      </MobileSheet>
+    </div>,
+    document.body,
   );
 }
 
@@ -543,117 +683,218 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
   const glass = variant === 6 || variant === 7;
   const [open, setOpen] = useState<Open>(null);
   const [railOpen, setRailOpen] = useState(variant === 2 || params.get("rail") === "open");
+  const [railField, setRailField] = useState(0);
   const close = useCallback(() => setOpen(null), []);
+  const nav = useMobileNavStore();
+  const navState = useMobileNav();
+  const [phoneSheet, setPhoneSheet] = useState<PhoneSheetState | null>(null);
 
   useLayoutEffect(() => {
     /* Menus and sheets are portalled to the body, outside this wrapper. */
     if (glass) document.documentElement.dataset.irGlass = "";
   }, [glass]);
 
-  /* The existing menu buttons answer with the regrouped menus. */
-  const rect = (trigger: HTMLElement) => trigger.getBoundingClientRect();
-  useIntercept(direction !== null && !phone, "[data-bar-more]", (trigger) => setOpen({ kind: "menu", menu: "board", anchor: rect(trigger) }));
-  useIntercept(direction !== null && !phone, ".kb .card [data-menu]", (trigger) => setOpen({ kind: "menu", menu: "card", anchor: rect(trigger) }));
-  useIntercept(direction === "A" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "menu", menu: "rail", anchor: rect(trigger) }));
-  useIntercept(direction === "B" && !phone, "[data-rail-menu]", () => setOpen({ kind: "settings", anchor: null, scope: "delegatus" }));
-  useIntercept(direction !== null && phone, '[data-mobile2-open="menu"]', (trigger) => {
-    const screen = trigger.closest<HTMLElement>("[data-mobile2-screen]")?.dataset.mobile2Screen;
-    setOpen({ kind: "menu", menu: screen === "board" ? "phoneBoard" : "phoneConversation", anchor: rect(trigger) });
-  });
-  /* The phone's title already opens the projects; the sidebar variants give that sheet the rail's missing functions. */
-  useIntercept((noRail || ownRail) && phone, '[data-mobile2-title][data-mobile2-open="projects"]', () => setOpen({ kind: "palette", anchor: null }));
+  /* An intercepted product trigger says it is expanded while its surface is open. */
+  useEffect(() => {
+    const trigger = open?.returnTo;
+    if (!trigger || trigger.dataset.irControl) return;
+    trigger.setAttribute("aria-expanded", "true");
+    return () => trigger.setAttribute("aria-expanded", "false");
+  }, [open]);
 
-  /* Variant 1 on the desktop: the header's title is the switcher, and one chip is the system. */
-  const lead = useSlot(noRail && !phone, '[data-bar="project"] [data-bar-group="where"]', "first");
-  const status = useSlot(noRail && !phone, '[data-bar="project"] [data-bar-group="status"]', "after");
+  /* The phone: the sheet is the product's, so leaving it by Back, the handle, the scrim or × ends it here too. */
+  const lastNavSheet = useRef(navState.sheet);
+  useEffect(() => {
+    if (phoneSheet && lastNavSheet.current === phoneSheet.sheet && navState.sheet !== phoneSheet.sheet) setPhoneSheet(null);
+    lastNavSheet.current = navState.sheet;
+  }, [navState.sheet, phoneSheet]);
+  const [sheetReady, setSheetReady] = useState(false);
+  /* A commit after the product's own sheet mounted, so this one is pushed above it on the modal-layer stack. */
+  useEffect(() => {
+    const ready = Boolean(phoneSheet) && navState.sheet === phoneSheet?.sheet;
+    const timer = window.setTimeout(() => setSheetReady(ready), 0);
+    return () => window.clearTimeout(timer);
+  }, [phoneSheet, navState.sheet]);
+  /* A row that changes the sheet's face or opens Settings in it moves focus to the new content's first control. */
+  const face = phoneSheet && sheetReady ? `${phoneSheet.menu}:${phoneSheet.view}` : null;
+  const lastFace = useRef<string | null>(null);
+  useEffect(() => {
+    if (face && lastFace.current && lastFace.current !== face) firstTabbable(document.querySelector("[data-ir-own] [data-mobile2-sheet-body]"))?.focus();
+    lastFace.current = face;
+  }, [face]);
+  const openPhone = (next: PhoneSheetState) => {
+    setPhoneSheet(next);
+    if (navState.sheet !== next.sheet) nav.openSheet(next.sheet);
+  };
+
+  /* The existing menu buttons answer with the regrouped menus. */
+  const anchorOf = (trigger: HTMLElement) => trigger.getBoundingClientRect();
+  useIntercept(direction !== null && !phone, "[data-bar-more]", (trigger) => setOpen({ kind: "menu", menu: "board", anchor: anchorOf(trigger), returnTo: trigger }));
+  useIntercept(direction !== null && !phone, ".kb .card [data-menu]", (trigger) => setOpen({ kind: "menu", menu: "card", anchor: anchorOf(trigger), returnTo: trigger }));
+  useIntercept(direction === "A" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "menu", menu: "rail", anchor: anchorOf(trigger), returnTo: trigger }));
+  useIntercept(direction === "B" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "settings", anchor: null, scope: "delegatus", returnTo: trigger }));
+  /* The phone's "⋯" belongs to the screen it is on. A pipeline's menu (W10) is left as it is. */
+  const PHONE_MENUS: Record<string, string> = { board: "phoneBoard", chat: "phoneConversation", task: "phoneTask" };
+  useIntercept(direction !== null && phone, '[data-mobile2-open="menu"]', (trigger) => {
+    const screen = trigger.closest<HTMLElement>("[data-mobile2-screen]")?.dataset.mobile2Screen ?? "";
+    const menu = PHONE_MENUS[screen];
+    if (!menu) return false;
+    openPhone({ sheet: "menu", menu, view: null, scope: "project" });
+  });
+  /* A pipeline's menu keeps its own face; its "Board menu" row leads to the regrouped board menu. */
+  useIntercept(direction !== null && phone, '[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]', () => openPhone({ sheet: "menu", menu: "phoneBoard", view: null, scope: "project" }));
+  /* The phone's title already opens the projects; the sidebar variants give that sheet the rail's missing functions. */
+  useIntercept((noRail || ownRail) && phone, '[data-mobile2-title][data-mobile2-open="projects"]', () => openPhone({ sheet: "projects", menu: null, view: null, scope: "delegatus" }));
+
+  /* Variants 1 and 7 on the desktop: the header's title is the switcher, and one
+     chip is the system. Every header that names where the operator is carries
+     them: the project board's, the bar of a loading or empty project, and the
+     Overview's title row (with or without a board under it). */
+  const [lead, leadHost] = useSlot(noRail && !phone, LEADS);
+  const [status] = useSlot(noRail && !phone, STATUS_SLOTS);
   useEffect(() => {
     if (phone || !(noRail || ownRail)) return;
     const onKey = (event: KeyboardEvent) => {
       const typing = (event.target as HTMLElement | null)?.closest("input, textarea, [contenteditable]");
-      const palette = (event.key === "k" && (event.ctrlKey || event.metaKey)) || (event.key.toLowerCase() === "b" && !typing && !event.ctrlKey && !event.metaKey && !event.altKey);
-      if (!palette) return;
+      const bare = !typing && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const find = event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey);
+      const toggle = event.key.toLowerCase() === "b" && bare;
+      const slash = event.key === "/" && bare && variant === 3;
+      if (!find && !toggle && !slash) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (noRail) setOpen((was) => (was?.kind === "palette" ? null : { kind: "palette", anchor: document.querySelector('[data-ir-control="shell:project"]')?.getBoundingClientRect() ?? null }));
-      else setRailOpen((was) => !was);
+      if (noRail) {
+        const active = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+        const entry = document.querySelector<HTMLElement>('[data-ir-control="shell:project"]');
+        setOpen((was) => (was?.kind === "palette" ? null : { kind: "palette", anchor: entry?.getBoundingClientRect() ?? null, returnTo: active ?? entry }));
+      } else if (toggle) {
+        if (!railOpen) setRailField((count) => count + 1);
+        setRailOpen(!railOpen);
+      } else {
+        setRailOpen(true);
+        setRailField((count) => count + 1);
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [phone, noRail, ownRail]);
+  }, [phone, noRail, ownRail, variant, railOpen]);
+  /* The rail's toggle is a different button open and closed; focus moves to the new one. */
+  const toggled = useRef(false);
+  useEffect(() => {
+    if (!toggled.current) return;
+    toggled.current = false;
+    document.querySelector<HTMLElement>('[data-ir-control="rail:toggle"]')?.focus();
+  }, [railOpen]);
 
-  const settingsScope = (menu: string, key: string): "project" | "delegatus" | null =>
-    direction !== "B" ? null : key === "settings-project" ? "project" : key === "settings" ? (menu === "phoneConversation" || menu === "phoneBoard" ? "project" : "delegatus") : null;
-  /* A menu row named Settings opens the Settings place. */
-  useIntercept(direction === "B", '[data-ir-control$=":settings"], [data-ir-control$=":settings-project"]', (trigger) => {
-    const [menu, key] = trigger.dataset.irControl!.split(":") as [string, string];
-    if (menu === "palette" || menu === "rail") return;
-    const scope = settingsScope(menu, key);
-    if (scope) setOpen({ kind: "settings", anchor: null, scope });
-  });
+  /** A row that leads somewhere: Settings in direction B, the board menu from a task or a conversation. */
+  const rowAction = (surface: "desktop" | "phone", menu: string): RowAction => (entry) => {
+    if (direction === "B" && (entry.key === "settings-project" || entry.key === "settings")) {
+      const scope = entry.key === "settings-project" || menu.startsWith("phone") ? "project" : "delegatus";
+      if (surface === "phone") setPhoneSheet((was) => (was ? { ...was, view: "settings", scope } : was));
+      else setOpen((was) => ({ kind: "settings", anchor: null, scope, returnTo: was?.returnTo ?? null }));
+      return true;
+    }
+    if (entry.face && surface === "phone") { setPhoneSheet((was) => (was ? { ...was, menu: entry.face!, view: null } : was)); return true; }
+    return false;
+  };
 
-  const openSystem = (anchor: DOMRect | null) => setOpen({ kind: "system", anchor });
-  const openSettings = (anchor: DOMRect | null) => setOpen(direction === "B" ? { kind: "settings", anchor: null, scope: "delegatus" } : { kind: "menu", menu: "rail", anchor: anchor ?? new DOMRect(8, 8, 0, 0) });
+  const openSystem = (trigger: HTMLElement) => setOpen({ kind: "system", anchor: trigger.getBoundingClientRect(), returnTo: trigger });
+  const openSettings = (trigger: HTMLElement | null) => setOpen((was) => direction === "B"
+    ? { kind: "settings", anchor: null, scope: "delegatus", returnTo: trigger ?? was?.returnTo ?? null }
+    : { kind: "menu", menu: "rail", anchor: trigger?.getBoundingClientRect() ?? new DOMRect(8, 8, 0, 0), returnTo: trigger ?? was?.returnTo ?? null });
   const railMenu = MENUS_A.rail!;
   const flatSettings = [...railMenu.promoted, ...railMenu.rows.flatMap((entry) => entry.into ?? [entry])];
 
+  /* Direction B puts rename and crown in the conversation sheet's header, beside its title. */
+  const titleControls = (
+    <span className="ir-title-row" data-ir-title-refs={B_CONVERSATION_TITLE_REFS.join(",")}>
+      <button type="button" className="ir-quiet" data-ir-control="phoneConversation:rename">{t.rename}</button>
+      <button type="button" className="ir-icon ir-crown" aria-pressed="false" aria-label={t.crownConv} data-ir-control="phoneConversation:crown"><Crown aria-hidden /></button>
+    </span>
+  );
+
   let surface: ReactNode = null;
-  if (open?.kind === "menu") {
+  if (!phone && open?.kind === "menu") {
     const source = open.menu === "rail" ? MENUS_A : menus;
     const menu = source[open.menu]!;
-    const titleRow = direction === "B" && open.menu === "phoneConversation" ? (
-      <div className="ir-title-row" data-ir-title-refs={B_CONVERSATION_TITLE_REFS.join(",")}>
-        <span className="ir-settings-title">{menu.title[lang]}</span>
-        <button type="button" className="ir-quiet" data-ir-control="phoneConversation:rename">{t.rename}</button>
-        <button type="button" className="ir-icon ir-crown" aria-pressed="false" aria-label={t.crownConv} data-ir-control="phoneConversation:crown"><Crown aria-hidden /></button>
-      </div>
-    ) : phone ? <div className="ir-title-row"><span className="ir-settings-title">{menu.title[lang]}</span></div> : null;
     surface = (
-      <Surface open={open} phone={phone} width={open.menu === "card" ? 300 : 280} label={menu.title[lang]} onClose={close} name={`menu-${open.menu}`}>
-        <MenuView menu={menu} name={open.menu} lang={lang} titleRow={titleRow} />
+      <Surface key={`menu-${open.menu}`} open={open} width={open.menu === "card" ? 300 : 280} label={menu.title[lang]} onClose={close} name={`menu-${open.menu}`}>
+        <MenuView menu={menu} name={open.menu} lang={lang} onRow={rowAction("desktop", open.menu)} />
       </Surface>
     );
-  } else if (open?.kind === "palette") {
+  } else if (!phone && open?.kind === "palette") {
     surface = (
-      <Surface open={open} phone={phone} width={380} label={t.goTo} onClose={close} name="palette">
-        <Palette lang={lang} phone={phone} onSystem={() => openSystem(null)} onSettings={() => openSettings(null)} settingsRows={direction === "B" ? null : flatSettings} />
+      <Surface key="palette" open={open} width={380} label={t.goTo} onClose={close} name="palette">
+        <Palette lang={lang} phone={false} onSettings={() => openSettings(null)} settingsRows={direction === "B" ? null : flatSettings} />
       </Surface>
     );
-  } else if (open?.kind === "system") {
-    surface = <Surface open={open} phone={phone} width={320} label={t.system} onClose={close} name="system"><SystemPanel lang={lang} /></Surface>;
-  } else if (open?.kind === "settings") {
-    surface = <Surface open={open} phone={phone} width={Math.min(720, innerWidth - 32)} label={t.settings} onClose={close} name="settings" tall><SettingsPlace lang={lang} phone={phone} scope={open.scope ?? "delegatus"} onClose={close} /></Surface>;
+  } else if (!phone && open?.kind === "system") {
+    surface = <Surface key="system" open={open} width={320} label={t.system} onClose={close} name="system"><SystemPanel lang={lang} /></Surface>;
+  } else if (!phone && open?.kind === "settings") {
+    surface = <Surface key="settings" open={open} width={Math.min(720, innerWidth - 32)} label={t.settings} onClose={close} name="settings"><SettingsPlace lang={lang} phone={false} scope={open.scope ?? "delegatus"} onClose={close} /></Surface>;
+  }
+
+  let sheet: ReactNode = null;
+  if (phone && phoneSheet && sheetReady && navState.sheet === phoneSheet.sheet) {
+    const closeSheet = () => nav.closeSheet();
+    /* The product's own sheet title (the task's or the conversation's title, the project) heads the regrouped menu. */
+    const productTitle = document.querySelector(`[data-mobile2-sheet="${phoneSheet.sheet}"] [data-mobile2-sheet-header] h2`)?.textContent ?? null;
+    const menu = phoneSheet.menu ? menus[phoneSheet.menu] ?? null : null;
+    if (phoneSheet.view === "settings") {
+      sheet = (
+        <PhoneSheet state={phoneSheet} title={t.settings} onClose={closeSheet}>
+          <SettingsPlace lang={lang} phone scope={phoneSheet.scope} onClose={closeSheet} backLabel={menu?.title[lang] ?? t.projects} onBack={() => setPhoneSheet((was) => (was ? { ...was, view: null } : was))} />
+        </PhoneSheet>
+      );
+    } else if (menu && phoneSheet.menu) {
+      const title = phoneSheet.menu === "phoneBoard" ? menu.title[lang] : productTitle ?? menu.title[lang];
+      sheet = (
+        <PhoneSheet state={phoneSheet} title={title} onClose={closeSheet} extra={direction === "B" && phoneSheet.menu === "phoneConversation" ? titleControls : undefined}>
+          <MenuView key={phoneSheet.menu} menu={menu} name={phoneSheet.menu} lang={lang} onRow={rowAction("phone", phoneSheet.menu)} />
+        </PhoneSheet>
+      );
+    } else if (phoneSheet.sheet === "projects") {
+      sheet = (
+        <PhoneSheet state={phoneSheet} title={productTitle ?? t.projects} onClose={closeSheet}>
+          <Palette lang={lang} phone onSettings={() => setPhoneSheet((was) => (was ? { ...was, view: "settings", scope: "delegatus" } : was))} settingsRows={direction === "B" ? null : flatSettings} />
+        </PhoneSheet>
+      );
+    }
   }
 
   const atlas = PROJECTS[0]!;
   const others = PROJECTS.slice(1).reduce((sum, project) => sum + project.needs, 0);
+  const where = leadHost === "overview" ? t.overview : atlas.name;
   return (
     <div data-ir-inner={variant} data-ir-shell={noRail ? "none" : ownRail ? "own" : "today"} className="ir-root">
       <style>{CSS}</style>
       {ownRail && !phone ? (
         <Rail
-          lang={lang} collapsible={variant === 3} open={railOpen} onToggle={() => setRailOpen((was) => !was)}
+          lang={lang} collapsible={variant === 3} open={railOpen} focusField={railField}
+          onToggle={() => { toggled.current = true; setRailOpen((was) => !was); }}
           onSystem={openSystem} onSettings={openSettings}
         />
       ) : null}
       {ownRail && !phone && variant === 2 && !railOpen ? (
-        <div className="ir-restore"><button type="button" className="ir-icon" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={() => setRailOpen(true)}><PanelLeftOpen aria-hidden /></button></div>
+        <div className="ir-restore"><button type="button" className="ir-icon" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={() => { toggled.current = true; setRailOpen(true); }}><PanelLeftOpen aria-hidden /></button></div>
       ) : null}
       <div data-ir-stage="" className="ir-stage">{children}</div>
       {lead ? createPortal(
-        <button type="button" className="ir-switch-title" aria-haspopup="dialog" aria-expanded={open?.kind === "palette"} aria-label={t.switchProject(atlas.name)} data-ir-control="shell:project" onClick={(event) => setOpen({ kind: "palette", anchor: event.currentTarget.getBoundingClientRect() })}>
-          <span>{atlas.name}</span>
-          {others ? <i className="ir-badge-inline" title={t.needs(others)} aria-hidden /> : null}
+        <button type="button" className="ir-switch-title" aria-haspopup="dialog" aria-expanded={open?.kind === "palette"} aria-label={t.switchProject(where)} data-ir-control="shell:project" data-ir-where={leadHost ?? ""} onClick={(event) => setOpen({ kind: "palette", anchor: event.currentTarget.getBoundingClientRect(), returnTo: event.currentTarget })}>
+          <span>{where}</span>
+          {others && leadHost !== "overview" ? <i className="ir-badge-inline" title={t.needs(others)} aria-hidden /> : null}
           <ChevronDown aria-hidden />
         </button>,
         lead,
       ) : null}
       {status ? createPortal(
-        <button type="button" className="ir-system-chip" aria-haspopup="dialog" aria-expanded={open?.kind === "system"} aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="shell:system" onClick={(event) => openSystem(event.currentTarget.getBoundingClientRect())}>
+        <button type="button" className="ir-system-chip" aria-haspopup="dialog" aria-expanded={open?.kind === "system"} aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="shell:system" onClick={(event) => openSystem(event.currentTarget)}>
           <Ring left={tightestLimit()} /><span>{tightestLimit()}%</span>
         </button>,
         status,
       ) : null}
       {surface}
+      {sheet}
     </div>
   );
 }
@@ -667,7 +908,17 @@ const CSS = `
 [data-ir-shell="none"] .ir-stage > div > aside, [data-ir-shell="own"] .ir-stage > div > aside,
 [data-ir-shell="none"] [data-rail-restore], [data-ir-shell="own"] [data-rail-restore] { display: none; }
 [data-ir-shell="none"] .ir-stage > div > div:has(> [data-rail-restore]), [data-ir-shell="own"] .ir-stage > div > div:has(> [data-rail-restore]) { display: none; }
-[data-ir-shell="none"] [data-bar="project"] [data-bar-group="where"] > h1 { display: none; }
+[data-ir-shell="none"] :is([data-bar="project"], [data-project-bar]) [data-bar-group="where"] > h1, [data-ir-shell="none"] ${OVERVIEW_TITLE_ROW} > h1 { display: none; }
+/* Without the rail the Overview's bar reaches its wide face, where its tools
+   would end under the Viewer's island and the notice hanging from it. The bar
+   keeps a reserve as wide as the notice (360 px at most, 16 px from the edge).
+   The project board's header is one row where today's wraps into two at
+   1000 px, so the pane under it starts higher: the island's gap closes from
+   16 to 8 px, and the notice ends above the pane's head. */
+[data-ir-shell="none"] .kb .bar[data-bar="overview"] { padding-right: 384px; }
+[data-ir-shell="none"] .kb .bar[data-bar="project"] [data-bar-island-slot] > div { gap: 8px; }
+/* A phone sheet the prototype draws is the product's MobileSheet under the product's own name; the product's copy of that sheet waits hidden under it. */
+html[data-ir-phone-sheet] [data-mobile2-scrim]:not([data-ir-own] > [data-mobile2-scrim]) { display: none; }
 
 .ir-root, [data-ir-layer] { --ir-row: 32px; --ir-pad: 10px; --ir-font: var(--text-ui); --ir-radius: var(--radius-control); }
 @media (pointer: coarse) { .ir-root, [data-ir-layer] { --ir-row: 48px; --ir-pad: 14px; --ir-font: 15px; --ir-radius: 12px; } }
@@ -680,7 +931,7 @@ const CSS = `
 .ir-badge-inline { width: 7px; height: 7px; border-radius: 50%; background: var(--color-warning); }
 .ir-system-chip { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; height: 32px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-default); font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); font-variant-numeric: tabular-nums; }
 .ir-system-chip:hover, .ir-system-chip[aria-expanded="true"] { background: var(--surface-well); color: var(--color-primary); }
-.ir-ring { width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%; background: conic-gradient(var(--color-accent) var(--ir-left), var(--border-strong) 0); -webkit-mask: radial-gradient(circle, transparent 4.5px, black 5px); mask: radial-gradient(circle, transparent 4.5px, black 5px); }
+.ir-ring { width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%; background: conic-gradient(var(--color-accent) var(--ir-left), var(--color-muted) 0); -webkit-mask: radial-gradient(circle, transparent 4.5px, black 5px); mask: radial-gradient(circle, transparent 4.5px, black 5px); }
 .ir-switch-title:focus-visible, .ir-system-chip:focus-visible, [data-ir-layer] button:focus-visible, .ir-rail button:focus-visible, .ir-field input:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent); outline-offset: 1px; }
 
 /* Surfaces */
@@ -688,12 +939,9 @@ const CSS = `
 .ir-scrim-dim { background: rgb(20 20 30 / 0.32); }
 .ir-surface { position: fixed; display: flex; flex-direction: column; overflow: hidden; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--shadow-2); }
 .ir-pop { border-radius: var(--radius-surface); animation: ir-in var(--motion-base) var(--ease-standard); }
-.ir-sheet { left: 0; right: 0; bottom: 0; max-height: 88dvh; border-radius: 20px 20px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); animation: ir-up var(--motion-slow) var(--ease-standard); }
-.ir-sheet.ir-tall { height: 88dvh; }
-.ir-grab { width: 36px; height: 4px; margin: 8px auto 2px; flex-shrink: 0; border-radius: 2px; background: var(--border-strong); }
+.ir-surface:focus { outline: none; }
 @keyframes ir-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
-@keyframes ir-up { from { transform: translateY(24px); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .ir-pop, .ir-sheet { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ir-pop { animation: none; } }
 .ir-menu-body { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 6px; }
 .ir-scroll { min-height: 0; overflow-y: auto; }
 .ir-menu-body:has(> .ir-scroll) { overflow: hidden; }
@@ -720,13 +968,24 @@ button.ir-row:hover, button.ir-row[aria-current="page"] { background: var(--surf
 .ir-segment { display: inline-flex; flex-shrink: 0; padding: 2px; border-radius: var(--ir-radius); background: var(--surface-well); }
 .ir-choice-wide .ir-segment { display: flex; }
 .ir-segment button { flex: 1 1 0; min-height: calc(var(--ir-row) - 6px); padding: 0 9px; border-radius: calc(var(--ir-radius) - 2px); font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
-.ir-segment button[aria-pressed="true"] { background: var(--surface-card); color: var(--color-primary); box-shadow: var(--shadow-1); }
+/* The chosen segment is told by an accent edge as well as by its fill, so the state reads at 3:1. */
+.ir-segment button[aria-pressed="true"] { background: var(--surface-card); color: var(--color-primary); box-shadow: inset 0 0 0 1.5px var(--color-accent), var(--shadow-1); }
 .ir-chips { display: inline-flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .ir-chips button { min-height: calc(var(--ir-row) - 8px); padding: 0 10px; border-radius: 999px; border: 1px solid var(--border-default); font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
 .ir-chips button.ir-swatch { width: 24px; min-height: 24px; padding: 0; border: 0; background: oklch(0.68 0.13 calc(var(--ir-hue) * 1deg)); }
-.ir-chips button.ir-swatch:first-child { background: none; border: 1px dashed var(--border-strong); }
-@media (pointer: coarse) { .ir-chips button { min-height: 44px; min-width: 44px; } .ir-segment button { min-height: 44px; } }
-.ir-switch { position: relative; width: 30px; height: 18px; flex-shrink: 0; border-radius: 999px; background: var(--border-strong); transition: background var(--motion-fast); }
+.ir-chips button.ir-swatch:first-child { background: none; border: 1.5px dashed var(--color-muted); }
+.ir-chips button[aria-pressed="true"] { border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.ir-chips button.ir-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface-raised), 0 0 0 3.5px var(--color-accent); }
+@media (pointer: coarse) {
+  .ir-chips button { min-height: 44px; min-width: 44px; }
+  .ir-segment button { min-height: 44px; min-width: 44px; }
+  /* Nine 44 px swatches do not fit beside a label on a phone: they wrap under it. */
+  .ir-choice:has(> .ir-chips) { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+  .ir-choice > .ir-chips { flex: 1 1 100%; justify-content: flex-start; }
+  .ir-chips button.ir-swatch { width: 44px; min-height: 44px; }
+}
+/* The track is the control's edge: muted ink off, accent on, both at 3:1 or more on the menu. */
+.ir-switch { position: relative; width: 30px; height: 18px; flex-shrink: 0; border-radius: 999px; background: var(--color-muted); transition: background var(--motion-fast); }
 .ir-switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface-card); transition: transform var(--motion-fast) var(--ease-standard); }
 [aria-checked="true"] > .ir-switch { background: var(--color-accent); }
 [aria-checked="true"] > .ir-switch::after { transform: translateX(12px); }
@@ -740,8 +999,7 @@ button.ir-row:hover, button.ir-row[aria-current="page"] { background: var(--surf
 .ir-line { display: flex; flex-shrink: 0; align-items: center; gap: 8px; min-height: var(--ir-row); padding: 0 var(--ir-pad); font-size: var(--ir-font); }
 .ir-sub { display: block; font-size: var(--text-label); font-weight: 400; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; }
 .ir-sub-inline { font-size: var(--text-label); font-weight: 400; color: var(--color-muted); }
-.ir-title-row { display: flex; flex-shrink: 0; align-items: center; gap: 8px; min-height: var(--ir-row); padding: 2px var(--ir-pad) 6px; }
-.ir-title-row .ir-settings-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ir-title-row { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
 
 /* Projects */
 .ir-project-line { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
@@ -751,8 +1009,10 @@ button.ir-row:hover, button.ir-row[aria-current="page"] { background: var(--surf
 .ir-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--border-strong); }
 .ir-dot-live { background: var(--color-success); }
 .ir-needs { flex-shrink: 0; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--color-warning-soft); color: var(--color-warning); font-size: var(--text-label); font-weight: 700; line-height: 18px; text-align: center; }
-.ir-crown { color: var(--border-strong); }
-.ir-crown[aria-pressed="true"] { color: var(--color-crown); }
+/* The crown is a control drawn as an icon: its outline is muted ink at rest; pinned, a gold fill inside a warning-ink outline, so both states read at 3:1. */
+.ir-crown { color: var(--color-muted); }
+.ir-crown[aria-pressed="true"] { color: var(--color-warning); }
+.ir-crown[aria-pressed="true"] svg { fill: var(--color-crown); }
 .ir-field { position: relative; display: flex; flex: 0 0 auto; align-items: center; min-width: 0; margin: 2px 2px 4px; }
 .ir-rail-top > .ir-field { flex: 1 1 0; }
 .ir-field .ir-ico { position: absolute; left: 10px; pointer-events: none; }
@@ -777,7 +1037,6 @@ button.ir-row:hover, button.ir-row[aria-current="page"] { background: var(--surf
 .ir-settings-panes .ir-settings-nav { border-right: 1px solid var(--border-default); background: var(--surface-sunken); }
 .ir-settings-rows { padding: 6px 10px 12px; overflow-y: auto; }
 .ir-settings-rows > .ir-settings-title { display: block; padding: 8px var(--ir-pad) 6px; }
-.ir-settings-phone .ir-settings-bar { padding-left: 14px; }
 .ir-settings-phone .ir-settings-nav, .ir-settings-phone .ir-settings-rows { flex: 1 1 auto; min-height: 0; }
 
 /* The prototype's rail */
@@ -811,6 +1070,7 @@ html[data-ir-glass] {
   --glass-edge: color-mix(in srgb, var(--color-primary) 10%, transparent);
   --glass-shine: inset 0 1px 0 rgb(255 255 255 / 0.6), inset 0 0 0 1px rgb(255 255 255 / 0.2);
   --glass-blur: blur(22px) saturate(1.7);
+  --glass-blur-strong: blur(30px) saturate(1.8);
   --glass-shadow: 0 10px 34px rgb(30 24 60 / 0.13), 0 1px 2px rgb(30 24 60 / 0.06);
   --radius-control: 10px; --radius-surface: 16px;
   --ir-wash:
@@ -847,22 +1107,31 @@ html[data-ir-glass] :is(.ir-stage > div > aside, .ir-rail, .kb .bar, [data-mobil
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: var(--glass-fill); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shine);
 }
-html[data-ir-glass] :is(.ir-stage > div > aside, .ir-rail, .kb .bar, [data-mobile2-bar], [data-mobile2-dock]) { isolation: isolate; }
+html[data-ir-glass] :is(.ir-stage > div > aside, .ir-rail, .kb .bar[data-bar="overview"], [data-mobile2-bar], [data-mobile2-dock]) { isolation: isolate; }
+/* A project's board header hosts the Viewer's island: the attention badge and
+   the notice, fixed on layer 50. Isolating that header would trap the notice
+   at the header's own level, under the orchestrator pane beside it. Its
+   stacking context sits at the island's layer instead, so the notice stays
+   above what it overlapped before. The Overview's island is outside its bar,
+   so that bar is only isolated: on layer 50 it would cover the notice. */
+html[data-ir-glass] .kb .bar[data-bar="project"] { z-index: ${BAR_ISLAND_LAYER}; }
 html[data-ir-glass] .ir-stage > div > aside :is(header, [data-rail-footer], [data-rail-footer] > *) { background: transparent; border-color: var(--glass-edge); }
 /* Wells let the wash through without a blur of their own: they are large and they scroll. */
 html[data-ir-glass] .kb .column { background-color: var(--glass-well); border-color: var(--glass-edge); }
 html[data-ir-glass] :is(.kb .seat, .kb .card) { box-shadow: 0 6px 22px rgb(30 24 60 / 0.07), 0 1px 2px rgb(30 24 60 / 0.05); border-color: var(--glass-edge); }
 /* Menus, popovers and sheets float over content: the strong fill keeps their text at AA. */
 html[data-ir-glass] :is(.kb .menu, [data-bar-more-menu], [data-rail-menu-panel], .ir-surface, [data-mobile2-sheet]) {
-  background: var(--glass-fill-strong); -webkit-backdrop-filter: blur(30px) saturate(1.8); backdrop-filter: blur(30px) saturate(1.8); border-color: var(--glass-edge); box-shadow: var(--glass-shadow), var(--glass-shine);
+  background: var(--glass-fill-strong); -webkit-backdrop-filter: var(--glass-blur-strong); backdrop-filter: var(--glass-blur-strong); border-color: var(--glass-edge); box-shadow: var(--glass-shadow), var(--glass-shine);
 }
 /* Secondary labels on glass are one step stronger than on paper, as the ground under them varies. */
 html[data-ir-glass] :is(.ir-stage > div > aside, .ir-rail, .kb .bar, .kb .col-head, [data-mobile2-bar], [data-mobile2-dock], .kb .menu, [data-bar-more-menu], [data-rail-menu-panel], .ir-surface, [data-mobile2-sheet]) {
   --color-muted: var(--ir-muted-strong);
 }
+/* The engine's name in the rail's limits footer is drawn in the engine's tint, 3.03:1 on today's card: on glass it takes the text ink. */
+html[data-ir-glass] .ir-stage > div > aside button[aria-haspopup="dialog"] > div > span:first-child { color: var(--color-primary) !important; }
 html[data-ir-glass] .ir-settings-panes .ir-settings-nav { background: color-mix(in srgb, var(--surface-sunken) 50%, transparent); }
 html[data-ir-glass] :is(.ir-promoted, .ir-segment button[aria-pressed="true"]) { background: color-mix(in srgb, var(--surface-card) 82%, transparent); }
 @media (prefers-reduced-transparency: reduce) {
-  html[data-ir-glass] { --glass-fill: var(--surface-card); --glass-fill-strong: var(--surface-raised); --glass-well: var(--surface-well); --glass-blur: none; }
+  html[data-ir-glass] { --glass-fill: var(--surface-card); --glass-fill-strong: var(--surface-raised); --glass-well: var(--surface-well); --glass-blur: none; --glass-blur-strong: none; }
 }
 `;

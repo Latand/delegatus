@@ -7,6 +7,9 @@
  * cannot lose a function without saying so.
  *
  * Inventory ids are the ones in docs/design/interface-redesign-usage-audit.md.
+ * An entry that is a whole menu (W3, W4, W8) or that holds two controls (B3,
+ * B11) is spelled out in ACTIONS, and rows name the action (`W3.hold`), so the
+ * check counts actions, never groups.
  */
 
 export type Lang = "en" | "uk";
@@ -99,6 +102,28 @@ export const INVENTORY: Record<string, string> = {
   O8: "Conversation account badge menu",
 };
 
+/** The actions inside an inventory entry that is more than one control (audit tables, "Every function"). */
+export const ACTIONS: Record<string, Record<string, string>> = {
+  W3: {
+    status: "Four statuses", hold: "Hold reason", priority: "High, normal or low priority", colour: "Eight colours or none", icon: "Task icon",
+    collapse: "Collapse or expand the card", rename: "Rename", description: "Add or edit the description", links: "Attach work links",
+    hide: "Hide from the board (unless it holds the seat)", lanes: "Each attached pipeline's group (W4)",
+  },
+  W4: {
+    open: "Expand the pipeline", links: "Attach work links", pause: "Pause or resume", retry: "Retry an eligible stage",
+    skip: "Skip an eligible stage", finish: "This lane finishes its task", close: "Close the lane",
+  },
+  W8: {
+    rename: "Rename", priority: "Priority, three choices", colour: "Colour, nine swatches", details: "Edit details",
+    links: "Attach work links", hide: "Hide or show (unless it holds the seat)", board: "Open the board menu",
+  },
+  B3: { sound: "Sound on or off", levels: "Sound levels" },
+  B11: { tasks: "Task list", pipelines: "Pipelines list" },
+};
+
+/** Every id a home is stated for: plain ids, and `W3.hold` for each action of a composite entry. */
+export const HOME_KEYS: string[] = Object.keys(INVENTORY).flatMap((id) => (ACTIONS[id] ? Object.keys(ACTIONS[id]!).map((action) => `${id}.${action}`) : [id]));
+
 /* ── Regrouped menus ───────────────────────────────────────────────────── */
 
 export interface Row {
@@ -113,6 +138,8 @@ export interface Row {
   trail?: Text;
   /** Rows a drill-in shows in place of the first view. */
   into?: Row[];
+  /** The open sheet changes to this menu (the phone's "Project menu" row). */
+  face?: string;
 }
 export interface Menu {
   title: Text;
@@ -131,17 +158,18 @@ const CREATE = [T("Agent", "Агент"), T("Task", "Задача"), T("Pipeline
 /* The audit's sampled conversation carried 38 descendants. */
 export const SUBAGENTS = 38;
 
-const lane = (name: string): Row => row(`lane-${name}`, ["W4"], `Pipeline: ${name}`, `Пайплайн: ${name}`, {
+const lane = (name: string): Row => row(`lane-${name}`, ["W3.lanes"], `Pipeline: ${name}`, `Пайплайн: ${name}`, {
   into: [
-    row("lane-open", ["W4"], "Open the stages", "Відкрити етапи"),
-    row("lane-links", ["W4"], "Attach work links", "Додати посилання"),
-    row("lane-pause", ["W4"], "Pause", "Призупинити"),
-    row("lane-retry", ["W4"], "Retry the stage", "Повторити етап"),
-    row("lane-skip", ["W4"], "Skip the stage", "Пропустити етап"),
-    row("lane-finish", ["W4"], "This lane finishes the task", "Ця лінія завершує задачу", { kind: "toggle" }),
-    row("lane-close", ["W4"], "Close the lane", "Закрити лінію", { kind: "danger" }),
+    row("lane-open", ["W4.open"], "Open the stages", "Відкрити етапи"),
+    row("lane-links", ["W4.links"], "Attach work links", "Додати посилання"),
+    row("lane-pause", ["W4.pause"], "Pause", "Призупинити"),
+    row("lane-retry", ["W4.retry"], "Retry the stage", "Повторити етап"),
+    row("lane-skip", ["W4.skip"], "Skip the stage", "Пропустити етап"),
+    row("lane-finish", ["W4.finish"], "This lane finishes the task", "Ця лінія завершує задачу", { kind: "toggle" }),
+    row("lane-close", ["W4.close"], "Close the lane", "Закрити лінію", { kind: "danger" }),
   ],
 });
+const COLOURS = Array.from({ length: 9 }, (_, index) => T(String(index), String(index)));
 
 const SETUP = [
   row("setup-guide", ["G4", "B16"], "Setup guide", "Посібник із налаштування"),
@@ -170,9 +198,9 @@ export const MENUS_A: Record<string, Menu> = {
       row("accounts", ["B2"], "Accounts", "Акаунти"),
     ],
     rows: [
-      row("notify", ["B3", "B7"], "Notifications", "Сповіщення", { into: [
-        row("sound", ["B3"], "Sound", "Звук", { kind: "toggle" }),
-        row("levels", ["B3"], "Sound levels", "Рівні звуку"),
+      row("notify", ["B7"], "Notifications", "Сповіщення", { into: [
+        row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
+        row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
         row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
       ] }),
       row("policies", ["B4", "B5", "B6"], "Project policies", "Правила проєкту", { into: [
@@ -202,31 +230,46 @@ export const MENUS_A: Record<string, Menu> = {
   card: {
     title: T("Task", "Задача"),
     promoted: [
-      row("status", ["W3", "W2"], "Status", "Статус", { kind: "segment", choices: STATUS }),
-      row("rename", ["W3"], "Rename", "Перейменувати"),
-      row("hide", ["W3"], "Hide from the board", "Сховати з дошки"),
+      row("status", ["W3.status"], "Status", "Статус", { kind: "segment", choices: STATUS }),
+      row("rename", ["W3.rename"], "Rename", "Перейменувати"),
+      row("hide", ["W3.hide"], "Hide from the board", "Сховати з дошки"),
     ],
     rows: [
-      row("priority", ["W3"], "Priority", "Пріоритет", { into: [row("priority-pick", ["W3"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY })] }),
-      row("appearance", ["W3"], "Colour and icon", "Колір і значок", { into: [
-        row("colour", ["W3"], "Colour", "Колір", { kind: "chips", choices: Array.from({ length: 9 }, (_, index) => T(String(index), String(index))) }),
-        row("icon", ["W3"], "Icon", "Значок"),
+      row("priority", ["W3.priority"], "Priority", "Пріоритет", { into: [row("priority-pick", ["W3.priority"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY })] }),
+      row("appearance", [], "Colour and icon", "Колір і значок", { into: [
+        row("colour", ["W3.colour"], "Colour", "Колір", { kind: "chips", choices: COLOURS }),
+        row("icon", ["W3.icon"], "Icon", "Значок"),
       ] }),
-      row("details", ["W3"], "Details and links", "Деталі й посилання", { into: [
-        row("description", ["W3"], "Edit the description", "Редагувати опис"),
-        row("hold", ["W3"], "Hold reason", "Причина очікування"),
-        row("links", ["W3"], "Attach work links", "Додати посилання"),
-        row("collapse", ["W3"], "Collapse the card", "Згорнути картку"),
+      row("details", [], "Details and links", "Деталі й посилання", { into: [
+        row("description", ["W3.description"], "Edit the description", "Редагувати опис"),
+        row("hold", ["W3.hold"], "Hold reason", "Причина очікування"),
+        row("links", ["W3.links"], "Attach work links", "Додати посилання"),
+        row("collapse", ["W3.collapse"], "Collapse the card", "Згорнути картку"),
       ] }),
       lane("Search fix"),
       lane("Release notes"),
     ],
   },
+  /* The phone task screen's "⋯" (W8): the same grouping as the card, with the phone's own rows. */
+  phoneTask: {
+    title: T("Task", "Задача"),
+    promoted: [
+      row("rename", ["W8.rename"], "Rename", "Перейменувати"),
+      row("details", ["W8.details"], "Details", "Деталі"),
+      row("links", ["W8.links"], "Links", "Посилання"),
+    ],
+    rows: [
+      row("priority", ["W8.priority"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY }),
+      row("colour", [], "Colour", "Колір", { into: [row("colour-pick", ["W8.colour"], "Colour", "Колір", { kind: "chips", choices: COLOURS })] }),
+      row("hide", ["W8.hide"], "Hide from the board", "Сховати з дошки"),
+      row("board", ["W8.board"], "Project menu", "Меню проєкту", { face: "phoneBoard" }),
+    ],
+  },
   phoneBoard: {
     title: T("atlas", "atlas"),
     promoted: [
-      row("tasks", ["B11"], "Tasks", "Задачі"),
-      row("pipelines", ["B11"], "Pipelines", "Пайплайни"),
+      row("tasks", ["B11.tasks"], "Tasks", "Задачі"),
+      row("pipelines", ["B11.pipelines"], "Pipelines", "Пайплайни"),
       row("hidden", ["B12"], "Hidden", "Сховані", { trail: T("2", "2") }),
     ],
     rows: [
@@ -234,9 +277,9 @@ export const MENUS_A: Record<string, Menu> = {
       row("view", ["B13"], "View", "Вигляд", { kind: "segment", choices: VIEWS }),
       row("accounts", ["B2"], "Accounts and limits", "Акаунти й ліміти"),
       row("host", ["B14"], "Host details", "Стан хоста"),
-      row("notify", ["B3", "B7", "B15", "G3"], "Notifications", "Сповіщення", { into: [
-        row("sound", ["B3"], "Sound", "Звук", { kind: "toggle" }),
-        row("levels", ["B3"], "Sound levels", "Рівні звуку"),
+      row("notify", ["B7", "B15", "G3"], "Notifications", "Сповіщення", { into: [
+        row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
+        row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
         row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
         row("awake", ["B15"], "Keep the screen awake", "Не вимикати екран", { kind: "toggle" }),
         row("push", ["G3"], "Push notifications", "Push-сповіщення", { kind: "toggle" }),
@@ -283,7 +326,7 @@ export const MENUS_A: Record<string, Menu> = {
         row("terminal", ["M15"], "Terminal command", "Команда для термінала"),
         row("stop", ["M20"], "Stop the host", "Зупинити хост", { kind: "danger" }),
       ] }),
-      row("project", ["M18"], "Project menu", "Меню проєкту"),
+      row("project", ["M18"], "Project menu", "Меню проєкту", { face: "phoneBoard" }),
     ],
   },
 };
@@ -311,8 +354,8 @@ export const SETTINGS: SettingsSection[] = [
   ] },
   { key: "notifications", scope: "delegatus", title: T("Notifications", "Сповіщення"), rows: [
     row("push", ["G3"], "Push notifications", "Push-сповіщення", { kind: "toggle" }),
-    row("sound", ["B3"], "Sound", "Звук", { kind: "toggle" }),
-    row("levels", ["B3"], "Sound levels", "Рівні звуку"),
+    row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
+    row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
     row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
   ] },
   { key: "setup", scope: "delegatus", title: T("Setup and guides", "Налаштування й посібники"), rows: SETUP },
@@ -331,34 +374,52 @@ export const MENUS_B: Record<string, Menu> = {
     rows: [
       row("search", ["B1"], "Search my messages", "Пошук моїх повідомлень"),
       row("settings-project", ["B2", "B4", "B5", "B6", "B8", "B9"], "Project settings", "Налаштування проєкту"),
-      row("settings", ["B3", "B7"], "Delegatus settings", "Налаштування Delegatus"),
+      row("settings", ["B7"], "Delegatus settings", "Налаштування Delegatus"),
     ],
   },
   card: {
     title: T("Task", "Задача"),
-    promoted: [row("status", ["W3", "W2"], "Status", "Статус", { kind: "segment", choices: STATUS })],
+    promoted: [row("status", ["W3.status"], "Status", "Статус", { kind: "segment", choices: STATUS })],
     rows: [
-      row("priority", ["W3"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY }),
-      row("rename", ["W3"], "Rename", "Перейменувати"),
-      row("details", ["W3"], "Details, colour and icon", "Деталі, колір і значок"),
-      row("links", ["W3"], "Attach work links", "Додати посилання"),
-      row("collapse", ["W3"], "Collapse the card", "Згорнути картку"),
-      row("hide", ["W3"], "Hide from the board", "Сховати з дошки"),
+      row("hold", ["W3.hold"], "Hold reason", "Причина очікування"),
+      row("priority", ["W3.priority"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY }),
+      row("rename", ["W3.rename"], "Rename", "Перейменувати"),
+      row("details", [], "Details, colour and icon", "Деталі, колір і значок", { into: [
+        row("description", ["W3.description"], "Edit the description", "Редагувати опис"),
+        row("colour", ["W3.colour"], "Colour", "Колір", { kind: "chips", choices: COLOURS }),
+        row("icon", ["W3.icon"], "Icon", "Значок"),
+      ] }),
+      row("links", ["W3.links"], "Attach work links", "Додати посилання"),
+      row("collapse", ["W3.collapse"], "Collapse the card", "Згорнути картку"),
+      row("hide", ["W3.hide"], "Hide from the board", "Сховати з дошки"),
       lane("Search fix"),
       lane("Release notes"),
+    ],
+  },
+  phoneTask: {
+    title: T("Task", "Задача"),
+    promoted: [],
+    rows: [
+      row("priority", ["W8.priority"], "Priority", "Пріоритет", { kind: "segment", choices: PRIORITY }),
+      row("rename", ["W8.rename"], "Rename", "Перейменувати"),
+      row("details", ["W8.details"], "Details", "Деталі"),
+      row("colour", [], "Colour", "Колір", { into: [row("colour-pick", ["W8.colour"], "Colour", "Колір", { kind: "chips", choices: COLOURS })] }),
+      row("links", ["W8.links"], "Attach work links", "Додати посилання"),
+      row("hide", ["W8.hide"], "Hide from the board", "Сховати з дошки"),
+      row("board", ["W8.board"], "Project menu", "Меню проєкту", { face: "phoneBoard" }),
     ],
   },
   phoneBoard: {
     title: T("atlas", "atlas"),
     promoted: [],
     rows: [
-      row("tasks", ["B11"], "Tasks", "Задачі", { trail: T("13", "13") }),
-      row("pipelines", ["B11"], "Pipelines", "Пайплайни", { trail: T("6", "6") }),
+      row("tasks", ["B11.tasks"], "Tasks", "Задачі", { trail: T("13", "13") }),
+      row("pipelines", ["B11.pipelines"], "Pipelines", "Пайплайни", { trail: T("6", "6") }),
       row("hidden", ["B12"], "Hidden work", "Сховане", { trail: T("2", "2") }),
       row("view", ["B13"], "View", "Вигляд", { kind: "segment", choices: VIEWS }),
       row("create", ["B10"], "Create", "Створити", { kind: "chips", choices: CREATE }),
       row("host", ["B14"], "Host details", "Стан хоста"),
-      row("settings", ["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B15", "B16"], "Settings", "Налаштування"),
+      row("settings", ["B2", "B4", "B5", "B6", "B7", "B8", "B15", "B16"], "Settings", "Налаштування"),
     ],
   },
   phoneConversation: {
@@ -381,7 +442,7 @@ export const MENUS_B: Record<string, Menu> = {
         row("terminal", ["M15"], "Terminal command", "Команда для термінала"),
         row("stop", ["M20"], "Stop the host", "Зупинити хост", { kind: "danger" }),
       ] }),
-      row("settings", ["M18"], "Settings", "Налаштування"),
+      row("project", ["M18"], "Project menu", "Меню проєкту", { face: "phoneBoard" }),
     ],
   },
 };
@@ -405,6 +466,32 @@ export const LEFT_OUT: Record<"A" | "B", Record<string, string>> = {
 
 export function refsOf(rows: Row[]): string[] {
   return rows.flatMap((entry) => [...entry.refs, ...(entry.into ? refsOf(entry.into) : [])]);
+}
+
+/** Menus each direction regroups. Direction B has no rail menu: the rail's "⋯" opens Settings. */
+export const REGROUPED: Record<"A" | "B", string[]> = {
+  A: ["board", "rail", "card", "phoneBoard", "phoneConversation", "phoneTask"],
+  B: ["board", "card", "phoneBoard", "phoneConversation", "phoneTask"],
+};
+/** The entries a menu direction must place: the rail menu, the board menus, the card, the phone task and conversation menus. */
+export const MENU_FAMILIES = ["G", "B", "M"];
+const MENU_ENTRIES = ["W3", "W4", "W8"];
+
+/**
+ * Every action a direction must carry that no row, title row or Settings section
+ * carries, and that is not stated as left out. Empty means complete.
+ */
+export function missingActions(direction: "A" | "B", menus: Record<string, Menu> = direction === "A" ? MENUS_A : MENUS_B, settings: SettingsSection[] = SETTINGS): string[] {
+  const have = new Set([
+    ...REGROUPED[direction].flatMap((surface) => (menus[surface] ? refsOf([...menus[surface]!.promoted, ...menus[surface]!.rows]) : [])),
+    ...(direction === "B" ? [...settings.flatMap((section) => refsOf(section.rows)), ...B_CONVERSATION_TITLE_REFS] : []),
+  ]);
+  return HOME_KEYS.filter((key) => {
+    const id = key.split(".")[0]!;
+    if (!MENU_FAMILIES.includes(id[0]!) && !MENU_ENTRIES.includes(id)) return false;
+    if (LEFT_OUT[direction][key] || LEFT_OUT[direction][id]) return false;
+    return !have.has(key);
+  });
 }
 
 /** Controls a menu shows before any drill-in: each choice of a segment or chip row is one. */
@@ -434,11 +521,11 @@ export interface Home { desktop: string; phone: string }
 const H = (desktop: string, phone: string = desktop): Home => ({ desktop, phone });
 const SAME = H("unchanged");
 
-const SYSTEM_1 = "System chip in the board header, opens the System panel";
+const SYSTEM_1 = "System chip after the status line of the board header (the Overview's too), and the System row of the Go-to palette; both open the System panel";
 const SYSTEM_2 = "the rail's one System row, opens the System panel";
 const SYSTEM_3 = "status ring at the rail's foot, opens the System panel";
 const SHEET = "project sheet from the title";
-const SETTINGS_1 = "Settings group of the Go-to palette";
+const SETTINGS_1 = "Settings row of the Go-to palette";
 const SETTINGS_2 = "Settings row at the rail's foot";
 const SETTINGS_3 = "gear at the rail's foot";
 const SHEET_SETTINGS = "Settings row of the project sheet";
@@ -447,8 +534,8 @@ const SHEET_SETTINGS = "Settings row of the project sheet";
 export const SIDEBAR_HOMES: Record<string, { 1: Home; 2: Home; 3: Home }> = {
   S1: { 1: H("removed: there is no rail to hide; B opens the Go-to palette", "n/a (no rail on the phone)"), 2: H("hide control in the rail header; B", "n/a"), 3: H("collapse control at the rail's foot; B", "n/a") },
   S2: { 1: H("the palette's field, focused when it opens (title, B or Ctrl+K)", "field at the top of the project sheet (new on the phone)"), 2: H("field at the top of the rail", "field at the top of the project sheet (new on the phone)"), 3: H("field at the top of the open rail; / opens the rail on it", "field at the top of the project sheet (new on the phone)") },
-  S3: { 1: H("New project row at the palette's foot", `${SHEET}, New project row`), 2: H("+ beside the rail's field", `${SHEET}, New project row`), 3: H("+ tile under the project tiles; + beside the field when open", `${SHEET}, New project row`) },
-  S4: { 1: H("the board header's project title opens the palette: Overview, then projects with their counts", `${SHEET} (as today)`), 2: H("the rail's list", `${SHEET} (as today)`), 3: H("project tiles with an attention dot; names and counts when open", `${SHEET} (as today)`) },
+  S3: { 1: H("New project row of the palette", `${SHEET}, New project row`), 2: H("+ beside the rail's field", `${SHEET}, New project row`), 3: H("+ tile under the project tiles; + beside the field when open", `${SHEET}, New project row`) },
+  S4: { 1: H("the project title at the start of the board header opens the palette: Overview, then projects with their counts; on the Overview the same control reads Overview", `${SHEET} (as today)`), 2: H("the rail's list", `${SHEET} (as today)`), 3: H("project tiles with an attention dot; names and counts when open", `${SHEET} (as today)`) },
   S5: { 1: H("crown at the end of a palette row", "crown at the end of a sheet row (new on the phone)"), 2: H("crown at the end of a rail row", "crown at the end of a sheet row (new on the phone)"), 3: H("crown at the end of a row when open; pinned tiles come first when closed", "crown at the end of a sheet row (new on the phone)") },
   S6: { 1: H("Archived fold at the end of the palette's projects", `${SHEET}, Archived fold (as today)`), 2: H("Archived fold at the end of the rail's list", `${SHEET}, Archived fold (as today)`), 3: H("Archived fold when open; the fold's tile opens the rail", `${SHEET}, Archived fold (as today)`) },
   S7: { 1: H("removed: the footer it folded is now one chip", "n/a"), 2: H("removed: the footer it folded is now one row", "n/a"), 3: H("removed: the footer it folded is now one ring", "n/a") },
@@ -467,65 +554,73 @@ const settingsHome = (ref: string): string => {
   const section = SETTINGS.find((entry) => refsOf(entry.rows).includes(ref));
   return section ? `Settings, ${section.scope === "project" ? "This project" : "Delegatus"}, ${section.title.en}` : "";
 };
+/** The row of a menu that carries `ref`, and how deep: read from the rows the prototype draws. */
 const menuHome = (menus: Record<string, Menu>, surface: string, ref: string): string => {
   const menu = menus[surface];
   if (!menu) return "";
   const top = [...menu.promoted, ...menu.rows].find((entry) => refsOf([entry]).includes(ref));
   if (!top) return "";
   const promoted = menu.promoted.includes(top);
-  return `${promoted ? "promoted" : "row"} "${top.label.en}"${top.into && top.into.length ? ", one level in" : ""}`;
+  const inner = top.into?.find((entry) => refsOf([entry]).includes(ref));
+  const deeper = inner && (inner.key !== top.key) ? `, one level in, "${inner.label.en}"` : "";
+  return `${promoted ? "promoted" : "row"} "${top.label.en}"${deeper}`;
 };
 
-/** Variants 4 and 5 regroup the menus (G, B, the card and the phone conversation); the rail stays. */
+/** Variants 4 and 5 regroup the menus (G, B, the card and the phone task and conversation menus); the rail stays. */
 export function menuHomes(direction: "A" | "B"): Record<string, Home> {
   const menus = direction === "A" ? MENUS_A : MENUS_B;
   const out: Record<string, Home> = {};
-  for (const id of Object.keys(INVENTORY)) {
-    const left = LEFT_OUT[direction][id];
-    if (left) { out[id] = H(`left out: ${left}`); continue; }
+  for (const key of HOME_KEYS) {
+    const id = key.split(".")[0]!;
+    const left = LEFT_OUT[direction][key] ?? LEFT_OUT[direction][id];
+    if (left) { out[key] = H(`left out: ${left}`); continue; }
     const family = id[0];
-    if (family === "S") { out[id] = id === "S10" && direction === "B" ? H("rail footer (as today) and Settings, Delegatus, Connections", "Settings, Delegatus, Connections") : SAME; continue; }
-    if (family === "O" || (family === "W" && !["W2", "W3", "W4", "W8"].includes(id))) { out[id] = SAME; continue; }
-    if (id === "W8") { out[id] = H("n/a (phone)", "phone task overflow, in the card menu's grouping (drawn once, on the desktop card)"); continue; }
-    if (family === "W") { out[id] = H(`card menu, ${menuHome(menus, "card", id)}`, "phone task overflow, same grouping"); continue; }
+    if (family === "S") { out[key] = id === "S10" && direction === "B" ? H("rail footer (as today) and Settings, Delegatus, Connections", "Settings, Delegatus, Connections") : SAME; continue; }
+    if (id === "W2") { out[key] = H("unchanged (its own status menu, with the previous and next column); the card menu's Status segment also carries the four statuses", "n/a (desktop)"); continue; }
+    if (family === "O" || (family === "W" && !MENU_ENTRIES.includes(id))) { out[key] = SAME; continue; }
+    if (id === "W8") { out[key] = H("n/a (phone)", `task menu, ${menuHome(menus, "phoneTask", key)}`); continue; }
+    if (id === "W3") { out[key] = H(`card menu, ${menuHome(menus, "card", key)}`, "n/a (desktop card; the phone task's menu is W8)"); continue; }
+    if (id === "W4") { out[key] = H(`card menu, row "Pipeline: <name>", one level in, ${menuHome(menus, "card", key).replace(/^row "[^"]*", one level in, /, "")}`, "n/a (desktop card; the phone's lane sheet W9 is unchanged)"); continue; }
     if (family === "M") {
       const inTitle = direction === "B" && B_CONVERSATION_TITLE_REFS.includes(id);
-      out[id] = H("n/a (phone menu)", inTitle ? "the conversation sheet's title row" : `conversation menu, ${menuHome(menus, "phoneConversation", id)}`);
+      out[key] = H("n/a (phone menu)", inTitle ? "the conversation sheet's title row" : `conversation menu, ${menuHome(menus, "phoneConversation", key)}`);
       continue;
     }
     /* G and B: the rail's menu and the board's menu. */
     const phoneMenuOnly = ["B10", "B11", "B12", "B13", "B14", "B15", "B16"].includes(id);
-    const phoneRow = menuHome(menus, "phoneBoard", id);
-    const place = direction === "B" ? settingsHome(id) : "";
+    const phoneRow = menuHome(menus, "phoneBoard", key);
+    const place = direction === "B" ? settingsHome(key) : "";
     const viaSettings = (where: string) => `${where} "Settings", then ${place}`;
     let desktop: string;
     if (phoneMenuOnly) desktop = "n/a (phone menu only, as today)";
-    else if (direction === "B") desktop = place ? (family === "G" ? `gear in the rail header, then ${place}` : viaSettings("board menu,")) : `board menu, ${menuHome(menus, "board", id)}`;
-    else desktop = family === "G" ? `rail menu, ${menuHome(menus, "rail", id)}` : `board menu, ${menuHome(menus, "board", id)}`;
+    else if (direction === "B") desktop = place ? (family === "G" ? `the rail's "⋯", which opens Settings, then ${place}` : viaSettings("board menu,")) : `board menu, ${menuHome(menus, "board", key)}`;
+    else desktop = family === "G" ? `rail menu, ${menuHome(menus, "rail", key)}` : `board menu, ${menuHome(menus, "board", key)}`;
     let phone: string;
     if (id === "B9") phone = "n/a (desktop only, as today)";
     else if (id === "B1") phone = "Search in the top bar (as today)";
     else if (id === "B16") phone = direction === "B" ? "board menu, Settings: the same sections as G4 to G13" : `board menu, ${phoneRow}`;
     else if (direction === "B" && place) phone = viaSettings("board menu,");
     else phone = `board menu, ${phoneRow}`;
-    out[id] = H(desktop, phone);
+    out[key] = H(desktop, phone);
   }
   return out;
 }
 
-/** Variant 7 is 1's shell with 5's menus: the rail's homes from 1, the rest from 5. */
+/** Variant 7 is 1's shell with 5's menus: the rail's homes from 1, the rest from 5. There is no rail, so no rail "⋯". */
 export function combinedHomes(): Record<string, Home> {
   const menus = menuHomes("B");
   const out: Record<string, Home> = {};
-  for (const id of Object.keys(INVENTORY)) {
+  for (const key of HOME_KEYS) {
+    const id = key.split(".")[0]!;
     const sidebar = SIDEBAR_HOMES[id];
-    if (id[0] === "S" && sidebar) out[id] = id === "S10" ? H("Telegram row of the System panel; Settings, Delegatus, Connections", "Settings, Delegatus, Connections") : sidebar[1];
-    else if (id[0] === "G") out[id] = H(menus[id]!.desktop, menus[id]!.phone);
-    else out[id] = menus[id]!;
+    if (id[0] === "S" && sidebar) out[key] = id === "S10" ? H("Telegram row of the System panel; Settings, Delegatus, Connections", "Settings, Delegatus, Connections") : sidebar[1];
+    else if (id[0] === "G") {
+      const place = settingsHome(key);
+      out[key] = H(`Settings row of the Go-to palette, then ${place}`, `${SHEET_SETTINGS}, or board menu, "Settings"; then ${place}`);
+    } else out[key] = menus[key]!;
   }
   return out;
 }
-
 /* ── Invented content the prototype's own chrome draws ─────────────────── */
 
 export interface ProtoProject { name: string; live: number; needs: number; total: number; crowned: boolean; age: Text }

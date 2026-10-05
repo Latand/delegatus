@@ -1,0 +1,1475 @@
+{
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=<stages|issue1820|issue1820-empty>&redesign=<n>&inner=1",
+  "method": "Desktop 1440: each surface is opened by Enter on its entry (or Ctrl+K, /), Tab and Shift+Tab are pressed 40 times each and every stop must stay inside the surface and carry a name, Escape must close it and put focus back on the entry. Phone 390 with touch: a sheet must add one history entry, Back must close it before the screen and keep the reading position behind it, a 40 px drag of the handle must leave it open and a 110 px drag close it, and × and the scrim must close it.",
+  "cases": {
+    "v1-1440-en-ctrl-k": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-en-title": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-en-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "System"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "shell:system"
+    },
+    "v1-1440-en-palette-system": {
+      "drill": {
+        "in": "palette:back",
+        "out": "palette:system"
+      }
+    },
+    "v1-1440-en-overview": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-en-empty": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-en-loading": {
+      "leads": [
+        "shell:project in dashboard bar",
+        "shell:system in dashboard bar"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-en-ctrl-k": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-en-title": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-en-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "System"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "shell:system"
+    },
+    "v7-1440-en-palette-system": {
+      "drill": {
+        "in": "palette:back",
+        "out": "palette:system"
+      }
+    },
+    "v7-1440-en-overview": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-en-empty": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-en-loading": {
+      "leads": [
+        "shell:project in dashboard bar",
+        "shell:system in dashboard bar"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Go to a project, an agent or a setting"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v2-1440-en-rail-settings": {
+      "opened": {
+        "name": "menu-rail",
+        "modal": "true",
+        "label": "Delegatus"
+      },
+      "focusOnOpen": "rail:language:0",
+      "tabStops": 14,
+      "focusAfterEscape": "rail:settings"
+    },
+    "v3-1440-en-slash": {
+      "focus": "rail:field"
+    },
+    "v3-1440-en-toggle": {
+      "focus": "rail:toggle"
+    },
+    "v4-1440-en-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Project"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 10,
+      "focusAfterEscape": "[data-bar-more]",
+      "drill": {
+        "in": "board:back",
+        "out": "board:policies"
+      }
+    },
+    "v4-1440-en-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Task"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 22,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v5-1440-en-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Project"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 6,
+      "focusAfterEscape": "[data-bar-more]"
+    },
+    "v5-1440-en-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Task"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 30,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v7-1440-en-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Project"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 6,
+      "focusAfterEscape": "[data-bar-more]"
+    },
+    "v7-1440-en-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Task"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 30,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v5-1440-en-rail-settings": {
+      "opened": {
+        "name": "settings",
+        "modal": "true",
+        "label": "Settings"
+      },
+      "focusOnOpen": "settings:close",
+      "tabStops": 26,
+      "focusAfterEscape": "[data-rail-menu]"
+    },
+    "v0-390-en-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v0-390-en-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-en-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-en-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-en-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v4-390-en-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-en-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-en-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-en-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v5-390-en-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-en-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-en-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-en-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v7-390-en-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-en-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-en-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-en-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:projects",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    },
+    "v1-390-en-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "palette",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    },
+    "v7-390-en-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "palette",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    },
+    "v1-1440-uk-ctrl-k": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-uk-title": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-uk-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "Система"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "shell:system"
+    },
+    "v1-1440-uk-palette-system": {
+      "drill": {
+        "in": "palette:back",
+        "out": "palette:system"
+      }
+    },
+    "v1-1440-uk-overview": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-uk-empty": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v1-1440-uk-loading": {
+      "leads": [
+        "shell:project in dashboard bar",
+        "shell:system in dashboard bar"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-uk-ctrl-k": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-uk-title": {
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-uk-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "Система"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "shell:system"
+    },
+    "v7-1440-uk-palette-system": {
+      "drill": {
+        "in": "palette:back",
+        "out": "palette:system"
+      }
+    },
+    "v7-1440-uk-overview": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-uk-empty": {
+      "leads": [
+        "shell:project in overview title row",
+        "shell:system in overview title row"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v7-1440-uk-loading": {
+      "leads": [
+        "shell:project in dashboard bar",
+        "shell:system in dashboard bar"
+      ],
+      "opened": {
+        "name": "palette",
+        "modal": "true",
+        "label": "Перейти до проєкту, агента чи налаштування"
+      },
+      "focusOnOpen": "palette:field",
+      "tabStops": 32,
+      "focusAfterEscape": "shell:project"
+    },
+    "v2-1440-uk-rail-settings": {
+      "opened": {
+        "name": "menu-rail",
+        "modal": "true",
+        "label": "Delegatus"
+      },
+      "focusOnOpen": "rail:language:0",
+      "tabStops": 14,
+      "focusAfterEscape": "rail:settings"
+    },
+    "v3-1440-uk-slash": {
+      "focus": "rail:field"
+    },
+    "v3-1440-uk-toggle": {
+      "focus": "rail:toggle"
+    },
+    "v4-1440-uk-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Проєкт"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 10,
+      "focusAfterEscape": "[data-bar-more]",
+      "drill": {
+        "in": "board:back",
+        "out": "board:policies"
+      }
+    },
+    "v4-1440-uk-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Задача"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 22,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v5-1440-uk-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Проєкт"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 6,
+      "focusAfterEscape": "[data-bar-more]"
+    },
+    "v5-1440-uk-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Задача"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 30,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v7-1440-uk-board-menu": {
+      "opened": {
+        "name": "menu-board",
+        "modal": "true",
+        "label": "Проєкт"
+      },
+      "focusOnOpen": "board:search",
+      "tabStops": 6,
+      "focusAfterEscape": "[data-bar-more]"
+    },
+    "v7-1440-uk-card-menu": {
+      "opened": {
+        "name": "menu-card",
+        "modal": "true",
+        "label": "Задача"
+      },
+      "focusOnOpen": "card:status:0",
+      "tabStops": 30,
+      "focusAfterEscape": "card [data-menu]"
+    },
+    "v5-1440-uk-rail-settings": {
+      "opened": {
+        "name": "settings",
+        "modal": "true",
+        "label": "Налаштування"
+      },
+      "focusOnOpen": "settings:close",
+      "tabStops": 26,
+      "focusAfterEscape": "[data-rail-menu]"
+    },
+    "v0-390-uk-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v0-390-uk-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-uk-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-uk-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "product:menu",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-uk-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v4-390-uk-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-uk-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v4-390-uk-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-uk-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v5-390-uk-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-uk-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v5-390-uk-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-uk-board-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 40
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneBoard",
+        "history": 3,
+        "scroll": 40
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      },
+      "shortDrag": "menu-phoneBoard",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 40
+      }
+    },
+    "v7-390-uk-task-menu": {
+      "before": {
+        "screen": "task",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "task",
+        "sheet": "menu-phoneTask",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneTask",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "task",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-uk-conversation-menu": {
+      "before": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "chat",
+        "sheet": "menu-phoneConversation",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneConversation",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "chat",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v7-390-uk-pipeline-menu": {
+      "opened": {
+        "screen": "pipeline",
+        "sheet": "product:menu (pipeline)",
+        "history": 4,
+        "scroll": null
+      },
+      "board": {
+        "screen": "pipeline",
+        "sheet": "menu-phoneBoard",
+        "history": 4,
+        "scroll": null
+      },
+      "back": {
+        "screen": "pipeline",
+        "sheet": null,
+        "history": 4,
+        "scroll": null
+      }
+    },
+    "v0-390-uk-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:projects",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    },
+    "v1-390-uk-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "palette",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    },
+    "v7-390-uk-projects": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": 0
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "palette",
+        "history": 3,
+        "scroll": 0
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": 0
+      }
+    }
+  },
+  "failures": []
+}
