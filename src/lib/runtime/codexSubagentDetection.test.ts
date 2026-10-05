@@ -123,16 +123,18 @@ test("the real controller pump retries a failed policy write before acknowledgin
   const key = { engine: "codex" as const, sessionId };
   let emitted = false;
   let acknowledged = 0;
-  const host = {
+  const host: StructuredDeliveryHost["host"] = {
     health: async () => ({ status: "idle", sessionKey: sessionId, endpoint: "fixture", pid: null,
       processStartIdentity: null, eventCursor: 0, protocolVersion: "v2", activeTurnRef: null,
       pendingAttention: [], activeFlags: [], account: null }),
     onStateChange: () => () => {},
+    send: async () => { throw new Error("unexpected fixture send"); },
+    interrupt: async () => {}, answer: async () => {}, release: async () => {},
     async *attach() {
       emitted = true;
       yield { kind: "item" as const, item: { type: "subAgentActivity", id: "controller-policy-fixture" }, turnId: null, phase: "completed" as const, seq: 1 };
     },
-  } as StructuredDeliveryHost["host"];
+  };
   const client = {
     snapshot: async () => ({ filesRevision: 0, sessions: [] }), producerCursor: async () => 0,
     effectBatch: async () => [], operationStatus: async () => null,
