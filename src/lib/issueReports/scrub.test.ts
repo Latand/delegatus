@@ -112,6 +112,9 @@ test("UNC and network-root paths are private in every decoded reading", () => {
     }
   }
   expect(classes("See src/lib/mcp/bindings.ts and ./scripts/gate-slot.sh.")).toEqual([]);
+  for (const file of ["\\notes.txt", "\\private", "C:notes.txt"]) {
+    for (const form of [file, entity(file), percent(file)]) expect(classes(`The transcript is stored at ${form}.`)).toContain("path");
+  }
 });
 
 test("nested and HTML blockquotes are found before markup disappears", () => {

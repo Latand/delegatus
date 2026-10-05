@@ -4,7 +4,7 @@ import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMai
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { isMutatingMcpTool } from "./server";
-import { permitMaintainerTool } from "./toolAllowlist";
+import { permitIssueReporterTool, permitMaintainerTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
@@ -2051,15 +2051,18 @@ function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, 
  * The role is the one the server attributed to the calling conversation, or
  * the registry's for it, or the `src` creator's when no caller is named.
  */
-function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependencies, src?: unknown, denies: (role: string | null) => boolean = isSpawnDeniedRole): void {
+function pipelineCallerRoles(dependencies: ViewerMcpDomainDependencies, src?: unknown): (string | null | undefined)[] {
   const caller = attributionOf(dependencies);
   let snapshot: RegistrySnapshot | null = null;
   try { snapshot = dependencies.registrySnapshot?.() ?? null; } catch { /* The attributed role decides alone. */ }
   const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
   const source = !caller.conversationId && typeof src === "string" ? lookup?.conversationForPath(src.trim()) ?? null : null;
   const conversationId = caller.conversationId ?? source?.id ?? null;
-  const roles = [caller.role, snapshot && conversationId ? conversationAgentRole(snapshot, conversationId as `conversation_${string}`) : null];
-  const denied = roles.find((role) => denies(role));
+  return [caller.role, snapshot && conversationId ? conversationAgentRole(snapshot, conversationId as `conversation_${string}`) : null];
+}
+
+function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependencies, src?: unknown, denies: (role: string | null) => boolean = isSpawnDeniedRole): void {
+  const denied = pipelineCallerRoles(dependencies, src).find((role) => denies(role ?? null));
   if (denied) throw new McpToolRefusal(reviewerOriginSpawnGuidance(denied), { code: "reviewer_origin_spawn", status: 403, retryable: false });
 }
 
@@ -6364,6 +6367,10 @@ export function viewerMcpToolPolicy(
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && isMutatingMcpTool(tool) && pipelineCallerRoles(domainDependencies, args.src).includes("issue-reporter")) {
+        const verdict = permitIssueReporterTool(tool, args);
+        if (!verdict.allowed) return verdict;
+      }
       if (!hostHealthProbe && isMutatingMcpTool(tool) && maintenanceCaller(domainDependencies)) {
         const verdict = permitMaintainerTool(tool, args);
         if (!verdict.allowed) return verdict;

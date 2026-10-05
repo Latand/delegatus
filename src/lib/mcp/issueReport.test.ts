@@ -8,7 +8,7 @@ import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
 
-import { viewerMcpBindings, type CallerAttribution } from "./bindings";
+import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
@@ -58,8 +58,8 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
   };
   /* Every caller gets its own service and receipt store, as every agent has
      its own MCP server process over the one state directory. */
-  const as = (caller: CallerAttribution) => createMcpToolService(
-    viewerMcpBindings(undefined, undefined, {
+  const as = (caller: CallerAttribution) => {
+    const domain = {
       attentionAuthority: () => (caller.conversationId
         ? { kind: "worker", conversationId: caller.conversationId, role: caller.role }
         : { kind: "unidentified" }),
@@ -73,9 +73,9 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         published.push({ ...report, repository });
         return options.publisher ? options.publisher(report, repository) : ISSUE_URL;
       },
-    } as never),
-    new MemoryMcpReceiptStore(),
-  );
+    };
+    return createMcpToolService(viewerMcpBindings(undefined, undefined, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
+  };
   let next = 0;
   const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
     as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...args }) as Promise<McpToolResult & Record<string, unknown>>;
@@ -261,6 +261,9 @@ test("account observations, qualified token counts and bare endpoints never crea
     ["port", "The launch ran on buildbox:8898."],
     ["port", '{"port":8898}'],
     ["port", "The listener port was 8898."],
+    ["path", "The transcript is stored at \\notes.txt."],
+    ["path", "The transcript is stored at \\private."],
+    ["path", "The transcript is stored at C:notes.txt."],
   ];
   for (const [kind, body] of cases) for (const encode of [
     (text: string) => text,
@@ -459,7 +462,7 @@ test("only the seat itself publishes", async () => {
 
   for (const caller of [REPORTER, DEPUTY]) {
     expect(await h.call(caller, { action: "publish", digest }))
-      .toMatchObject({ ok: false, code: "issue_report_publish_refused" });
+      .toMatchObject({ ok: false, code: caller === REPORTER ? "issue_reporter_write_refused" : "issue_report_publish_refused" });
   }
   expect(h.published).toEqual([]);
 });

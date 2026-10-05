@@ -167,8 +167,9 @@ const RELATIVE_SOURCE_PREFIX = /(?:^|[\s`[(])(?:\.{1,2}\/)?[\p{L}\p{N}_.-]+(?:\/
 const SLASH_OPENED_PATH = /(?<![\p{L}\p{M}\p{N}_.*\/])(?<!<(?=\/[A-Za-z][A-Za-z0-9-]*\s*>))\/(?![\/*>\s])/u;
 /* Both UNC spellings, and Windows root-relative paths. Decoding Markdown's
    escaped backslash can reduce a UNC prefix to one backslash, which remains
-   a local path. A server/share separator distinguishes it from punctuation. */
-const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[\p{L}\p{N}_.-]+[\/\\][^\s\/\\]/u;
+   a local path, even when it holds only one component. */
+const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[^\s\/\\>*]/u;
+const DRIVE_RELATIVE_PATH = /(?<![\p{L}\p{N}_])[a-z]:(?!\/\/)[^\s"'`\/\\]/iu;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
 /* Counts and plan facts also disclose usage without a percentage or price.
@@ -255,7 +256,7 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
-    if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text)) found.add("path");
+    if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
     if (STRICT_PORT.test(text) || STRICT_PORT_FIELD.test(text)) found.add("port");

@@ -22,8 +22,8 @@ mock.module("@/lib/pipelines/engine", () => ({
   },
 }));
 
-const { viewerMcpBindings } = await import("./bindings");
-const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore, MUTATING_MCP_TOOL_NAMES } = await import("./server");
 type CallerAttribution = import("./bindings").CallerAttribution;
 type McpToolResult = import("./server").McpToolResult;
 
@@ -51,7 +51,7 @@ const EMPTY_REGISTRY = { conversations: {}, conversationAliases: {}, memberships
 
 let next = 0;
 function call(caller: CallerAttribution, tool: "create_pipeline" | "pipeline_action", args: Record<string, unknown>, registry: Record<string, unknown> = EMPTY_REGISTRY) {
-  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+  const domain = {
     attentionAuthority: () => ({ kind: "worker", conversationId: caller.conversationId, role: caller.role }),
     callerAttribution: () => caller,
     authorizedSeats: () => [],
@@ -61,7 +61,8 @@ function call(caller: CallerAttribution, tool: "create_pipeline" | "pipeline_act
       return { pipeline: { id, stages: [], state: "running" } };
     },
     getPipelines: () => ({ pipelines: [] }),
-  } as never), new MemoryMcpReceiptStore());
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
   return service.callTool(tool, { clientRequestId: `role-fence-${next += 1}`, ...args }) as Promise<McpToolResult & Record<string, unknown>>;
 }
 
@@ -92,12 +93,44 @@ test("every role with no child-spawn capability is refused the same way", async 
 });
 
 test("an issue reporter launches no stage of an existing pipeline", async () => {
-  for (const action of ["start", "retry-stage"]) {
+  for (const action of ["start", "retry-stage", "resume", "skip-stage", "publish", "add-stage", "accept-head", "pause", "cancel"]) {
     const refused = await call(REPORTER, "pipeline_action", { pipelineId: "0a1b2c3d", action, stageId: "build" });
     expect(refused).toMatchObject({ ok: false });
     expect(String(refused.error)).toContain("issue reporter starts no agents and no pipelines");
   }
   expect(patched).toEqual([]);
+});
+
+test("the reporter policy refuses every other mutation before downstream dispatch, including receipt replay", async () => {
+  let caller = BUILDER;
+  let writes = 0;
+  const domain = {
+    attentionAuthority: () => ({ kind: "worker", conversationId: caller.conversationId, role: caller.role }),
+    callerAttribution: () => caller,
+    registrySnapshot: () => EMPTY_REGISTRY,
+  };
+  const bindings = Object.fromEntries([...MUTATING_MCP_TOOL_NAMES].map((tool) => [tool, async () => { writes++; return { recorded: true }; }])) as never;
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
+  const args = { clientRequestId: "reporter-replay", pipelineId: "0a1b2c3d", action: "resume" };
+  expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: true });
+  expect(writes).toBe(1);
+  caller = REPORTER;
+  expect(await service.callTool("pipeline_action", args)).toMatchObject({ ok: false, code: "issue_reporter_write_refused" });
+  expect(writes).toBe(1);
+  const policy = viewerMcpToolPolicy(domain as never);
+  for (const tool of MUTATING_MCP_TOOL_NAMES) {
+    if (["issue_report", "agent_activity", "lifecycle_events", "role_presets", "seat_tick_settings", "account_project_binding", "auto_updates"].includes(tool)) continue;
+    expect(policy.permit(tool, {})).toMatchObject({ allowed: false, code: "issue_reporter_write_refused" });
+  }
+  for (const [tool, input] of [
+    ["issue_report", { action: "preview" }], ["issue_report", { action: "show" }],
+    ["pipeline_action", { action: "preview" }], ["agent_activity", {}], ["lifecycle_events", {}],
+    ["role_presets", {}], ["seat_tick_settings", {}], ["account_project_binding", { action: "list" }], ["auto_updates", {}],
+  ] as const) expect(policy.permit(tool, input)).toEqual({ allowed: true });
+  for (const [tool, input] of [
+    ["issue_report", { action: "publish" }], ["role_presets", { overrides: {} }], ["seat_tick_settings", { enabled: true }],
+    ["account_project_binding", { action: "bind" }], ["auto_updates", { enabled: true }],
+  ] as const) expect(policy.permit(tool, input)).toMatchObject({ allowed: false });
 });
 
 test("an orchestrator and a builder still reach the engine", async () => {
