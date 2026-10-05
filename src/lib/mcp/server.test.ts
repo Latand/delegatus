@@ -1071,6 +1071,7 @@ describe("MCP tool service", () => {
     { name: "a stale-lock claimant waits out another generation's live retirement at the same inode", phase: "observe", ownerAlive: true },
     { name: "a stale-lock claimant retires another generation's dead retirement at the same inode", phase: "observe", ownerAlive: false },
     { name: "a holder retires its lock after another generation's owner took the first epoch", phase: "retire", ownerAlive: true },
+    { name: "a holder retires its lock after another generation's dead owner took the first epoch", phase: "retire", ownerAlive: false },
   ] as const)("$name", async ({ phase, ownerAlive }) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-foreign-generation-"));
     scratch.push(directory);
@@ -1119,6 +1120,113 @@ describe("MCP tool service", () => {
     expect(settledWhileOwned).toBeFalse();
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({ ok: true, replayed: false });
     expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 20_000);
+
+  test("two generations at one inode that publish different epochs both settle", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-mixed-epochs-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const lockPath = `${receiptPath}.lock`;
+    const countPath = path.join(directory, "binding-count");
+    const pinPath = path.join(directory, "retired-inode-pin");
+    const child = path.join(import.meta.dir, "server.lockChild.ts");
+    /* What a creator that died at "recovery-link-cleanup" leaves: the stale
+       lock and its recovery link are gone, the inode is free, and the dead
+       creator's epoch 0 still names the retired generation. */
+    fs.writeFileSync(pinPath, "");
+    const pin = fs.statSync(pinPath);
+    const namespace = `${lockPath}.${pin.dev}-${pin.ino}.recovering`;
+    fs.writeFileSync(`${namespace}.recovery-owner-0`, JSON.stringify({
+      version: 1,
+      epoch: 0,
+      pid: 999_999_999,
+      startIdentity: "dead",
+      token: crypto.randomUUID(),
+      targetDev: pin.dev,
+      targetIno: pin.ino,
+      targetToken: "retired-generation",
+    }));
+    const claim = (role: "stale" | "holder" | "later") => ownFixtureChild(Bun.spawn({
+      cmd: role === "later"
+        ? [process.execPath, child, "claim", receiptPath, countPath, path.join(directory, "later-result.json")]
+        : [
+            process.execPath,
+            child,
+            "mixed-epoch-claim",
+            receiptPath,
+            countPath,
+            path.join(directory, `${role}-result.json`),
+            role,
+            pinPath,
+            path.join(directory, `${role}-ready`),
+            path.join(directory, `${role}-release`),
+          ],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+
+    const stale = claim("stale");
+    expect(await waitForFile(path.join(directory, "stale-ready"), 10_000)).toBeTrue();
+    const holder = claim("holder");
+    expect(await waitForFile(path.join(directory, "holder-ready"), 10_000)).toBeTrue();
+    expect(fs.statSync(lockPath).ino).toBe(pin.ino);
+    fs.writeFileSync(path.join(directory, "stale-release"), "release");
+    /* The retired generation's epoch 1 has now been published beside the new
+       generation's epoch 0, with both owners alive. */
+    expect(await waitForFile(path.join(directory, "stale-ready-published"), 10_000)).toBeTrue();
+    fs.writeFileSync(path.join(directory, "holder-release"), "release");
+
+    expect(await Promise.all([childResult(stale), childResult(holder)])).toEqual([
+      { exit: 0, error: "" },
+      { exit: 0, error: "" },
+    ]);
+    const results = ["stale", "holder"]
+      .map((role) => JSON.parse(fs.readFileSync(path.join(directory, `${role}-result.json`), "utf8")) as { ok: boolean; replayed: boolean });
+    expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
+    expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(recoveryArtifacts(directory)).toEqual([]);
+    expect(fs.existsSync(lockPath)).toBeFalse();
+
+    expect(await childResult(claim("later"))).toEqual({ exit: 0, error: "" });
+    expect(JSON.parse(fs.readFileSync(path.join(directory, "later-result.json"), "utf8"))).toMatchObject({ ok: true, replayed: true });
+    expect(recoveryArtifacts(directory)).toEqual([]);
+  }, 40_000);
+
+  test("dead owners of two generations left in one namespace are both retired", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-mixed-residue-"));
+    scratch.push(directory);
+    const receiptPath = path.join(directory, "receipts.json");
+    const countPath = path.join(directory, "binding-count");
+    const resultPath = path.join(directory, "result.json");
+    const pinPath = path.join(directory, "retired-inode-pin");
+    fs.writeFileSync(pinPath, "");
+    const pin = fs.statSync(pinPath);
+    /* The newer generation's epoch 0 holds the name the older generation's
+       successor epoch needs, so the order of retirement matters. */
+    for (const [epoch, targetToken] of [[0, "newer-generation"], [1, "older-generation"], [2, "older-generation"]] as const) {
+      fs.writeFileSync(`${receiptPath}.lock.${pin.dev}-${pin.ino}.recovering.recovery-owner-${epoch}`, JSON.stringify({
+        version: 1,
+        epoch,
+        pid: 999_999_999,
+        startIdentity: "dead",
+        token: crypto.randomUUID(),
+        targetDev: pin.dev,
+        targetIno: pin.ino,
+        targetToken,
+      }));
+    }
+
+    const claimant = ownFixtureChild(Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "server.lockChild.ts"), "claim", receiptPath, countPath, resultPath],
+      env: { ...process.env },
+      stdout: "ignore",
+      stderr: "pipe",
+    }));
+
+    expect(await childResult(claimant)).toEqual({ exit: 0, error: "" });
+    expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({ ok: true, replayed: false });
     expect(recoveryArtifacts(directory)).toEqual([]);
   }, 20_000);
 

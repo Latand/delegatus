@@ -164,6 +164,53 @@ function installForeignGenerationOwner(
   }) as typeof fs.linkSync;
 }
 
+/** One side of two lock generations that publish DIFFERENT epochs in one
+    namespace. "stale" is a claimant of the retired generation: it has scanned
+    that generation's dead epoch 0 and stops before the link that publishes
+    epoch 1, where a claimant sits while its pending file is flushed. "holder"
+    takes the lock at the inode the retired generation had (the pin stands in
+    for the filesystem handing the freed number out again) and stops right
+    after publishing epoch 0 for its own retirement. */
+function installMixedEpochPause(
+  receiptPath: string,
+  role: "stale" | "holder",
+  pinPath: string,
+  readyPath: string,
+  releasePath: string,
+): void {
+  const lockPath = `${receiptPath}.lock`;
+  const originalOpen = fs.openSync.bind(fs);
+  const originalLink = fs.linkSync.bind(fs);
+  let reused = false;
+  let paused = false;
+  const pause = () => {
+    paused = true;
+    fs.writeFileSync(readyPath, "ready");
+    waitFor(releasePath);
+  };
+  if (role === "holder") {
+    fs.openSync = ((filename: fs.PathLike, flags: string | number, mode?: fs.Mode) => {
+      if (!reused && String(filename) === lockPath && String(flags).includes("x")) {
+        originalLink(pinPath, lockPath);
+        reused = true;
+        const descriptor = originalOpen(lockPath, "r+");
+        fs.ftruncateSync(descriptor, 0);
+        return descriptor;
+      }
+      return originalOpen(filename, flags, mode);
+    }) as typeof fs.openSync;
+  }
+  fs.linkSync = ((existingPath: fs.PathLike, newPath: fs.PathLike) => {
+    const target = String(newPath);
+    if (role === "stale" && !paused && target.endsWith(".recovery-owner-1")) pause();
+    const publishes = role === "stale" && target.endsWith(".recovery-owner-1");
+    const result = originalLink(existingPath, newPath);
+    if (publishes) fs.writeFileSync(`${readyPath}-published`, "published");
+    if (role === "holder" && reused && !paused && target.endsWith(".recovery-owner-0")) pause();
+    return result;
+  }) as typeof fs.linkSync;
+}
+
 function installNamespaceHandoffPause(
   receiptPath: string,
   pinPath: string,
@@ -493,6 +540,15 @@ if (mode === "hold") {
     Number(process.argv[6]),
     process.argv[7]!,
     process.argv[8] as "observe" | "retire",
+  );
+  await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
+} else if (mode === "mixed-epoch-claim") {
+  installMixedEpochPause(
+    process.argv[3]!,
+    process.argv[6] as "stale" | "holder",
+    process.argv[7]!,
+    process.argv[8]!,
+    process.argv[9]!,
   );
   await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
 } else if (mode === "crash-claim") {
