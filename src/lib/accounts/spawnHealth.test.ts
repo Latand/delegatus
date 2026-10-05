@@ -635,3 +635,56 @@ for (const withFallback of [false, true]) test(`a pinned expired Claude account 
     }
   } finally { providerReply = null; removeStateDir(); }
 });
+
+for (const outcome of ["invalid", "unknown"] as const) test(`a changed expired pin stays unreserved after ${outcome} refresh`, async () => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const { readAccountSource, writeAccountSource } = await import("./accountsStore");
+  const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/spawn/route");
+  const { clearAccountTestState } = await import("./accountsStoreFixture");
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
+  const { resetLegacyDocumentStoresForTests } = await import("@/lib/state/legacyDocumentStore");
+  resetLegacyDocumentStoresForTests();
+  const pin = createManagedClaudeAccount("Rejected refresh pin");
+  const fallback = createManagedClaudeAccount("Rejected refresh fallback");
+  fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() - 1,
+  } }), { mode: 0o600 });
+  fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+  } }), { mode: 0o600 });
+  const cwd = fs.mkdtempSync(path.join(STATE_SANDBOX, "rejected-refresh-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  let requests = 0;
+  providerReply = () => {
+    requests += 1;
+    if (requests === 1) {
+      const read = readAccountSource("claude-accounts.json");
+      if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+      const catalog = read.body as { accounts: { id: string; label: string }[] };
+      catalog.accounts.find(row => row.id === pin.id)!.label = "Changed rejected pin";
+      writeAccountSource("claude-accounts.json", catalog);
+      return Response.json({ error: outcome === "invalid" ? "invalid_grant" : "temporarily_unavailable" }, { status: outcome === "invalid" ? 401 : 500 });
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome}` }),
+    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    providerReply = null;
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  }
+});

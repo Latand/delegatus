@@ -162,6 +162,13 @@ function currentClaudeAccount(account: ClaudeAccount): ClaudeAccount {
   return current;
 }
 
+function claudeCatalogIdentity(value: ClaudeAccount): string {
+  return JSON.stringify([
+    value.id, value.label, value.kind, path.resolve(value.home),
+    path.resolve(value.projectsDir), value.provider ?? null, value.createdAt,
+  ]);
+}
+
 async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRevision = false): Promise<ClaudeValidityProbeResult> {
   const options = { holder: "Claude validity snapshot", caller: "spawn health" };
   let original: Awaited<ReturnType<typeof accountProbeSnapshot<ClaudeAccount>>>;
@@ -172,11 +179,7 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
   }
   // The supplied catalog row predates OAuth refresh. Credential rotation is
   // expected there; a changed or removed pin must still refuse admission.
-  const catalogIdentity = (value: ClaudeAccount) => JSON.stringify([
-    value.id, value.label, value.kind, path.resolve(value.home),
-    path.resolve(value.projectsDir), value.provider ?? null, value.createdAt,
-  ]);
-  if (catalogIdentity(original.account) !== catalogIdentity(account)) throw new AccountAdmissionChangedError();
+  if (claudeCatalogIdentity(original.account) !== claudeCatalogIdentity(account)) throw new AccountAdmissionChangedError();
   const credentialIdentity = claudeProbeCredentialIdentity(original.account.home);
   if (credentialIdentity === null) throw new ClaudeCredentialUnavailableError();
   for (let attempt = 0; attempt < (retryUnrelatedRevision ? 3 : 1); attempt += 1) {
@@ -212,6 +215,18 @@ async function refreshValidityProbe(account: ClaudeAccount, retryUnrelatedRevisi
   const expectedCredentialIdentity = retryUnrelatedRevision ? claudeProbeCredentialIdentity(current.home) : undefined;
   if (expectedCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
   const refreshed = await refreshClaudeOauth(current, undefined, expectedCredentialIdentity);
+  // A rejection/unknown result can still follow an external pin change.
+  // Revalidate before either branch can degrade the pin or burn its key.
+  if (retryUnrelatedRevision) {
+    let after: Awaited<ReturnType<typeof accountProbeSnapshot<ClaudeAccount>>>;
+    try { after = await accountProbeSnapshot(() => currentClaudeAccount(current), { holder: "Claude refresh recheck", caller: "spawn health" }); }
+    catch (error) {
+      if (error instanceof UnknownClaudeAccountError) throw new AccountAdmissionChangedError();
+      throw error;
+    }
+    if (claudeCatalogIdentity(after.account) !== claudeCatalogIdentity(current)) throw new AccountAdmissionChangedError();
+    if (refreshed !== "refreshed" && claudeProbeCredentialIdentity(current.home) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
+  }
   if (refreshed === "invalid") {
     return classifySpawnAccountAdmission({ enabled: true, authentication: "failed", limits: "unknown", stale: false, retryAt: null });
   }
