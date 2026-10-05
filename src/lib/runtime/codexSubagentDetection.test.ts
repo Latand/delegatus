@@ -116,6 +116,103 @@ test("child history uses the permission at activity time across denied and grant
   expect(recordCodexSubagentViolation(registry, parentPath, "denied-child", "thread_spawn", undefined, undefined, receipts, "2002-06-01T00:00:00.000Z")).toBe(true);
 });
 
+test("a same-path grant retains denied history for scanner discovery and durable replay", async () => {
+  const { registry, parentPath, sessionId, conversation } = launched();
+  const deniedAt = new Date().toISOString();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const profile = emptyLaunchProfile({ cwd: root, title: "Exercise granted resume", allowSubagents: true });
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: conversation.id,
+    purpose: "resume-successor", transport: "tmux", expectedArtifactPath: parentPath,
+    origin: { kind: "resume-successor" }, launchProfile: profile });
+  if (begun.kind !== "created") throw new Error("expected resume receipt");
+  registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId }, artifactPath: parentPath,
+    cwd: root, accountId: null, launchProfile: profile, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  expect(registry.conversationForPath(parentPath)?.generations[0]?.launchProfile.allowSubagents).toBeTrue();
+  const grantedAt = new Date().toISOString();
+  const rows = [
+    { timestamp: deniedAt, type: "response_item", payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: "denied-before-grant" } },
+    { timestamp: grantedAt, type: "response_item", payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: "granted-after-resume" } },
+  ];
+  fs.appendFileSync(parentPath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  const entry = { engine: "codex", path: parentPath, size: fs.statSync(parentPath).size,
+    mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
+  observeCodexSubagentTranscripts(registry, [entry]);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
+  for (const [id, activityAt] of [["denied-ledger-before-grant", deniedAt], ["granted-after-resume", grantedAt]]) {
+    observeCodexSubagentEvent(registry, parentPath, { kind: "item", turnId: null, phase: "completed", seq: 1,
+      item: { type: "collabAgentToolCall", tool: "spawnAgent", id }, activityAt });
+  }
+  observeCodexSubagentTranscripts(registry, [entry]);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+});
+
+test.each([[false, "starting"], [false, "failed"], [true, "starting"], [true, "failed"]] as const)(
+  "an unactuated resume leaves permission %j effective in state %s", async (allowed, state) => {
+    const { registry, parentPath, conversation } = launched(allowed);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const profile = emptyLaunchProfile({ cwd: root, title: "Exercise unactuated resume", allowSubagents: !allowed });
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: conversation.id,
+      purpose: "resume-successor", transport: "tmux", expectedArtifactPath: parentPath,
+      origin: { kind: "resume-successor" }, launchProfile: profile });
+    if (begun.kind !== "created") throw new Error("expected resume intent");
+    if (state === "failed") registry.failSpawn(begun.receipt.launchId, "fixture failure before actuation");
+    expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]?.key).toBeNull();
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(parentPath, JSON.stringify({ timestamp, type: "response_item", payload: {
+      type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "still-running-native" } }) + "\n");
+    const entry = { engine: "codex", path: parentPath, size: fs.statSync(parentPath).size,
+      mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
+    observeCodexSubagentTranscripts(registry, [entry]);
+    observeCodexSubagentEvent(registry, parentPath, { kind: "item", turnId: null, phase: "completed", seq: 1,
+      item: { type: "collabAgentToolCall", tool: "spawnAgent", id: "still-running-native" }, activityAt: timestamp });
+    expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(allowed ? 0 : 1);
+  },
+);
+
+test.each(["sub_agent_activity", "SubAgentActivity", "CollabAgentToolCall"])(
+  "native rollout schema %s is shared by transcript detection and adoption time lookup", (schema) => {
+    for (const route of ["scanner", "adoption"]) for (const allowed of [false, true]) {
+      const { registry, parentPath, sessionId, conversation } = launched(allowed);
+      const timestamp = new Date().toISOString();
+      const activity = { id: "native-schema-fixture", kind: "completed", agent_thread_id: randomUUID(), agent_path: "/team/child" };
+      const payload = schema === "sub_agent_activity"
+        ? { type: schema, event_id: activity.id, kind: "started", agent_thread_id: activity.agent_thread_id,
+          agent_path: activity.agent_path, occurred_at_ms: Date.parse(timestamp) }
+        : { type: "item_completed", thread_id: sessionId, turn_id: "fixture-turn", started_at_ms: Date.parse(timestamp),
+          completed_at_ms: Date.parse(timestamp), item: schema === "SubAgentActivity"
+            ? { type: schema, ...activity }
+            : { type: schema, id: activity.id, tool: "spawn_agent", status: "failed", sender_thread_id: sessionId,
+              receiver_thread_ids: [], agents_states: {}, prompt: "PRIVATE NATIVE CONTENT" } };
+      const historicMs = Date.parse("2000-01-01T00:00:00.000Z");
+      const historic = schema === "sub_agent_activity" ? { ...payload, event_id: "historical-schema", occurred_at_ms: historicMs }
+        : { ...payload, started_at_ms: historicMs, completed_at_ms: historicMs,
+          item: { ...payload.item, id: "historical-schema" } };
+      fs.appendFileSync(parentPath, [
+        { timestamp, type: "event_msg", payload },
+        // The file write time is later than the activity's own native time.
+        { timestamp, type: "event_msg", payload: historic },
+        { timestamp, type: "event_msg", payload: { type: "item_completed", item: {
+          type: "McpToolCall", id: "mcp-fixture", name: "spawn_agent", server: "viewer" } } },
+      ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+      const item = schema === "CollabAgentToolCall" ? { type: "collabAgentToolCall", id: activity.id, tool: "spawnAgent" }
+        : { type: "subAgentActivity", id: activity.id };
+      const entry = { engine: "codex", path: parentPath, size: fs.statSync(parentPath).size,
+        mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
+      // Exercise each observer independently before checking cross-route deduplication.
+      if (route === "scanner") observeCodexSubagentTranscripts(registry, [entry]);
+      else observeCodexSubagentEvent(registry, parentPath, { kind: "item", turnId: null, phase: "completed", seq: 1, item, activityAt: null });
+      expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(allowed ? 0 : 1);
+      observeCodexSubagentEvent(registry, parentPath, { kind: "item", turnId: null, phase: "completed", seq: 1,
+        item: { ...item, id: "historical-schema" }, activityAt: null });
+      observeCodexSubagentTranscripts(registry, [entry]);
+      observeCodexSubagentTranscripts(registry, [entry]);
+      const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+      expect(events).toHaveLength(allowed ? 0 : 1);
+      expect(JSON.stringify(events)).not.toContain("PRIVATE");
+    }
+  },
+);
+
 test("native transcript calls alert without a child while prose, MCP calls and pre-admission history stay clear", () => {
   const { registry, parentPath, conversation } = launched();
   const timestamp = new Date().toISOString();

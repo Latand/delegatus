@@ -15,6 +15,11 @@ const childObservations = new WeakMap<AgentRegistry, Set<string>>();
 const v1Methods = new Set(["spawn_agent", "resume_agent", "send_input", "wait", "wait_agent", "close_agent"]);
 const v2Methods = new Set(["spawn_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]);
 
+/** A reserved resume intent has not imposed its profile on a native process. */
+function hasCodexLaunchEvidence(receipt: SpawnReceipt): boolean {
+  return receipt.key?.engine === "codex" || receipt.verifiedHost != null;
+}
+
 /** The native transcript stores namespace separately from the method name. */
 export function nativeCodexFunctionCallMethod(payload: Record<string, unknown>, toolNamespaces: ReadonlySet<string> = new Set(["collaboration"])): string | null {
   const name = payload.name;
@@ -62,9 +67,27 @@ export function nativeCodexActivityMethod(item: unknown): string | null {
   if (!item || typeof item !== "object") return null;
   const source = item as Record<string, unknown>;
   if (source.type === "autoApprovalReview" || source.type === "guardian_assessment") return "autoApprovalReview";
-  if (source.type === "subAgentActivity") return "subAgentActivity";
-  if (source.type !== "collabAgentToolCall") return null;
+  if (source.type === "subAgentActivity" || source.type === "SubAgentActivity" || source.type === "sub_agent_activity") return "subAgentActivity";
+  if (source.type !== "collabAgentToolCall" && source.type !== "CollabAgentToolCall") return null;
   return typeof source.tool === "string" && nativeMethods.has(source.tool) ? source.tool : "collabAgentToolCall";
+}
+
+/** Native rollout EventMsg and TurnItem schemas differ from app-server items. */
+function nativeTranscriptEvent(payload: Record<string, unknown>): { method: string; id: string } | null {
+  const item = payload.type === "item_completed" || payload.type === "item_started" ? payload.item : payload;
+  const method = nativeCodexActivityMethod(item);
+  if (!method) return null;
+  const source = item as Record<string, unknown>;
+  const id = source.event_id ?? source.call_id ?? source.id;
+  return typeof id === "string" ? { method, id } : null;
+}
+
+function transcriptActivityTime(row: Record<string, unknown>, payload: Record<string, unknown>): string | undefined {
+  for (const field of ["occurred_at_ms", "started_at_ms", "completed_at_ms"]) {
+    const value = payload[field];
+    if (typeof value === "number" && value > 0 && Number.isFinite(new Date(value).getTime())) return new Date(value).toISOString();
+  }
+  return typeof row.timestamp === "string" ? row.timestamp : undefined;
 }
 
 export function recordCodexSubagentViolation(
@@ -80,11 +103,11 @@ export function recordCodexSubagentViolation(
   const conversation = registry.conversationForPath(parentPath);
   if (!conversation || conversation.engine !== "codex") return false;
   const generation = conversation.generations.find((candidate) => candidate.path === parentPath);
-  if (generation?.launchProfile.allowSubagents !== false) return false;
+  if (!generation) return false;
   // Scanner imports also have a default false profile. A launch receipt proves
   // Delegatus actually imposed the permission on this conversation.
   const launched = (receipts ?? Object.values(registry.readOnlySnapshot().receipts)).filter((receipt) =>
-    receipt.engine === "codex" && receipt.artifactPath === parentPath
+    receipt.engine === "codex" && receipt.artifactPath === parentPath && hasCodexLaunchEvidence(receipt)
     && Date.parse(receipt.createdAt) <= Date.parse(activityAt))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   if (launched?.launchProfile.allowSubagents !== false) return false;
@@ -123,11 +146,13 @@ function transcriptActivityAt(registry: AgentRegistry, parentPath: string, id: s
   const namespaces = configuredToolNamespaces({ path: parentPath, cwd });
   for (const row of tail.records) {
     const payload = row.payload as Record<string, unknown> | undefined;
-    if (!payload || (payload.call_id ?? payload.id) !== id || typeof row.timestamp !== "string") continue;
-    const native = row.type === "response_item" && payload.type === "function_call"
-      ? nativeCodexFunctionCallMethod(payload, namespaces)
-      : row.type === "event_msg" ? nativeCodexActivityMethod(payload) : null;
-    if (native && Number.isFinite(Date.parse(row.timestamp))) return row.timestamp;
+    if (!payload || typeof payload !== "object") continue;
+    const method = row.type === "response_item" && payload.type === "function_call"
+      ? nativeCodexFunctionCallMethod(payload, namespaces) : null;
+    const evidence = method && typeof payload.call_id === "string" ? { method, id: payload.call_id }
+      : row.type === "event_msg" ? nativeTranscriptEvent(payload) : null;
+    const activityAt = transcriptActivityTime(row, payload);
+    if (evidence?.id === id && activityAt && Number.isFinite(Date.parse(activityAt))) return activityAt;
   }
   return null;
 }
@@ -173,7 +198,7 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
   // Calls whose child never materializes are still native activity. Reuse the
   // scanner's bounded tail reader; never search conversation prose or scripts.
   if (entries.some((entry) => entry.engine === "codex")) receipts ??= Object.values(registry.readOnlySnapshot().receipts);
-  const deniedPaths = new Set(receipts?.filter((receipt) => receipt.engine === "codex" && receipt.launchProfile.allowSubagents === false)
+  const deniedPaths = new Set(receipts?.filter((receipt) => receipt.engine === "codex" && hasCodexLaunchEvidence(receipt) && receipt.launchProfile.allowSubagents === false)
     .map((receipt) => receipt.artifactPath));
   const observations = transcriptObservations.get(registry) ?? new Map<string, string>();
   transcriptObservations.set(registry, observations);
@@ -193,16 +218,21 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
       const payload = row.payload as Record<string, unknown> | undefined;
       if (!payload || typeof payload !== "object") continue;
       let method: string | null = null;
+      let id: unknown;
       if (row.type === "response_item" && payload.type === "function_call" && typeof payload.name === "string") {
         if (typeof payload.namespace === "string" && payload.namespace !== "collaboration" && payload.namespace !== "multi_agent_v1"
           && !payload.namespace.startsWith("mcp__") && v2Methods.has(payload.name)) namespaces ??= configuredToolNamespaces(entry);
         method = nativeCodexFunctionCallMethod(payload, namespaces);
-      } else if (row.type === "event_msg") method = nativeCodexActivityMethod(payload);
+        id = payload.call_id;
+      } else if (row.type === "event_msg") {
+        const evidence = nativeTranscriptEvent(payload);
+        method = evidence?.method ?? null;
+        id = evidence?.id;
+      }
       if (!method) continue;
-      const id = payload.call_id ?? payload.id;
       if (typeof id !== "string") continue;
       recordCodexSubagentViolation(registry, entry.path, `item:${id}`, method, at, collect, receipts,
-        typeof row.timestamp === "string" ? row.timestamp : at);
+        transcriptActivityTime(row, payload) ?? at);
     }
     completed.push([entry.path, signature]);
   }

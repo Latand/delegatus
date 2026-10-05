@@ -157,11 +157,13 @@ and leaves its observations pending for the next tick; pipeline and account
 controllers continue while the journal is unavailable. The app-server ledger
 retains its stricter retry-before-acknowledgement behavior.
 
-A violation requires the exact parent generation to deny sub-agents and an
-explicit denied Delegatus launch receipt for its artifact. Imported standalone
+A violation requires a tracked parent generation and an explicit denied
+Delegatus launch receipt for its artifact, effective when activity occurred. Imported standalone
 sessions with a default false profile produce no false alert. The most recent
-receipt at the activity's timestamp must deny delegation; child history from a
-permission-enabled interval stays clear. Live native app-server items persist
+receipt with a bound native key or verified host at the activity's timestamp
+must deny delegation. Reserved and failed intents without launch evidence do
+not change that interval. Child history from a permission-enabled interval stays
+clear, and a later grant preserves earlier denied history. Live native app-server items persist
 their original observation time, including while startup buffers notifications.
 Adopted history and older ledger items with no time join their native item id to
 the bounded authoritative transcript tail. History with no timestamp evidence
@@ -172,6 +174,16 @@ through `lifecycle_events` query and its immediate high-signal digest. Stable
 native-item/child keys deduplicate replay and survive restarts. Summaries contain
 only a fixed method label; native prompts and child results are discarded.
 Detection adds no controls and does not alter the agent's execution state.
+
+The transcript observer and adoption lookup share normalization for the
+persisted native protocol: legacy `sub_agent_activity` uses `event_id`, while
+`item_completed` wraps `SubAgentActivity` or `CollabAgentToolCall` with `item.id`
+and snake_case tool labels. Their original `occurred_at_ms`, `started_at_ms` or
+`completed_at_ms` takes precedence over the rollout write timestamp. Nested
+MCP items stay clear. These shapes follow the tagged
+[native protocol](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/protocol.rs),
+[native items](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/protocol/src/items.rs)
+and [rollout persistence policy](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/rollout/src/policy.rs).
 
 ## Newer CLI delta
 
@@ -268,6 +280,13 @@ timestamped allowed ledger items and history without timing evidence stay clear;
 denied historical and live items alert. Replaying the live item remains
 deduplicated. The preceding implementation recorded five historical violations
 where one was expected; the corrected regression passes.
+
+Receipt and native-schema regressions failed in six cases on the preceding
+implementation. They independently exercise scanner discovery and adoption's
+timestamp lookup, preserve denied history after a granted same-path resume,
+ignore pending/failed unactuated intents in both permission directions, and
+deduplicate cross-observer replay. Native event times also exclude pre-admission
+history written later. The corrected detector suite passes all 30 tests.
 
 Heavy commands use `scripts/gate-slot.sh`. Type checking and changed-file lint
 are also run. Publication uses the repository's local pre-commit and pre-push
