@@ -26,6 +26,7 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
 import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
@@ -39,12 +40,16 @@ import {
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
 let metadataState: string;
 let previousMetadataState: string | undefined;
+let restoreFeatures: () => void;
+const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.plugins=false"];
 beforeEach(() => {
+  restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
   previousMetadataState = process.env.LLV_STATE_DIR;
   metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
   process.env.LLV_STATE_DIR = metadataState;
 });
 afterEach(() => {
+  restoreFeatures();
   if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousMetadataState;
   fs.rmSync(metadataState, { recursive: true, force: true });
@@ -123,6 +128,36 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
     else process.env.LLV_STATE_DIR = previousStateDirectory;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("fresh and adopted app-server hosts enforce native delegation at process and thread boundaries", async () => {
+  for (const allowed of [false, true]) for (const resumed of [false, true]) {
+    const server = new FakeAppServer("policy-thread");
+    const captured: { args?: string[] } = {};
+    const options = { cwd: "/repo", allowSubagents: allowed, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
+    try {
+      expect(captured.args).toContain(`agents.enabled=${allowed}`);
+      const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
+      const config = params?.config;
+      expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed } });
+      for (const feature of ["multi_agent_v2", "future_worker"]) {
+        expect(captured.args?.includes(`features.${feature}=false`)).toBe(!allowed);
+        if (!allowed) expect(config).toMatchObject({ features: { [feature]: false } });
+      }
+    } finally { await host.release(); }
+  }
+});
+
+test("failed app-server feature discovery releases scratch and never starts a host", async () => {
+  const restore = setCodexFeatureReaderForTest(() => { throw new Error("fixture inventory failure"); });
+  let launches = 0;
+  let releases = 0;
+  try {
+    await expect(CodexAppServerHost.start({ cwd: "/repo", releaseCleanup: () => { releases += 1; }, spawnProcess: () => { launches += 1; throw new Error("must not spawn"); } })).rejects.toThrow("fixture inventory failure");
+    expect(launches).toBe(0);
+    expect(releases).toBe(1);
+  } finally { restore(); }
 });
 
 class FailingEventStore implements RuntimeEventStore {
@@ -608,7 +643,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
-    expect(captured.args).toEqual(["app-server", "--enable", "realtime_conversation"]);
+    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, "app-server", "--enable", "realtime_conversation"]);
     expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
       config: {
         mcp_servers: {
@@ -640,6 +675,7 @@ describe("CodexAppServerHost", () => {
         : await CodexAppServerHost.start(options);
 
       expect(captured.args).toEqual([
+        ...DENIED_FEATURE_ARGS,
         "-c", `default_permissions=${JSON.stringify(permissionProfile)}`,
         "-c", permissionProfileConfig,
         "app-server", "--enable", "realtime_conversation",
@@ -2052,6 +2088,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
     expect(captured.args).toEqual([
+      ...DENIED_FEATURE_ARGS,
       "-c",
       "cli_auth_credentials_store=file",
       "app-server",

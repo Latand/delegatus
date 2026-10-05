@@ -21,6 +21,7 @@ import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { codexSubagentArgs } from "./codexSpawnPolicy";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -450,7 +451,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
   else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
   if (options.readOnly) args.push("--sandbox", "read-only");
-  if (!options.allowSubagents) args.push("--disable", "multi_agent");
+  args.push(...codexSubagentArgs(args[0], options.allowSubagents, process.env, true));
   const command = args.map(shellQuote).join(" ");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
@@ -602,7 +603,7 @@ export function resumeSpecForSession(
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
-  if (!options.allowSubagents) command += " --disable multi_agent";
+  command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
   command += ` resume ${sessionId}`;
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),

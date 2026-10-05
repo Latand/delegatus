@@ -25,6 +25,7 @@ import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } fr
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -1435,7 +1436,16 @@ export class CodexAppServerHost implements EngineHost {
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
+    const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
+    let features: ReturnType<typeof readCodexFeatures>;
+    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    catch (error) { options.releaseCleanup?.(); throw error; }
+    const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
+    const granted = grantedPlugins(options.plugins);
+    if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     const args = [
+      "-c", `agents.enabled=${options.allowSubagents === true}`,
+      ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1447,7 +1457,6 @@ export class CodexAppServerHost implements EngineHost {
       "--enable",
       "realtime_conversation",
     ];
-    const granted = grantedPlugins(options.plugins);
     let childEnv: NodeJS.ProcessEnv;
     try {
       childEnv = withTelegramConnectorGrant(
@@ -1466,7 +1475,7 @@ export class CodexAppServerHost implements EngineHost {
     }
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
+      child = spawnProcess(binary, args, {
         cwd: options.cwd,
         env: childEnv,
         detached: true,
@@ -1511,6 +1520,7 @@ export class CodexAppServerHost implements EngineHost {
            environment, so only a thread whose app-server holds one goes
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
+        features,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       if (memoryHook) {

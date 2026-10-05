@@ -4,6 +4,12 @@ import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } fro
 import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
 import { telegramMcpUrl } from "./telegram/packaging";
 
+test("denied Codex threads override model-default delegation and unknown features", () => {
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, agents: { enabled: true }, features: { multi_agent: true, multi_agent_v2: true, future_worker: true } } }, false,
+    undefined, undefined, "stdio", [{ name: "future_worker", stage: "stable", enabled: true }]);
+  expect(config).toMatchObject({ agents: { enabled: false }, features: { multi_agent: false, multi_agent_v2: false, future_worker: false } });
+});
+
 test("stdio Viewer forwards the current launch capability without embedding it in thread config", () => {
   const configured = { command: "bun", env_vars: ["CUSTOM_VIEWER_ENV"], env: { CUSTOM_VIEWER_ENV: "kept" } };
   for (const servers of [{}, { viewer: configured }]) {
@@ -56,7 +62,8 @@ test("headless Codex threads allow only the registered Viewer MCP server", () =>
       },
       docs: { enabled: false },
     },
-    features: { plugins: false, apps: false, multi_agent: false, realtime_conversation: true },
+    features: { plugins: false, apps: false, multi_agent: false, multi_agent_v2: false, realtime_conversation: true },
+    agents: { enabled: false },
     include_apps_instructions: false,
   });
 });
@@ -67,7 +74,8 @@ test("configurations without Viewer add the packaged server and disable every un
       docs: { enabled: false },
       viewer: { ...viewerMcpServerEntry(), env_vars: ["LLV_SPAWN_CAPABILITY"], enabled: true, default_tools_approval_mode: "approve" },
     },
-    features: { plugins: false, apps: false, multi_agent: false, realtime_conversation: true },
+    features: { plugins: false, apps: false, multi_agent: false, multi_agent_v2: false, realtime_conversation: true },
+    agents: { enabled: false },
     include_apps_instructions: false,
   });
 });

@@ -9,6 +9,7 @@ import {
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { operatorTelegramCodexEntry } from "@/lib/runtime/telegramConnectorEnv";
+import { codexSubagentConfig, type CodexFeature } from "@/lib/agent/codexSpawnPolicy";
 
 type JsonObject = Record<string, unknown>;
 const MCP_APPROVAL_MODES = new Set(["auto", "prompt", "writes", "approve"]);
@@ -72,6 +73,7 @@ export function headlessCodexThreadConfig(
   /** This launch's transport (`viewerMcpTransportForLaunch`); stdio unless the
       caller knows the thread's environment carries a capability. */
   viewerTransport: ViewerMcpTransport = "stdio",
+  features: readonly CodexFeature[] = [],
 ): JsonObject {
   const config = record(record(configRead)?.config);
   const servers = record(config?.mcp_servers);
@@ -146,10 +148,12 @@ export function headlessCodexThreadConfig(
        must be restated here or thread/realtime/start fails locally (#621). */
     features: {
       ...CODEX_VIEWER_SPAWN_FEATURES,
+      ...codexSubagentConfig(features, allowSubagents),
       plugins: granted.length > 0,
       multi_agent: allowSubagents,
       realtime_conversation: true,
     },
+    agents: { enabled: allowSubagents },
     ...(granted.length > 0 ? { plugins: pluginTable(config, granted) } : {}),
     include_apps_instructions: false,
   };

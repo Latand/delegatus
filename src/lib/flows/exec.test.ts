@@ -7,11 +7,13 @@ import path from "node:path";
 
 import { procBackend } from "@/lib/proc";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 
 /* The state dir must point at a sandbox before store.ts computes its
    module-level constants, so exec/store load dynamically after the env set. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-exec-test-"));
 const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
+const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
 const { forgetHeadlessReview, headlessReviewStatus, reviewerCommand, scanEventStream, startHeadlessReview, terminateHeadlessReviewerGroup, terminateHeadlessReviewerGroupAndWait } = await import("./exec");
 const { prepareHeadlessPublication, runHeadlessCodexOnce, reviewerEnvironment } = await import("@/lib/agent/headless");
 const { reviewerPrompt } = await import("./prompts");
@@ -20,7 +22,16 @@ const { registerPipelineTick } = await import("../pipelines/controllerSignal");
 
 afterAll(() => {
   restorePolicyReader();
+  restoreFeatures();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
+
+test("headless exec denies model-selected v2 delegation and unknown features", () => {
+  const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
+  expect(built.args).toContain("agents.enabled=false");
+  for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
+    expect(built.args[built.args.indexOf(feature) - 1]).toBe("--disable");
+  }
 });
 
 test("headless launch asynchronously retains publication fields through restrictive shell filters", async () => {
