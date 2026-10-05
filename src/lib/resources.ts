@@ -2277,13 +2277,20 @@ async function collectResourcesInWorker(
         });
       }
     };
-    const onStdinError = (error: Error) => finish({
-      type: "failure",
-      reason: "collector-crash",
-      cause: "worker-input",
-      message: "resource collector worker input failed",
-      error,
-    });
+    const onStdinError = (error: Error) => {
+      /* A worker that goes away without reading its request breaks the pipe.
+         What it did is still on its way: the message it wrote, or its exit.
+         Finishing here would report the pipe in place of either. A worker
+         that only closed its input and says nothing ends at its timeout. */
+      if ((error as NodeJS.ErrnoException).code === "EPIPE") return;
+      finish({
+        type: "failure",
+        reason: "collector-crash",
+        cause: "worker-input",
+        message: "resource collector worker input failed",
+        error,
+      });
+    };
     worker.stdout.on("data", onStdout);
     worker.stderr.on("data", onStderr);
     worker.stdin.once("error", onStdinError);

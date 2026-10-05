@@ -2629,6 +2629,31 @@ describe("resource recurring reads", () => {
     });
   });
 
+  test("a worker that exits without reading its request reports its exit over the broken input pipe", async () => {
+    await withResourceWorkerScript([
+      "printf 'unread-request-trace\\n' >&2",
+      "exit 7",
+    ], async () => {
+      /* A request larger than a pipe holds stays partly unwritten until the
+         worker is gone, so the write fails with EPIPE on every run. */
+      const files = resourceWorkerFileSnapshot(
+        Array.from({ length: 4_000 }, (_, index) => ({ ...entry, path: `${PATHNAME}.${index}`, name: `${PATHNAME}.${index}` })),
+        () => null,
+      );
+      expect(Buffer.byteLength(JSON.stringify(files))).toBeGreaterThan(1024 * 1024);
+      const outcome = await workerTestReader({ initial: null, readFiles: async () => files }).read(true);
+
+      expect(outcome.diagnostic).toMatchObject({
+        degradedReason: "collector-crash",
+        failure: {
+          cause: "worker-exit",
+          message: "resource collector worker exited before observation (7)",
+          stderr: expect.stringContaining("unread-request-trace"),
+        },
+      });
+    });
+  });
+
   test("a keyed Authorization Bearer credential is fully redacted from worker stderr", async () => {
     await withResourceWorkerScript([
       `printf '${AUTHORIZATION_LABEL}: Bearer tracer-secret-sentinel\\nsafe diagnostic suffix\\n' >&2`,
