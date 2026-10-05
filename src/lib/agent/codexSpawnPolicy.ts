@@ -61,8 +61,8 @@ export function parseCodexFeatures(output: string): CodexFeature[] {
 type FeatureReader = (binary: string, env: NodeJS.ProcessEnv) => CodexFeature[];
 let testReader: FeatureReader | undefined;
 
-/** Same explicit dependency seam used by the launch shell-policy tests. */
-export function setCodexFeatureReaderForTest(reader: FeatureReader): () => void {
+/** Scoped test override; undefined opts into the real interpreter probe. */
+export function setCodexFeatureReaderForTest(reader: FeatureReader | undefined): () => void {
   if (process.env.NODE_ENV !== "test") throw new Error("Codex feature test reader is unavailable");
   const previous = testReader;
   testReader = reader;

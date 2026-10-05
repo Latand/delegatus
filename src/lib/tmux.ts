@@ -1229,9 +1229,17 @@ export async function sendShellCommandToPane(
     script = path.join(base, `delegatus-command-${crypto.randomUUID()}.sh`);
     input = `. ${shellSingleQuote(script)}`;
     if (Buffer.byteLength(input) > 2048) throw new Error("tmux command file path exceeds the safe tty input limit");
+    let fileCommand = command;
+    if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1") {
+      // The adapter rewrites container CLI paths for the host shell. A source
+      // command only exposes the filename to its usual send-keys translation.
+      const translated = await run(["delegatus-host-command-text", command]);
+      if (translated.code !== 0) throw new Error(translated.stderr.trim() || "could not translate command for host pane");
+      fileCommand = translated.stdout;
+    }
     // Sourcing keeps the pane's shell and argv semantics. The shell opens the
     // file before unlinking it, removing the capability before CLI startup.
-    fs.writeFileSync(script, `command rm -f -- ${shellSingleQuote(script)}\n${command}\n`, { mode: 0o600, flag: "wx" });
+    fs.writeFileSync(script, `command rm -f -- ${shellSingleQuote(script)}\n${fileCommand}\n`, { mode: 0o600, flag: "wx" });
   }
   try {
     for (const [args, message] of [

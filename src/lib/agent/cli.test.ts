@@ -34,6 +34,12 @@ test("fresh and resumed terminal launches deny all native agent routes and futur
   const sessionId = randomUUID();
   const transcript = path.join(home, "sessions", `rollout-${sessionId}.jsonl`);
   fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: SANDBOX } }) + "\n");
+  const binary = path.join(SANDBOX, "codex-policy-mcp-stub");
+  fs.writeFileSync(binary, "#!/bin/sh\nprintf '[{\"name\":\"viewer\"}]'\n");
+  fs.chmodSync(binary, 0o755);
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  try {
   for (const allowed of [false, true]) {
     for (const spec of [freshSpecFor("codex", SANDBOX, { codexHome: home, allowSubagents: allowed }), resumeSpecFor("codex-sessions", transcript, { allowSubagents: allowed })]) {
       expect(spec?.command).toContain("--no-daemon");
@@ -44,6 +50,10 @@ test("fresh and resumed terminal launches deny all native agent routes and futur
         expect(normalized?.includes(`--disable ${feature}`)).toBe(!allowed);
       }
     }
+  }
+  } finally {
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousBinary;
   }
 });
 

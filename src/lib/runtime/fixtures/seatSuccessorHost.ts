@@ -1,4 +1,4 @@
-import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +11,7 @@ import { FileRuntimeEventStore } from "../eventStore";
 import { adoptCodexRegistryHosts, bindCodexHostPersistence } from "../registry";
 
 // This separate process also launches only the fixture interpreter.
-setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true"));
+beginCodexFeatureFixture();
 
 const [mode, registryPath, eventsPath, transcriptPath, mcpProofPath, readyPath] = process.argv.slice(2);
 if ((mode !== "incumbent" && mode !== "successor")

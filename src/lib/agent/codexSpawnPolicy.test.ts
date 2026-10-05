@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import zlib from "node:zlib";
 import fs from "node:fs";
@@ -12,6 +12,10 @@ import { prepareAgentPublicationSpec, resumeSpecForSession, freshSpecFor, withSp
 import { sendShellCommandToPane } from "@/lib/tmux";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+
+let restoreFeatureReader: () => void;
+beforeEach(() => { restoreFeatureReader = setCodexFeatureReaderForTest(undefined); });
+afterEach(() => restoreFeatureReader());
 
 test("every agent-spawning feature of the installed CLI is classified by the policy", () => {
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
