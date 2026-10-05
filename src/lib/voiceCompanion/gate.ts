@@ -17,6 +17,12 @@ import type { Id } from "./contract";
  * negation, a quotation, a condition, a plain question, an older or missing
  * input. The companion asks instead.
  *
+ * The whole completed input is read, every sentence of it. A sentence beside
+ * the request that takes it back ("Actually, do not send anything."), makes it
+ * conditional ("Only if the build is green."), negates or asks something
+ * refuses the input, and so does a retraction after a comma in the request's
+ * own sentence.
+ *
  * Admission is checked again whenever the operator speaks and once more
  * before the send: a proposal lives only while its source is still the
  * operator's last input and still reads as it did when the proposal froze.
@@ -28,6 +34,7 @@ export type GateRefusal =
   | "stale_input"
   | "no_orchestrator"
   | "negated"
+  | "retracted"
   | "conditional"
   | "question"
   | "quoted"
@@ -47,6 +54,22 @@ const QUOTES = /["“”„«»]/u;
 /* A condition anywhere in the sentence makes the request conditional. */
 const CONDITION = /\b(?:if|unless|maybe|perhaps|in case|whether)\b|(?:^|[\s,])(?:якщо|якби|можливо|мабуть|раптом|чи)(?=[\s,]|$)/u;
 const NEGATION = /\b(?:not|no|nobody|nothing|never|don't|dont|do not)\b|n't\b|(?:^|[\s,])(?:не|ні|нікому|нічого|ніколи)(?=[\s,]|$)/u;
+/* Beside the request a looser condition counts too: "only when…", "лише коли…".
+   The request's own sentence keeps the narrow list, where "коли" and "when"
+   are ordinary words of the instruction ("запитай у оркестратора, коли реліз"). */
+const FOLLOWUP_CONDITION = /\b(?:when|once|only|provided|assuming)\b|(?:^|[\s,])(?:коли|лише|тільки|хіба|за умови)(?=[\s,]|$)/u;
+/* The operator takes the request back: a retraction marker anywhere, a halt at
+   the start of a clause, or a negated sending verb. */
+const RETRACTION = new RegExp([
+  String.raw`\b(?:actually|never\s?mind|on second thought|scratch that|forget (?:it|that|this|about it)|cancel (?:it|that|this))\b`,
+  String.raw`(?:^|[,;:.!?…—–]\s*)(?:wait|hold on|stop|cancel|no)(?![\w'])`,
+  String.raw`(?:\b(?:do not|don't|dont|never)|n't)\s+(?:you\s+)?(?:ask|tell|send|forward|pass|delegate|give|hand|message)\b`,
+  String.raw`\b(?:send|ask|tell|forward|pass|delegate|message)\s+(?:nothing|nobody|no one)\b`,
+  String.raw`(?:^|[\s,])(?:забудь|передумав|передумала|передумали|відбій|неважливо|скасуй)(?=[\s,.:;!?…]|$)`,
+  String.raw`(?:^|[,;:.!?…—–]\s*)(?:стривай|зачекай|почекай|чекай|стоп|стій|ні|хоча)(?=[\s,.:;!?…]|$)`,
+  String.raw`(?:^|[\s,])не\s+(?:треба|потрібно|варто|проси|питай|запитуй|кажи|передавай|надсилай|відправляй|доручай|пересилай|пиши)(?=[\s,.:;!?…]|$)`,
+  String.raw`(?:^|[\s,])(?:нічого|нікому)\s+не(?=\s)`,
+].join("|"), "u");
 
 /* The sentence opens with a direct request: an optional address and
    politeness, then the verb. The polite question form ("could you ask…",
@@ -75,12 +98,13 @@ const ADDRESSED = new RegExp(`^(?:${EN_ADDRESS}${EN_POLITE}${EN_REQUEST}|${UK_AD
 const normalize = (text: string) => text.normalize("NFC").replace(/[’ʼ`]/gu, "'").replace(/\s+/gu, " ").trim().toLowerCase();
 const sentences = (text: string) => text.split(/(?<=[.!?…])\s+/u).map((part) => part.trim()).filter(Boolean);
 
-/** Whether one completed utterance explicitly asks to reach the orchestrator. */
+/** Whether one completed utterance, read whole, explicitly asks to reach the orchestrator. */
 export function explicitDelegationRequest(utterance: string): GateVerdict {
   const text = normalize(utterance);
   if (!text) return { admit: false, reason: "no_input" };
   if (QUOTES.test(utterance)) return { admit: false, reason: "quoted" };
-  const addressed = sentences(text).filter((sentence) => ORCHESTRATOR.test(sentence));
+  const all = sentences(text);
+  const addressed = all.filter((sentence) => ORCHESTRATOR.test(sentence));
   if (addressed.length === 0) return { admit: false, reason: "no_orchestrator" };
   for (const sentence of addressed) {
     const opening = OPENING.exec(sentence);
@@ -93,6 +117,18 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
       return { admit: false, reason: NEGATION.test(directive) ? "negated" : "not_addressed" };
     }
     if (sentence.includes("?") && !request.groups?.ask) return { admit: false, reason: "question" };
+    /* Taken back in the same breath: "ask the orchestrator to review it, actually don't send anything". */
+    if (RETRACTION.test(sentence.slice(request[0].length))) return { admit: false, reason: "retracted" };
+  }
+  /* The rest of the input is read too. Whatever stands beside the request and
+     takes it back, hedges it or cannot be read as part of it refuses the whole
+     input: the companion asks which was meant. */
+  for (const sentence of all) {
+    if (ORCHESTRATOR.test(sentence)) continue;
+    if (RETRACTION.test(sentence)) return { admit: false, reason: "retracted" };
+    if (NEGATION.test(sentence)) return { admit: false, reason: "negated" };
+    if (CONDITION.test(sentence) || FOLLOWUP_CONDITION.test(sentence)) return { admit: false, reason: "conditional" };
+    if (sentence.includes("?")) return { admit: false, reason: "question" };
   }
   return { admit: true };
 }

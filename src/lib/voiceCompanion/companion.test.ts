@@ -43,6 +43,10 @@ describe("the explicit-request gate", () => {
     "Скажи оркестратору, що деплой завершено.",
     "Передай це нашому оркестратору: перезапусти перевірки.",
     "Запитай у оркестратора, коли буде реліз.",
+    /* Plain sentences beside the request leave it standing. */
+    "Hi Delegatus. Ask the orchestrator to review the export plan. It is in the docs folder.",
+    "Привіт. Попроси оркестратора перевірити план експорту. Він у теці з документами.",
+    "Ask the orchestrator to stop the deploy and wait for the checks.",
   ];
   const refused: Array<[string, string]> = [
     ["Hi Delegatus. Are you there?", "no_orchestrator"],
@@ -79,6 +83,21 @@ describe("the explicit-request gate", () => {
     ["Скажи мені, що передати оркестратору.", "not_addressed"],
     ["Напиши, що таке оркестратор.", "not_addressed"],
     ["Розкажи, як працює оркестратор.", "not_imperative"],
+    /* The whole input is read: a sentence beside the request takes it back, hedges it or negates it. */
+    ["Ask the orchestrator to review the plan. Actually, do not send anything.", "retracted"],
+    ["Попроси оркестратора перевірити план. Нічого не надсилай.", "retracted"],
+    ["Ask the orchestrator to review the plan. Never mind.", "retracted"],
+    ["Попроси оркестратора перевірити план. Хоча ні, забудь.", "retracted"],
+    ["Ask the orchestrator to review the plan, actually don't send anything.", "retracted"],
+    ["Попроси оркестратора перевірити план, хоча ні, не треба.", "retracted"],
+    ["Ask the orchestrator to review the plan. Only if the build is green.", "conditional"],
+    ["Ask the orchestrator to review the plan. But only when the checks pass.", "conditional"],
+    ["Попроси оркестратора перевірити план. Але тільки якщо збірка зелена.", "conditional"],
+    ["Попроси оркестратора перевірити план. Лише коли перевірки пройдуть.", "conditional"],
+    ["Ask the orchestrator to review the plan. I am not sure about it.", "negated"],
+    ["Попроси оркестратора перевірити план. Я не впевнений.", "negated"],
+    ["Ask the orchestrator to review the plan. Or should I do it myself?", "question"],
+    ["Wait. Ask the orchestrator to review the plan.", "retracted"],
     ["Explain how the orchestrator works.", "not_imperative"],
   ];
   for (const text of admitted) test(`admits: ${text}`, () => expect(explicitDelegationRequest(text)).toEqual({ admit: true }));
@@ -115,6 +134,10 @@ describe("the simulated companion opens a confirmation only for an explicit requ
     ["a question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Tell me how the orchestrator works." }, ...propose("i1")]],
     ["a polite question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Could you tell me how the orchestrator works?" }, ...propose("i1")]],
     ["a question about the orchestrator (uk)", [{ kind: "operator", itemId: "i1", text: "Скажи, що робить оркестратор." }, ...propose("i1")]],
+    ["a retraction in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Actually, do not send anything." }, ...propose("i1")]],
+    ["a retraction in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Нічого не надсилай." }, ...propose("i1")]],
+    ["a condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Only if the build is green." }, ...propose("i1")]],
+    ["a condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Але тільки якщо збірка зелена." }, ...propose("i1")]],
     ["missing input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...propose("i9")]],
     ["stale input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, { kind: "operator", itemId: "i2", text: "Actually, never mind." }, ...propose("i1")]],
   ];
@@ -141,6 +164,56 @@ describe("the simulated companion opens a confirmation only for an explicit requ
     await run.adapter.finished;
     expect(run.dispatched.length).toBe(1);
     expect(run.state().delegation?.stage).toBe("delivered");
+  });
+
+  /* Consent by speech is admitted nowhere yet: whatever item a speech command names, it sends nothing. */
+  const spoken: Array<[string, string | undefined]> = [
+    ["no consent item", undefined],
+    ["an invented consent item", "nonexistent"],
+    ["the request itself, heard before the preview", "i1"],
+    ["an older input, heard before the preview", "i0"],
+  ];
+  for (const [name, confirmationItemId] of spoken) {
+    test(`a spoken Send with ${name} sends nothing; the tap after it sends exactly once`, async () => {
+      const run = simulate([{ kind: "operator", itemId: "i0", text: "Yes, send it." }, { kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...propose("i1")]);
+      await run.adapter.start({ locale: "en", project: "atlas" });
+      await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
+      await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "speech", ...(confirmationItemId ? { confirmationItemId } : {}) });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(types(run.events)).not.toContain("delegation.confirmed");
+      expect(run.dispatched).toEqual([]);
+      expect(run.state().delegation?.stage).toBe("awaiting-confirmation");
+      /* The dropped command consumed nothing: the proposal still takes its one tap. */
+      await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+      await run.adapter.finished;
+      expect(run.dispatched.length).toBe(1);
+      expect(run.state().delegation?.stage).toBe("delivered");
+    });
+  }
+
+  test("the reducer takes no spoken confirmation, and the delivery an adapter claims after it is not shown", () => {
+    const at = (payload: Payload, seq: number): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `s:1:${seq}`, seq, atMs: seq } as CompanionEvent);
+    const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan.", recipient: RECIPIENT };
+    const delivery: Delivery = { proposalId: "p1", callId: "c1", clientMessageId: "m1", operationId: "op1", recipient: RECIPIENT };
+    const waiting = [
+      at({ type: "session.ready", mode: "simulated" }, 0),
+      at({ type: "transcript.final", speaker: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, 1),
+      at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction: "Review the plan." }, 2),
+      at({ type: "delegation.confirmation.required", proposal }, 3),
+    ].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+    expect(waiting.delegation?.stage).toBe("awaiting-confirmation");
+    for (const confirmationItemId of [undefined, "nonexistent", "i1"]) {
+      const after = [
+        at({ type: "delegation.confirmed", proposalId: "p1", via: "speech", ...(confirmationItemId ? { confirmationItemId } : {}) }, 4),
+        at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 5),
+      ].reduce(reduceCompanion, waiting);
+      expect(after.delegation).toMatchObject({ stage: "awaiting-confirmation", delivery: null });
+    }
+    const tapped = [
+      at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }, 4),
+      at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 5),
+    ].reduce(reduceCompanion, waiting);
+    expect(tapped.delegation).toMatchObject({ stage: "queued", delivery });
   });
 
   /* The operator asks, sees the preview, then takes it back. Send is tapped anyway. */

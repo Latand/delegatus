@@ -274,7 +274,7 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
           await play(step.cancelled, mine);
           return;
         }
-        emit({ type: "delegation.confirmed", proposalId: proposal.proposalId, via: command.via, ...(command.confirmationItemId ? { confirmationItemId: command.confirmationItemId } : {}) });
+        emit({ type: "delegation.confirmed", proposalId: proposal.proposalId, via: "tap" });
         await clock.sleep(900);
         if (gone(mine)) return;
         /* Admission, read again at the send: the frozen proposal must still be what the operator last asked for. */
@@ -325,6 +325,11 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       if (!live) return;
       if (command.type === "mute") { muted = command.muted; return; }
       if (command.type === "interrupt") { interrupted = command.responseId; return; }
+      /* A tap is the only confirmation there is. A spoken one has to be a
+         later completed input admitted as consent to the proposal on screen
+         (note §5, step 2), and nothing here admits one: a speech command is
+         dropped whatever item it names, so it neither sends nor cancels. */
+      if (command.via !== "tap") return;
       /* Only the proposal on screen can be decided, and only once. */
       if (!pendingProposal || command.proposalId !== pendingProposal.proposalId || decided) return;
       decided = command;

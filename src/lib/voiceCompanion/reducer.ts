@@ -295,6 +295,10 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
     case "delegation.confirmed": {
       const current = base.delegation;
       if (!current?.proposal || current.proposal.proposalId !== event.proposalId || current.stage !== "awaiting-confirmation") return next({});
+      /* Only a tap confirms. Consent by speech is not admitted anywhere yet,
+         so such a confirmation leaves the proposal waiting, and the delivery
+         result an adapter sends after it finds no proposal in "sending". */
+      if (event.via !== "tap") return next({});
       return next({ delegation: { ...current, stage: "sending" } });
     }
     case "delegation.tool.result": {
