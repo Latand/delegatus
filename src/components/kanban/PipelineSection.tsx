@@ -124,7 +124,7 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
-    edit.runtimeSwitch ? t("stageRuntime.appliedAttempt", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
+    edit.runtimeSwitch ? t("kanban.graph.edit.appliedNow", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
   ].filter(Boolean).join(" · ");
   const at = Date.parse(edit.at);
   return (

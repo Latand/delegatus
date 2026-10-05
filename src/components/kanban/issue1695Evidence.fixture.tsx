@@ -376,6 +376,12 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
+/* `&stage-switch`: the running verify conversation carries its stage membership, as a launched stage does,
+   so its runtime pill moves the attempt through the pipeline. */
+if (new URLSearchParams(location.search).has("stage-switch")) {
+  searchVer2.durableLineage = { kind: "spawn", role: "verifier", parentConversationId: null, reviewsConversationId: null,
+    memberships: [{ kind: "pipeline", containerId: "p-search", role: "verifier", slot: "verify", stageId: "verify", stageOrder: 2, round: null, parentConversationId: null }] };
+}
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -2177,6 +2183,9 @@ const evidence = {
     }
     const seat = phase === "committed" ? change.to : change.from;
     live.effectiveRole = { ...live.effectiveRole, engine: seat.engine, model: seat.model, effort: seat.effort, serviceTier: seat.serviceTier ?? undefined };
+    /* The conversation runs on what the attempt settled on, and the scan says so. */
+    const agent = files.find(entry => entry.conversationId === live.conversationId);
+    if (agent && seat.model) Object.assign(agent, { model: seat.model, effort: seat.effort ?? agent.effort });
     window.dispatchEvent(new Event("llv:pipelines-changed"));
   },
   /* K6: conversation account switches the board sent, in order. */

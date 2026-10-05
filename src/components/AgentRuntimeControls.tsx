@@ -37,7 +37,6 @@ export function RuntimeControlsView({
   error,
   showSpeed = true,
   withDefaults = false,
-  hideApply = false,
   disabled = false,
   onEdit,
   onApply,
@@ -53,7 +52,6 @@ export function RuntimeControlsView({
   draftPending?: boolean;
   showSpeed?: boolean;
   withDefaults?: boolean;
-  hideApply?: boolean;
   /** Frozen surfaces (a pipeline stage that already ran) disable the pickers;
       live windows never pass this. */
   disabled?: boolean;
@@ -101,10 +99,10 @@ export function RuntimeControlsView({
           <input type="checkbox" checked={draft.fast} onChange={(event) => onEdit((current) => ({ ...current, fast: event.target.checked }))} /> {t("draft.speedFast")}
         </label>
       ) : null}
-      {!hideApply ? <button type="button" className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-canvas px-1.5 text-[9.5px] font-semibold text-muted hover:border-accent/45 hover:text-accent disabled:opacity-60 max-md:min-h-11 max-md:px-2.5 max-md:text-label" disabled={disabled || state === "saving"} onClick={onApply} aria-label={t("runtimeConfig.apply")}>
+      <button type="button" className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-canvas px-1.5 text-[9.5px] font-semibold text-muted hover:border-accent/45 hover:text-accent disabled:opacity-60 max-md:min-h-11 max-md:px-2.5 max-md:text-label" disabled={disabled || state === "saving"} onClick={onApply} aria-label={t("runtimeConfig.apply")}>
         {applyBusy ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Check className="h-3 w-3" aria-hidden />}
         {t("runtimeConfig.apply")}
-      </button> : null}
+      </button>
     </div>
   );
 }

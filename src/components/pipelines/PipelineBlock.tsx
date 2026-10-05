@@ -1,5 +1,4 @@
 "use client";
-import { RuntimeSwitchLine } from "./StageRuntimeControl";
 
 import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -938,7 +937,6 @@ function ScreenBlock(props: PipelineBlockProps & {
         <ChevronRight />
       </button>
     ) : <div className="pb-stage-row" title={who ?? undefined}>{head}</div>;
-    const runtimeControl = Boolean(props.onConfigureStage) && stage.kind === "run" && latestAttempt(pipeline, stage.id) ? <button type="button" data-stage-runtime-open={stage.id} className="flex min-h-11 items-center gap-2 px-3 text-ui text-secondary" onClick={() => props.onConfigureStage!(pipeline, stage)}><Settings className="h-4 w-4" aria-hidden />{t("stageRuntime.menu")}</button> : null;
     const edges = isCurrent ? arcLines(stage) : [];
     const latest = isCurrent && ATTEMPT_LIVE.has(chip.state) ? conversation.latest : null;
     return (
@@ -952,8 +950,6 @@ function ScreenBlock(props: PipelineBlockProps & {
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}
-        {runtimeControl}
-        <RuntimeSwitchLine attempt={latestAttempt(pipeline, stage.id)} />
         {isCurrent || agent.target || agent.earlier.length ? (
           <div className="pb-stage-body">
             {agent.question ? <p className="pb-latest whitespace-pre-wrap" data-stage-question={stage.id}>{agent.question}</p> : null}

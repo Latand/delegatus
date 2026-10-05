@@ -1,0 +1,670 @@
+[
+  {
+    "viewportWidth": 1440,
+    "lang": "en",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "verify",
+      "applyNow": true,
+      "model": "fable",
+      "effort": "low"
+    },
+    "before": {
+      "face": "Opus 5.5 · Light",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 924,
+        "width": 129,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "beforeOpen": {
+      "face": "Opus 5.5 · Light",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 924,
+        "width": 129,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "runs on Account A",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    },
+    "switching": {
+      "face": "Fable · Light",
+      "busy": true,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 906,
+        "width": 111,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBack": {
+      "face": "Opus 5.5 · High",
+      "busy": false,
+      "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "pill": {
+        "x": 795,
+        "right": 922,
+        "width": 127,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBackOpen": {
+      "face": "Opus 5.5 · High",
+      "busy": false,
+      "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "pill": {
+        "x": 795,
+        "right": 922,
+        "width": 127,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    },
+    "failed": {
+      "face": "Opus 5.5 · High",
+      "busy": false,
+      "error": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "title": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "pill": {
+        "x": 795,
+        "right": 922,
+        "width": 127,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committed": {
+      "face": "Fable · Light",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 906,
+        "width": 111,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committedOpen": {
+      "face": "Fable · Light",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 906,
+        "width": 111,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "runs on Account A",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    }
+  },
+  {
+    "viewportWidth": 390,
+    "lang": "en",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "verify",
+      "applyNow": true,
+      "model": "fable",
+      "effort": "low"
+    },
+    "before": {
+      "face": "Opus 5.5 · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 135,
+        "width": 115,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "beforeOpen": {
+      "face": "Opus 5.5 · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 135,
+        "width": 115,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "runs on Account A",
+        "clipped": false,
+        "right": 157
+      },
+      "pageOverflow": false
+    },
+    "switching": {
+      "face": "Fable · low",
+      "busy": true,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBack": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBackOpen": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+        "clipped": false,
+        "right": 374
+      },
+      "pageOverflow": false
+    },
+    "failed": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "title": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committed": {
+      "face": "Fable · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committedOpen": {
+      "face": "Fable · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "runs on Account A",
+        "clipped": false,
+        "right": 157
+      },
+      "pageOverflow": false
+    }
+  },
+  {
+    "viewportWidth": 1440,
+    "lang": "uk",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "verify",
+      "applyNow": true,
+      "model": "fable",
+      "effort": "low"
+    },
+    "before": {
+      "face": "Opus 5.5 · Легкі",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 924,
+        "width": 129,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "beforeOpen": {
+      "face": "Opus 5.5 · Легкі",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 924,
+        "width": 129,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "працює на Account A",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    },
+    "switching": {
+      "face": "Fable · Легкі",
+      "busy": true,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 907,
+        "width": 112,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBack": {
+      "face": "Opus 5.5 · Високі",
+      "busy": false,
+      "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "pill": {
+        "x": 795,
+        "right": 933,
+        "width": 138,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBackOpen": {
+      "face": "Opus 5.5 · Високі",
+      "busy": false,
+      "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "pill": {
+        "x": 795,
+        "right": 933,
+        "width": 138,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    },
+    "failed": {
+      "face": "Opus 5.5 · Високі",
+      "busy": false,
+      "error": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "title": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "pill": {
+        "x": 795,
+        "right": 933,
+        "width": 138,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committed": {
+      "face": "Fable · Легкі",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 907,
+        "width": 112,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committedOpen": {
+      "face": "Fable · Легкі",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 795,
+        "right": 907,
+        "width": 112,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": 7,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "працює на Account A",
+        "clipped": false,
+        "right": 1028
+      },
+      "pageOverflow": false
+    }
+  },
+  {
+    "viewportWidth": 390,
+    "lang": "uk",
+    "patch": {
+      "action": "override-stage",
+      "stageId": "verify",
+      "applyNow": true,
+      "model": "fable",
+      "effort": "low"
+    },
+    "before": {
+      "face": "Opus 5.5 · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 135,
+        "width": 115,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "beforeOpen": {
+      "face": "Opus 5.5 · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 135,
+        "width": 115,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "працює на Account A",
+        "clipped": false,
+        "right": 168
+      },
+      "pageOverflow": false
+    },
+    "switching": {
+      "face": "Fable · low",
+      "busy": true,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBack": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "rolledBackOpen": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+        "clipped": false,
+        "right": 374
+      },
+      "pageOverflow": false
+    },
+    "failed": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "title": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committed": {
+      "face": "Fable · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "committedOpen": {
+      "face": "Fable · low",
+      "busy": false,
+      "error": null,
+      "title": null,
+      "pill": {
+        "x": 20,
+        "right": 117,
+        "width": 97,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": 15,
+      "selectorOverflow": false,
+      "accountLine": {
+        "text": "працює на Account A",
+        "clipped": false,
+        "right": 168
+      },
+      "pageOverflow": false
+    }
+  }
+]

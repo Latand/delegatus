@@ -1,5 +1,4 @@
 "use client";
-import { StageRuntimeControl } from "@/components/pipelines/StageRuntimeControl";
 
 import { Boxes, CircleX, Eye, Pause, Play } from "lucide-react";
 
@@ -511,8 +510,7 @@ export function MobilePipelineScreen({
     };
     return (
       <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: names.get(configStage.id) ?? configStage.id })} onClose={close}>
-        <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col overflow-y-auto px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
-          {latestAttempt(pipeline, configStage.id) ? <StageRuntimeControl pipeline={pipeline} stage={configStage} /> : null}
+        <div data-mobile2-stage-config={configStage.id} className="flex h-[min(620px,72dvh)] min-h-0 flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
           <StagePlaceholderPane slot={slot} interactive />
         </div>
       </MobileSheet>

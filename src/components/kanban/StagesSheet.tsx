@@ -16,7 +16,6 @@ import { GraphGlyph, graphStateWord, LoopChip, PipelineGraph, pipelineProgress, 
 import { stageIdentity, valuesOf } from "./stageIdentity";
 import { modelGlyphKind } from "./modelGlyph";
 import { StageGlyph } from "./StageGlyph";
-import { RuntimeSwitchLine } from "@/components/pipelines/StageRuntimeControl";
 import { engineWord, identityTitle, StageIdentity } from "./identityMarks";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
@@ -461,7 +460,6 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
       {/* A stage that never ran says when it starts once, in its draft. */}
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
-      <RuntimeSwitchLine attempt={attempts.at(-1) ?? null} />
       {agent.question ? <p className="m-0 max-h-40 shrink-0 overflow-y-auto whitespace-pre-wrap break-words text-ui text-primary" tabIndex={0} data-stage-question={stage.id}>{agent.question}</p> : null}
       {agent.target ? (
         <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => {

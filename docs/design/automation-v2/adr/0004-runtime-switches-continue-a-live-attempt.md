@@ -52,7 +52,17 @@ completion before the cut supersedes the request. A reserved handoff successor
 may report before its launch acknowledgement. A new transcript retains output
 produced before that acknowledgement arrived.
 
-The control reads a fresh stage digest before sending runtime fields, offers both
-application times, and names switching, continuation and rollback. Geometry and
-localized status evidence are captured by the existing kanban browser driver at
-1440 and 390 px in English and Ukrainian.
+The operator has no separate surface for this. The runtime pill in the composer
+of the stage's conversation is the control: while that conversation is the
+agent of a running attempt, a model, reasoning or speed row sends
+`override-stage` with `applyNow` and the whole runtime the pill shows, and an
+account row sends the same request with the account. The pill spins while the
+attempt's switch record is open. A rolled-back, failed or parked switch is the
+pill's error: its face, its tooltip, a toast, and the account line of its
+popover and sheet, worded by the model's display name and the account's label.
+A conversation that is no longer the stage's agent keeps its own reconfigure.
+An engine change has no row in the pill and stays with MCP
+`pipeline_action override-stage`. A stage that has not started keeps its
+stage-settings surface, which applies from the next attempt. The existing
+kanban browser driver captures the pill at 1440 and 390 px in English and
+Ukrainian, with the conversation's controls counted before and after.
