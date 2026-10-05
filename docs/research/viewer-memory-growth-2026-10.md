@@ -211,10 +211,12 @@ treated as resident live objects. The residual RSS is consistent with runtime
 and allocator capacity around transient work. Its exact native owners were
 not identified, and no SQLite-native or mimalloc allocation stacks were taken.
 
-The footer polls resources every **30 seconds** (`ResourcesFooter.tsx:15`),
+The footer schedules the next resource poll **30 seconds after completion**
+(`ResourcesFooter.tsx:15`, `:154`),
 files and board fallback polls use **10 seconds** (`useFiles.ts:29`,
-`useBoardState.ts:15`), Telegram reports use **20 seconds**
-(`useTelegramReports.ts:17`), pipeline watchdog reconciliation uses **30
+`useBoardState.ts:15`), the active Telegram reports surface schedules its next
+poll **20 seconds after completion** (`useTelegramReports.ts:17`, `:80`),
+pipeline watchdog reconciliation uses **30
 seconds** (`pipelines/controller.ts:86`), and migration inventory uses **60
 seconds** (`accounts/migration/controller.ts:34`). Overlapping clients and
 background work can generate a different apparent cadence. No route timestamps
@@ -414,3 +416,101 @@ or separately authorized instrumentation. Existing access does not supply
 those answers; the current sample and synthetic evidence cannot assign all
 reported 12 GB to one cause. Preserve this attribution gap when opening the
 follow-up fix.
+
+**Repeat verification, 16:48–16:58 UTC.** The existing draft and first issue
+comment were recovered through `gh` and the prior conversation reader. This
+repeat extends the evidence on the same branch; the earlier measurements above
+retain their original time bounds.
+
+At 16:49:14, fetched main was
+`ff4af9a3877edfcdbf8c906412f24a28a1ef1b45`. Comparing the investigated paths
+against `ee19907eb` found unchanged registry/state-store, scanner, resource
+reader/cache and handoff, title projection and polling implementations. Main's
+resource-worker changes handle an exiting namespace member and stdin EPIPE;
+its MCP changes concern receipt-lock recovery. Neither change prunes registry
+rows or introduces failure backoff. Package publication/patch entries changed;
+Next remains 16.3.6 and the Docker Bun pin remains 1.4.0. The main comparison
+does not claim a rebuilt main HTTP measurement: the repeated HTTP run serves
+the existing production build at the investigation source pin.
+
+At 16:52:25, `git merge-base --is-ancestor` returned 0 for each historical fix
+on both this main and the observed release: #956 `dfa7447e89a9`, #1991
+`c82045fad2bd`, #1832 `4746038be907`, and #2484 `ee726f70bad2`. The five related
+issue bodies were read again with `gh issue view <number> --json
+number,title,state,body`. #907 and #1816 remain open. These checks preserve the
+distinction between shipped mitigations and work still proposed.
+
+The live repeat read `/proc/$VIEWER_PID/{stat,status,smaps_rollup,fd}` **91
+times from 16:51:08.282 through 16:54:13.658**, at roughly two-second intervals.
+It checked the same PID/start identity throughout. Resolving its executable,
+running that executable with `--version` in an isolated environment, reading
+the installed Next package, and `git -C <observed release> rev-parse HEAD`
+again confirmed Bun 1.4.0, Next 16.3.6 and release `6af2bab08a52`. Uptime was
+24.17 hours. No live HTTP request, signal, GC, snapshot or attach was used.
+
+| Metric | Minimum | Maximum | First | Last |
+| --- | ---: | ---: | ---: | ---: |
+| RSS, MiB | 2,089.90 | 2,909.24 | 2,101.84 | 2,909.24 |
+| RssAnon, MiB | 2,006.79 | 2,826.13 | 2,018.73 | 2,826.13 |
+| PSS, MiB | 2,017.46 | 2,875.60 | 2,031.55 | 2,841.36 |
+| VmSwap / SwapPss, MiB | 0 | 0 | 0 | 0 |
+| State DB / WAL / SHM descriptors | 32 / 29 / 1 | 32 / 29 / 1 | 32 / 29 / 1 | 32 / 29 / 1 |
+
+RSS thirty-second lower-water marks were 2,101.84, 2,092.50, 2,094.84,
+2,089.90, 2,097.40 and 2,126.81 MiB. There were irregular short spikes and a
+larger burst near the end. A regular 20-second cycle was not established.
+Counters from `status` and `smaps_rollup` are sequential reads, so their maxima
+need not coincide. The descriptor-number sets were identical at the endpoints.
+The earlier window had 31 DB descriptors; the repeat had 32. Stability within
+each short window cannot rule out intermittent additions across the unobserved
+gap, and the extra descriptor has no confirmed owner.
+
+A 16:56:04 read located state through an existing DB descriptor, without opening
+the database. The successful persisted resource observation was generation 355,
+completed at **16:51:34.198**, with no degradation reason. `journalctl --user
+-u delegatus.service --no-pager -o json --since '2026-10-05 16:51:08 UTC'
+--until '2026-10-05 16:54:14 UTC'` returned one journal entry and no resource
+failure entries. The state DB/WAL/registry file sizes at 16:56:04 were
+34.58 / 1.05 / 38.46 MiB. These observations again provide no support for
+assigning an always-failing collector to this live window.
+
+`bun scripts/profileBrowser.ts --registry-churn --out <private aggregate>` ran
+at **16:51:09.530–16:51:10.104**, exit 0. Its empty current snapshots again
+left 200 through 1,600 deleted rows cached, ending at 6,050,320 serialized bytes
+and 18.73 MiB post-GC heap, from 5.15 MiB after the first cycle. This repeat
+confirms the retention invariant and the proposed absent-key pruning/test plan.
+
+`bun scripts/profileBrowser.ts --server-memory --seconds 30 --corpus 128,2048
+--out <private aggregate>` ran at **16:51:13.054–16:57:21.566**, exit 0, under
+Bun 1.4.0 and Next 16.3.6 with the same isolation and route mixes described
+above. Each transcript phase completed 117 history reads. All routes succeeded.
+
+| Phase | 128 files: post-GC heap / RSS, MiB | 2,048 files: post-GC heap / RSS, MiB |
+| --- | ---: | ---: |
+| Idle | 25.25 / 245.28 | 28.91 / 246.00 |
+| Board closed route mix | 33.99 / 251.49 | 37.02 / 260.66 |
+| Board open route mix | 34.57 / 259.75 | 38.58 / 269.71 |
+| Resource polling | 35.67 / 257.81 | 38.48 / 268.78 |
+| Transcript history | 36.07 / 264.29 | 40.42 / 274.63 |
+| Cooldown | 36.89 / 261.73 | 39.78 / 271.96 |
+
+Both corpora warmed state DB/WAL/SHM descriptors from 10/8/1 through 13/11/1
+to 17/15/1, then held that count. Final JSC heap capacity was 43.01 / 45.67 MiB;
+extra memory was 11.68 / 14.07 MiB for the two corpora. Extra memory is included
+in the JSC heap/capacity counters and must not be added to them again. The main
+process's named scanner Maps held only three one-entry path/project caches in
+each phase; transcript metadata Maps in scanner workers belong to other PIDs.
+Thus this counter does not measure all worker caches. Recorded-PID/start-identity
+checks at 16:57:50 found no running survivor among the 12 HTTP fixture processes.
+
+At 16:58:28, a source search over API routes, instrumentation, HTTP modules,
+process helpers and scan-cache diagnostics found a files-scan request count
+exposed in response headers (`src/app/api/files/route.ts:536`). It supplies no
+passive timestamped per-route series for the observed window. No live heap or
+native-owner diagnostic was found in those surfaces. The missing affected-PID
+identity and same-window route evidence still prevent attribution of the 12 GB
+footprint or oscillator. The synthetic post-GC results distinguish fixed-corpus
+warm-up from the demonstrated historical-key leak; they cannot classify the
+live floor's native component. Obtain those missing measurements or explicitly
+accept this bounded result with the attribution gap. Obtaining the measurements
+is the recommended next step. Production remained unchanged.
