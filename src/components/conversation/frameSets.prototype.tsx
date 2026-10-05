@@ -52,6 +52,7 @@ import {
   stripTiles,
   swipeDirection,
   viewsOf,
+  widthsFirst,
   type Frame,
   type FrameSet,
 } from "./frameSets.prototype.model";
@@ -77,7 +78,7 @@ const COPY = {
     title: "Orchestrator",
     working: "waiting for you",
     reports: "Report log",
-    views: { 1440: "desktop 1440", 440: "board pane 440", 390: "phone 390" } as Record<number, string>,
+    views: { 1440: "desktop", 440: "board pane", 390: "phone" } as Record<number, string>,
     setTitle: "Step between my own messages",
     variantTitles: ["In the header", "A row above the message field", "In the message field's own row", "Keys and menu rows"],
     laneVariantTitles: ["In the header, beside the conversation's title", "A row above the message field", "In the message field's own row, left of the attach button", "Keys and two rows in the conversation menu"],
@@ -100,7 +101,7 @@ const COPY = {
     title: "Оркестратор",
     working: "чекає на вас",
     reports: "Журнал звітів",
-    views: { 1440: "десктоп 1440", 440: "панель дошки 440", 390: "телефон 390" } as Record<number, string>,
+    views: { 1440: "десктоп", 440: "панель дошки", 390: "телефон" } as Record<number, string>,
     setTitle: "Кроки між моїми повідомленнями",
     variantTitles: ["У шапці", "Рядок над полем повідомлення", "У рядку самого поля повідомлення", "Клавіші та рядки меню"],
     laneVariantTitles: ["У шапці, поруч із назвою розмови", "Рядок над полем повідомлення", "У рядку самого поля повідомлення, ліворуч від вкладення", "Клавіші та два рядки в меню розмови"],
@@ -200,7 +201,7 @@ export function fixtureFrameSet(lang: Lang): FrameSet {
   const frames: Frame[] = [];
   for (let variant = 1; variant <= FRAME_SET_FIXTURE_VARIANTS; variant += 1) {
     for (const view of VIEWS) for (const frameLang of FRAME_LANGS) {
-      const caption = `${copy.views[view.width]} · ${frameLang}`;
+      const caption = copy.views[view.width]!;
       const src = drawFrame(variant, view.width, view.height, `${view.width} px · ${frameLang}`);
       frames.push({
         id: `fixture-${variant}-${view.width}-${frameLang}`, variant, caption, width: view.width, lang: frameLang,
@@ -237,7 +238,7 @@ export function laneFrameSet(lang: Lang): FrameSet {
        the viewer finds the frame it was opened on by its picture. */
     const src = drawFrame(entry.variant ?? 0, size.w, size.h, `${entry.caption} · ${entry.width} px · ${entry.lang}`);
     return {
-      id: `lane-${entry.name.replace(/\.png$/, "")}`, variant: entry.variant, caption: `${entry.caption} · ${entry.width} · ${entry.lang}`,
+      id: `lane-${entry.name.replace(/\.png$/, "")}`, variant: entry.variant, caption: entry.caption,
       width: entry.width, lang: entry.lang, w: size.w, h: size.h, bytes: Math.round((src.length * 3) / 4), src,
     };
   });
@@ -264,10 +265,12 @@ interface Presenter {
   choose: (variant: number) => void;
 }
 
-/* The width and the language come before the variant's title: a caption cut
-   by a narrow header still says which frame this is. */
+/* The variant, the width and the language come first, from the frame's own
+   fields, then the caption's words and the variant's title: a caption cut by
+   a narrow header still says which frame this is. */
 const frameCaption = (presenter: Presenter, frame: Frame) =>
-  frame.variant === null ? frame.caption : `${frame.variant} · ${frame.caption} · ${presenter.set.variants.find((entry) => entry.number === frame.variant)?.title ?? ""}`;
+  [frame.variant, frame.width, frame.lang, frame.caption, presenter.set.variants.find((entry) => entry.number === frame.variant)?.title]
+    .filter((part) => part !== null && part !== undefined && part !== "").join(" · ");
 
 /** A sideways swipe over an element steps; the click that ends it is swallowed. */
 function useSwipe(onStep: (direction: -1 | 1) => void) {
@@ -570,7 +573,7 @@ function ComparePanel({ presenter, onClose, onState }: { presenter: Presenter; o
             onClick={() => setView(at)}
             className={`inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-control border px-2.5 text-label font-semibold pointer-coarse:h-11 ${FOCUS} ${at === view ? "border-accent bg-accent text-black" : "border-white/25 text-white/80 hover:bg-white/15"}`}
           >
-            {entry.width !== null ? presenter.copy.views[entry.width] ?? `${entry.width}` : ""} · {entry.lang}
+            {entry.width !== null ? `${presenter.copy.views[entry.width] ?? ""} ${entry.width}`.trim() : ""} · {entry.lang}
           </button>
         ))}
       </div>
@@ -584,9 +587,11 @@ function ComparePanel({ presenter, onClose, onState }: { presenter: Presenter; o
 /* Under this width the height is what runs out, so each variant gets one row
    of tiles that scrolls sideways; from the second width up two variants stand
    side by side. In both forms a variant is one row of tiles, so the collage is
-   as tall with twenty-four frames a variant as with six. In the wide form the
-   frames that do not fit stand behind a last tile, "+N", which opens the
-   viewer on the first of them. */
+   as tall with twenty-four frames a variant as with six. A row begins with
+   the first frame of each width the variant was captured at (`widthsFirst`),
+   so a desktop, a pane and a phone frame are on screen before any second
+   moment of one of them. In the wide form the frames that do not fit stand
+   behind a last tile, "+N", which opens the viewer on the first of them. */
 const COLLAGE_STRIP_BELOW = 560;
 const COLLAGE_TWO_COLUMNS_FROM = 960;
 const COLLAGE_ROW_HEIGHT = 120;
@@ -629,7 +634,7 @@ function CollagePanel({ presenter, width, room: tall, onZoomed }: {
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
     >
       {presenter.set.variants.map((variant) => {
-        const own = presenter.set.frames.map((frame, index) => ({ frame, index })).filter((entry) => entry.frame.variant === variant.number);
+        const own = widthsFirst(presenter.set.frames.map((frame, index) => ({ frame, index, width: frame.width })).filter((entry) => entry.frame.variant === variant.number));
         const aspects = own.map((entry) => entry.frame.w / entry.frame.h);
         const { row, hidden } = strip
           ? { row: stripTiles(aspects, stripHeight, minTile), hidden: 0 }

@@ -115,6 +115,21 @@ export function viewKey(frame: Pick<Frame, "width" | "lang">): string {
   return `${frame.width ?? "-"}:${frame.lang ?? "-"}`;
 }
 
+/**
+ * A variant's frames as the collage lays them out: the first frame of each
+ * captured width, in the order the widths are first seen, then the rest in
+ * the set's order. A driver names its frames pane by pane, so by name alone a
+ * variant's first tiles are one pane's moments and the phone's frames stand
+ * last. The viewer keeps the set's order: a width's first tile opens it on
+ * that width's first frame, and the steps from there are that width's own.
+ */
+export function widthsFirst<T extends { width: number | null }>(frames: readonly T[]): T[] {
+  const leads = new Map<number | null, T>();
+  for (const frame of frames) if (!leads.has(frame.width)) leads.set(frame.width, frame);
+  const first = new Set(leads.values());
+  return [...leads.values(), ...frames.filter((frame) => !first.has(frame))];
+}
+
 /** The frame of `variant` taken at the same width and language, for a side-by-side compare. */
 export function frameAtView(set: FrameSet, variant: number, view: string): Frame | null {
   return framesOfVariant(set, variant).find((frame) => viewKey(frame) === view) ?? null;
@@ -171,8 +186,9 @@ export function framesOfNoVariant(set: FrameSet): Frame[] {
 export const FRAME_NAME_LANGS = ["en", "uk"] as const;
 
 /**
- * What one file name says about its frame, by the one convention the capture
- * drivers already follow: `variant-<N>-<anything>-<width>-<lang>-<moment>.png`.
+ * What one file name says about its frame, by the convention the design
+ * lanes' capture runs already follow:
+ * `variant-<N>-<anything>-<width>-<lang>-<moment>.png`.
  * Words are split on `-` and `_`. `variant-N` (or a leading `vN`) is the
  * variant, and variant 0 is a frame of no variant (the pane as it is today).
  * The viewport width is the first number from 240 to 3840 that follows the
@@ -210,10 +226,12 @@ export function frameFromFileName(name: string): { variant: number | null; width
     with numbers compared as numbers, frames of no variant last. Inside a
     variant the name is therefore the order, and a driver that wants its
     moments in the order it took them numbers them (`…-en-1-closed`,
-    `…-en-2-open`): without the number they stand by the alphabet. */
+    `…-en-2-open`): without the number they stand by the alphabet. Only the
+    directory's own files are read: a name with a `/` in it is a file of a
+    subdirectory and is left out. */
 export function framesFromFileNames(names: readonly string[]): (ReturnType<typeof frameFromFileName> & { name: string })[] {
   return names
-    .filter((name) => /\.(png|jpe?g|webp)$/i.test(name))
+    .filter((name) => !name.includes("/") && /\.(png|jpe?g|webp)$/i.test(name))
     .map((name) => ({ name, ...frameFromFileName(name) }))
     .sort((a, b) => (a.variant ?? 99) - (b.variant ?? 99) || a.name.localeCompare(b.name, "en", { numeric: true }));
 }
@@ -269,7 +287,9 @@ export interface TileRow {
  * `target` height, grown by at most `maxScale` to fill `width` or shrunk by at
  * most `minScale`. When they do not fit, it takes the first frames that do
  * beside a tile `more` px wide, and `hidden` says how many frames stand behind
- * that tile. `minTile` keeps a narrow frame wide enough to press.
+ * that tile. `minTile` keeps a narrow frame wide enough to press. The caller
+ * hands the frames in the collage's order (`widthsFirst`), so the first that
+ * fit are one of each width before a second of any.
  */
 export function collageRow(
   aspects: readonly number[],

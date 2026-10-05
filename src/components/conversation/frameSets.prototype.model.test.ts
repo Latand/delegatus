@@ -23,6 +23,7 @@ import {
   stripTiles,
   swipeDirection,
   viewsOf,
+  widthsFirst,
   type Frame,
   type FrameSet,
 } from "./frameSets.prototype.model";
@@ -107,6 +108,8 @@ describe("frame set prototype model", () => {
   test("a directory is published by variant, then by name, numbers as numbers", () => {
     const ordered = framesFromFileNames([
       "variant-2-desktop-1440-en-10.png", "variant-2-desktop-1440-en-9.png", "notes.md", "variant-0-desktop-1440-en.png", "variant-1-phone-390-uk.png",
+      /* Only the directory's own files: the driver's page bundle lies in a subdirectory of its output. */
+      "bundle/variant-3-desktop-1440-en.png", "bundle/fixture.js",
     ]).map((entry) => entry.name);
     expect(ordered).toEqual(["variant-1-phone-390-uk.png", "variant-2-desktop-1440-en-9.png", "variant-2-desktop-1440-en-10.png", "variant-0-desktop-1440-en.png"]);
   });
@@ -174,6 +177,36 @@ describe("frame set prototype model", () => {
     expect(frameFromFileName("arrival-turn-phone-390-uk.png")).toEqual({ variant: null, width: 390, lang: "uk", caption: "arrival turn phone" });
   });
 
+  test("a variant's row begins with one frame of each width it was captured at", () => {
+    /* This lane's own variant 3 by name: eight desktop frames, eight of the
+       pane, eight of the phone. By name alone the first phone frame is the
+       seventeenth. */
+    const third = framesFromFileNames(driverFrameNames()).filter((entry) => entry.variant === 3);
+    expect(third.findIndex((entry) => entry.width === 390)).toBe(16);
+    const row = widthsFirst(third);
+    expect(row.slice(0, 4).map((entry) => entry.name)).toEqual([
+      "variant-3-desktop-1440-en-1-closed.png", "variant-3-pane-440-en-1-closed.png", "variant-3-phone-390-en-1-closed.png",
+      /* Then the rest as the names have them. */
+      "variant-3-desktop-1440-en-2-open.png",
+    ]);
+    expect(row).toHaveLength(third.length);
+    expect(new Set(row)).toEqual(new Set(third));
+    expect(row.slice(3)).toEqual(third.filter((entry) => !row.slice(0, 3).includes(entry)));
+    /* The six-frame fixture's variant: three widths in two languages. */
+    expect(widthsFirst([1440, 1440, 440, 440, 390, 390].map((width, at) => ({ width, at }))).map((entry) => entry.at)).toEqual([0, 2, 4, 1, 3, 5]);
+    /* Frames with no width are one group, so a set whose names say no width keeps its order. */
+    expect(widthsFirst([null, null, null].map((width, at) => ({ width, at }))).map((entry) => entry.at)).toEqual([0, 1, 2]);
+    expect(widthsFirst([390, null, 390, null].map((width, at) => ({ width, at }))).map((entry) => entry.at)).toEqual([0, 1, 2, 3]);
+    expect(widthsFirst([])).toEqual([]);
+    /* The viewer keeps the set's order, so a width's other frames follow its
+       first: in this lane's set a width holds eight (two languages, four
+       moments), the last of them seven steps on and the first Ukrainian one four. */
+    const phone = third.filter((entry) => entry.width === 390);
+    expect(phone).toHaveLength(8);
+    expect(third.indexOf(phone[7]!) - third.indexOf(phone[0]!)).toBe(7);
+    expect(phone.findIndex((entry) => entry.lang === "uk")).toBe(4);
+  });
+
   test("a variant is one row of tiles, whatever it holds", () => {
     /* Two desktop frames, two pane frames, two phone frames: the six-frame fixture's variant. */
     const six = [1.6, 1.6, 0.55, 0.55, 0.462, 0.462];
@@ -188,13 +221,14 @@ describe("frame set prototype model", () => {
     expect(tight.hidden).toBe(0);
     expect(tight.row.height).toBeLessThan(120);
     expect(tight.row.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 5).toBeLessThanOrEqual(640);
-    /* A lane's variant, twenty-four frames in the order they were taken: the
-       first that fit, and one tile for the rest. Still one row. */
-    const lane = [...Array(8).fill(1.6), ...Array(8).fill(1.25), ...Array(8).fill(0.462)] as number[];
+    /* A lane's variant, twenty-four frames in the collage's order (one of
+       each width, then the rest): the first that fit, and one tile for the
+       rest. Still one row, and the three that fit are the three widths. */
+    const lane = [1.6, 1.25, 0.462, ...Array(7).fill(1.6), ...Array(7).fill(1.25), ...Array(7).fill(0.462)] as number[];
     const capped = collageRow(lane, 662, { target: 120, gap: 6, more: 56 });
     expect(capped.row.tiles.map((tile) => tile.index)).toEqual([0, 1, 2]);
     expect(capped.hidden).toBe(21);
-    expect(capped.row.height).toBeGreaterThanOrEqual(120);
+    expect(capped.row).toEqual({ height: 150, tiles: [{ index: 0, width: 240 }, { index: 1, width: 187 }, { index: 2, width: 69 }] });
     expect(capped.row.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 3 + 56).toBeLessThanOrEqual(662);
     /* A few frames never stretch into giants, and one frame wider than the row is drawn at its width. */
     expect(collageRow([1.6], 1300, { target: 120, gap: 6, more: 56 }).row.height).toBeLessThanOrEqual(150);

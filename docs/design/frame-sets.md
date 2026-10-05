@@ -39,11 +39,14 @@ into a collage grouped by variant, a tile opens the image viewer the feed
 already has, and each variant has its own "Choose" button that writes the
 reply into the message field. A variant is one row of tiles whatever it
 holds, so the collage is as tall for this lane's own 126 frames as for 24,
-and it fits the feed at every width measured. A chosen variant is 2 presses
-with no scroll at any width and either size. A frame is 2 presses away, plus
-a sideways drag of the variant's row in a narrow pane, or one step in the
-viewer on the desktop when the variant holds more frames than its row. It
-adds no new full-screen surface.
+and it fits the feed at every width measured. A variant's row begins with the
+first frame of each width it was captured at, so right after the collage
+opens every variant shows a desktop, a pane and a phone frame at every width
+measured, and each of them is 2 presses away with nothing dragged. A chosen
+variant is 2 presses with no scroll at any width and either size. The later
+moments of a width are steps in the viewer from its first frame, a sideways
+drag of the variant's row in a narrow pane, or the "+N" tile on the desktop.
+It adds no new full-screen surface.
 
 ## 1. What exists today
 
@@ -113,7 +116,8 @@ driver itself checks against what it wrote), reads it by the rule below, and
 gets no refusal.
 
 The server reads the variant, the width and the language of each frame from
-its file name, by one convention that the capture drivers already follow:
+its file name, by the convention the design lanes' capture runs already
+follow:
 
 ```
 variant-<N>-<anything>-<width>-<lang>-<moment>.png
@@ -139,15 +143,36 @@ variant-4-pane-440-en-open.png  →  variant 4, width 440, language en, caption 
   `…-2-open`, `…-3-frame`, `…-4-chosen`, `desktop-1440-uk-1-closed`: by pane,
   then by language, then by moment. The number stays in the caption
   ("desktop 2 open").
-- The order decides what the collage shows first: a variant's row holds its
-  first frames (section 3).
+- The order is the viewer's order. The collage takes one thing from the
+  frames' widths instead: a variant's row begins with the first frame of each
+  captured width and goes on by name (section 3). So an agent renames nothing
+  to have its phone frames seen.
 - `variants` is the list of titles in order; the first title belongs to
   variant 1. Without it the variants have numbers and no titles.
 - A file whose name says none of this is published as a plain captioned frame.
   Files that are not PNG, JPEG or WebP are skipped.
+- Only the directory's own files are read. A subdirectory is left out with
+  everything in it: this lane's driver keeps its page bundle in `bundle/`
+  under its output directory (3.6 MB of JavaScript), and a capture run may
+  keep older runs beside the current one. Frames in a subdirectory are
+  published by naming that subdirectory.
+- The caption's words are the name's words, in whatever language the driver
+  wrote them. The variant, the width and the language in front of them come
+  from the frame's own fields and read the same in every interface language.
+
+Where the convention holds. The fourth review read the rule against seven
+real directories of design lanes under `/var/tmp`, 16 to 106 frames each,
+named with `variant-N` and with `vN`: every one gave variants and widths.
+It does not hold for every driver in the repository:
+`scripts/capture-board-geometry.ts` names its frames by a tag and a moment,
+with no variant. Such a directory is published whole and is a plain album: its
+frames are the frames of no variant, the closed row counts them, the viewer
+steps through them, and there is no "Choose", because there is nothing to
+choose between. That is the right reading of a run that compares nothing.
 
 The rule is `frameFromFileName` and `framesFromFileNames` in the model file,
-with a test that uses this lane's own file names.
+with a test that uses this lane's own file names and a name from a
+subdirectory.
 
 **The full form**, for the exceptions: names that follow no convention, a
 caption that needs a sentence, an order the names do not give.
@@ -208,6 +233,12 @@ which is today's state. The path below reads no agent's text.
 Only two things draw a row: a `publish_frames` call, and a `frames:` line in a
 record the server delivered itself. Text an agent or the operator typed that
 looks like such a line draws nothing.
+
+A turn draws one row for one set. The rows of a turn are keyed by the set's
+id, so when the wake's `frames:` line names a set and the orchestrator also
+calls `publish_frames { setId }` for it in the same turn, the feed draws that
+set once, at the end of the turn. The same set shown again in a later turn
+gets a row there too, which is what the third form is for.
 
 One thing here was read and not run: that a delivered wake can be told from
 typed text in both engines' transcripts (the server marks what it delivers,
@@ -432,13 +463,27 @@ with 6:
   proportions. When they all fit, they fill it. When they do not, the row
   holds the first that fit and ends with one tile, "+21", that opens the
   viewer on the first frame the row has no room for. From 960 px two variants
-  stand side by side. At 1440 the four variants make a 2 × 2 block 344 px
-  tall.
+  stand side by side. At 1440 the four variants of the six-frame set make a
+  2 × 2 block 344 px tall.
 - **Under 560 px** the height is what runs out. Each variant gets its header
   and one row of tiles that scrolls sideways when it is wider than the pane.
   The row is 60 px tall with a mouse and 72 px with a touch pointer when the
   feed has the room, and gives up height, down to 48 px, before the collage
   would be taller than the feed.
+
+**What a row begins with.** A driver names its frames pane by pane, so by
+name a variant of this lane's set is eight desktop frames, then eight of the
+pane, then eight of the phone. A row of the first frames by name showed three
+moments of the desktop and left the first phone frame sixteen frames away,
+in every variant. So a row begins with the first frame of each width the
+variant was captured at, in the order the widths first appear, and then goes
+on with the rest by name (`widthsFirst` in the model). With three widths the
+first three tiles are a desktop, a pane and a phone frame, and they are on
+screen at every width measured. The viewer keeps the set's own order: a tile
+opens it on that frame, and the next steps are that width's later moments
+(in this lane's set seven steps cover a width's eight frames, and the fourth
+step is its first Ukrainian frame). A set whose names say no width keeps its
+order by name.
 
 **Frames of no variant** (the pane as it is today, a measurement) are no
 choice, so they get no tiles. They stand in one last row under the variants,
@@ -509,7 +554,9 @@ committed): per variant, width and language, the moments `1-closed`,
 `2-open`, `3-frame` and `4-chosen`; for variant 4 over the lane-sized set,
 `5-lane-open` and `6-lane-frame`; the pane without the feature as
 `variant-0-…-1-closed`; and one `arrival-<place>-…` frame per width and
-language. That is 126 frames; the run takes about three and a half minutes.
+language. That is 126 frames; the run takes about three minutes. The page
+the driver serves is built into `bundle/` under the same directory, which the
+short form does not read (section 2).
 Run it with the default output directory: `publish_frames` reads the worktree
 and does not read `/tmp` (section 2).
 
@@ -563,17 +610,26 @@ whole collage is inside the feed, every "Choose" button is on screen, every
 variant has exactly one row of tiles, and that row is inside the feed top to
 bottom (`open.collage`). It reads every variant's title too
 (`open.collage.titles`) and fails the run when one is cut: by an ellipsis, by
-a box narrower or shorter than its text, or by the feed's edge.
+a box narrower or shorter than its text, or by the feed's edge. And it reads
+which captured widths have a tile wholly on screen in each variant
+(`open.collage.widthsOnScreen`) and fails the run when a variant shows no
+frame of 1440, of 440 or of 390. All four variants show all three in all six
+panes.
 
 **A set of a real lane's size.** Six more records,
 `variant-4-<pane>-<lang>-lane-set`: variant 4 over the 126-frame set at the
 three widths in both languages. The same closed checks, the same open checks,
 and the run fails when a "Choose" is past the feed's edge, the collage is
-taller than the feed, a variant has a second row, a title is cut, or the row
-of the frames of no variant is off screen. All six pass. In the 440 px pane
+taller than the feed, a variant has a second row, a title is cut, a variant
+shows no frame of one of the three widths, or the row of the frames of no
+variant is off screen. All six pass. In the 440 px pane
 and on the phone three of the four English titles and one Ukrainian title
-stand on two lines, and none is cut. The driver then goes to variant 3's fifth frame, to
-the first frame of no variant, and to a chosen reply.
+stand on two lines, and none is cut. The driver then goes to variant 3's
+first phone frame, which is its seventeenth frame by name, to the first frame
+of no variant, and to a chosen reply. The run fails when that phone frame
+costs more than two presses, a drag of a strip, a scroll of the feed, or a
+step in the viewer (`toFrame.count`, `scrolled`, `stepsInViewer`). In all six
+it is two presses and nothing else.
 
 **Open full screen (2 and 3).** The surface covers the window while it is
 open, by design, on the layer the image viewer uses. Its own controls pass the
@@ -581,7 +637,8 @@ hit-test and intersection checks and stay inside the window, and on the phone
 each is at least 44 × 44 px. After a choice the surface is gone and the field
 is visible.
 
-**The walk.** In every pane the driver goes to variant 3's fifth frame and
+**The walk.** In every pane the driver goes to variant 3's first phone frame
+(its fifth frame by name in the six-frame set) and
 reads which frame is shown, steps one back and one forward (by arrow keys on
 the desktop, by a touch swipe on the phone), then reloads, chooses variant 3
 from the closed row, reads the reply out of the message field, types more
@@ -621,9 +678,9 @@ had to be brought into view before a press.
 | Open, 440 px pane | 374 px of the feed | the window | the window | 420 px of a 519 px feed |
 | Open, phone 390 | 377 px of the feed | the window | the window | 516 px of a 643 px feed |
 | Controls on screen when open | 13 | 13 | 17 (14 on the phone) | 29; 21 on the phone |
-| To variant 3's fifth frame, desktop | 3 presses | 3 presses | 3 presses | 2 presses |
+| To variant 3's first phone frame (its fifth by name), desktop | 3 presses | 3 presses | 3 presses | 2 presses |
 | The same, 440 px pane | 3 presses | 3 presses | 3 presses | 2 presses |
-| The same, phone | 3 presses | 3 presses | 3 presses + 223 px sideways (276 uk) | 2 presses + 39 px sideways |
+| The same, phone | 3 presses | 3 presses | 3 presses + 223 px sideways (276 uk) | 2 presses, nothing dragged |
 | To choose variant 3, every width | 3 presses, no scroll | 3 presses, no scroll | 3 presses, no scroll | 2 presses, no scroll |
 | To choose variant 1 | 2 presses | 2 presses | 2 presses | 2 presses |
 | Feed leaves its tail when opened | no | no | no | no |
@@ -635,23 +692,37 @@ recommendation, was measured again over the set of this lane's own size: 24,
 
 | Variant 4 | 6 frames a variant (24 in all) | A lane's size (126 in all) |
 |---|---|---|
-| Open, desktop 1440 | 344 px of a 619 px feed | 382 px of a 619 px feed |
+| Open, desktop 1440 | 344 px of a 619 px feed | 438 px of a 619 px feed |
 | Open, 440 px pane | 420 px of a 519 px feed | 438 px of a 519 px feed |
 | Open, phone 390 | 516 px of a 643 px feed | 550 px of a 643 px feed |
 | Rows of tiles a variant | 1 | 1 |
-| Controls on screen when open | 29; 21 on the phone | 22; 18 on the phone |
+| Widths with a frame on screen, per variant, every pane | 3 of 3 | 3 of 3 |
+| Controls on screen when open | 29; 21 on the phone | 22; 26 in the 440 px pane |
 | To choose variant 3, every width | 2 presses, no scroll | 2 presses, no scroll |
-| To variant 3's fifth frame, desktop | 2 presses | 2 presses and 1 step in the viewer |
-| The same, 440 px pane | 2 presses | 2 presses + 113 px sideways |
-| The same, phone | 2 presses + 39 px sideways | 2 presses + 222 px sideways |
+| Variant 3's first phone frame is, by name | its 5th of 6 | its 17th of 24 |
+| To that frame, desktop | 2 presses | 2 presses, no step in the viewer |
+| The same, 440 px pane | 2 presses, nothing dragged | 2 presses, nothing dragged |
+| The same, phone | 2 presses, nothing dragged | 2 presses, nothing dragged |
+| The same with the row in the order of the names (the third round) | 2 presses; + 39 px sideways on the phone | desktop: 2 presses and 13 steps in the viewer; pane: a drag of 1376 px; phone: a drag of 1648 px |
 | To the first frame of no variant | the set has none | 2 presses, no scroll |
 | Feed leaves its tail when opened | no | no |
 
-The larger set is taller by 38 px on the desktop, 18 px in the pane and 34 px
-on the phone. That is the row of the frames of no variant (28 px and its
-gap, 44 px on the phone); in the narrow form the four strips give up 4 px
+The last-but-two row is what the third round's note left out. Its price table
+went to "variant 3's fifth frame", which in the lane-sized set is the
+neighbouring desktop frame, so it read "2 presses and 1 step". The fourth
+review measured the walk to the first phone frame in that round's build: the
+"+21" tile opens the viewer on the fourth frame and the phone's first is the
+seventeenth, and in the narrow form the strip had to be dragged 3.6 widths of
+the row in the pane and 4.5 on the phone, for each of the four variants.
+
+The larger set is taller by 94 px on the desktop, 18 px in the pane and 34 px
+on the phone. In each that is the row of the frames of no variant (28 px and
+its gap, 44 px on the phone). In the narrow form the four strips give up 4 px
 each to make room for it, 60 to 56 px in the pane and 72 to 68 px on the
-phone.
+phone. On the desktop the two rows of tiles are also taller, 150 px where the
+six-frame set's are 121 px: three tiles of three different widths and "+21"
+do not fill a row at 120 px and a fourth tile does not fit, so the row grows
+to the rule's limit.
 
 How large a frame is before a zoom:
 
@@ -667,15 +738,19 @@ What variant 4 shows without any scroll, right after it opens:
 |---|---|---|---|
 | "Choose" buttons on screen, either set | 4 of 4 | 4 of 4 | 4 of 4 |
 | Variant titles shown whole, either set | 4 of 4 | 4 of 4 | 4 of 4, in both languages |
-| Tiles wholly on screen, per variant, 6 frames a variant | 6 of 6 | 6 of 6 | 4 of 6; the rest by a sideways drag of that row |
-| The same, a lane's size | 3 of 24 (3 of 36), and "+21" ("+33") | 3 of 24; the rest by a sideways drag | 3 of 24; the rest by a sideways drag |
-| A tile of a desktop capture, a lane's size | 196 × 122 px | 90 × 56 px | 109 × 68 px |
+| Widths with a frame on screen, per variant, either set | desktop, pane, phone | desktop, pane, phone | desktop, pane, phone |
+| Tiles wholly on screen, per variant, 6 frames a variant | 6 of 6 | 6 of 6 | 4 of 6: one of each width and a second desktop frame; the rest by a sideways drag of that row |
+| The same, a lane's size | 3 of 24 (3 of 36): one of each width, and "+21" ("+33") | 4 of 24: one of each width and a second desktop frame; the rest by a sideways drag | 3 of 24: one of each width; the rest by a sideways drag |
+| A tile of a desktop / pane / phone capture, a lane's size | 240 × 150, 187 × 150, 69 × 150 px | 90 × 56, 70 × 56, 26 × 56 px | 109 × 68, 85 × 68, 44 × 68 px |
 | Width of the pane the tiles fill, 6 frames a variant | all of it | all but 16 px | all of it |
 
 In the lane-sized set a tile of the 440 px pane's capture is wider than in
-the six-frame set (70 × 56 px in the pane) because this lane's driver
-captures the 1000 × 800 window around the pane; the six-frame set draws that
-frame 440 px wide.
+the six-frame set (70 × 56 px in the pane, 33 × 60 px there) because this
+lane's driver captures the 1000 × 800 window around the pane; the six-frame
+set draws that frame 440 px wide. In the 440 px pane a phone capture's tile
+is 26 px wide (28 px in the six-frame set): enough to see that the variant
+has a phone frame and to press it with a mouse, and the viewer is where it
+is read. With a touch pointer a tile is never narrower than 44 px.
 
 ### What the review of the first round found, and what changed
 
@@ -822,9 +897,81 @@ in the pane):
   pane's edge, which is what says the strip goes on sideways.
 - The closed row's left edge is on the line of the answer's text and of the
   list markers above it at every width.
-- A variant shows the frames its names put first. This lane's first three
-  are the closed, open and frame moments of the English desktop; a lane that
-  wants its phone frames seen first names them first.
+
+That round's reading ended with the advice that a lane which wants its phone
+frames seen first names them first. The fourth review turned it down, and it
+is gone from this note; see below.
+
+### What the review of the fourth round found, and what changed
+
+The fourth review reran the driver over an export of the commit, got the
+committed measurements byte for byte, confirmed the closed state in all 30
+panes and the verdict on each variant, and found one thing in the
+recommended one.
+
+- **Over a set of a real lane's size every variant showed three nearly
+  identical desktop frames, and the pane's and the phone's frames were far
+  away.** A variant's frames stand pane by pane in their names, and the row
+  took the first by name. In variant 3 the first pane frame was the ninth of
+  24 and the first phone frame the seventeenth. The price the note had left
+  out is in section 5: 13 steps in the viewer on the desktop, a drag of
+  1376 px in the 440 px pane and of 1648 px on the phone, for each of the
+  four variants. The note's own price row went to "the fifth frame", a
+  neighbouring desktop frame, and its advice to name the phone frames first
+  moved the work to the agent: by the naming convention that is renaming
+  files, and the review's real lane directories of 106 and 80 frames sort the
+  same way.
+- **What changed.** A variant's row begins with the first frame of each width
+  it was captured at and goes on by name (`widthsFirst`, used by both forms
+  of the collage). The agent renames nothing and the publication's rule is
+  unchanged. Right after opening, every variant shows a desktop, a pane and a
+  phone frame at 1440, in the 440 px pane and on the phone, in both
+  languages, over both sets. The driver reads that and fails the run when a
+  width is missing. Its walk now goes to variant 3's first phone frame in
+  both sets (the fifth by name in one, the seventeenth in the other) and
+  fails the run when that costs more than two presses, any drag or scroll, or
+  a step in the viewer. The price table has the row for both sets.
+- **What that cost.** On the desktop the lane-sized collage is 438 px tall
+  where it was 382 px, because three tiles of different widths leave the row
+  room to grow; it is inside the 619 px feed with every "Choose" on screen.
+  The narrow form's height did not change. A phone capture's tile is 26 px
+  wide in a 440 px pane.
+
+Smaller things from the same review, each answered in the section named:
+
+- The driver's output directory holds a `bundle/` subdirectory, and the note
+  did not say whether the short form reads subdirectories. It reads the
+  directory's own files only (section 2, with a test).
+- A set named by the wake's `frames:` line and shown by
+  `publish_frames { setId }` in the same turn would have drawn two rows. A
+  turn's rows are keyed by the set's id (section 2).
+- "A convention the capture drivers already follow" was true of the design
+  lanes' names only: `capture-board-geometry` writes no variant. Section 2 now says whose convention it is and what such a
+  directory becomes.
+- The lane-sized set's captions were English words in a Ukrainian interface,
+  and the viewer's caption on the phone was cut after "3 · desktop 1 …". A
+  caption's words are the file name's words, which no interface language
+  translates. So the viewer's caption now leads with what is read from the
+  frame's own fields, "3 · 390 · en", then the name's words and the
+  variant's title. On the phone the header shows "3 · 390 · en · …": the
+  variant, the width and the language are whole and the words after them are
+  what is cut. Giving the caption its own line is still step 4 of the build.
+
+Reading the new frames as pictures (I looked at the lane-sized captures of
+variant 4 at all three widths in Ukrainian, and at the viewer opened on the
+phone frame on the phone):
+
+- On the desktop each variant shows one desktop, one pane and one phone
+  capture, 150 px tall, then "+21" ("+33" in variant 4). The three are told
+  apart by their proportions at a glance, and the variant number printed on
+  each is readable.
+- In the 440 px pane a row is a desktop tile, a pane tile, a narrow phone
+  tile, a second desktop tile, and a fifth tile cut by the pane's edge, which
+  says the strip goes on.
+- On the phone a row is a desktop tile, a pane tile, a phone tile and a
+  fourth tile cut by the edge.
+- The viewer opened from the phone tile shows the phone frame at the pane's
+  full width, "65 / 126".
 
 ### Recommendation: variant 4
 
@@ -838,11 +985,16 @@ What it gives up, plainly:
 
 - No side-by-side view. Two variants are compared by stepping between two
   frames in the viewer.
-- A variant shows its first frames and no more than one row of them. With
-  six frames a variant a third of them are a sideways drag away on the phone;
-  with 24, three are on screen at every width and the rest are behind "+21"
-  on the desktop or a sideways drag in a narrow pane. The frames the agent's
-  names put first are the ones on screen.
+- A variant shows one row of frames and no more. The row begins with the
+  first frame of each captured width, so with three widths those three are
+  on screen at every width measured. With six frames a variant a third of
+  them are a sideways drag away on the phone; with 24, the other 21 are
+  behind "+21" on the desktop or a sideways drag in a narrow pane, or steps
+  in the viewer from their width's first frame (up to seven in this lane's
+  set).
+- Of a width's frames the one on screen is the first by name. In this lane's
+  set that is the closed state in English; the Ukrainian one is four steps on
+  in the viewer.
 - The frames of no variant have a row and no tiles.
 - More than four variants are not measured. Four and the row of the frames
   of no variant fill a 440 px pane's feed and the phone's with the strips at
@@ -881,12 +1033,14 @@ existing rules. Publishing a set never sends anything anywhere by itself.
 ## What the build lane does
 
 1. `publish_frames` in the MCP server and its Viewer-side write: the three
-   forms, the file-name convention, the store, the bounds, the two read routes,
+   forms, the file-name convention over a directory's own files (no
+   subdirectories), the store, the bounds, the two read routes,
    removal by lifetime and by the store's bounds. The model file's types and
    rules move to `src/lib/frameSets/`.
 2. The set's row as a derived row that closes its turn, aligned to the
    answer's text column, and the card in it: the closed row and the collage
-   in both forms, one row of tiles a variant with "+N" in the wide form, the
+   in both forms, one row of tiles a variant that begins with the first frame
+   of each captured width, with "+N" in the wide form, the
    strip's height taken from the feed's own between 48 px and 60 px (72 px
    with a touch pointer), the row of the frames of no variant, in English and
    Ukrainian. The publishing call's own row leaves the feed. The states "no
@@ -894,7 +1048,8 @@ existing rules. Publishing a set never sends anything anywhere by itself.
    when the message field grows under a chosen reply.
 3. `frameSets` in the `get_pipeline` stage answer and the `frames:` line in
    the seat tick wake, the row drawn from that line, and the line left out of
-   the wake's shown text.
+   the wake's shown text. One row for one set id in a turn, whichever of the
+   two named it.
 4. Swipe in `Lightbox` for an unzoomed picture, and on a narrow screen the
    caption on a line of its own under the header, so a frame's width and
    language are read whole.
@@ -903,8 +1058,8 @@ existing rules. Publishing a set never sends anything anywhere by itself.
    its frames with `publish_frames`, by directory, in one call: the whole
    directory is the set, up to 240 frames. Names follow the convention of
    section 2, and a driver numbers its moments so that a variant's frames
-   stand in the order they were taken, the ones to be seen first named first.
-   It says where a driver writes them: the driver's default under `.artifacts/` in the worktree, or a
+   stand in the order they were taken. Nothing is renamed for the collage's
+   sake. It says where a driver writes them: the driver's default under `.artifacts/` in the worktree, or a
    directory under `/var/tmp`; a run isolated under `/tmp` keeps its output
    directory (`LLV_FRAME_SETS_OUT` for the conversation driver) out of `/tmp`.
    Nothing in it asks an agent to pass an id on.
@@ -926,9 +1081,13 @@ existing rules. Publishing a set never sends anything anywhere by itself.
 - **The strip's height** follows the feed in the prototype only downwards:
   60 px (72 px with a touch pointer) when there is room, less when there is
   not, 48 px at least. The build may also let a tall pane have larger tiles.
-- **The viewer's caption on the phone** is still cut in the captures, as said
-  in section 5; the fix is in `Lightbox`, a product file this lane does not
-  change.
+- **The viewer's caption on the phone** is still cut in the captures after
+  the variant, the width and the language, as said in section 5; the fix is
+  in `Lightbox`, a product file this lane does not change.
+- **Other mixes of widths.** Both sets are captured at three widths. A
+  variant captured at more widths than its row has room for (five on the
+  desktop's half row, say) shows the first of them, and the rest are behind
+  "+N" or a drag; that follows from the rule and is in no capture.
 - **The refusal for `/tmp`** is a pure rule with a test. The tool that would
   say it is the build lane's.
 - **Sets with other shapes.** Two sets are measured: six frames a variant,
@@ -965,8 +1124,8 @@ existing rules. Publishing a set never sends anything anywhere by itself.
 | "built into the orchestrator and into Delegatus" | One tool any agent calls; a lane's set reaches the orchestrator's chat through the server's own wake; the row appears in any conversation pane, desktop and phone |
 | "you give me a button" | One row per set, under the orchestrator's answer, on screen when the answer arrives (measured at three widths) |
 | "it expands" | Variant 4 opens in place, in the feed, and the feed stays on its tail, with 24 frames and with this lane's own 126 |
-| "shows the photos, the collage the agent left" | Each variant's first frames at their own proportions, one row a variant, the rest one press or a drag away; kept after the worktree is gone |
-| "the design needs thinking through" | Four working prototypes, measured, reviewed three times as the operator would, revised, with a recommendation |
+| "shows the photos, the collage the agent left" | In each variant a frame of every captured width at its own proportions, one row a variant, the rest one press or a drag away; kept after the worktree is gone |
+| "the design needs thinking through" | Four working prototypes, measured, reviewed four times as the operator would, revised, with a recommendation |
 | Nothing on top of anything while closed | Measured in 24 panes, section 4 |
 | Frames an agent left reach the operator | A driver's whole directory is one call; this lane's own 126 names pass the rule in a test. Read from the worktree, the stage's directory and `/var/tmp`; a directory under `/tmp` is refused with the command that moves it, section 2 |
 | A chosen variant lands in the field, editable | Measured in 24 panes, section 4 |

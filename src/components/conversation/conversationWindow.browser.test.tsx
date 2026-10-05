@@ -1898,7 +1898,13 @@ describe("frame sets, design variants", () => {
    * to the collage, so a second pass opens variant 4 over a set of this lane's
    * own size (`set=lane`: twenty-four frames and more a variant, and frames of
    * no variant) and fails the run when a "Choose" is past the feed's edge or
-   * the collage is taller than the feed. A last pass holds the turn's answer
+   * the collage is taller than the feed. A variant's frames stand pane by
+   * pane in their names, so a row of the first frames by name showed three
+   * moments of the desktop and left the phone's frames sixteen frames away:
+   * both passes fail the run unless every variant shows a frame of each
+   * captured width right after the collage opens, and unless the first phone
+   * frame of variant 3 is two presses away with no drag of a strip and no
+   * step in the viewer. A last pass holds the turn's answer
    * back, delivers it, and reads whether the entry is on screen at that
    * moment, for both places the entry can stand.
    *
@@ -1916,22 +1922,30 @@ describe("frame sets, design variants", () => {
     { name: "phone-390", width: 390, height: 844, phone: true, pane: 0 },
   ] as const;
   const LANGS = ["en", "uk"] as const;
-  /* The frame the walk goes to: variant 3, its fifth frame (the phone, en). */
+  /* The frame the walk goes to: variant 3's first phone frame, its fifth by name. */
   const TARGET = { variant: 3, index: 4, id: "fixture-3-390-en", before: "fixture-3-440-uk", after: "fixture-3-390-uk", inSet: 16, frames: 24 };
   const REPLY = { en: "Variant 3 (In the message field's own row).", uk: "Варіант 3 (У рядку самого поля повідомлення)." };
   /* The lane-sized set is this lane's own directory in publication order; the
-     walk goes to the same place in it, variant 3's fifth frame. */
+     walk goes to the same place in it, variant 3's first phone frame, which
+     is its seventeenth by name. */
   const LANE = (() => {
     const frames = framesFromFileNames(driverFrameNames());
     const third = frames.map((frame, index) => ({ frame, index })).filter((entry) => entry.frame.variant === TARGET.variant);
+    const phone = third.findIndex((entry) => entry.frame.width === 390);
     return {
       frames: frames.length,
-      target: third[TARGET.index]!.index,
+      target: third[phone]!.index,
+      targetInVariant: phone + 1,
       firstOther: frames.findIndex((frame) => frame.variant === null),
       others: frames.filter((frame) => frame.variant === null).length,
       perVariant: [1, 2, 3, 4].map((variant) => frames.filter((frame) => frame.variant === variant).length),
     };
   })();
+  /* The widths both fixture sets are captured at: what a variant has to show a frame of. */
+  const WIDTHS = [1440, 440, 390];
+  /** What reaching a frame may cost in the collage: the row and one tile, nothing dragged, no step in the viewer. */
+  const dear = (walk: { count: number; scrolled: { down: number; sideways: number } }, stepsInViewer: number) =>
+    walk.count > 2 || walk.scrolled.down > 0 || walk.scrolled.sideways > 0 || stepsInViewer > 0;
   const LANE_REPLY = {
     en: "Variant 3 (In the message field's own row, left of the attach button).",
     uk: "Варіант 3 (У рядку самого поля повідомлення, ліворуч від вкладення).",
@@ -2135,6 +2149,9 @@ describe("frame sets, design variants", () => {
         return { onScreen: tiles.filter(whole).length, of: tiles.length, rows: section.querySelectorAll("[data-frame-collage-row]").length,
           rowsInsideFeed: Array.from(section.querySelectorAll("[data-frame-collage-row]")).every((row) => tall(row.getBoundingClientRect())) };
       }),
+      /* Per variant: the widths of the captures whose tiles are wholly on screen. */
+      widthsOnScreen: sections.map((section) => [...new Set(Array.from(section.querySelectorAll<HTMLElement>('[data-frame-control^="tile-"]')).filter(whole)
+        .map((tile) => Number(tile.dataset.frameTileOf)))].sort((a, b) => b - a)),
       /* Per variant: the title as shown, and whether any of it is cut (by an ellipsis, by a clipping box, or by the feed's edge). */
       titles: sections.map((section) => {
         const title = section.querySelector<HTMLElement>("[data-frame-variant-title]")!;
@@ -2293,9 +2310,10 @@ describe("frame sets, design variants", () => {
             if (laid.titles.length !== 4) fail("open", `${laid.titles.length} variant titles, wanted 4`);
             if (laid.tiles.some((entry) => entry.rows !== 1)) fail("open", `a variant has more than one row of tiles: ${JSON.stringify(laid.tiles)}`);
             if (!viewport.phone && !viewport.pane && (laid.tileOf[1440]?.[0] ?? 0) < 180) fail("open", `a desktop frame's tile is ${JSON.stringify(laid.tileOf[1440])} on the desktop`);
+            if (laid.widthsOnScreen.some((widths) => WIDTHS.some((width) => !widths.includes(width)))) fail("open", `a variant shows no frame of one of ${WIDTHS.join(", ")}: ${JSON.stringify(laid.widthsOnScreen)}`);
           }
 
-          /* To one frame: variant 3, its fifth. */
+          /* To one frame: variant 3's first phone frame, its fifth by name. */
           if (variant === 1 || variant === 2) { await press(`tab-${TARGET.variant}`); await press(`thumb-${TARGET.index}`); }
           if (variant === 3) { await press(`left-tab-${TARGET.variant}`); await press(`view-${TARGET.index}`); }
           if (variant === 4) { await press(`tile-${TARGET.inSet}`); await page.locator("[data-lightbox-position]").waitFor(); }
@@ -2314,7 +2332,8 @@ describe("frame sets, design variants", () => {
             check("frame", reached);
             if (!reached.modal && !reached.controls.some((control) => control.name === "entry")) fail("frame", "the row that was pressed left the screen");
           }
-          record.toFrame = { ...walked(), shows: await at() };
+          record.toFrame = { ...walked(), frameByName: TARGET.index + 1, shows: await at() };
+          if (variant === 4 && dear(walked(), 0)) fail("frame", `variant 3's first phone frame costs ${JSON.stringify(walked())}`);
 
           /* By key on the desktop, by swipe on the phone: one back, one forward again, one on. */
           const steps: Record<string, unknown> = {};
@@ -2385,8 +2404,8 @@ describe("frame sets, design variants", () => {
          variant fit one row at every width; twenty-four do not, and a collage
          that wraps them is taller than the feed. After opening, every
          "Choose" is on screen and the collage is inside the feed, or the run
-         fails. Then the same walk: variant 3's fifth frame, the frames of no
-         variant, and a chosen reply. */
+         fails. Then the same walk: variant 3's first phone frame, the frames
+         of no variant, and a chosen reply. */
       for (const viewport of VIEWPORTS) for (const lang of LANGS) {
         const where = `variant-4-${viewport.name}-${lang}-lane-set`;
         const url = `${served.base}?case=frame-sets&variant=4&set=lane&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}`;
@@ -2451,18 +2470,20 @@ describe("frame sets, design variants", () => {
           if (laid.tiles.some((entry) => entry.rows !== 1 || !entry.rowsInsideFeed || entry.onScreen === 0)) fail("open", `a variant's tiles need a scroll: ${JSON.stringify(laid.tiles)}`);
           for (const title of laid.titles.filter((entry) => entry.cut)) fail("open", `a variant's title is cut: ${JSON.stringify(title)}`);
           if (!laid.other?.onScreen) fail("open", `the row of the frames of no variant: ${JSON.stringify(laid.other)}`);
+          if (laid.widthsOnScreen.some((widths) => WIDTHS.some((width) => !widths.includes(width)))) fail("open", `a variant shows no frame of one of ${WIDTHS.join(", ")}: ${JSON.stringify(laid.widthsOnScreen)}`);
 
-          /* To variant 3's fifth frame: its tile when the row holds it, else
-             the "+N" tile and steps in the viewer. */
+          /* To variant 3's first phone frame: its tile when the row holds it,
+             else the "+N" tile and steps in the viewer, which fails the run. */
           const tile = await page.locator(`[data-frame-control="tile-${LANE.target}"]`).count();
           let stepsInViewer = 0;
           await press(tile ? `tile-${LANE.target}` : `more-${TARGET.variant}`);
           await page.locator("[data-lightbox-position]").waitFor();
           const there = `${LANE.target + 1} / ${LANE.frames}`;
-          for (; stepsInViewer < 8 && await position() !== there; stepsInViewer += 1) { await page.keyboard.press("ArrowRight"); await page.waitForTimeout(150); }
+          for (; stepsInViewer < LANE.targetInVariant && await position() !== there; stepsInViewer += 1) { await page.keyboard.press("ArrowRight"); await page.waitForTimeout(150); }
           if (await position() !== there) fail("frame", `shows ${await position()}, wanted ${there}`);
           await shot("lane-frame");
-          const toFrame = { ...walked(), stepsInViewer, shows: await position() };
+          const toFrame = { ...walked(), stepsInViewer, frameByName: LANE.targetInVariant, shows: await position() };
+          if (dear(walked(), stepsInViewer)) fail("frame", `variant 3's first phone frame costs ${JSON.stringify(toFrame)}`);
           await page.keyboard.press("Escape");
           await page.locator("[data-lightbox-position]").waitFor({ state: "detached" });
 
