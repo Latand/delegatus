@@ -1,3 +1,4 @@
+import { readStartIdentity } from "./pid";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -25,7 +26,7 @@ export function beginRestartGate(file: string, now = Date.now()): string | null 
   const id = randomUUID();
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ id, until: now + MAX_HANDOFF_MS })}\n`, { mode: 0o600 });
+  writeFileSync(temporary, `${JSON.stringify({ id, until: now + MAX_HANDOFF_MS, issuerPid: process.pid, issuerIdentity: readStartIdentity(process.pid) })}\n`, { mode: 0o600 });
   renameSync(temporary, file);
   return id;
 }
@@ -34,4 +35,13 @@ export function endRestartGate(file: string, id: string): void {
   try {
     if ((JSON.parse(readFileSync(file, "utf8")) as { id?: string }).id === id) rmSync(file, { force: true });
   } catch { /* A newer handoff or a removed file must not be touched. */ }
+}
+
+/** Dispatch belongs to the issuer that acquired this gate, including PID reuse. */
+export function ownsRestartGate(file: string, id: string, now = Date.now()): boolean {
+  try {
+    const gate = JSON.parse(readFileSync(file, "utf8"));
+    return gate.id === id && gate.until > now && gate.issuerPid === process.pid
+      && gate.issuerIdentity !== null && gate.issuerIdentity === readStartIdentity(process.pid);
+  } catch { return false; }
 }

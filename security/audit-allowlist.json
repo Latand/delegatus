@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "reason": "Fixed locally by patches/braces-3.0.3.patch, ported from upstream tree 28d440b5dd449dbf1fe6f3506cf94ecca4d02660. Installed-package nesting, AST and parent-cycle regressions verify mitigation and fresh-install patch application. Remove patch and advisory metadata when upstream ships a fixed release; tracked by issue #2496.",
+    "expires": "2026-10-10"
+  }
+]

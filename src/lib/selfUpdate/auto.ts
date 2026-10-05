@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, resolve, sep } from "node:path";
 import type { GreenVerdict } from "./green";
-import type { LauncherRecord, LauncherRole } from "./launcher";
+import { publishLauncherRequest, type LauncherRecord, type LauncherRole } from "./launcher";
 import type { QuietBlockers } from "./quiet";
 import type { Revision } from "./types";
 import { runGit } from "./git";
@@ -95,10 +95,7 @@ export function requestAutoRestart(record: LauncherRecord, role: LauncherRole, t
     rollbackPointer, from: role === "web" ? record.web.revision : record.runtimeHost.revision, target,
   };
   persist(pending);
-  mkdirSync(dirname(record.requestFile), { recursive: true, mode: 0o700 });
-  const temporary = `${record.requestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ requestId: pending.requestId, role, requestedAt: pending.at, autoGateId: gateId })}\n`, { mode: 0o600 });
-  renameSync(temporary, record.requestFile);
+  publishLauncherRequest(record.requestFile, { requestId: pending.requestId, role, requestedAt: pending.at, autoGateId: gateId });
   return pending;
 }
 export function restorePointer(file: string, raw: string | null): void {
@@ -140,7 +137,7 @@ export async function pruneReleaseWorktrees(record: LauncherRecord, rollbackPoin
   });
   let rollbackDir: string | null = null;
   try { rollbackDir = (JSON.parse(rollbackPointer ?? "null") as { dir?: string } | null)?.dir ?? null; } catch { /* checkout rollback */ }
-  const current = [record.web.revision, record.runtimeHost.revision];
+  const current = [record.web.revision, record.runtimeHost.revision, record.launcher.revision];
   let pointerDir: string | null = null;
   try { pointerDir = (JSON.parse(readFileSync(record.releasePointer, "utf8")) as { dir?: string }).dir ?? null; } catch { /* no pointer */ }
   const protectedDirs = new Set([pointerDir, rollbackDir].filter((part): part is string => !!part).map((part) => resolve(part)));

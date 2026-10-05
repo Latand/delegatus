@@ -95,6 +95,8 @@ describe("paths, entry and identity", () => {
       record: "/s/self-update/launcher-abc.json",
       request: "/s/self-update/request-abc.json",
       releasePointer: "/s/self-update/release-abc.json",
+      trial: "/s/self-update/trial-abc.json",
+      adopt: "/s/self-update/adopt-abc.json",
       releasesDir: "/c/delegatus/self-update/abc/releases",
     });
   });
@@ -118,7 +120,7 @@ describe("paths, entry and identity", () => {
   });
 
   test("this process has a start identity, and a PID that does not exist has none", () => {
-    expect(readStartIdentity(process.pid)).toMatch(/^\d+$/);
+    expect(readStartIdentity(process.pid)).toMatch(process.platform === "win32" ? /^\d+:\d+$/ : process.platform === "darwin" ? /^ps:/ : /^\d+$/);
     expect(readStartIdentity(2 ** 30)).toBeNull();
   });
 
@@ -165,6 +167,7 @@ describe("restart requests", () => {
     try {
       await watcher.poll();
       expect(restarted).toBe(false);
+      expect(JSON.parse(readFileSync(`${file}.result.json`, "utf8"))).toMatchObject({ requestId: "unadmitted", state: "rejected" });
       expect(existsSync(file)).toBe(false);
       expect(existsSync(gateFile)).toBe(false);
     } finally { watcher.stop(); }
@@ -298,4 +301,85 @@ describe("probePageAndChunk", () => {
     expect(timedOut).toMatch(/^Viewer readiness probe failed \([A-Za-z0-9_]+\)$/);
     expect(refused).not.toBe(timedOut);
   });
+});
+
+test("a packaged pointer survives bootstrap until a manual package upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "package-pointer-"));
+  try {
+    const base = join(root, "base"); const release = join(root, "release");
+    mkdirSync(join(base, "dist"), { recursive: true });
+    mkdirSync(join(release, "dist", "standalone"), { recursive: true });
+    writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    writeFileSync(join(release, "package.json"), JSON.stringify({ version: "1.0.1" }));
+    writeFileSync(join(release, "dist", "standalone", "server.js"), "");
+    writeFileSync(join(release, "dist", "runtime-host.mjs"), "");
+    const pointer = join(root, "pointer.json"); const sha = "a".repeat(40);
+    writeFileSync(pointer, JSON.stringify({ kind: "package", version: "1.0.1", baseVersion: "1.0.0", dir: release, sha }));
+    expect(installedRelease(pointer, base)).toMatchObject({ dir: release, sha, published: true });
+    writeFileSync(join(base, "package.json"), JSON.stringify({ version: "1.0.2" }));
+    expect(installedRelease(pointer, base)).toMatchObject({ dir: base, published: false });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("Windows launcher and Viewer identities agree on the kernel creation token", async () => {
+  const { readStartIdentity: viewerIdentity } = await import("../src/lib/selfUpdate/pid");
+  const pid = 2147483000; const calls: unknown[][] = [];
+  const run = (...args: unknown[]) => { calls.push(args); return { status: 0, stdout: "133000000000000001\r\n" }; };
+  expect(readStartIdentity(pid, "win32", run as never)).toBe(`${pid}:133000000000000001`);
+  expect(viewerIdentity(pid, "win32", run as never)).toBe(`${pid}:133000000000000001`);
+  expect(calls.length).toBe(2);
+  const script = Buffer.from((calls[0]![1] as string[]).at(-1)!, "base64").toString("utf16le");
+  expect(script).toContain("GetProcessById"); expect(script).toContain("StartTime.ToFileTimeUtc()"); expect(script).toContain("HasExited");
+  expect(readStartIdentity(pid, "win32", (() => ({ status: 1, stdout: "133000000000000001" })) as never)).toBeNull();
+  expect(readStartIdentity(pid, "win32", (() => ({ status: 0, stdout: "1" })) as never)).toBeNull();
+});
+
+
+test("macOS orphan takeover verifies the kernel fence and retains legacy launcher identity", async () => {
+  const { takeOverOrphanHost } = await import("./launcher-adoption.mjs");
+  const { parseDarwinProcBsdInfoIdentity } = await import("../src/lib/proc/darwinIdentity");
+  const root = mkdtempSync(join(tmpdir(), "macos-orphan-fence-"));
+  try {
+    const pid = 42420; const buffer = Buffer.alloc(136);
+    buffer.writeUInt32LE(pid, 12); buffer.writeBigUInt64LE(BigInt(1_700_000_000), 120); buffer.writeBigUInt64LE(BigInt(123456), 128);
+    const kernel = parseDarwinProcBsdInfoIdentity(pid, buffer, 136)!;
+    const { parseDarwinIdentity } = await import("./darwin-process-identity.mjs");
+    expect(parseDarwinIdentity(pid, buffer, 136)).toBe(kernel);
+    const fencePath = join(root, "fence.json"); const stopped: unknown[] = [];
+    const ports = { launcherIdentity: () => "ps:fixture start", hostIdentity: () => kernel,
+      stop: async (...args: unknown[]) => { stopped.push(args); return true; } };
+    writeFileSync(fencePath, JSON.stringify({ pid, startIdentity: kernel }));
+    const config = { fencePath, socketPath: join(root, "host.sock") };
+    expect(await takeOverOrphanHost({ record: join(root, "record.json") }, config, ports)).toBe(true);
+    expect(stopped[0]).toEqual([{ pid, startIdentity: "ps:fixture start" }, config.socketPath]);
+    writeFileSync(fencePath, JSON.stringify({ pid, startIdentity: `${pid}:1700000000:123457` }));
+    expect(await takeOverOrphanHost({ record: join(root, "record.json") }, config, ports)).toBe(false);
+    expect(stopped.length).toBe(1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watcher final response fence retains stale relaunch custody: %s", async change => {
+  const dir = mkdtempSync(join(root, "dispatch-response-"));
+  const file = join(dir, "request.json"), gateFile = join(dir, "auto-admission.json"), ownerFile = join(dir, "launcher.json");
+  const request = JSON.stringify({ requestId: "accepted-relaunch", role: "relaunch", target: "a".repeat(40), autoGateId: "issuer-gate" });
+  const gate = { id: "issuer-gate", until: Date.now() + 60000, issuerPid: process.pid, issuerIdentity: readStartIdentity(process.pid) };
+  writeFileSync(file, request); writeFileSync(gateFile, JSON.stringify(gate));
+  writeFileSync(ownerFile, JSON.stringify({ launcher: { pid: process.pid, startIdentity: readStartIdentity(process.pid) } }));
+  let resume!: () => void, entered!: () => void, dispatched = 0;
+  const wait = new Promise<void>(resolve => { resume = resolve; }), arrival = new Promise<void>(resolve => { entered = resolve; });
+  const watcher = watchRestartRequests(file, async () => { dispatched++; }, { intervalMs: 60000,
+    admitAuto: async () => { entered(); await wait; return true; } });
+  try {
+    const polling = watcher.poll(); await arrival;
+    if (change === "gate-expired") writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 }));
+    if (change === "issuer-changed") writeFileSync(gateFile, JSON.stringify({ ...gate, issuerIdentity: "stale-issuer" }));
+    if (change === "launcher-changed") writeFileSync(ownerFile, JSON.stringify({ launcher: { pid: process.pid, startIdentity: "stale-launcher" } }));
+    const expectedGate = readFileSync(gateFile, "utf8"), expectedOwner = readFileSync(ownerFile, "utf8");
+    resume(); await polling;
+    expect(dispatched).toBe(0); expect(readFileSync(file, "utf8")).toBe(request);
+    expect(readFileSync(gateFile, "utf8")).toBe(expectedGate); expect(readFileSync(ownerFile, "utf8")).toBe(expectedOwner);
+    expect(JSON.parse(readFileSync(`${file}.result.json`, "utf8"))).toMatchObject({ requestId: "accepted-relaunch", state: "rejected" });
+  } finally { resume(); watcher.stop(); }
 });
