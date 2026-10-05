@@ -10,7 +10,10 @@ export const dynamic = "force-dynamic";
 
 export function POST(req: NextRequest): NextResponse {
   const nonce = req.headers.get("x-delegatus-self") ?? "";
-  if (!consumeSelfNonce(nonce)) return unauthorizedPeer();
+  // Kept for the operator to read beside the address the check expected.
+  const header = (name: string) => req.headers.get(name)?.slice(0, 200) ?? null;
+  const seen = { host: header("host"), forwardedHost: header("x-forwarded-host"), forwardedProto: header("x-forwarded-proto"), forwarded: header("forwarded") };
+  if (!consumeSelfNonce(nonce, seen)) return unauthorizedPeer();
   const token = process.env.LLV_TOKEN;
   const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
   return NextResponse.json({

@@ -12,11 +12,11 @@ import { OPEN_LINKED_SETTINGS_EVENT } from "./openLinkedSettings";
 import { LinkConnectForm } from "./LinkConnectForm";
 import { LinkCopyButton } from "./LinkCopyButton";
 import { LinkStep } from "./LinkStep";
-import { connectErrorMessage, isDrawnState, linkSeverity, peerErrorMessage, requestErrorMessage } from "./linkSeverity";
+import { connectErrorMessage, forwardedNamesAddress, hostSeen, isDrawnState, linkSeverity, peerErrorMessage, requestErrorMessage } from "./linkSeverity";
 import { mintRefusalMessage } from "./mintRefusal";
 
 type State = {
-  self: { label: string; publicUrl: string | null; check: { code: string; at: string } | null } | null;
+  self: { label: string; publicUrl: string | null; check: { code: string; at: string; expected?: unknown; seen?: unknown } | null } | null;
   state: string | null;
   entry: { port: number; publishable: boolean; localVouches?: boolean };
   keyOn: boolean;
@@ -216,6 +216,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
   const stateText = shown === "unverified" && severity === "warning" ? t("links.state.unverified")
     : shown === "unverified" ? t("links.state.unverifiedBlocking", { port: value?.entry.port ?? 0 })
     : shown ? t(`links.state.${shown}` as "links.state.ok") : null;
+  const arrived = shown === "host-rewritten" ? hostSeen(value?.self?.check) : null;
   const stateStyle = severity === "ok" ? "bg-success-soft text-success" : severity === "warning" ? "bg-warning-soft text-warning" : "bg-danger-soft text-danger";
   const pickRole = (next: Role) => setRole(next);
   const roles: { id: Role; title: string; hint: string }[] = [
@@ -291,6 +292,14 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
                 {shown && severity && stateText ? <div role={severity === "error" ? "alert" : "status"} data-linked-state={shown} data-linked-severity={severity} className={`space-y-1 rounded-[8px] px-3 py-2 text-ui ${stateStyle}`}>
                   {severity === "blocking" ? <p className="font-semibold">{t("links.severity.blocking")}</p> : severity === "warning" ? <p className="font-semibold">{t("links.severity.warning")}</p> : null}
                   <p>{stateText}</p>
+                  {arrived ? <div data-linked-host-seen="" className="space-y-1">
+                    <p>{t("links.hostSeen.expected", { expected: arrived.expected })}</p>
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+                      {([["Host", arrived.seen.host], ["X-Forwarded-Host", arrived.seen.forwardedHost], ["X-Forwarded-Proto", arrived.seen.forwardedProto], ["Forwarded", arrived.seen.forwarded]] as const).map(([name, header]) =>
+                        <div key={name} className="contents"><dt>{name}</dt><dd className="min-w-0 break-all font-mono">{header ?? t("links.hostSeen.absent")}</dd></div>)}
+                    </dl>
+                    <p>{t(forwardedNamesAddress(arrived.expected, arrived.seen.forwardedHost) ? "links.hostSeen.actionForwarded" : "links.hostSeen.action")}</p>
+                  </div> : null}
                   {severity === "warning" && savedAddress ? <div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-words">{t("links.checkFromOther", { address: savedAddress })}</p><LinkCopyButton text={savedAddress} label={t("links.copyAddress")} /></div> : null}
                 </div> : null}
                 {selfRequestError ? <p role="alert" data-linked-severity="error" className="rounded-[8px] bg-danger-soft px-3 py-2 text-ui text-danger">{selfRequestError}</p> : null}

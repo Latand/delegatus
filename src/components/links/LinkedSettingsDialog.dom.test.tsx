@@ -206,6 +206,38 @@ test("an unverified address blocks when the local entry vouches for local reques
   expect(line.textContent).toContain(en("links.severity.blocking"));
 });
 
+test("a rewritten Host shows what the server received beside what it expected, in both languages", async () => {
+  const seen = { host: "127.0.0.1:8898", forwardedHost: "delegatus.example.com", forwardedProto: "https", forwarded: null };
+  const rewritten = (over: object) => { const base = view("host-rewritten"); return { ...base, self: { ...base.self, check: { code: "host-rewritten", at: "2026-09-29T08:00:00.000Z", expected: "delegatus.example.com", seen: { ...seen, ...over } } } }; };
+  serve({ status: 200, body: {} }, { links: rewritten({}) });
+  await mount();
+  const box = document.querySelector('[data-linked-state="host-rewritten"]')!;
+  expect(box.getAttribute("data-linked-severity")).toBe("blocking");
+  expect(box.textContent).toContain(en("links.hostSeen.expected", { expected: "delegatus.example.com" }));
+  expect([...box.querySelectorAll("dt")].map((node) => node.textContent)).toEqual(["Host", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"]);
+  expect([...box.querySelectorAll("dd")].map((node) => node.textContent)).toEqual(["127.0.0.1:8898", "delegatus.example.com", "https", en("links.hostSeen.absent")]);
+  expect(box.textContent).toContain(en("links.hostSeen.actionForwarded"));
+  // The box gains sentences and no control.
+  expect(box.querySelectorAll("button, a, input").length).toBe(0);
+  act(() => root?.unmount()); root = null; document.body.innerHTML = "";
+
+  serve({ status: 200, body: {} }, { links: rewritten({ forwardedHost: "127.0.0.1:8898", forwardedProto: "http" }) });
+  await mount();
+  const plain = document.querySelector("[data-linked-host-seen]")!;
+  expect(plain.textContent).toContain(en("links.hostSeen.action"));
+  expect(plain.textContent).not.toContain(en("links.hostSeen.actionForwarded"));
+  act(() => root?.unmount()); root = null; document.body.innerHTML = "";
+
+  // A check saved before the detail existed keeps its one sentence.
+  serve({ status: 200, body: {} }, { links: view("host-rewritten") });
+  await mount();
+  expect(document.querySelector('[data-linked-state="host-rewritten"]')?.textContent).toContain(en("links.state.host-rewritten"));
+  expect(document.querySelector("[data-linked-host-seen]")).toBeNull();
+  for (const key of ["links.hostSeen.expected", "links.hostSeen.absent", "links.hostSeen.action", "links.hostSeen.actionForwarded"] as const) {
+    expect(translate("uk", key, { expected: "x" })).not.toBe(translate("en", key, { expected: "x" }));
+  }
+});
+
 test("genuine blockers stay blocking and a passing check reads ok", async () => {
   for (const code of ["needs-remote-entry", "http-public", "open-to-internet", "host-rewritten", "tls-failure"]) {
     serve({ status: 200, body: {} }, { links: view(code) });

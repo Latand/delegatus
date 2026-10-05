@@ -10,6 +10,21 @@ export function isDrawnState(code: string | null | undefined): code is string {
   return code === "ok" || code === "unverified" || BLOCKING.includes(code ?? "") || REQUEST_ERRORS.includes(code ?? "");
 }
 
+export type HostSeen = { host: string | null; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null };
+
+/** What a failed Host check recorded, when the saved check carries all of it. */
+export function hostSeen(check: { code: string; expected?: unknown; seen?: unknown } | null | undefined): { expected: string; seen: HostSeen } | null {
+  if (check?.code !== "host-rewritten" || typeof check.expected !== "string" || typeof check.seen !== "object" || check.seen === null) return null;
+  const read = (key: keyof HostSeen) => { const value = (check.seen as Record<string, unknown>)[key]; return typeof value === "string" ? value : null; };
+  return { expected: check.expected, seen: { host: read("host"), forwardedHost: read("forwardedHost"), forwardedProto: read("forwardedProto"), forwarded: read("forwarded") } };
+}
+
+/** Whether X-Forwarded-Host still carries the name the Host lost. */
+export function forwardedNamesAddress(expected: string, forwardedHost: string | null): boolean {
+  const name = (value: string) => value.trim().toLowerCase().replace(/:\d+$/, "");
+  return forwardedHost !== null && name(forwardedHost.split(",")[0]!) === name(expected);
+}
+
 /** How a check state reads. An unverified address only blocks linking when the
     local entry vouches for loopback callers (`localVouches`), which is the
     condition `mintCode` refuses it under; otherwise it is a warning. */

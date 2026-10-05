@@ -134,7 +134,7 @@ and `invalid-address` grey, although `mintCode` refuses every one of them
 | `needs-remote-entry` | blocking | yes | `protocol.ts:35`, `self.ts:131-132` |
 | `http-public` | blocking | yes | `protocol.ts:35`, `self.ts:223` |
 | `open-to-internet` | blocking, plus a banner above the roles | yes | `protocol.ts:35`; banner per `linked-installs.md:1173-1174` |
-| `host-rewritten` | blocking | yes | `self.ts:237`, `protocol.ts:37` |
+| `host-rewritten` | blocking; the box also lists what arrived (below) | yes | `self.ts:256`, `protocol.ts:37` |
 | `tls-failure` | blocking | yes | `self.ts:231-233`, `protocol.ts:37` |
 | `invalid-address` (a save refusal) | blocking | yes | `self.ts:138`, `protocol.ts:34` |
 | `save-conflict`, `key-failed`, `unavailable` | request error (red, `role="alert"`) | none: these are failed requests | `self.ts:159`, `route.ts:64` |
@@ -147,6 +147,17 @@ share a colour: blocking uses `bg-danger-soft text-danger` with the lead
 warning's style, `LinkedSettingsDialog.tsx:170`) with the lead "Not checked
 from here". Only request errors take `role="alert"`. A state read on open
 keeps `role="status"`, as today.
+
+**What a `host-rewritten` box says (#2516).** The saved check carries
+`expected` (the address's host) and `seen` (`host`, `forwardedHost`,
+`forwardedProto`, `forwarded`, as the self-check route read them;
+`linked-installs.md` §3.1). Under the state sentence the same box draws
+`[data-linked-host-seen]`: `links.hostSeen.expected`, a four-row list (Host,
+X-Forwarded-Host, X-Forwarded-Proto, Forwarded; `links.hostSeen.absent` for a
+header that did not arrive; values in monospace, wrapping anywhere), and the
+action: `links.hostSeen.actionForwarded` when X-Forwarded-Host names the
+address, `links.hostSeen.action` otherwise. The box gains sentences and no
+control. A check saved before this detail existed draws its one sentence.
 
 The "Allow a connection" button's disabled rule stays exactly as it is
 (`LinkedSettingsDialog.tsx:185`). A stale `tls-failure` or `host-rewritten` may
@@ -500,7 +511,7 @@ Add the case to the existing driver; do not write a new script (AGENTS.md,
   works (`:5344, 5407-5409`). Run it with
   `LINKING_EVIDENCE_DIR=$HOME/Pictures/delegatus-review/linking-ux`.
 
-Frames, each at 1440 × 900 and 390 × 844, in en and uk (9 × 4 = 36 PNGs,
+Frames, each at 1440 × 900 and 390 × 844, in en and uk (11 × 4 = 44 PNGs,
 named `{width}-{lang}-{frame}.png`):
 
 | Frame | Role | Fixture |
@@ -508,6 +519,8 @@ named `{width}-{lang}-{frame}.png`):
 | `accept-unverified` | accept | saved address, `unverified`, `localVouches: false` |
 | `accept-verified` | accept | `ok` |
 | `accept-blocked` | accept | `tls-failure` (a genuine blocker) |
+| `accept-host-rewritten` | accept | `host-rewritten` with `expected` and `seen`: Host is the upstream, X-Forwarded-Host names the address (#2516) |
+| `accept-host-rewritten-long` | accept | the same with a 200-character `Forwarded` and no header naming the address |
 | `accept-code` | accept | the frame above with `ok`, after a mint, code open |
 | `accept-connected` | accept | poll `used`, one new grant |
 | `connect-start` | connect | no address, no peers |
@@ -524,7 +537,11 @@ Assertions recorded in `linking.json` and failing the run:
 - both role radios in the viewport on open at 390 × 844;
 - the frame's text holds its locale's `links.title`;
 - `accept-unverified` has no `[data-linked-severity="blocking"]`, and
-  `accept-blocked` has one.
+  `accept-blocked` has one;
+- the two `accept-host-rewritten` frames list four headers inside the box,
+  none clipped or past its edge, with the expected Host, the received Host
+  and the action in the frame's language and no control in the box; every
+  other frame draws no header list.
 
 Build and run from an export of the lane's commit under `$TMPDIR`, with an
 isolated config root (AGENTS.md, "Only a declared owner resolves the
