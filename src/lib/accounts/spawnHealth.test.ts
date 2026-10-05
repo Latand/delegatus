@@ -583,3 +583,55 @@ test("shared refresh is classified separately for Fable and Sonnet without anoth
   expect(results[1].status).toBe("fulfilled");
   expect(refreshes).toBe(1);
 });
+
+for (const change of ["unrelated", "catalog during refresh", "removed during refresh", "credentials during refresh"] as const)
+for (const withFallback of [false, true]) test(`a pinned expired Claude account fences ${change} (fallback: ${withFallback})`, async () => {
+  const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { readAccountSource, writeAccountSource } = await import("./accountsStore");
+  removeStateDir();
+  const created = createManagedClaudeAccount("Expired pinned fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() - 1,
+  } }), { mode: 0o600 });
+  if (withFallback) {
+    const fallback = createManagedClaudeAccount("Current refresh fallback");
+    fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+    } }), { mode: 0o600 });
+  }
+  let requests = 0;
+  providerReply = () => {
+    requests += 1;
+    if (requests === 1) {
+      if (change === "credentials during refresh") {
+        fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+          ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+        } }), { mode: 0o600 });
+      } else if (change !== "unrelated") {
+        const read = readAccountSource("claude-accounts.json");
+        if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+        const catalog = read.body as { accounts: { id: string; label: string }[] };
+        if (change === "catalog during refresh") catalog.accounts.find(row => row.id === created.id)!.label = "Changed refresh pin";
+        else catalog.accounts = catalog.accounts.filter(row => row.id !== created.id);
+        writeAccountSource("claude-accounts.json", catalog);
+      }
+      const fresh = crypto.randomUUID();
+      return Response.json({ access_token: fresh, expires_in: 3_600 });
+    }
+    if (requests === 2) recordSpawnAdmissionRejection({ clientAttemptId: "unrelated-refresh-key", requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const selection = selectHealthyClaudeAccount(listClaudeAccounts(), created.id);
+    if (change === "unrelated") {
+      const selected = await selection;
+      expect(selected.account.id).toBe(created.id);
+      expect(selected.admission).toMatchObject({ kind: "admissible", basis: "current" });
+      expect(requests).toBe(3);
+    } else {
+      await expect(selection).rejects.toMatchObject({ name: "AccountAdmissionChangedError" });
+      expect(requests).toBe(1);
+    }
+  } finally { providerReply = null; removeStateDir(); }
+});

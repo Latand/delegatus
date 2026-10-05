@@ -232,6 +232,77 @@ test("an automatic bound-project health revision race stays retryable and preser
   }
 });
 
+for (const change of ["unrelated refusal", "unrelated refusal with fallback", "pinned catalog", "pinned credential", "continuous unrelated writes"] as const) test(`a pinned Claude health probe handles ${change} before reserving once`, async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { readAccountSource, writeAccountSource } = await import("@/lib/accounts/accountsStore");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "bound-health-revision-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  const account = createManagedClaudeAccount("Bound route fixture");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+
+  if (change === "unrelated refusal with fallback") {
+    const fallback = createManagedClaudeAccount("Healthy fallback fixture");
+    fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  }
+  const deps: SpawnRouteTestDependencies = {
+    ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+  };
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let raced = false;
+  let probes = 0;
+  globalThis.fetch = (async () => {
+    probes += 1;
+    if (change === "unrelated refusal with fallback") await Bun.sleep(8);
+    if (!raced || change === "continuous unrelated writes") {
+      raced = true;
+      if (change === "pinned catalog") {
+        const read = readAccountSource("claude-accounts.json");
+        if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+        const catalog = read.body as { accounts: { id: string; label: string }[] };
+        catalog.accounts.find(row => row.id === account.id)!.label = "Changed pin";
+        writeAccountSource("claude-accounts.json", catalog);
+      } else if (change === "pinned credential") {
+        fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+      } else {
+        recordSpawnAdmissionRejection({ clientAttemptId: `unrelated-key-${probes}`, requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+      }
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  }) as unknown as typeof globalThis.fetch;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "claude", accountId: account.id, cwd, title: "Bound health revision", prompt: "Review", clientAttemptId: `pinned-health-${change.replaceAll(" ", "-")}` }),
+  });
+  try {
+    const response = await POST.withDependencies(request(), deps);
+    if (change === "unrelated refusal" || change === "unrelated refusal with fallback") {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+      expect(probes).toBe(2);
+      expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+    } else {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+      expect(probes).toBe(change === "continuous unrelated writes" ? 3 : 1);
+    }
+  } finally {
+    process.env.LLV_STATE_DIR = previousState;
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+
 test("spawn admission rejects malformed MCP allowlists", async () => {
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST",

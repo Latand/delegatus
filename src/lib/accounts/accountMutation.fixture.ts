@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withAccountMutationLockAsync } from "./accountMutation";
 
 /** A real foreign writer. Arm only after caller setup, so the short hold
  * overlaps admission rather than module loading. Every child is joined. */
@@ -43,4 +44,25 @@ export async function foreignAccountHolder(state = process.env.LLV_STATE_DIR!) {
       if (code !== 0) throw new Error(`fixture holder exited ${code}: ${stderr}`);
     },
   };
+}
+
+/** Exercise an async request from outside the holder's transaction context. */
+export async function withAccountHolder<T>(kind: "local" | "foreign" | "timeout" | "queued", request: () => Promise<T>): Promise<T> {
+  if (kind !== "local") {
+    const holder = await foreignAccountHolder();
+    const queued = kind === "queued" ? withAccountMutationLockAsync(() => undefined) : null;
+    try {
+      holder.releaseAfter(kind === "timeout" ? 2_150 : kind === "queued" ? 8 : 120);
+      return await request();
+    } finally { await holder.close(); await queued; }
+  }
+  let ready!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { ready = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const held = withAccountMutationLockAsync(async () => { ready(); await gate; });
+  await entered;
+  const timer = setTimeout(release, 8);
+  try { return await request(); }
+  finally { clearTimeout(timer); release(); await held; }
 }

@@ -31,8 +31,8 @@ const CLAUDE_SPAWN_HEALTH_TIMEOUT_MS = 600;
 
 export interface ClaudeSpawnHealthDependencies {
   now(): number;
-  probe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult>;
-  refresh(account: ClaudeAccount): Promise<ClaudeValidityProbeResult>;
+  probe(account: ClaudeAccount, retryUnrelatedRevision?: boolean): Promise<ClaudeValidityProbeResult>;
+  refresh(account: ClaudeAccount, retryUnrelatedRevision?: boolean): Promise<ClaudeValidityProbeResult>;
 }
 
 const globalStore = globalThis as typeof globalThis & {
@@ -42,13 +42,16 @@ const globalStore = globalThis as typeof globalThis & {
 function refreshSingleFlight(
   account: ClaudeAccount,
   refresh: ClaudeSpawnHealthDependencies["refresh"],
+  retryUnrelatedRevision = false,
 ): Promise<ClaudeValidityProbeResult> {
   const inflight = globalStore.__llvClaudeRefreshInflight ??= new Map();
-  const key = `${account.id}\0${path.resolve(account.home)}`;
+  // Validation policies share the OAuth refresh fence, while a pinned waiter
+  // must not inherit an automatic waiter's single-probe revision refusal.
+  const key = `${account.id}\0${path.resolve(account.home)}\0${retryUnrelatedRevision}`;
   const existing = inflight.get(key);
   if (existing) return existing;
   const pending = Promise.resolve()
-    .then(() => refresh(account))
+    .then(() => refresh(account, retryUnrelatedRevision))
     .catch((error: unknown) => {
       if (isAccountAdmissionRetryable(error) || error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
       return classifySpawnAccountAdmission({
@@ -159,29 +162,59 @@ function currentClaudeAccount(account: ClaudeAccount): ClaudeAccount {
   return current;
 }
 
-async function fencedLiveValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
-  const snapshot = await accountProbeSnapshot(() => currentClaudeAccount(account), { holder: "Claude validity snapshot", caller: "spawn health" });
-  const credentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
-  const result = await liveValidityProbe(snapshot.account);
-  const currentCredentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
-  if (credentialIdentity === null || currentCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
-  if (credentialIdentity !== currentCredentialIdentity) throw new AccountAdmissionChangedError();
-  await withAccountMutationLockAsync(() => {
-    if (snapshot.revision !== accountsCollectionRevision() || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();
-  }, { holder: "Claude validity recheck" });
-  return result;
+async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRevision = false): Promise<ClaudeValidityProbeResult> {
+  const options = { holder: "Claude validity snapshot", caller: "spawn health" };
+  let original: Awaited<ReturnType<typeof accountProbeSnapshot<ClaudeAccount>>>;
+  try { original = await accountProbeSnapshot(() => currentClaudeAccount(account), options); }
+  catch (error) {
+    if (error instanceof UnknownClaudeAccountError) throw new AccountAdmissionChangedError();
+    throw error;
+  }
+  // The supplied catalog row predates OAuth refresh. Credential rotation is
+  // expected there; a changed or removed pin must still refuse admission.
+  const catalogIdentity = (value: ClaudeAccount) => JSON.stringify([
+    value.id, value.label, value.kind, path.resolve(value.home),
+    path.resolve(value.projectsDir), value.provider ?? null, value.createdAt,
+  ]);
+  if (catalogIdentity(original.account) !== catalogIdentity(account)) throw new AccountAdmissionChangedError();
+  const credentialIdentity = claudeProbeCredentialIdentity(original.account.home);
+  for (let attempt = 0; attempt < (retryUnrelatedRevision ? 3 : 1); attempt += 1) {
+    let snapshot = original;
+    if (attempt > 0) {
+      try { snapshot = await accountProbeSnapshot(() => currentClaudeAccount(account), options); }
+      catch (error) {
+        if (error instanceof UnknownClaudeAccountError) throw new AccountAdmissionChangedError();
+        throw error;
+      }
+    }
+    // Only unrelated collection writes may repeat the probe. A changed pin
+    // or credential must retain its retryable refusal before any reservation.
+    if (snapshot.identity !== original.identity) throw new AccountAdmissionChangedError();
+    const result = await liveValidityProbe(snapshot.account);
+    const currentCredentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
+    if (credentialIdentity === null || currentCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+    if (credentialIdentity !== currentCredentialIdentity) throw new AccountAdmissionChangedError();
+    const unchanged = await withAccountMutationLockAsync(() => {
+      if (accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();
+      return snapshot.revision === accountsCollectionRevision();
+    }, { holder: "Claude validity recheck", ...(retryUnrelatedRevision ? { caller: "spawn health" } : {}) });
+    if (unchanged) return result;
+  }
+  throw new AccountAdmissionChangedError();
 }
 
-async function refreshValidityProbe(account: ClaudeAccount): Promise<ClaudeValidityProbeResult> {
+async function refreshValidityProbe(account: ClaudeAccount, retryUnrelatedRevision = false): Promise<ClaudeValidityProbeResult> {
   const { account: current } = await accountProbeSnapshot(() => currentClaudeAccount(account), { holder: "Claude refresh admission", caller: "spawn health" });
   // The existing OAuth refresh fence compares the credential read before its
   // network request with the current credential at replacement time.
-  const refreshed = await refreshClaudeOauth(current);
+  const expectedCredentialIdentity = retryUnrelatedRevision ? claudeProbeCredentialIdentity(current.home) : undefined;
+  if (expectedCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+  const refreshed = await refreshClaudeOauth(current, undefined, expectedCredentialIdentity);
   if (refreshed === "invalid") {
     return classifySpawnAccountAdmission({ enabled: true, authentication: "failed", limits: "unknown", stale: false, retryAt: null });
   }
   if (refreshed === "unknown") throw new ClaudeCredentialUnavailableError();
-  return await fencedLiveValidityProbe(current);
+  return await fencedLiveValidityProbe(current, retryUnrelatedRevision);
 }
 
 const productionDependencies: ClaudeSpawnHealthDependencies = {
@@ -223,7 +256,7 @@ export async function selectHealthyClaudeAccount(
     probe: ClaudeSpawnHealthDependencies["probe"],
   ): Promise<Evaluated | null> => {
     try {
-      return { account, admission: forModel(await probe(account)) };
+      return { account, admission: forModel(await probe(account, pinPreferred && account.id === preferredId)) };
     } catch (error) {
       // Credential uncertainty excludes only this candidate. An explicit pin
       // must still refuse substitution; identity and other errors retain their fences.
@@ -247,6 +280,28 @@ export async function selectHealthyClaudeAccount(
     ...(pinPreferred && preferredId && requested ? { requestedAdmission: requested.admission } : {}),
   });
 
+  // Resolve a current pin before probing fallbacks: their revision races may
+  // not veto a healthy, unchanged account the caller explicitly requested.
+  const pinnedCandidate = pinPreferred ? classified.find(candidate => candidate.account.id === preferredId
+    && candidate.oauth && candidate.oauth.expiresAt > now) : undefined;
+  const pinnedCurrent = pinnedCandidate ? await evaluate(pinnedCandidate.account, dependencies.probe) : null;
+  if (pinnedCurrent?.admission.kind === "admissible") return result(pinnedCurrent, pinnedCurrent);
+
+  let requested: Evaluated | null = pinnedCurrent;
+  const preferredExpired = pinPreferred && preferredId
+    ? classified.find((candidate) => candidate.account.id === preferredId
+      && candidate.oauth?.expiresAt
+      && candidate.oauth.expiresAt <= now
+      && candidate.oauth.refreshable)
+    : null;
+  if (preferredExpired) {
+    requested = {
+      account: preferredExpired.account,
+      admission: forModel(await refreshSingleFlight(preferredExpired.account, dependencies.refresh, true)),
+    };
+    if (requested.admission.kind === "admissible") return result(requested, requested);
+  }
+
   const providers = classified.filter((candidate) => candidate.provider);
   const providerCurrent: Evaluated[] = providers.length ? await Promise.all(providers.map(async ({ account }) => {
     const token = readClaudeProviderToken(account.home);
@@ -263,26 +318,12 @@ export async function selectHealthyClaudeAccount(
     else if (messages?.state === "authenticated") authentication = "authenticated";
     return { account, admission: classifySpawnAccountAdmission({ enabled: true, authentication, limits: "unknown", stale: false, retryAt: null }, now) };
   })) : [];
-  const current = [...providerCurrent, ...(await Promise.all(classified
-    .filter((candidate) => candidate.oauth && candidate.oauth.expiresAt > now)
+  const current = [...providerCurrent, ...(pinnedCurrent ? [pinnedCurrent] : []), ...(await Promise.all(classified
+    .filter((candidate) => candidate.oauth && candidate.oauth.expiresAt > now && candidate !== pinnedCandidate)
     .map(({ account }) => evaluate(account, dependencies.probe))))
     .filter((candidate) => candidate !== null)];
-  let requested = preferredId ? current.find((candidate) => candidate.account.id === preferredId) ?? null : null;
+  requested ??= preferredId ? current.find((candidate) => candidate.account.id === preferredId) ?? null : null;
   if (pinPreferred && requested?.admission.kind === "admissible") return result(requested, requested);
-
-  const preferredExpired = pinPreferred && preferredId
-    ? classified.find((candidate) => candidate.account.id === preferredId
-      && candidate.oauth?.expiresAt
-      && candidate.oauth.expiresAt <= now
-      && candidate.oauth.refreshable)
-    : null;
-  if (preferredExpired) {
-    requested = {
-      account: preferredExpired.account,
-      admission: forModel(await refreshSingleFlight(preferredExpired.account, dependencies.refresh)),
-    };
-    if (requested.admission.kind === "admissible") return result(requested, requested);
-  }
 
   const currentSelection = select(current);
   if (currentSelection) return result(currentSelection, requested);

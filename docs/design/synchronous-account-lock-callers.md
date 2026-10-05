@@ -44,12 +44,12 @@ the lock.
 | `productionReportReplyPorts.withdraw` | `src/lib/telegram/bot/reportReplies.ts:67` | Async queue (2 s) | The returned withdrawal result must correspond to the still-held row fenced under the lease. | Async withdrawal queues (2 s) and rechecks row state/operation id under the lease before returning withdrawn. |
 | `inRecordTransaction` | `src/lib/accounts/projectBindings.ts:293` | 25 ms wait | A binding mutation returns its committed record or BUSY; API paths already queue asynchronously. | The HTTP API queues asynchronously. MCP and the direct binding API return BUSY with the safe store sentence; callers retry after the holder finishes. The synchronous return reports no committed binding. |
 | `ManagedCodexRuntime.record` | `src/lib/accounts/codexRuntime.ts:458` | 25 ms wait; existing queued replay | A short holder permits synchronous persistence; longer/local contention keeps the existing coalesced queue. | Existing coalesced async persistence queue replays latest records; client completion/cleanup continues while the holder remains runnable. |
-| `withRegistryLock` | `src/lib/accounts/claude.ts:283` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager mutation admission already queues. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
+| `withRegistryLock` | `src/lib/accounts/claude.ts:283` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager admission and `/api/accounts/claude` provider edit/create and orphan cleanup queue each catalog commit (2 s); exhausted admission returns 503 `account_store_busy`. Provider model reads stay outside the lock. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
 | `setActiveClaudeAccount` | `src/lib/accounts/claude.ts:325` | 25 ms wait | Selection must commit before its caller proceeds. | Async manager selection and compatibility routing queue. Direct sync API raises safe AccountMutationBusyError before selection changes. |
-| `withRegistryLock` | `src/lib/accounts/codex.ts:297` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager mutation admission already queues. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
+| `withRegistryLock` | `src/lib/accounts/codex.ts:297` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager admission and `/api/accounts/codex` creation/orphan cleanup queue each catalog commit (2 s); exhausted admission returns 503 `account_store_busy`. Device login starts after the catalog lease releases. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
 | `setActiveCodexAccount` | `src/lib/accounts/codex.ts:472` | 25 ms wait | Selection must commit before its caller proceeds. | Async manager selection and compatibility routing queue. Direct sync API raises safe AccountMutationBusyError before selection changes. |
-| `setActiveCopilotAccount` | `src/lib/accounts/copilot.ts:173` | 25 ms wait | Selection must commit before its caller proceeds. | Safe AccountMutationBusyError before selection changes; the Copilot route returns the safe sentence (400), so the operator retries after the holder finishes. |
-| `createManagedCopilotAccount` | `src/lib/accounts/copilot.ts:184` | 25 ms wait | Creation must return the account that was durably added. | Safe AccountMutationBusyError without adding an account; the Copilot route returns the safe sentence (400), so the operator retries after the holder finishes. |
+| `setActiveCopilotAccount` | `src/lib/accounts/copilot.ts:173` | 25 ms wait | Selection must commit before its caller proceeds. | `/api/accounts/copilot` selection queues the commit (2 s); exhausted admission returns 503 `account_store_busy` with the safe sentence. Direct sync API raises safe AccountMutationBusyError before selection changes. |
+| `createManagedCopilotAccount` | `src/lib/accounts/copilot.ts:184` | 25 ms wait | Creation must return the account that was durably added. | `/api/accounts/copilot` creation queues the commit (2 s); exhausted admission returns 503 `account_store_busy` with the safe sentence. Direct sync API raises safe AccountMutationBusyError without adding an account. |
 | `ClaudeLoginSupervisor.persist` | `src/lib/accounts/claudeLogin.ts:340` | 25 ms wait; existing queued replay | A short holder commits the stdout transition before returning; longer/local contention keeps the existing queue. | Existing coalesced async persistence queue writes the latest stdout transition; login remains alive and the holder remains runnable. |
 | `syncCompatibilityRouting` | `src/lib/accounts/migration/controller.ts:74` | Async queue (2 s) | The controller needs compatibility selection aligned with its authoritative routing snapshot. | Controller awaits async admission (2 s), then re-reads authoritative routing and commits compatibility selection reentrantly. No detached write. |
 
@@ -59,8 +59,24 @@ persisted lock wording. Lock-owner evidence remains in server diagnostics.
 Admission revision exhaustion retains its own safe account_admission_changed
 code and cause.
 
+An explicit Claude pin is validated before fallback candidates, including its
+post-refresh validation when expired. Pinned and automatic validation flights
+keep their admission policies separate; the OAuth refresh fence still coalesces
+the credential replacement. An explicitly pinned Claude candidate repeats its
+live health probe at most three times when only the shared collection revision moves. Each probe retains its
+600 ms network timeout and runs outside the lock; async snapshot/recheck admission
+has a 2 s budget. A changed pinned catalog row or credential, including external
+replacement during OAuth refresh, refuses admission with `account_admission_changed`, as does continuous revision churn after the
+third probe. Automatic selection retains its existing retryable revision fence.
+
 Focused regression evidence:
 
+- All seven account-route catalog branches cover a local 8 ms holder, a foreign
+  120 ms holder, a local contender behind a foreign holder and exhausted 2 s
+  admission. The 21 local/foreign/timeout cases fail on the previous
+  head with 400/500 and pass with queued success or the safe retryable 503.
+- A pinned Claude probe with one unrelated refusal write admits 202 with one
+  receipt; changed pinned catalog/credentials and continuous churn admit none.
 - Local queued and locally held scenarios fail on the previous head and pass
   for the spawn refusal fence, Telegram withdrawal, compatibility routing,
   deputy command commits, deputy settlement and deputy note commits.
