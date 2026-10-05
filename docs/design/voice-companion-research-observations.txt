@@ -1,0 +1,50 @@
+Voice companion research observation record
+Date: 2026-10-05
+Product source HEAD inspected: ee19907eb0dc9a9e39fc0fd23363d1869eb9b2e3
+
+Read-only command: codex --version
+Result: codex-cli 0.159.3
+Read-only registry GET: https://registry.npmjs.org/@openai/codex/latest
+Result: version 0.160.0
+Release: https://github.com/openai/codex/releases/tag/rust-v0.160.0
+Release published_at: 2026-10-01T20:19:13Z
+Resolved annotated tag commit: a956835d020762cb2b570053af06f643a11c0ecc
+
+Read-only command: codex app-server generate-json-schema --experimental --out <scratch>/installed-schema
+Exit: 0
+Environment: fresh HOME, CODEX_HOME, TMPDIR, LLV_STATE_DIR under OS temporary root
+LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+No app-server daemon, thread, realtime session or microphone was started.
+ThreadRealtimeStartParams required: outputModality, threadId
+ThreadRealtimeStartParams selected optional fields: prompt, version, model, voice, transport,
+  clientManagedHandoffs, codexResponsesAsItems, includeStartupContext, initialItems,
+  realtimeStartInstructions, realtimeEndInstructions, flushTranscriptTailOnSessionEnd,
+  delegationAckFiller, codexResponseHandoffMode, backendReasoningStatus
+clientManagedHandoffs description: controls automatic Codex response forwarding to realtime
+ThreadRealtimeAppendAudioParams required: audio, threadId
+ThreadRealtimeAppendSpeechParams required: text, threadId
+ThreadRealtimeListVoicesParams properties: none
+
+Compared official source files at rust-v0.159.3 and rust-v0.160.0:
+codex-rs/app-server-protocol/src/protocol/v2/realtime.rs: byte-identical
+SHA-256 for both: d86584ad3d3285672112ccc997b50579822d402a8d0ac2d058efba4ed976ca0c
+codex-rs/core/src/realtime_conversation.rs: byte-identical
+SHA-256 for both: 1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280
+GitHub compare status: diverged; versions are maintenance release lines, not assumed ancestors
+Voice-related change inspected: 15c08beee2d917f8d4f10bae1917bbcee21308df (#49073)
+Change: TUI voice-catalog lookup errors are surfaced during picker, save and startup
+Changed voice paths: codex-rs/tui/src/app/realtime_settings.rs and realtime request tests/snapshots
+Scope: source comparison and installed schema generation; no newer binary was executed
+
+Issue read: gh issue view 2519 --json title,body,url,createdAt,updatedAt
+Issue URL: https://github.com/Latand/delegatus/issues/2519
+Issue created/updated: 2026-10-05T14:40:32Z
+Scope of this stage: research note and proposed event contract; prototype acceptance remains future work
+
+Validation: extracted the note's 72-line TypeScript contract to OS-temp scratch
+Command: node <existing TypeScript compiler> <scratch>/contract.ts --strict --noEmit --skipLibCheck --target ES2022 --module ESNext --lib ES2022,DOM
+Isolation: same fresh HOME, TMPDIR and LLV_STATE_DIR; control URL remained closed
+Contract compiler exit: 0
+Citation file/range validation: no missing files or out-of-range citations
+Antithesis scan: no forbidden constructions
+Privacy gate: PASS for both research files with committed known-value fingerprints
