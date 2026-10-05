@@ -17953,3 +17953,126 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+describe("shared memory settings", () => {
+  browserTest("status, shared key and ledger stay readable in en and uk at 1440 and 390", async () => {
+    const { NextRequest } = await import("next/server");
+    const memory = await import("@/app/api/memory/settings/route");
+    const keyRoute = await import("@/app/api/asks-you/key/route");
+    const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
+    const { memoryIndex } = await import("@/lib/memory/service");
+    const { writeAsksYouSettings } = await import("@/lib/asks/settings");
+    const { mutateOperatorAsks } = await import("@/lib/asks/store");
+    const { asksYouSettingView } = await import("@/lib/asks/view");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-browser-"));
+    const previous = { ...process.env };
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.PORT;
+    const out = path.resolve(".artifacts/shared-memory-settings"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
+      "/api/asks-you/key": (request: Request) => request.method === "PUT" ? keyRoute.PUT(new NextRequest(request)) : keyRoute.GET(),
+      "/api/asks-you": () => Response.json(asksYouSettingView()),
+    });
+    // Record the owned browser PID and close precisely this launch through its server.
+    let launched: Awaited<ReturnType<typeof chromium.launchServer>> | undefined;
+    let browser: Browser | undefined;
+    let browserPid: number | undefined;
+    const cases: unknown[] = [];
+    try {
+      launched = await chromium.launchServer(LAUNCH);
+      browserPid = launched.process().pid;
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+      browser = await chromium.connect(launched.wsEndpoint());
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        setSharedMemoryEnabled("atlas", true);
+        writeAsksYouSettings({ capUsd: 1 });
+        delete process.env.OPENROUTER_API_KEY;
+        process.env.PORT = "9876";
+        fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const dialog = page.locator("[data-telemetry-settings]");
+          await dialog.waitFor();
+          await page.locator("[data-memory-status]").waitFor();
+          await page.locator("[data-provider-key] input").waitFor();
+          const measure = async (state: string) => {
+            await dialog.evaluate(node => { node.scrollTop = 0; });
+            const geometry = await dialog.evaluate(node => {
+              const box = node.getBoundingClientRect();
+              const rows = [...node.querySelectorAll<HTMLElement>("[data-memory-setting], [data-provider-key]")].map(row => {
+                const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height, overflow: row.scrollWidth - row.clientWidth };
+              });
+              const controls = [...node.querySelectorAll<HTMLElement>("input, button")].map(control => {
+                const r = control.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+              });
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+                overflow: node.scrollWidth - node.clientWidth, scrollHeight: node.scrollHeight, height: node.clientHeight, rows, controls,
+                status: node.querySelector("[data-memory-status]")?.textContent,
+                counts: node.querySelector("[data-memory-counts]")?.textContent };
+            });
+            expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+            expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
+            expect(geometry.overflow).toBeLessThanOrEqual(1);
+            expect(geometry.rows[0].bottom).toBeLessThanOrEqual(geometry.rows[1].top);
+            expect(geometry.rows.every(row => row.overflow <= 1)).toBe(true);
+            expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
+            cases.push({ lang, width, state, ...geometry });
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+            await page.locator("[data-provider-key]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}-key.png`) });
+          };
+          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.notOwner"));
+          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.noKey"));
+          await measure("missing-key");
+          // No file key is seeded; the only secret sent is this fake fixture.
+          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.saved"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          await measure("inactive");
+          delete process.env.PORT;
+          memoryIndex().recordInjectionActivity("decisions");
+          memoryIndex().recordInjectionActivity("noMatches");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.ready"));
+          await measure("ready");
+          mutateOperatorAsks(file => { file.spend.usd = 1; });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.capped"));
+          await measure("capped");
+          await page.locator("[data-memory-setting] [role=switch]").click();
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.projectOff"));
+          await measure("off");
+          process.env.OPENROUTER_API_KEY = "test-env";
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.getByText(translate(lang, "providerKey.env"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+          await measure("environment");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+        // The next language/viewport starts with no file key.
+        const { openRouterKeyPath } = await import("@/lib/asks/settings");
+        fs.rmSync(openRouterKeyPath(), { force: true });
+        mutateOperatorAsks(file => { file.spend.usd = 0; });
+      }
+      fs.mkdirSync("evidence/shared-memory-settings", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory-settings/geometry.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally {
+      await browser?.close(); await launched?.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+      memoryIndex().close();
+      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "OPENROUTER_API_KEY", "PORT"]) {
+        if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+});

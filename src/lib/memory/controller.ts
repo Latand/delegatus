@@ -21,6 +21,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
   const hookId = request.headers.get("x-llv-memory-hook") ?? "";
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
+  let counted = input.delegatus_confirm === true;
+  let outcome: "skipped" | "failed" = "skipped";
   try {
     if (!/^[a-f0-9-]{36}$/.test(hookId)) return "";
     const conversationId = callerConversationId(request);
@@ -124,8 +126,10 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (latestReply) index.recordCitations(conversationId, latestReply.citationText ?? latestReply.text);
     let reserved = 0;
     const month = spendMonth(new Date());
+    counted = true;
     return await injectMemory({ prompt, origin, engine: engine, project, conversation: conversationId, requestId, context }, {
       deadline, signal: request.signal,
+      activity: event => { try { index.recordInjectionActivity(event); } catch { /* optional ledger */ } },
       enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
       candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline),
       reserve: ceiling => {
@@ -142,5 +146,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         index.recordPreparedInjection(entries, requestId, conversationId, hookId, expires);
       },
     });
-  } catch { return ""; }
+  } catch { outcome = "failed"; return ""; }
+  finally {
+    if (!counted) { try { memoryIndex().recordInjectionActivity(outcome); } catch { /* optional ledger */ } }
+  }
 }

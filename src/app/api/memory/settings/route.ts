@@ -1,14 +1,13 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { readAsksYouSettings } from "@/lib/asks/settings";
-import { readOperatorAsks, currentSpend } from "@/lib/asks/store";
-import { sharedMemoryEnabled, setSharedMemoryEnabled } from "@/lib/memory/settings";
+import { memorySettingView } from "@/lib/memory/view";
+import { setSharedMemoryEnabled } from "@/lib/memory/settings";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 function answer(project: string) {
-  return Response.json({ enabled: sharedMemoryEnabled(project), capUsd: readAsksYouSettings().capUsd,
-    spentUsd: currentSpend(readOperatorAsks(), new Date()).usd }, { headers: { "Cache-Control": "no-store" } });
+  try { return Response.json(memorySettingView(project), { headers: { "Cache-Control": "no-store" } }); }
+  catch { return Response.json({ error: "status_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }); }
 }
 export async function GET(request: NextRequest) {
   const project = request.nextUrl.searchParams.get("project");
