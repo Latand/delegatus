@@ -35,6 +35,13 @@ before the earliest denied launch admission were excluded. No malformed rows
 were encountered. This is an available-artifact snapshot; missing artifacts
 and the two unmatched calls provide no child-completion evidence.
 
+A later read-only cross-check during publication reached **714 `spawn_agent`
+calls in 224 denied conversations**, with **712 matching child headers** among
+1,860 headers. Its receipt inventory contained 886 denied launches and 855
+available parent artifacts. All 714 inspected argument objects used the v2
+contract; no matching child predates denied admission. Only the 2026-10-05 row
+grew, to 18 calls and 18 matching headers. Both snapshots recorded 0.159.3.
+
 The exact observed method was `spawn_agent`, recorded as a native
 `response_item` / `function_call`. Searches also covered `collabAgentToolCall`,
 `subAgentActivity`, and other spawning calls. Those two app-server item types
@@ -116,7 +123,9 @@ headers and the durable app-server ledger cover activity outside that tail.
 
 A violation requires the exact parent generation to deny sub-agents and an
 explicit denied Delegatus launch receipt for its artifact. Imported standalone
-sessions with a default false profile produce no false alert. Violations append
+sessions with a default false profile produce no false alert. The most recent
+receipt at the activity's timestamp must deny delegation; child history from a
+permission-enabled interval stays clear. A violation appends
 `subagent_policy_violation` to the existing durable lifecycle journal, visible
 through `lifecycle_events` query and its immediate high-signal digest. Stable
 native-item/child keys deduplicate replay and survive restarts. Summaries contain
@@ -160,6 +169,8 @@ test passes. The installed-inventory test reads `codex features list`, checks
 every agent-related feature is disabled, explicitly allowed, or removed, and
 feeds the emitted flags back through the native parser. Unknown-feature tests
 cover unrelated spellings and both true and false defaults.
+The permission-history regression also failed before the detection correction
+and passes when it selects the receipt active at the child's creation time.
 
 Focused checks run each exact file in a separate process with isolated
 `LLV_STATE_DIR`, `HOME`, `TMPDIR`, and configuration under the OS temporary
@@ -176,8 +187,13 @@ root, plus `LLV_VIEWER_CONTROL_URL` on a closed port:
 - `src/lib/scanner/links.test.ts`
 - `src/lib/lifecycle/digest.test.ts`
 - `src/lib/lifecycle/journal.test.ts`
+- `src/lib/mcp/voiceUtteranceWiring.test.ts`
 
 Heavy commands use `scripts/gate-slot.sh`. Type checking and changed-file lint
 are also run. Publication uses the repository's local pre-commit and pre-push
 gates. Hosted CI is left to run after publication; this lane does not wait for
 it, merge, deploy, or update the installed interpreter.
+The native compatibility harness also pins the closed control URL. Its existing
+voice HTTP fixture now overrides that URL with its own port-0 stub and restores
+it after each case. With the closed URL, the original fixture failed seven of
+eight tests; the corrected fixture passes all eight.

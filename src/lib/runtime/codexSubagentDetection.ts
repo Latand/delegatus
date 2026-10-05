@@ -35,11 +35,11 @@ export function recordCodexSubagentViolation(
   if (generation?.launchProfile.allowSubagents !== false) return false;
   // Scanner imports also have a default false profile. A launch receipt proves
   // Delegatus actually imposed the permission on this conversation.
-  const launched = (receipts ?? Object.values(registry.readOnlySnapshot().receipts)).some((receipt) =>
+  const launched = (receipts ?? Object.values(registry.readOnlySnapshot().receipts)).filter((receipt) =>
     receipt.engine === "codex" && receipt.artifactPath === parentPath
-    && receipt.launchProfile.allowSubagents === false
-    && Date.parse(receipt.createdAt) <= Date.parse(activityAt));
-  if (!launched) return false;
+    && Date.parse(receipt.createdAt) <= Date.parse(activityAt))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  if (launched?.launchProfile.allowSubagents !== false) return false;
   const event: LifecycleEventInput = {
     key: `codex-subagent-policy:${conversation.id}:${evidenceKey}`,
     type: "subagent_policy_violation", at,

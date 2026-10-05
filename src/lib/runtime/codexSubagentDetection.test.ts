@@ -8,7 +8,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lifecycleJournalPath, queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { pollLifecycleDigest } from "@/lib/lifecycle/digest";
 import type { FileEntry } from "@/lib/types";
-import { observeCodexSubagentEvent, observeCodexSubagentTranscripts } from "./codexSubagentDetection";
+import { observeCodexSubagentEvent, observeCodexSubagentTranscripts, recordCodexSubagentViolation } from "./codexSubagentDetection";
 import { bindStructuredDeliveryQueue, type StructuredDeliveryHost } from "./structuredDeliveryController";
 import type { RuntimeHostClient } from "./client";
 
@@ -97,6 +97,18 @@ test("an imported transcript with no Delegatus launch receipt produces no violat
   registry.ensureConversation("codex", parentPath, null);
   observeCodexSubagentEvent(registry, parentPath, { kind: "item", item: { type: "subAgentActivity", id: "imported-item" }, turnId: null, phase: "completed", seq: 1 });
   expect(queryLifecycleEvents({}).events).toHaveLength(0);
+});
+
+test("child history uses the permission at activity time across denied and granted resumes", () => {
+  const { registry, parentPath } = launched();
+  const original = Object.values(registry.readOnlySnapshot().receipts)[0]!;
+  const receipts = [
+    { ...original, createdAt: "2000-01-01T00:00:00.000Z" },
+    { ...original, createdAt: "2001-01-01T00:00:00.000Z", launchProfile: { ...original.launchProfile, allowSubagents: true } },
+    { ...original, createdAt: "2002-01-01T00:00:00.000Z" },
+  ];
+  expect(recordCodexSubagentViolation(registry, parentPath, "permitted-child", "thread_spawn", undefined, undefined, receipts, "2001-06-01T00:00:00.000Z")).toBe(false);
+  expect(recordCodexSubagentViolation(registry, parentPath, "denied-child", "thread_spawn", undefined, undefined, receipts, "2002-06-01T00:00:00.000Z")).toBe(true);
 });
 
 test("native transcript calls alert without a child while prose, MCP calls and pre-admission history stay clear", () => {
