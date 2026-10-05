@@ -22,13 +22,18 @@
         "x": 795,
         "right": 924,
         "width": 129,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -41,13 +46,18 @@
         "x": 795,
         "right": 924,
         "width": 129,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -64,13 +74,18 @@
         "x": 795,
         "right": 906,
         "width": 111,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -83,13 +98,18 @@
         "x": 795,
         "right": 922,
         "width": 127,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -102,13 +122,18 @@
         "x": 795,
         "right": 922,
         "width": 127,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
         "clipped": false,
@@ -125,13 +150,18 @@
         "x": 795,
         "right": 922,
         "width": 127,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -144,13 +174,18 @@
         "x": 795,
         "right": 922,
         "width": 127,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -163,13 +198,18 @@
         "x": 795,
         "right": 922,
         "width": 127,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -182,13 +222,18 @@
         "x": 795,
         "right": 906,
         "width": 111,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -201,13 +246,18 @@
         "x": 795,
         "right": 906,
         "width": 111,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -239,13 +289,18 @@
         "x": 20,
         "right": 135,
         "width": 115,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -258,13 +313,18 @@
         "x": 20,
         "right": 135,
         "width": 115,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
+      "sheetHeader": "Running stageApplies now: the turn stops, the attempt goes on.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -281,13 +341,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -300,13 +365,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 738,
+        "bottom": 782
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -319,13 +389,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 738,
+        "bottom": 782
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
+      "sheetHeader": "Running stageApplies now: the turn stops, the attempt goes on.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
         "clipped": false,
@@ -342,13 +417,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 680,
+        "bottom": 724
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -361,13 +441,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 622,
+        "bottom": 666
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -380,13 +465,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 564,
+        "bottom": 608
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -399,13 +489,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 582,
+        "bottom": 626
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -418,13 +513,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 582,
+        "bottom": 626
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
+      "sheetHeader": "Running stageApplies now: the turn stops, the attempt goes on.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -434,7 +534,9 @@
     },
     "ordinarySheet": {
       "header": "Next messageApplies to your next message: Opus 5.5 · low",
-      "controls": 15
+      "controls": 15,
+      "headingGap": 6.1,
+      "headingHeight": 15.1
     }
   },
   {
@@ -460,13 +562,18 @@
         "x": 795,
         "right": 924,
         "width": 129,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -479,13 +586,18 @@
         "x": 795,
         "right": 924,
         "width": 129,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -502,13 +614,18 @@
         "x": 795,
         "right": 907,
         "width": 112,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -521,13 +638,18 @@
         "x": 795,
         "right": 933,
         "width": 138,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -540,13 +662,18 @@
         "x": 795,
         "right": 933,
         "width": 138,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
         "clipped": false,
@@ -563,13 +690,18 @@
         "x": 795,
         "right": 933,
         "width": 138,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -582,13 +714,18 @@
         "x": 795,
         "right": 933,
         "width": 138,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -601,13 +738,18 @@
         "x": 795,
         "right": 933,
         "width": 138,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -620,13 +762,18 @@
         "x": 795,
         "right": 907,
         "width": 112,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -639,13 +786,18 @@
         "x": 795,
         "right": 907,
         "width": 112,
-        "height": 28
+        "height": 28,
+        "top": 502,
+        "bottom": 530
       },
+      "viewportHeight": 900,
       "composerControls": 6,
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -677,13 +829,18 @@
         "x": 20,
         "right": 135,
         "width": 115,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -696,13 +853,18 @@
         "x": 20,
         "right": 135,
         "width": 115,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба триває.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -719,13 +881,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 825,
+        "bottom": 869
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -738,13 +905,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 738,
+        "bottom": 782
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -757,13 +929,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 738,
+        "bottom": 782
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба триває.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
         "clipped": false,
@@ -780,13 +957,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 680,
+        "bottom": 724
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -799,13 +981,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 622,
+        "bottom": 666
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -818,13 +1005,18 @@
         "x": 20,
         "right": 139,
         "width": 119,
-        "height": 44
+        "height": 44,
+        "top": 564,
+        "bottom": 608
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -837,13 +1029,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 582,
+        "bottom": 626
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
       "sheetHeader": null,
+      "headingGap": null,
+      "headingHeight": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -856,13 +1053,18 @@
         "x": 20,
         "right": 117,
         "width": 97,
-        "height": 44
+        "height": 44,
+        "top": 582,
+        "bottom": 626
       },
+      "viewportHeight": 900,
       "composerControls": 5,
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
-      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба триває.",
+      "headingGap": 6.1,
+      "headingHeight": 15.1,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -872,7 +1074,9 @@
     },
     "ordinarySheet": {
       "header": "Наступне повідомленняСтосується наступного повідомлення: Opus 5.5 · low",
-      "controls": 15
+      "controls": 15,
+      "headingGap": 6.1,
+      "headingHeight": 15.1
     }
   }
 ]

@@ -3579,7 +3579,7 @@ export const en = {
   "mobile2.composer.sheetTitle": "Next message",
   "mobile2.composer.nextMessage": "Applies to your next message: {model} · {effort}",
   "mobile2.composer.stageSheetTitle": "Running stage",
-  "mobile2.composer.stageNow": "Applies now: the turn stops and the attempt continues on your choice.",
+  "mobile2.composer.stageNow": "Applies now: the turn stops, the attempt goes on.",
   "mobile2.composer.chipAtLimit": "{model} · {account} at limit",
   "mobile2.composer.accountGroup": "Account",
   "mobile2.composer.accountRunsOn": "runs on {account}",

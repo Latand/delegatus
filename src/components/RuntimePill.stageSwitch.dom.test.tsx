@@ -12,6 +12,7 @@ import type { Pipeline, PipelineRuntimeSwitch } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill } from "./RuntimePill";
+import type { RuntimeSession } from "./runtime/runtimeModel";
 import { stageRunOf, switchFailureText } from "./stageRuntimeSwitch";
 import { TaskToastHost } from "./tasks/taskToast";
 
@@ -103,6 +104,7 @@ beforeEach(() => {
       });
     }
     if (url === "/api/pipelines/p-stage") return answerPatch();
+    if (url === "/api/tmux") return json({ ok: true, operationId: "op-parked" });
     return json({ ok: true });
   }) as typeof fetch;
 });
@@ -256,7 +258,7 @@ test("the sheet of a running stage says the change applies now, in both language
   const { root } = await openSheet();
   const header = () => document.querySelector("[data-runtime-sheet-header]")!.textContent;
   expect(header()).toContain("Running stage");
-  expect(header()).toContain("Applies now: the turn stops and the attempt continues on your choice.");
+  expect(header()).toContain("Applies now: the turn stops, the attempt goes on.");
   expect(header()).not.toContain("ext message");
   expect(document.querySelector('[data-runtime-sheet-account="acct-a"]')?.textContent).toContain("this attempt");
   expect(document.querySelector('[data-runtime-sheet-account="acct-b"]')?.getAttribute("aria-label")).toBe("Continue this attempt on Account B now");
@@ -266,7 +268,7 @@ test("the sheet of a running stage says the change applies now, in both language
   setLocale("uk");
   const second = await openSheet();
   expect(header()).toContain("Етап у роботі");
-  expect(header()).toContain("Діє одразу: хід зупиняється, спроба продовжується на обраному.");
+  expect(header()).toContain("Діє одразу: хід зупиняється, спроба триває.");
   expect(document.querySelector("[data-runtime-sheet]")!.textContent).not.toContain("аступне повідомлення");
   expect(document.querySelector('[data-runtime-sheet-account="acct-a"]')?.textContent).toContain("ця спроба");
   await act(async () => second.root.unmount());
@@ -301,5 +303,59 @@ test("a conversation that is no longer the stage's agent keeps its own reconfigu
 
   expect(writes()).toEqual([]);
   expect(calls.find((call) => call.url === "/api/tmux")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
+  await act(async () => root.unmount());
+});
+
+/** The conversation's own session, carrying how its reconfigure `op-parked` ended. */
+function settled(status: "applied" | "failed", reason?: string): RuntimeSession {
+  return {
+    conversationId: "conversation_stage",
+    sessionKey: { engine: "claude", sessionId: "session-stage" },
+    hostKind: "claude-broker", host: "hosted", turn: "idle", provenance: "structured",
+    revision: 5, attentionIds: [],
+    recentReceipts: [{
+      operationId: "op-parked", idempotencyKey: "op-parked", conversationId: "conversation_stage",
+      kind: "reconfigure", status, ...(reason ? { reason } : {}), at: "2026-10-05T10:00:00.000Z", revision: 5,
+    }],
+    accountId: "acct-a", parentConversationId: null, flowId: null, workflowId: null,
+    cwd: "/repo", artifactPath: file.path,
+    capabilities: { steer: true, structuredAttention: true },
+    activeTurnId: null, pendingReconfigure: null, drift: null,
+  };
+}
+
+test("a parked stage keeps the conversation's own reconfigure, and its failure is the pill's error", async () => {
+  await publish(pipeline({ state: "needs_decision", attemptState: "needs_decision" }));
+  const { host, root } = await openSheet();
+  await choose("Opus 5.5");
+  expect(writes()).toEqual([]);
+  expect(calls.find((call) => call.url === "/api/tmux")?.body).toMatchObject({ action: "reconfigure", model: "opus" });
+  expect(pill(host).textContent).toContain("Opus 5.5");
+
+  await act(async () => {
+    root.render(<><TaskToastHost /><RuntimePill file={file} surface="structured" runtimeSession={settled("failed", "The provider refused the model")} /></>);
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  await settle();
+  expect(host.querySelector("[data-runtime-pill-error]")?.textContent).toBe("The provider refused the model");
+  expect(host.querySelector(".border-l-danger")?.textContent).toContain("The provider refused the model");
+  expect(pill(host).textContent).toContain("Fable");
+  expect(pill(host).getAttribute("aria-busy")).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("a parked stage's reconfigure that applied is announced like any conversation's", async () => {
+  await publish(pipeline({ state: "needs_decision", attemptState: "needs_decision" }));
+  const { host, root } = await openSheet();
+  await choose("Opus 5.5");
+  await act(async () => {
+    root.render(<><TaskToastHost /><RuntimePill file={file} surface="structured" runtimeSession={settled("applied")} /></>);
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  await settle();
+  expect(host.textContent).toContain("Conversation settings applied");
+  expect(host.querySelector("[data-runtime-pill-error]")).toBeNull();
+  expect(pill(host).textContent).toContain("Opus 5.5");
+  expect(pill(host).getAttribute("aria-busy")).toBeNull();
   await act(async () => root.unmount());
 });

@@ -3506,7 +3506,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.composer.sheetTitle": "Наступне повідомлення",
   "mobile2.composer.nextMessage": "Стосується наступного повідомлення: {model} · {effort}",
   "mobile2.composer.stageSheetTitle": "Етап у роботі",
-  "mobile2.composer.stageNow": "Діє одразу: хід зупиняється, спроба продовжується на обраному.",
+  "mobile2.composer.stageNow": "Діє одразу: хід зупиняється, спроба триває.",
   "mobile2.composer.chipAtLimit": "{model} · ліміт на {account}",
   "mobile2.composer.accountGroup": "Акаунт",
   "mobile2.composer.accountRunsOn": "працює на {account}",

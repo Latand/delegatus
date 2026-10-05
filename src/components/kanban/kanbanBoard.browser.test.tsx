@@ -17962,7 +17962,9 @@ describe("running stage runtime switch", () => {
    * `applyNow`, the pill spins while the switch is under way, and a switch that does not take is the pill's
    * error, worded by what happened to the agent and by display names. The conversation's controls are counted
    * before and after: the selector gains none. On the phone the sheet says the change applies now, and the same
-   * conversation without its stage membership keeps the next-message words.
+   * conversation without its stage membership keeps the next-message words. Every measured state is framed with
+   * the pill inside the window, and the sheet's heading keeps the gap to the account line that the ordinary
+   * conversation has.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "running stage runtime switch"
    *
@@ -18002,17 +18004,23 @@ describe("running stage runtime switch", () => {
               return other.left < box.right - 1 && other.right > box.left + 1 && other.top < box.bottom - 1 && other.bottom > box.top + 1;
             }).length;
             const line = document.querySelector<HTMLElement>("[data-runtime-sheet-account-current], [data-runtime-popover-account]");
+            const heading = document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]");
+            const accounts = document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div");
             return {
               face: pill.textContent?.replace(/\s+/g, " ").trim() ?? "",
               busy: pill.getAttribute("aria-busy") === "true",
               error: document.querySelector("[data-runtime-pill-error]")?.textContent ?? null,
               title: pill.getAttribute("title"),
-              pill: { x: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height) },
+              pill: { x: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height), top: Math.round(box.top), bottom: Math.round(box.bottom) },
+              viewportHeight: innerHeight,
               composerControls: siblings.length + 1,
               overlapped,
               selectorControls: selector ? selector.querySelectorAll("button, input, select").length : null,
               selectorOverflow: selector ? selector.scrollWidth > selector.clientWidth + 1 : null,
               sheetHeader: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+              /* The heading's paragraph against the account line under it: its height says how many lines it took. */
+              headingGap: heading && accounts ? Math.round((accounts.getBoundingClientRect().top - heading.getBoundingClientRect().bottom) * 10) / 10 : null,
+              headingHeight: heading ? Math.round(heading.getBoundingClientRect().height * 10) / 10 : null,
               accountLine: line ? { text: line.textContent?.replace(/\s+/g, " ").trim() ?? "", clipped: line.scrollWidth > line.clientWidth + 1, right: Math.round(line.getBoundingClientRect().right) } : null,
               pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
             };
@@ -18026,10 +18034,17 @@ describe("running stage runtime switch", () => {
             await page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { state: "detached", timeout: 5_000 });
           };
           const frame = (name: string) => page.screenshot({ path: path.join(out, `${width}-${lang}-${name}.png`) });
+          /* A state as the operator sees it: the board re-lays its columns when the lane's state changes, so the pill is brought back into the window before it is measured and framed. */
+          const capture = async (name: string) => {
+            await pill.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+            await page.waitForTimeout(150);
+            const reading = await measure();
+            await frame(name);
+            return reading;
+          };
           const setPhase = (phase: string, outcome?: string) => page.evaluate(({ phase, outcome }) => (window as unknown as Evidence).evidence.setRuntimeSwitchPhase("p-search", "verify", phase, outcome), { phase, outcome });
 
-          const before = await measure();
-          await frame("before");
+          const before = await capture("before");
           await openSelector();
           const beforeOpen = await measure();
           await frame("before-selector");
@@ -18059,15 +18074,13 @@ describe("running stage runtime switch", () => {
             return stored.runs.find((run) => run.stageId === "verify")?.attempts.at(-1)?.runtimeSwitches?.at(-1)?.phase === "requested";
           }, undefined, { timeout: 5_000 });
           await page.waitForTimeout(300);
-          const switching = await measure();
-          await frame("switching");
+          const switching = await capture("switching");
           expect(switching.face).toContain("Fable");
           expect(switching.busy).toBe(true);
 
           await setPhase("rolled-back");
           await page.waitForSelector("[data-runtime-pill-error]", { state: "attached", timeout: 5_000 });
-          const rolledBack = await measure();
-          await frame("rolled-back");
+          const rolledBack = await capture("rolled-back");
           const rolledBackWords = translate(lang, "stageRuntime.rolledBack", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.switchFailed") });
           expect(rolledBack.error).toBe(rolledBackWords);
           expect(rolledBack.title).toBe(rolledBackWords);
@@ -18084,28 +18097,24 @@ describe("running stage runtime switch", () => {
           await setPhase("failed", "target engine is unavailable; stage stays on its runtime");
           const notSwitchedWords = translate(lang, "stageRuntime.notSwitched", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.engineUnavailable") });
           await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, notSwitchedWords, { timeout: 5_000 });
-          const notSwitched = await measure();
-          await frame("not-switched");
+          const notSwitched = await capture("not-switched");
 
           /* The stop is not confirmed yet: the lane waits for the operator. */
           await setPhase("switching", "runtime switch stop remains unconfirmed: host busy");
           const waitingWords = translate(lang, "stageRuntime.waiting", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.stopUnconfirmed") });
           await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, waitingWords, { timeout: 5_000 });
-          const waiting = await measure();
-          await frame("waiting");
+          const waiting = await capture("waiting");
 
           await setPhase("failed", "stage stopped by kill during runtime switch");
           const failedWords = translate(lang, "stageRuntime.failed", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.kill") });
           await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, failedWords, { timeout: 5_000 });
-          const failed = await measure();
-          await frame("failed");
+          const failed = await capture("failed");
 
           await setPhase("committed");
           await page.waitForSelector("[data-runtime-pill-error]", { state: "detached", timeout: 5_000 });
           /* The scan brings the runtime the conversation now runs on, and the face follows it. */
           await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>("[data-runtime-pill]")].some((element) => element.offsetParent !== null && (element.textContent ?? "").includes("Fable")), undefined, { timeout: 10_000 });
-          const committed = await measure();
-          await frame("committed");
+          const committed = await capture("committed");
           expect(committed.face).toContain("Fable");
           expect(committed.busy).toBe(false);
           await openSelector();
@@ -18118,12 +18127,17 @@ describe("running stage runtime switch", () => {
             expect(reading.overlapped).toBe(0);
             expect(reading.pageOverflow).toBe(false);
             expect(reading.pill.right).toBeLessThanOrEqual(width);
+            expect(reading.pill.x).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.top).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.bottom).toBeLessThanOrEqual(reading.viewportHeight);
             expect(JSON.stringify(reading)).not.toContain("claude ·");
           }
           for (const reading of [rolledBackOpen, committedOpen]) {
             expect(reading.selectorControls).toBe(beforeOpen.selectorControls);
             expect(reading.selectorOverflow).toBe(false);
           }
+          /* The sheet's heading stays clear of the account line under it, whatever that line says. */
+          if (phone) for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) expect(reading.headingGap).toBeGreaterThanOrEqual(6);
           expect(await page.locator("[data-stage-runtime-control], [data-stage-runtime-open], [data-stage-runtime-action], [data-stage-runtime-status]").count()).toBe(0);
           expect(pageErrors).toEqual([]);
           readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, notSwitched, waiting, failed, committed, committedOpen });
@@ -18143,11 +18157,17 @@ describe("running stage runtime switch", () => {
           const sheet = await ordinary.page.evaluate(() => ({
             header: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
             controls: document.querySelector("[data-runtime-sheet]")!.querySelectorAll("button, input, select").length,
+            headingGap: Math.round((document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div")!.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().bottom) * 10) / 10,
+            headingHeight: Math.round(document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().height * 10) / 10,
           }));
           await ordinary.page.screenshot({ path: path.join(out, `${width}-${lang}-ordinary-selector.png`) });
           expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
           expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
-          expect(sheet.controls).toBe((readings.at(-1) as { beforeOpen: { selectorControls: number } }).beforeOpen.selectorControls);
+          const staged = (readings.at(-1) as { beforeOpen: { selectorControls: number; headingGap: number; headingHeight: number } }).beforeOpen;
+          expect(sheet.controls).toBe(staged.selectorControls);
+          /* One line of heading, and the same gap under it, as the conversation that is no stage. */
+          expect(staged.headingHeight).toBe(sheet.headingHeight);
+          expect(staged.headingGap).toBe(sheet.headingGap);
           expect(ordinary.pageErrors).toEqual([]);
           (readings.at(-1) as Record<string, unknown>).ordinarySheet = sheet;
         } finally { await ordinary.context.close(); }

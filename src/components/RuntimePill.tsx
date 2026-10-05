@@ -440,8 +440,9 @@ export function RuntimePill({
 
   useEffect(() => {
     if (pillSurface !== "structured") return;
-    /* A stage's switch reconfigures its conversation under the pipeline's own operation; its record settles it. */
-    if (stageRun) return;
+    /* A live stage's switch reconfigures its conversation under the pipeline's own operation; its record settles
+       it. A parked stage's choice is the conversation's own reconfigure, settled by its receipt below. */
+    if (stageRoute) return;
     const pending = runtimeSession?.pendingReconfigure;
     /* #1846: an account pick is the conversation's choice, shown as «next on» until a message engages it.
        The pill never adopts it as an apply in flight: no pending phase is written for a later page to restore
@@ -501,7 +502,7 @@ export function RuntimePill({
       setError(receipt.reason ?? t("runtimeConfig.failed"));
       if (trackedOperationId) pushTaskToast("err", receipt.reason ?? t("runtimeConfig.failed"));
     }
-  }, [clearBrowserProfileRollback, file, pillSurface, restoreBrowserProfile, runtimeSession, stageRun, t]);
+  }, [clearBrowserProfileRollback, file, pillSurface, restoreBrowserProfile, runtimeSession, stageRoute, t]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- confirm-by-observation:
      the poll updates `file`, and matching observed runtime settles the phase
@@ -524,7 +525,7 @@ export function RuntimePill({
   /* An account pick waits for the next message, however long that is (#1846): it is the conversation's
      choice, shown as «next on», and nothing is being applied while it waits. */
   const waitingForEngagement = pillSurface === "structured" && Boolean(runtimeSession?.pendingReconfigure?.accountId);
-  const applying = stageRun
+  const applying = stageRoute
     ? applyState === "saving" || stageMoving
     : !waitingForEngagement && (applyState === "saving"
       || applyState === "pending"
