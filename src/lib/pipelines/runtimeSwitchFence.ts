@@ -43,7 +43,7 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
   const found = find();
   const tier = found?.to.serviceTier ?? null;
   return {
-    ...(found?.to.engine === "codex" ? { serviceTier: tier === "priority" ? "priority" : null } : {}),
+    ...(found?.to.engine === "codex" ? { serviceTier: tier && !["default", "standard"].includes(tier) ? tier : null } : {}),
     authorize(accountId) {
       // Read again on every call: the registry and the bindings may both have moved since admission.
       const current = find();

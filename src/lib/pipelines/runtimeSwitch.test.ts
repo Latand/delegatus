@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -175,6 +175,101 @@ function switchHarness() {
 async function requestSwitch(h: ReturnType<typeof switchHarness>, body = {}) {
   const pipeline = await runningStage(h);
   return await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true, ...body }, h.ports, { kind: "operator" });
+}
+
+test("the production runtime-switch control preserves the fast flag for Ultrafast", async () => {
+  const controls = await import("@/lib/runtime/structuredControls");
+  const { defaultPipelinePorts } = await import("./engine");
+  const requests: import("@/lib/runtime/structuredControls").StructuredControlRequest[] = [];
+  const dispatch = spyOn(controls, "dispatchStructuredControl").mockImplementation(async request => {
+    requests.push(request);
+    return { status: 202, body: { ok: true, structured: true, target: request.conversationId, operationId: request.operationId!, receipt: { operationId: request.operationId!, status: "queued" } } };
+  });
+  try {
+    await defaultPipelinePorts().runtimeSwitchControl!("conversation_tier_control", "/codex/tier-control.jsonl", "reconfigure", "tier-control",
+      { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", accountId: "default", accountPinned: false });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.reconfiguration).toMatchObject({ fast: true });
+  } finally { dispatch.mockRestore(); }
+});
+
+for (const edit of ["model", "effort", "account", "standard", "priority"] as const) {
+  test(`a displayed Ultrafast stage choice reaches its native generation and pipeline projection: ${edit}`, async () => {
+    const { AgentRegistry } = await import("@/lib/agent/registry");
+    const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+    const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
+    const { pipelineSwitchFence, switchOperationKey } = await import("./runtimeSwitchFence");
+    const { createManagedCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
+    const targetAccount = createManagedCodexAccount(`Tier account ${edit}`);
+    for (const account of listCodexAccounts()) {
+      fs.mkdirSync(account.home, { recursive: true });
+      fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6-astra", "gpt-6.1-sol"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
+    }
+    const h = switchHarness();
+    h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", access: "read-only", promptScaffold: "Stage guidance" });
+    const lane = await runningStage(h);
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `tier-${edit}.json`));
+    const transcript = path.join(process.env.LLV_STATE_DIR!, `rollout-${crypto.randomUUID()}.jsonl`);
+    registry.reconcileConversations([{
+      engine: "codex", path: transcript, accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd: lane.worktreeDir, title: "Stage tier", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: h.ports.now(),
+    }]);
+    const conversationId = registry.conversationForPath(transcript)!.id;
+    const records = loadPipelines();
+    Object.assign(records[0]!.runs[0]!.attempts[0]!, { conversationId, agentPath: transcript });
+    savePipelines(records);
+    h.ports.pathForConversation = () => transcript;
+    h.ports.conversationIdForPath = () => conversationId;
+    h.ports.conversationGeneration = () => {
+      const generation = registry.conversation(conversationId)!.generations.at(-1)!;
+      return { engine: "codex", model: generation.launchProfile.model, effort: generation.launchProfile.effort, serviceTier: generation.launchProfile.serviceTier ?? null,
+        accountId: generation.accountId, sessionId: generation.id, agentPath: generation.path };
+    };
+    let nativeStarts = 0;
+    const nativeProfiles: unknown[] = [];
+    h.ports.runtimeSwitchControl = async (_id, _path, action, key, target) => {
+      h.operations.set(key, action);
+      if (action !== "reconfigure") return;
+      await applyStructuredReconfigure({ kind: "reconfigure", operationId: key, conversationId,
+        model: target!.model!, effort: target!.effort!, fast: ![null, "standard", "default"].includes(target!.serviceTier), accountId: target!.accountId!, eventSeq: 1 }, {
+        registry, validateAccount: async () => {}, resolveAccount: () => ({}) as never, releaseHost: async () => true,
+        recover: async () => {
+          nativeStarts += 1;
+          nativeProfiles.push(registry.conversation(conversationId)!.generations.at(-1)!.launchProfile);
+          return { target: null, path: transcript, conversationId, spawned: true };
+        },
+        migrate: async (id, accountId, store, _owns, _operation, authorize) => {
+          await authorize?.();
+          let migration = store.conversation(id)!.migration!;
+          migration = store.transitionConversationMigration(id, migration.revision, [migration.phase], { phase: "successor-starting" }).migration!;
+          const receipt = { operationId: migration.operationId, nativeId: crypto.randomUUID(), path: transcript + ".successor.jsonl", continuityPaths: [], historyHash: "tier-history",
+            host: { kind: "codex-app-server" as const, identity: "tier-successor", epoch: 1, verifiedAt: h.ports.now() } };
+          store.persistMigrationProviderReceipt(id, migration.revision, migration.operationId, receipt);
+          const committed = store.commitSuccessor(id, { id: receipt.nativeId, path: receipt.path, accountId, historyHash: receipt.historyHash, host: receipt.host }, migration.revision, migration.operationId, receipt);
+          nativeStarts += 1;
+          nativeProfiles.push(committed.generations.at(-1)!.launchProfile);
+          return committed;
+        },
+      });
+    };
+    const tier = edit === "standard" ? "standard" : edit === "priority" ? "priority" : "ultrafast";
+    const body = { action: "override-stage" as const, stageId: "plan", engine: "codex" as const, model: edit === "model" ? "gpt-6.1-sol" : "gpt-6-astra",
+      effort: edit === "effort" ? "xhigh" : "high", serviceTier: tier, ...(edit === "account" ? { account: targetAccount.id } : {}), applyNow: true };
+    const result = await patchPipeline(lane.id, body, h.ports, { kind: "operator" });
+    expect(result.error).toBeUndefined();
+    expect(result.runtimeSwitch?.to.serviceTier).toBe(tier);
+    expect(pipelineSwitchFence(switchOperationKey(result.runtimeSwitch!, "reconfigure"))!.serviceTier).toBe(tier === "standard" ? null : tier);
+    expect(await patchPipeline(lane.id, body, h.ports, { kind: "operator" })).toMatchObject({ replayed: true, runtimeSwitch: { id: result.runtimeSwitch!.id } });
+    await tickPipelines([], h.ports);
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(attempt.runtimeSwitches).toHaveLength(1);
+    expect(attempt.runtimeSwitches![0]!.phase).toBe("committed");
+    expect(nativeStarts).toBe(1);
+    expect(nativeProfiles).toEqual([expect.objectContaining({ fast: tier !== "standard" })]);
+    expect((nativeProfiles[0] as import("@/lib/accounts/migration/contracts").LaunchProfile).serviceTier ?? null).toBe(tier === "standard" ? null : tier);
+    expect(attempt.effectiveRole.serviceTier ?? null).toBe(tier === "standard" ? null : tier);
+  });
 }
 test("a model switch interrupts, reconfigures and continues once, keeping the attempt and receipts", async () => {
   const h = switchHarness(); const requested = await requestSwitch(h);

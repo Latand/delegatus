@@ -1552,7 +1552,7 @@ export function defaultPipelinePorts(
       if (await runtimeHostClient()?.operationStatus(operationId)) return;
       const result = await dispatchStructuredControl({ conversationId, path, action, operationId,
         ...(action === "reconfigure" ? { reconfiguration: { model: target.model ?? undefined, effort: target.effort ?? undefined,
-          fast: target.engine === "codex" ? target.serviceTier === "priority" : null,
+          fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
           ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
       return runtimeSwitchControlAcknowledgement(result);
     },
@@ -10462,7 +10462,6 @@ export async function patchPipeline(
         if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
         if (pipeline.state !== "running" || target.kind !== "run" || !live || live.state !== "running" || live.paneId || live.historical || !live.conversationId || !live.agentPath || !live.sessionId) return { error: "apply now requires a running structured run stage", status: 409, code: live?.state === "spawning" ? "ATTEMPT_STARTING" : "RUNTIME_SWITCH_UNAVAILABLE" };
         if (live.report) return { error: "stage already reported", status: 409, code: "STAGE_ALREADY_REPORTED" };
-        if (req.serviceTier && !["default", "standard", "priority"].includes(req.serviceTier)) return { error: "this service tier applies from the next attempt", status: 400 };
       }
       const reach = stageEditReach(pipeline, target.id);
       const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined || req.serviceTier !== undefined;
@@ -10573,7 +10572,6 @@ export async function patchPipeline(
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
         const engine = target.effectiveRole.engine;
-        if (target.effectiveRole.serviceTier && !["standard", "default", "priority"].includes(target.effectiveRole.serviceTier)) return { error: "apply now requires standard or priority speed; select it explicitly", status: 400 };
         const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
         if (readiness !== "connected") return { error: `target engine ${readiness}`, status: 409 };
         const read = stageAccountPool(ports, pipeline.project, engine);

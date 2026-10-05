@@ -18,6 +18,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, Light",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 924,
@@ -42,6 +44,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, Light",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 795,
         "right": 924,
@@ -70,6 +74,8 @@
       "busy": true,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, Light",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 906,
@@ -94,6 +100,8 @@
       "busy": false,
       "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
       "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, High",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 922,
@@ -118,6 +126,8 @@
       "busy": false,
       "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
       "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, High",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 795,
         "right": 922,
@@ -146,6 +156,8 @@
       "busy": false,
       "error": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
       "title": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, High",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 922,
@@ -170,6 +182,8 @@
       "busy": false,
       "error": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
       "title": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, High",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 922,
@@ -194,6 +208,8 @@
       "busy": false,
       "error": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
       "title": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, High",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 922,
@@ -218,6 +234,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, Light",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 906,
@@ -242,6 +260,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, Light",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 795,
         "right": 906,
@@ -264,6 +284,14 @@
         "right": 1028
       },
       "pageOverflow": false
+    },
+    "ordinarySheet": {
+      "accessibleName": "Model and reasoning — applies to your next message — Opus 5.5, Light",
+      "selectorAccessibleName": "Model and reasoning — applies to your next message",
+      "header": null,
+      "controls": 7,
+      "headingGap": null,
+      "headingHeight": null
     }
   },
   {
@@ -285,6 +313,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 135,
@@ -309,6 +339,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, low",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 20,
         "right": 135,
@@ -337,6 +369,8 @@
       "busy": true,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 117,
@@ -361,6 +395,8 @@
       "busy": false,
       "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
       "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -385,6 +421,8 @@
       "busy": false,
       "error": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
       "title": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, high",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 20,
         "right": 139,
@@ -413,6 +451,8 @@
       "busy": false,
       "error": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
       "title": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -437,6 +477,8 @@
       "busy": false,
       "error": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
       "title": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -461,6 +503,8 @@
       "busy": false,
       "error": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
       "title": "Switch to Fable failed. The agent stopped on Opus 5.5. The stage was stopped during the switch.",
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -485,6 +529,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 117,
@@ -509,6 +555,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Running stage — Applies now: the turn stops, the attempt goes on. — Fable, low",
+      "selectorAccessibleName": "Running stage — Applies now: the turn stops, the attempt goes on.",
       "pill": {
         "x": 20,
         "right": 117,
@@ -533,6 +581,8 @@
       "pageOverflow": false
     },
     "ordinarySheet": {
+      "accessibleName": "Model and reasoning — applies to your next message — Opus 5.5, low",
+      "selectorAccessibleName": "Model and reasoning — applies to your next message",
       "header": "Next messageApplies to your next message: Opus 5.5 · low",
       "controls": 15,
       "headingGap": 6.1,
@@ -558,6 +608,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Легкі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 924,
@@ -582,6 +634,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Легкі",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 795,
         "right": 924,
@@ -610,6 +664,8 @@
       "busy": true,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, Легкі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 907,
@@ -634,6 +690,8 @@
       "busy": false,
       "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
       "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Високі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 933,
@@ -658,6 +716,8 @@
       "busy": false,
       "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
       "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Високі",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 795,
         "right": 933,
@@ -686,6 +746,8 @@
       "busy": false,
       "error": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
       "title": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Високі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 933,
@@ -710,6 +772,8 @@
       "busy": false,
       "error": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
       "title": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Високі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 933,
@@ -734,6 +798,8 @@
       "busy": false,
       "error": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
       "title": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, Високі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 933,
@@ -758,6 +824,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, Легкі",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 795,
         "right": 907,
@@ -782,6 +850,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, Легкі",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 795,
         "right": 907,
@@ -804,6 +874,14 @@
         "right": 1028
       },
       "pageOverflow": false
+    },
+    "ordinarySheet": {
+      "accessibleName": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, Легкі",
+      "selectorAccessibleName": "Модель і міркування — застосується до наступного повідомлення",
+      "header": null,
+      "controls": 7,
+      "headingGap": null,
+      "headingHeight": null
     }
   },
   {
@@ -825,6 +903,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 135,
@@ -849,6 +929,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, low",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 20,
         "right": 135,
@@ -877,6 +959,8 @@
       "busy": true,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 117,
@@ -901,6 +985,8 @@
       "busy": false,
       "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
       "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -925,6 +1011,8 @@
       "busy": false,
       "error": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
       "title": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, high",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 20,
         "right": 139,
@@ -953,6 +1041,8 @@
       "busy": false,
       "error": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
       "title": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -977,6 +1067,8 @@
       "busy": false,
       "error": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
       "title": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -1001,6 +1093,8 @@
       "busy": false,
       "error": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
       "title": "Перехід на Fable не вдався. Агент зупинився на Opus 5.5. Етап зупинили під час переходу.",
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Opus 5.5, high",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 139,
@@ -1025,6 +1119,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, low",
+      "selectorAccessibleName": null,
       "pill": {
         "x": 20,
         "right": 117,
@@ -1049,6 +1145,8 @@
       "busy": false,
       "error": null,
       "title": null,
+      "accessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває. — Fable, low",
+      "selectorAccessibleName": "Етап у роботі — Діє одразу: хід зупиняється, спроба триває.",
       "pill": {
         "x": 20,
         "right": 117,
@@ -1073,6 +1171,8 @@
       "pageOverflow": false
     },
     "ordinarySheet": {
+      "accessibleName": "Модель і міркування — застосується до наступного повідомлення — Opus 5.5, low",
+      "selectorAccessibleName": "Модель і міркування — застосується до наступного повідомлення",
       "header": "Наступне повідомленняСтосується наступного повідомлення: Opus 5.5 · low",
       "controls": 15,
       "headingGap": 6.1,

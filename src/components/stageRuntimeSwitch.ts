@@ -54,7 +54,7 @@ export function stageRunOf(file: FileEntry, pipeline: Pipeline | null): StageRun
  * attempt was set to, and the attempt and conversation the pill was opened on
  * ride along, so a choice that arrives after a retry is refused.
  */
-export function stageSwitchRequest(run: StageRun, engine: string, draft: RuntimeDraft, accountId?: string): PatchPipelineRequest {
+export function stageSwitchRequest(run: StageRun, engine: string, draft: RuntimeDraft, accountId?: string, displayedTier?: string | null): PatchPipelineRequest {
   return {
     action: "override-stage",
     stageId: run.stage.id,
@@ -65,7 +65,7 @@ export function stageSwitchRequest(run: StageRun, engine: string, draft: Runtime
     model: draft.model,
     effort: draft.effort,
     // Claude has no speed: a tier the next attempt was given for Codex is cleared with the engine.
-    ...(engine === "codex" ? { serviceTier: draft.fast ? "priority" : "standard" } : engine === "claude" ? { serviceTier: null } : {}),
+    ...(engine === "codex" ? { serviceTier: displayedTier ?? (draft.fast ? "priority" : "standard") } : engine === "claude" ? { serviceTier: null } : {}),
     ...(accountId ? { account: accountId } : {}),
   };
 }

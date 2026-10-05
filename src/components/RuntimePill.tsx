@@ -380,12 +380,13 @@ export function RuntimePill({
   /* A running stage: the pipeline takes the choice and continues the attempt on
      it. Nothing is kept in the browser profile, so a switch that does not take
      leaves the face on what the conversation runs. */
-  const applyStageSwitch = useCallback(async (run: StageRun, draft: RuntimeDraft, accountId?: string): Promise<boolean> => {
+  const applyStageSwitch = useCallback(async (run: StageRun, draft: RuntimeDraft, accountId?: string, speedChanged = false): Promise<boolean> => {
     if (!engine) return false;
     const revision = revisionRef.current;
     setApplyState("saving");
     setError("");
-    const answer = await browserPipelinePorts.patch(run.pipeline.id, stageSwitchRequest(run, engine, draft, accountId));
+    const displayedTier = !speedChanged && engine === "codex" && file.serviceTier && draft.fast === !["default", "standard"].includes(file.serviceTier) ? file.serviceTier : null;
+    const answer = await browserPipelinePorts.patch(run.pipeline.id, stageSwitchRequest(run, engine, draft, accountId, displayedTier));
     if (revision !== revisionRef.current) return answer.ok;
     if (!answer.ok) {
       const refusal = switchRefusalText(t, answer);
@@ -582,7 +583,7 @@ export function RuntimePill({
       };
       liveDraftRef.current = next;
       setLiveDraft(next);
-      void applyStageSwitch(stageRoute, next);
+      void applyStageSwitch(stageRoute, next, undefined, patch.fast !== undefined);
       return;
     }
     if (pillSurface === "live-root" || pillSurface === "structured") {
@@ -757,7 +758,10 @@ export function RuntimePill({
     : serviceTier && !["default", "standard"].includes(serviceTier) ? t("composer.speedTierNamed", { tier: namedTier! })
     : face.fast ? t("composer.speedFastTier") : t("composer.speedStandard");
   const tierSuffix = namedTier && !["default", "standard"].includes(serviceTier!) ? ` · ${namedTier}` : "";
-  const faceLabel = `${t("composer.runtimePill")} — ${modelLabel(engine, face.model)}, ${faceTier}${tierSuffix}`;
+  const accessibleLabel = stageRoute
+    ? `${t("mobile2.composer.stageSheetTitle")} — ${t("mobile2.composer.stageNow")}`
+    : t("composer.runtimePill");
+  const faceLabel = `${accessibleLabel} — ${modelLabel(engine, face.model)}, ${faceTier}${tierSuffix}`;
   /* At the account's limit the chip stops offering a reasoning tier the next
      message cannot use and names the wall instead (mobile v2 §4.2, §4.4); its
      sheet leads with the accounts that can take the message. */
@@ -775,7 +779,7 @@ export function RuntimePill({
         aria-expanded={open}
         aria-busy={applying || undefined}
         aria-label={limitedAccount
-          ? `${t("composer.runtimePill")} — ${chipText}`
+          ? `${accessibleLabel} — ${chipText}`
           : accountChoice && moving
             ? `${faceLabel} · ${t(stageRoute ? "mobile2.composer.accountRunsOnMoving" : "mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(nextAccount) })}`
             : faceLabel}
@@ -844,6 +848,7 @@ export function RuntimePill({
 
       {open && !isMobile && popoverAt ? (
         <RuntimePopover
+          accessibleLabel={accessibleLabel}
           at={popoverAt}
           owner={pillRef.current?.ownerDocument ?? document}
           t={t}
@@ -872,6 +877,7 @@ export function RuntimePill({
 
       {open && isMobile ? (
         <RuntimeSheet
+          accessibleLabel={accessibleLabel}
           t={t}
           engine={engine}
           modelOptions={modelOptions}
@@ -991,6 +997,7 @@ function accountLine(t: TFunction, account: string, choice: AccountChoice | null
 }
 
 interface PanelProps {
+  accessibleLabel: string;
   t: TFunction;
   engine: "claude" | "codex" | "copilot";
   modelOptions: readonly AgentModelOption[];
@@ -1017,7 +1024,7 @@ interface PanelProps {
 }
 
 function RuntimePopover({
-  t, engine, modelOptions, account, nameOf, accountChoice, error, face, efforts, speedShown, speedDetail, panel, setPanel,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -1108,7 +1115,7 @@ function RuntimePopover({
     <div
       ref={rootRef}
       role="menu"
-      aria-label={t("composer.runtimePill")}
+      aria-label={accessibleLabel}
       data-runtime-popover
       onKeyDown={onKeyDown}
       onPointerDown={(event) => event.stopPropagation()}
@@ -1198,7 +1205,7 @@ function EngineAccountsFeed({ engine, onAccounts }: {
 function buildRows({
   t, engine, modelOptions, face, efforts, speedShown, speedDetail, panel, effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onOpenPanel, accountChoice, accountOptions, nameOf,
-}: Omit<PanelProps, "onClose" | "account"> & {
+}: Omit<PanelProps, "onClose" | "account" | "accessibleLabel"> & {
   panel: Panel;
   onOpenPanel: (panel: Panel) => void;
   accountOptions?: readonly AccountOption[] | null;
@@ -1362,7 +1369,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 function RuntimeSheet({
-  t, engine, modelOptions, account, nameOf, accountChoice, error, owner, face, efforts, speedShown, speedDetail,
+  t, accessibleLabel, engine, modelOptions, account, nameOf, accountChoice, error, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
@@ -1398,7 +1405,7 @@ function RuntimeSheet({
         ref={sheetRef}
         role="dialog"
         aria-modal="true"
-        aria-label={t("composer.runtimePill")}
+        aria-label={accessibleLabel}
         tabIndex={-1}
         data-runtime-sheet
         data-mobile2-sheet="model"

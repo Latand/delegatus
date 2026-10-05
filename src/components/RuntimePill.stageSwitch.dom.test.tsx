@@ -35,8 +35,9 @@ Object.assign(globalThis, {
   PointerEvent: dom.MouseEvent,
   localStorage: dom.localStorage, sessionStorage: dom.sessionStorage,
 });
+let phone = true;
 (dom as unknown as { matchMedia(query: string): unknown }).matchMedia = (query: string) => ({
-  matches: true,
+  matches: phone,
   media: query,
   addEventListener() {},
   removeEventListener() {},
@@ -88,6 +89,7 @@ let answerPatch: () => Response = () => new Response("{}", { status: 500 });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 
 beforeEach(() => {
+  phone = true;
   setLocale("en");
   calls.length = 0;
   resetEngineAccountsStoresForTests();
@@ -100,7 +102,7 @@ beforeEach(() => {
     if (url === "/api/accounts") {
       return json({
         claude: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
-        codex: { active: null, accounts: [], migration: null, autoBalance: null },
+        codex: { active: "acct-a", accounts: ACCOUNTS, migration: null, autoBalance: null },
       });
     }
     if (url === "/api/pipelines/p-stage") return answerPatch();
@@ -128,12 +130,13 @@ async function publish(record: Pipeline): Promise<void> {
   await settle();
 }
 
-async function openSheet(): Promise<{ host: HTMLElement; root: Root }> {
+async function openSheet(shownFile: FileEntry = file, mobile = true): Promise<{ host: HTMLElement; root: Root }> {
+  phone = mobile;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(<><TaskToastHost /><RuntimePill file={file} surface="structured" /></>);
+    root.render(<><TaskToastHost /><RuntimePill file={shownFile} surface="structured" /></>);
     await new Promise((r) => setTimeout(r, 0));
   });
   await settle();
@@ -141,7 +144,7 @@ async function openSheet(): Promise<{ host: HTMLElement; root: Root }> {
     (host.querySelector("[data-runtime-pill]") as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 5));
   });
-  for (let attempt = 0; attempt < 40 && document.querySelectorAll("[data-runtime-sheet-account]").length < 2; attempt += 1) {
+  for (let attempt = 0; mobile && attempt < 40 && document.querySelectorAll("[data-runtime-sheet-account]").length < 2; attempt += 1) {
     await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
   }
   return { host, root };
@@ -156,6 +159,60 @@ async function choose(label: string): Promise<void> {
 const writes = () => calls.filter((call) => call.method === "PATCH");
 const pill = (host: HTMLElement) => host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
 const accountLine = () => document.querySelector("[data-runtime-sheet-account-current]")!.textContent;
+
+for (const locale of ["en", "uk"] as const) {
+  for (const mobile of [false, true]) {
+    test(`selector accessible names explain when the change takes effect: ${locale}, ${mobile ? "phone" : "desktop"}`, async () => {
+      setLocale(locale);
+      let ordinaryControls = 0;
+      for (const running of [false, true]) {
+        if (running) await publish(pipeline());
+        const { host, root } = await openSheet(running ? file : { ...file, durableLineage: undefined }, mobile);
+        try {
+          const panel = document.querySelector(mobile ? '[role="dialog"]' : '[role="menu"]')!;
+          const controls = panel.querySelectorAll("button").length + host.querySelectorAll("button").length;
+          if (!running) ordinaryControls = controls;
+          else expect(controls).toBe(ordinaryControls);
+          const wording = translate(locale, running ? "mobile2.composer.stageNow" : "composer.runtimePill");
+          expect(pill(host).getAttribute("aria-label")).toContain(wording);
+          expect(panel.getAttribute("aria-label")).toContain(wording);
+          if (running) {
+            expect(pill(host).getAttribute("aria-label")).not.toContain(translate(locale, "composer.runtimePill"));
+            expect(panel.getAttribute("aria-label")).not.toContain(translate(locale, "composer.runtimePill"));
+          }
+        } finally {
+          await act(async () => root.unmount());
+        }
+      }
+    });
+  }
+}
+
+for (const edit of ["model", "effort", "account", "speed"] as const) {
+  test(`the running-stage selector preserves displayed Ultrafast on a ${edit} edit`, async () => {
+    const codexFile = { ...file, engine: "codex", fmt: "codex", root: "codex-sessions", path: "/state/accounts/codex/acct-a/sessions/stage.jsonl", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" } as FileEntry;
+    const lane = pipeline();
+    lane.stages[0]!.effectiveRole = { ...lane.stages[0]!.effectiveRole, engine: "codex", model: "gpt-6-astra" };
+    lane.runs[0]!.attempts[0]!.effectiveRole = lane.stages[0]!.effectiveRole;
+    await publish(lane);
+    answerPatch = () => json({ ok: true, pipeline: lane });
+    const { host, root } = await openSheet(codexFile);
+    try {
+      expect(pill(host).getAttribute("aria-label")).toContain("Ultrafast");
+      if (edit === "account") {
+        await act(async () => { (document.querySelector('[data-runtime-sheet-account="acct-b"]') as HTMLButtonElement).click(); });
+        await settle();
+      } else {
+        await choose(edit === "model" ? "GPT-6.1-Sol" : edit === "effort" ? "xhigh" : "Standard");
+      }
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]!.body).toMatchObject({ applyNow: true, serviceTier: edit === "speed" ? "standard" : "ultrafast" });
+      if (edit === "account") expect(writes()[0]!.body?.account).toBe("acct-b");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
 
 test("a model chosen on a running stage continues the attempt on it through the pipeline", async () => {
   await publish(pipeline());

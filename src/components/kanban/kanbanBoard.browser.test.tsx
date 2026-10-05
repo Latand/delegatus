@@ -17973,7 +17973,11 @@ describe("running stage runtime switch", () => {
   type Evidence = { evidence: { setRuntimeSwitchPhase(pipeline: string, stage: string, phase: string, outcome?: string): void; pipelinePatches: Array<{ body: Record<string, unknown> }> } };
   browserTest("the conversation's own selector moves the attempt on desktop and 390 px in en and uk", async () => {
     const out = path.resolve(".artifacts/stage-runtime-switch"); fs.mkdirSync(out, { recursive: true });
-    const server = await serveEvidenceFixture(out); const browser = await chromium.launch(LAUNCH);
+    const server = await serveEvidenceFixture(out);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process()?.pid;
+    fs.writeFileSync(path.join(out, "browser.pid"), String(browserPid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
     const readings: unknown[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
@@ -18011,6 +18015,8 @@ describe("running stage runtime switch", () => {
               busy: pill.getAttribute("aria-busy") === "true",
               error: document.querySelector("[data-runtime-pill-error]")?.textContent ?? null,
               title: pill.getAttribute("title"),
+              accessibleName: pill.getAttribute("aria-label"),
+              selectorAccessibleName: selector?.getAttribute("aria-label") ?? null,
               pill: { x: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height), top: Math.round(box.top), bottom: Math.round(box.bottom) },
               viewportHeight: innerHeight,
               composerControls: siblings.length + 1,
@@ -18136,44 +18142,59 @@ describe("running stage runtime switch", () => {
             expect(reading.selectorControls).toBe(beforeOpen.selectorControls);
             expect(reading.selectorOverflow).toBe(false);
           }
+          for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) {
+            expect(reading.accessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.selectorAccessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.accessibleName).not.toContain(translate(lang, "composer.runtimePill"));
+          }
           /* The sheet's heading stays clear of the account line under it, whatever that line says. */
           if (phone) for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) expect(reading.headingGap).toBeGreaterThanOrEqual(6);
           expect(await page.locator("[data-stage-runtime-control], [data-stage-runtime-open], [data-stage-runtime-action], [data-stage-runtime-status]").count()).toBe(0);
           expect(pageErrors).toEqual([]);
           readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, notSwitched, waiting, failed, committed, committedOpen });
         } finally { await context.close(); }
-        if (!phone) continue;
         /* The same conversation without a stage membership: an ordinary one, whose sheet still speaks of the next message. */
-        const ordinary = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, { width, height: 900 }, "light", lang, "reduce", true);
+        const ordinary = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, { width, height: 900 }, "light", lang, "reduce", phone);
         try {
-          await ordinary.page.locator('[data-phone-card-pipeline="p-search"]').click();
-          await ordinary.page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
-          await ordinary.page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          if (phone) {
+            await ordinary.page.locator('[data-phone-card-pipeline="p-search"]').click();
+            await ordinary.page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+            await ordinary.page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          } else {
+            await ordinary.page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await ordinary.page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          }
           const pill = ordinary.page.locator("[data-runtime-pill]:visible").first();
           await pill.waitFor({ timeout: 15_000 });
           await ordinary.page.waitForTimeout(500);
           await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
-          await ordinary.page.waitForSelector("[data-runtime-sheet]", { timeout: 5_000 });
+          await ordinary.page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { timeout: 5_000 });
           const sheet = await ordinary.page.evaluate(() => ({
+            accessibleName: document.querySelector("[data-runtime-pill]")?.getAttribute("aria-label"),
+            selectorAccessibleName: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")?.getAttribute("aria-label"),
             header: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
-            controls: document.querySelector("[data-runtime-sheet]")!.querySelectorAll("button, input, select").length,
-            headingGap: Math.round((document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div")!.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().bottom) * 10) / 10,
-            headingHeight: Math.round(document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().height * 10) / 10,
+            controls: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")!.querySelectorAll("button, input, select").length,
+            headingGap: document.querySelector("[data-runtime-sheet]") ? Math.round((document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div")!.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().bottom) * 10) / 10 : null,
+            headingHeight: document.querySelector("[data-runtime-sheet]") ? Math.round(document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().height * 10) / 10 : null,
           }));
           await ordinary.page.screenshot({ path: path.join(out, `${width}-${lang}-ordinary-selector.png`) });
-          expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
-          expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
-          const staged = (readings.at(-1) as { beforeOpen: { selectorControls: number; headingGap: number; headingHeight: number } }).beforeOpen;
+          if (phone) {
+            expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
+          }
+          expect(sheet.accessibleName).toContain(translate(lang, "composer.runtimePill"));
+          expect(sheet.selectorAccessibleName).toContain(translate(lang, "composer.runtimePill"));
+          const staged = (readings.at(-1) as { beforeOpen: { selectorControls: number; headingGap: number | null; headingHeight: number | null } }).beforeOpen;
           expect(sheet.controls).toBe(staged.selectorControls);
           /* One line of heading, and the same gap under it, as the conversation that is no stage. */
-          expect(staged.headingHeight).toBe(sheet.headingHeight);
-          expect(staged.headingGap).toBe(sheet.headingGap);
+          expect(staged.headingHeight).toEqual(sheet.headingHeight);
+          expect(staged.headingGap).toEqual(sheet.headingGap);
           expect(ordinary.pageErrors).toEqual([]);
           (readings.at(-1) as Record<string, unknown>).ordinarySheet = sheet;
         } finally { await ordinary.context.close(); }
       }
       fs.mkdirSync("evidence/stage-runtime-switch", { recursive: true });
       fs.writeFileSync("evidence/stage-runtime-switch/geometry.json", JSON.stringify(readings, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); await browserServer.close(); server.stop(); }
   }, 360_000);
 });
