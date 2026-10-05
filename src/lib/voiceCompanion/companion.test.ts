@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CompanionEvent, Delivery, Payload, Recipient } from "./contract";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
-import { BUBBLE_MAX_CHARS, defaultAnchor, intersectionArea, isFree, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
 import { createSimulatedCompanion, syntheticLevel, virtualClock, type ScriptStep } from "./simulator";
@@ -568,7 +568,7 @@ describe("geometry", () => {
     expect(isFree({ ...placed, ...shape }, grid)).toBe(true);
   });
 
-  test("speech closes a bubble at a sentence once it holds 48 characters, a long sentence at a word, and a streaming line never takes a word back", () => {
+  test("speech closes a bubble at a sentence once it holds 48 characters, and a streaming line never changes a bubble before its last", () => {
     const text = scenarioText("en").long;
     const chunks = splitSpeech(text);
     for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(BUBBLE_MAX_CHARS);
@@ -582,6 +582,40 @@ describe("geometry", () => {
       expect(partial.slice(0, -1)).toEqual(chunks.slice(0, partial.length - 1));
     }
     for (const chunk of splitSpeech(scenarioText("uk").long)) expect(chunk.length).toBeLessThanOrEqual(BUBBLE_MAX_CHARS);
+  });
+
+  test("a sentence longer than a bubble is cut at a clause: no bubble ends on a function word or starts as a lone word", () => {
+    /* The two cuts the first split made mid-phrase (review of 2f5590ee7). */
+    expect(splitSpeech(scenarioText("en").long)).toContain("The billing migration lane is blocked on the external audit,");
+    expect(splitSpeech(scenarioText("en").long)).toContain("and nothing on our side can move it until they confirm the reconciliation.");
+    expect(splitSpeech(scenarioText("uk").long).slice(0, 3)).toEqual([
+      "Ось уся картина релізу. Від ранку злито чотири смуги: банер повтору, адаптер черги, пресети експорту",
+      "й виправлення блокування акаунта. Дві ще відкриті.",
+      "Смуга пошуку пройшла рев’ю з другого кола й чекає пакетного злиття, яке запускається що двадцять хвилин,",
+    ]);
+    const closers = /(?:^|\s)(?:a|an|the|of|to|in|on|and|or|but|that|which|nothing|і|й|та|а|але|що|яке|який|в|у|на|з|до|не)$/iu;
+    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain"] as const) {
+      const text = scenarioText(locale)[key];
+      const chunks = splitSpeech(text);
+      expect(chunks.join(" "), `${locale} ${key}`).toBe(text);
+      for (const [index, chunk] of chunks.entries()) {
+        expect(chunk.length, chunk).toBeLessThanOrEqual(BUBBLE_MAX_CHARS);
+        expect(closers.test(chunk.replace(/[^\p{L}\p{N}\s]+$/u, "")), `ends on a function word: ${chunk}`).toBe(false);
+        /* A bubble that continues a sentence the one before it left open holds more than a word or two. */
+        if (index > 0 && !/[.!?…]$/u.test(chunks[index - 1]!)) expect(chunk.split(/\s+/u).length, `carried too little: ${chunk}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+    /* No comma to cut at: the cut still carries two words on and keeps off the function word. */
+    const flat = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen the eighteen nineteen twenty twentyone";
+    expect(splitSpeech(flat)).toEqual(["one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen", "seventeen the eighteen nineteen twenty twentyone"]);
+    /* One word longer than a bubble is left whole for the wrap to break. */
+    expect(splitSpeech("x".repeat(150))).toEqual(["x".repeat(150)]);
+  });
+
+  test("a cursor of its own marks a control: resize handles and dragging surfaces count, text and plain boxes do not", () => {
+    for (const cursor of ["ew-resize", "ns-resize", "col-resize", "grab", "grabbing", "move", "pointer", "not-allowed"]) expect(isPassiveCursor(cursor), cursor).toBe(false);
+    for (const cursor of ["auto", "default", "text", "none", ""]) expect(isPassiveCursor(cursor), cursor).toBe(true);
+    expect(CONTROL_SELECTOR).toContain("[role='separator']");
   });
 
   test("the synthetic level opens on vowels", () => {

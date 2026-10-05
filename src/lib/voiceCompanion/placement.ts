@@ -27,7 +27,13 @@ export interface Point { x: number; y: number }
 export const CONTROL_SELECTOR = [
   "a[href]", "button", "input", "select", "textarea", "summary", "[contenteditable='true']", "[draggable='true']",
   "[role='button']", "[role='link']", "[role='tab']", "[role='menuitem']", "[role='switch']", "[role='checkbox']", "[role='option']",
+  "[role='separator']", "[role='slider']", "[role='scrollbar']",
 ].join(",");
+
+/** A cursor that only says "nothing here takes the pointer". Anything else under
+    the pointer is a control whatever its markup: a resize handle (`ew-resize`), a
+    surface that drags (`grab`), a custom clickable (`pointer`). */
+export const isPassiveCursor = (cursor: string): boolean => cursor === "auto" || cursor === "default" || cursor === "text" || cursor === "none" || cursor === "";
 
 /** The gap kept between the companion and every control. */
 export const CONTROL_CLEARANCE = 8;
@@ -114,6 +120,11 @@ export function placeExpanded(input: {
   const maxX = viewport.width - block.width - VIEWPORT_MARGIN;
   const maxY = viewport.height - block.height - VIEWPORT_MARGIN;
   if (maxX < VIEWPORT_MARGIN || maxY < VIEWPORT_MARGIN) return null;
+  /* The place asked for, when it holds the tallest lane, is the answer without a search:
+     the common case of a page that changed somewhere else. */
+  const asked = { ...start, ...block };
+  const tallest = laneLayout(viewport, asked, heights[0] ?? 0);
+  if (heights.length && free(asked) && tallest.rect.height >= heights[0]! && free(tallest.rect)) return { mode: "expanded", at: start, laneHeight: heights[0]!, lane: tallest };
   /* Candidates nearest first, so the first free one is the answer. */
   const candidates = nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, { x: maxX, y: maxY }, step);
   for (const height of heights) {
@@ -133,6 +144,7 @@ export function placeCollapsed(input: { viewport: Size; size: Size; obstacles: r
   const start = clampToViewport(desired, viewport, size);
   const max = { x: viewport.width - size.width - VIEWPORT_MARGIN, y: viewport.height - size.height - VIEWPORT_MARGIN };
   if (max.x < VIEWPORT_MARGIN || max.y < VIEWPORT_MARGIN) return null;
+  if (isFree({ ...start, ...size }, obstacles, clearance)) return start;
   return nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, max, step).find((point) => isFree({ ...point, ...size }, obstacles, clearance)) ?? null;
 }
 
@@ -146,25 +158,67 @@ function nearestFirst(start: Point, min: Point, max: Point, step: number): Point
 
 /** A sentence that ends a bubble holding at least this many characters closes it. */
 export const BUBBLE_SENTENCE_BREAK = 48;
+/** A clause break is taken only when the bubble it closes holds at least this many characters. */
+export const BUBBLE_CLAUSE_BREAK = 40;
+/** A sentence cut by the limit carries at least this many words into the next bubble. */
+export const BUBBLE_CARRY_WORDS = 2;
+
+/* Words a bubble never ends on: articles, prepositions, conjunctions, auxiliaries and bare pronouns. */
+const FUNCTION_WORDS = new Set((
+  "a an the of to in on at for with by from as into onto over under about than then and or but nor so if that which who whose whom when while "
+  + "because although though unless until since is are was were be been am do does did has have had can could will would shall should may might must "
+  + "i you we they he she it its this these those my your our their his her not no "
+  + "і й та а але чи або що щоб як який яка яке які якого якої якій яких яким коли доки поки бо тож тому якщо хоча ні не в у на з із зі до від для по за при про під над "
+  + "через без між це цей ця ці той те ті свій своя своє свої його її їх ми ви він вона воно вони я ти би б же ж лише тільки ще вже дуже є був була було були"
+).split(" "));
+/* Words a clause starts with: a break before one of them reads as the end of a clause. */
+const CLAUSE_OPENERS = new Set((
+  "and but or so because which that who when while if although though unless until since "
+  + "і й та а але чи або що щоб який яка яке які коли доки поки бо тож якщо хоча"
+).split(" "));
+const bare = (word: string) => word.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 
 /**
  * Speech split into bubbles. A bubble closes at the end of a sentence once it
- * holds 48 characters, so short sentences share one; a sentence longer than a
- * bubble continues in the next one at a word boundary. The split reads only
- * what came before, so a line that is still streaming never moves a word out
- * of a bubble already shown.
+ * holds 48 characters, so short sentences share one. A sentence longer than a
+ * bubble continues in the next one, cut where it reads best: at the last comma
+ * or before the last conjunction that leaves the bubble at least 40
+ * characters, otherwise at the last word that is no function word. A cut
+ * carries at least two words on, so the next bubble never starts as a lone
+ * word, and no bubble ends on a function word. The cut is chosen from what
+ * came before it, so every bubble but the last stays as it is while a line
+ * still streams; the last one gives up the carried words when it closes.
  */
 export function splitSpeech(text: string, maxChars = BUBBLE_MAX_CHARS): string[] {
   const chunks: string[] = [];
-  let current = "";
+  let current: string[] = [];
+  const length = (words: readonly string[]) => words.join("").trimEnd().length;
   for (const word of text.match(/\S+\s*/gu) ?? []) {
-    const sentenceEnded = current.trim().length >= BUBBLE_SENTENCE_BREAK && /[.!?…]["”»)]?\s+$/u.test(current);
-    if (current && (current.trimEnd().length + 1 + word.trimEnd().length > maxChars || sentenceEnded)) {
-      chunks.push(current.trim());
-      current = "";
+    const joined = current.join("");
+    const sentenceEnded = joined.trim().length >= BUBBLE_SENTENCE_BREAK && /[.!?…]["”»)]?\s+$/u.test(joined);
+    if (current.length && sentenceEnded) {
+      chunks.push(joined.trim());
+      current = [];
+    } else if (current.length && length(current) + 1 + word.trimEnd().length > maxChars) {
+      const at = clauseCut(current, word);
+      chunks.push(current.slice(0, at + 1).join("").trim());
+      current = current.slice(at + 1);
     }
-    current += word;
+    current.push(word);
   }
-  if (current.trim()) chunks.push(current.trim());
+  if (current.join("").trim()) chunks.push(current.join("").trim());
   return chunks;
+}
+
+/** The index of the last word a bubble that overflowed keeps; the words after it move on with `next`. */
+function clauseCut(words: readonly string[], next: string): number {
+  const last = words.length - 1;
+  const closes = (index: number) => !FUNCTION_WORDS.has(bare(words[index]!));
+  const carries = (index: number) => last - index >= BUBBLE_CARRY_WORDS;
+  const size = (index: number) => words.slice(0, index + 1).join("").trimEnd().length;
+  const clause = (index: number) => /[,;:—–]\s*$/u.test(words[index]!) || CLAUSE_OPENERS.has(bare(words[index + 1] ?? next));
+  for (let index = last; index >= 0; index -= 1) if (carries(index) && closes(index) && clause(index) && size(index) >= BUBBLE_CLAUSE_BREAK) return index;
+  for (let index = last; index >= 1; index -= 1) if (carries(index) && closes(index)) return index;
+  for (let index = last; index >= 1; index -= 1) if (closes(index)) return index;
+  return last;
 }

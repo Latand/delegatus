@@ -22,9 +22,9 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 54,
+        "samples": 25,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -53,12 +53,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 55,
-        "maxBubbles": 4,
+        "samples": 33,
+        "maxBubbles": 3,
         "maxCalls": 2,
-        "maxFloaters": 6,
+        "maxFloaters": 5,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "samplesOutsideViewport": 0,
@@ -86,7 +86,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 72,
+        "samples": 48,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -117,7 +117,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 69,
+        "samples": 41,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -146,9 +146,9 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 50,
+        "samples": 27,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -179,7 +179,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 73,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -210,7 +210,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 69,
+        "samples": 41,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -239,12 +239,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 48,
-        "maxBubbles": 4,
+        "samples": 27,
+        "maxBubbles": 3,
         "maxCalls": 2,
-        "maxFloaters": 6,
+        "maxFloaters": 5,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 244,
         "samplesOutsideViewport": 0,
@@ -272,7 +272,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 68,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -301,9 +301,9 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 51,
+        "samples": 29,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -332,9 +332,9 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 59,
+        "samples": 31,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -365,7 +365,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 62,
+        "samples": 34,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -396,7 +396,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 71,
+        "samples": 50,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -427,7 +427,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 68,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -456,9 +456,9 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 6,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 58,
+        "samples": 33,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -489,7 +489,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 67,
+        "samples": 45,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -520,7 +520,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 71,
+        "samples": 41,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -551,7 +551,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 59,
+        "samples": 30,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -582,7 +582,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 70,
+        "samples": 49,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -613,7 +613,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 66,
+        "samples": 33,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -634,36 +634,36 @@
       },
       "where": "lane, outside every element",
       "cell": "493",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1440,
       "point": {
-        "x": 1047,
+        "x": 1129,
         "y": 528
       },
       "where": "lane, outside every element",
-      "cell": "494",
+      "cell": "496",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1440,
       "point": {
-        "x": 1088,
+        "x": 1252,
         "y": 528
       },
       "where": "lane, outside every element",
-      "cell": "495",
+      "cell": "499",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1440,
-      "point": {
-        "x": 1250.3203125,
-        "y": 722.7925415039062
-      },
       "where": "on a bubble",
-      "cell": "679",
+      "cell": null,
+      "onElement": true,
       "reachedPage": false
     },
     {
@@ -674,36 +674,36 @@
       },
       "where": "lane, outside every element",
       "cell": "264",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1000,
       "point": {
-        "x": 607,
+        "x": 689,
         "y": 428
       },
       "where": "lane, outside every element",
-      "cell": "265",
+      "cell": "267",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1000,
       "point": {
-        "x": 648,
+        "x": 812,
         "y": 428
       },
       "where": "lane, outside every element",
-      "cell": "266",
+      "cell": "270",
+      "onElement": false,
       "reachedPage": true
     },
     {
       "viewport": 1000,
-      "point": {
-        "x": 810.3203125,
-        "y": 629.8412475585938
-      },
       "where": "on a bubble",
-      "cell": "395",
+      "cell": null,
+      "onElement": true,
       "reachedPage": false
     }
   ]

@@ -7,7 +7,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { useLocale } from "@/lib/i18n";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import {
-  BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, isPassiveCursor, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState, type DelegationView, type SpeechLine, type ToolCallView } from "@/lib/voiceCompanion/reducer";
@@ -23,10 +23,14 @@ import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
  * The character is the floating object, with no frame around it. What it says
  * appears as separate speech bubbles beside it that rise, older ones drifting
  * away and fading; tool calls and the delegation appear as their own elements
- * in the same lane. The lane is reserved with the character, so placing the
- * character decides what the bubbles may cover: nothing that takes a click.
- * Outside a bubble, an element and the character, every click reaches the
- * page underneath. It collapses to a small shape and has no way to be dismissed.
+ * in the same lane. The lane is one chronology: whatever arrived last, a
+ * bubble or a call, stands next to the character, and the lane moves only away
+ * from it. An element leaves from the far end, so nothing ever slides back
+ * toward the character. The lane is reserved with the character, so placing
+ * the character decides what the bubbles may cover: nothing that takes a
+ * click. Outside a bubble, an element and the character, every click reaches
+ * the page underneath. It collapses to a small shape, which also keeps off
+ * the page's text, and has no way to be dismissed.
  */
 
 export type CompanionVariant = 1 | 2 | 3;
@@ -36,9 +40,9 @@ const BLOCK: Record<CompanionVariant, Size> = { 1: { width: 132, height: 148 }, 
 const CHARACTER: Record<CompanionVariant, number> = { 1: 76, 2: 62, 3: 70 };
 const SHAPE: Record<CompanionVariant, Size> = { 1: { width: 52, height: 52 }, 2: { width: 140, height: 44 }, 3: { width: 56, height: 56 } };
 const SHAPE_CHARACTER: Record<CompanionVariant, number> = { 1: 40, 2: 30, 3: 40 };
-/** The most speech bubbles shown at once; an older one leaves when a newer one would exceed it. */
+/** The most speech bubbles shown at once; a newer one sends the oldest away, with everything older than it. */
 export const SPEECH_CAP = 4;
-/** The most call elements shown at once; the rest are counted on one more element. */
+/** The most call elements shown at once; the calls still at work beyond them are counted on one more element. */
 export const CALL_CAP = 4;
 /** A speech bubble leaves this long after its line finished. */
 export const SPEECH_LINGER_MS = 9_000;
@@ -53,8 +57,12 @@ export const NOMINAL_MS_PER_CHAR = 58;
 const EXIT_ROOM = 18;
 const DRAG_THRESHOLD = 6;
 const RISE_MS = 340;
-const ENTER_MS = 260;
+/* An element enters over the time the stack takes to rise out of its place, and
+   stays unseen for the first part of it: by the time it can be read, the place is free. */
+const ENTER_MS = 340;
+const ENTER_HIDDEN = 0.5;
 const EXIT_MS = 420;
+const QUICK_EXIT_MS = 140;
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
 
@@ -79,34 +87,71 @@ function createStore(adapter: VoiceCompanionAdapter) {
   };
 }
 
-/** Every visible control on the page outside the companion, as viewport rectangles.
-    A control scrolled out of its container is cut to the part that can be reached. */
+/** The part of a box a pointer can reach: cut to the viewport and to every clipping element from `within` up. */
+function reachable(within: Element | null, box: { left: number; top: number; right: number; bottom: number }, clips: Map<Element, DOMRect | null>): Rect | null {
+  let left = Math.max(box.left, 0);
+  let top = Math.max(box.top, 0);
+  let right = Math.min(box.right, innerWidth);
+  let bottom = Math.min(box.bottom, innerHeight);
+  for (let parent = within; parent && right - left >= 1 && bottom - top >= 1; parent = parent.parentElement) {
+    if (!clips.has(parent)) {
+      const style = getComputedStyle(parent);
+      clips.set(parent, style.overflowX !== "visible" || style.overflowY !== "visible" ? parent.getBoundingClientRect() : null);
+    }
+    const clip = clips.get(parent);
+    if (!clip) continue;
+    left = Math.max(left, clip.left); top = Math.max(top, clip.top); right = Math.min(right, clip.right); bottom = Math.min(bottom, clip.bottom);
+  }
+  return right - left < 1 || bottom - top < 1 ? null : { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** Every visible control on the page outside the companion, as viewport rectangles:
+    what the selector names, and whatever shows a cursor of its own (a resize
+    handle, a surface that drags), which no selector can list. */
 function controlRects(self: Element | null, extra: string | undefined): Rect[] {
   const rects: Rect[] = [];
   const clips = new Map<Element, DOMRect | null>();
-  const clipOf = (element: Element): DOMRect | null => {
-    if (!clips.has(element)) {
-      const style = getComputedStyle(element);
-      clips.set(element, style.overflowX !== "visible" || style.overflowY !== "visible" ? element.getBoundingClientRect() : null);
+  const nodes = new Set<HTMLElement>(document.querySelectorAll<HTMLElement>(extra ? `${CONTROL_SELECTOR},${extra}` : CONTROL_SELECTOR));
+  /* The cursor is inherited, so the outermost element that sets one stands for all it contains. */
+  const walk = (parent: Element, inherited: boolean) => {
+    for (const child of parent.children) {
+      if (child === self || !(child instanceof HTMLElement)) continue;
+      const active = !isPassiveCursor(getComputedStyle(child).cursor);
+      if (active && !inherited) nodes.add(child);
+      walk(child, active);
     }
-    return clips.get(element)!;
   };
-  for (const node of document.querySelectorAll<HTMLElement>(extra ? `${CONTROL_SELECTOR},${extra}` : CONTROL_SELECTOR)) {
+  walk(document.body, !isPassiveCursor(getComputedStyle(document.body).cursor));
+  for (const node of nodes) {
     if (self?.contains(node)) continue;
-    const box = node.getBoundingClientRect();
-    let left = Math.max(box.left, 0);
-    let top = Math.max(box.top, 0);
-    let right = Math.min(box.right, innerWidth);
-    let bottom = Math.min(box.bottom, innerHeight);
-    for (let parent = node.parentElement; parent && right - left >= 1 && bottom - top >= 1; parent = parent.parentElement) {
-      const clip = clipOf(parent);
-      if (!clip) continue;
-      left = Math.max(left, clip.left); top = Math.max(top, clip.top); right = Math.min(right, clip.right); bottom = Math.min(bottom, clip.bottom);
-    }
-    if (right - left < 1 || bottom - top < 1) continue;
+    const rect = reachable(node.parentElement, node.getBoundingClientRect(), clips);
+    if (!rect) continue;
     const style = getComputedStyle(node);
     if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
-    rects.push({ x: left, y: top, width: right - left, height: bottom - top });
+    rects.push(rect);
+  }
+  return rects;
+}
+
+/** Every line of visible text on the page outside the companion. The collapsed
+    shape keeps off these too: at rest it hides no label and no count. */
+function textRects(self: Element | null): Rect[] {
+  const rects: Rect[] = [];
+  const clips = new Map<Element, DOMRect | null>();
+  const shown = new Map<Element, boolean>();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (!parent || !node.nodeValue?.trim() || self?.contains(parent)) continue;
+    if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (parent.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true));
+    if (!shown.get(parent)) continue;
+    range.selectNodeContents(node);
+    for (const line of range.getClientRects()) {
+      /* The parent's own box clips its text too (an ellipsis, a one-pixel screen-reader label). */
+      const rect = reachable(parent, line, clips);
+      if (rect) rects.push(rect);
+    }
   }
   return rects;
 }
@@ -120,12 +165,17 @@ type Layout =
   /* `yielded`: the companion was open but no free place held its lane. */
   | { mode: "collapsed"; at: Point; yielded: boolean };
 
-/** One thing in the lane: a bubble of speech, a tool call, the delegation, or the count of calls not shown. */
+/** One thing in the lane: a bubble of speech, a tool call, the delegation, the
+    orchestrator's answer to it, or the count of calls at work that are not shown. */
 type Floater =
-  | { kind: "speech"; key: string; speaker: SpeechLine["speaker"]; text: string; cut: number | null; newest: boolean; settled: boolean }
+  | { kind: "speech"; key: string; speaker: SpeechLine["speaker"]; text: string; cut: number | null; settled: boolean }
   | { kind: "call"; key: string; call: ToolCallView; settled: boolean }
   | { kind: "delegation"; key: string; delegation: DelegationView; settled: boolean }
+  | { kind: "answer"; key: string; delegation: DelegationView; settled: true }
   | { kind: "more"; key: string; count: number; settled: false };
+
+const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS };
+type Place = { top: number; height: number; width: number; left: number; arrival: number | null };
 
 /** How many bubbles of a line are out: all of an operator's line and of a
     played one, none before its audio starts, and while it plays, those the
@@ -143,6 +193,19 @@ function bubblesOut(line: SpeechLine, chunks: readonly string[], playedMs: numbe
   }
   return out;
 }
+
+/** A leaving element the stack is rising into: it drops under half opacity in that frame and is gone
+    in 140 ms, so it is never read through the element that takes its place. */
+function fadeAtOnce(node: HTMLElement) {
+  const from = Math.min(Number(getComputedStyle(node).opacity), 0.4);
+  const at = getComputedStyle(node).transform;
+  const away = node.closest<HTMLElement>("[data-direction]")?.dataset.direction === "down" ? 16 : -16;
+  for (const running of node.getAnimations()) running.cancel();
+  node.animate([{ transform: at === "none" ? "translate3d(0, 0, 0)" : at, opacity: from }, { transform: `translate3d(0, ${away}px, 0)`, opacity: 0 }], { duration: QUICK_EXIT_MS, easing: "linear", fill: "forwards" });
+}
+
+/** A bubble's text with its last two words kept on one line, so the wrap never leaves one word alone at the end. */
+const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.replace(/\s+(\S+)$/u, "\u00a0$1") : text);
 
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 
@@ -192,13 +255,16 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     const obstacles = controlRects(root.current, protect);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
     let next: Layout | null = null;
+    const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
     if (!isCollapsed) {
       const open = placeExpanded({ viewport, block, obstacles, desired: { x: corner.x - block.width, y: corner.y - block.height } });
       if (open) next = { mode: "expanded", at: open.at, laneHeight: open.laneHeight };
     }
     if (!next) {
-      const at = placeCollapsed({ viewport, size: shape, obstacles, desired: { x: corner.x - shape.width, y: corner.y - shape.height } })
-        ?? clampToViewport({ x: corner.x - shape.width, y: corner.y - shape.height }, viewport, shape);
+      /* The shape keeps off the page's text as well; a page with no such place still keeps it off every control. */
+      const at = placeCollapsed({ viewport, size: shape, obstacles: [...obstacles, ...textRects(root.current)], desired })
+        ?? placeCollapsed({ viewport, size: shape, obstacles, desired })
+        ?? clampToViewport(desired, viewport, shape);
       next = { mode: "collapsed", at, yielded: !isCollapsed };
     }
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
@@ -231,7 +297,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     let timer: ReturnType<typeof setTimeout> | null = null;
     const check = () => {
       timer = null;
-      const obstacles = controlRects(root.current, protect);
+      const obstacles = layout.mode === "collapsed" ? [...controlRects(root.current, protect), ...textRects(root.current)] : controlRects(root.current, protect);
       const blocked = footprint().some((rect) => !isFree(rect, obstacles));
       if (blocked || (layout.mode === "collapsed" && layout.yielded)) {
         const size = layout.mode === "collapsed" ? shape : block;
@@ -259,11 +325,10 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const speaking = state.phase === "speaking";
   useEffect(() => { if (!speaking) character.current?.setLevel(0); }, [speaking, collapsed]);
 
-  /* What is in the lane, oldest first: speech, then the calls nearest the character. */
+  /* What may be in the lane: speech, the calls, the delegation and the answer to it. */
   const candidates = useMemo((): Floater[] => {
     const speech: Floater[] = [];
-    const lines = state.lines.filter((line) => line.text.trim());
-    lines.forEach((line, lineIndex) => {
+    for (const line of state.lines.filter((entry) => entry.text.trim())) {
       const chunks = splitSpeech(line.text);
       const out = line.playback === "playing" && paced?.key === line.key ? Math.max(1, Math.min(paced.out, chunks.length)) : bubblesOut(line, chunks, 0);
       const done = line.speaker === "operator" ? line.final : line.playback === "played" || line.playback === "cut";
@@ -271,26 +336,36 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         const last = index === out - 1;
         speech.push({
           kind: "speech", key: `${line.key}#${index}`, speaker: line.speaker, text: chunks[index]!,
-          cut: line.playback === "cut" && last ? line.playedMs ?? 0 : null,
-          newest: lineIndex === lines.length - 1 && last, settled: done || !last,
+          cut: line.playback === "cut" && last ? line.playedMs ?? 0 : null, settled: done || !last,
         });
       }
-    });
+    }
     const calls: Floater[] = state.calls.map((call) => ({ kind: "call", key: `call:${call.callId}`, call, settled: call.status !== "running" }));
     const delegation = state.delegation;
     /* Delivered work stays in view after the conversation ends; a proposal does not. */
     const deleg: Floater[] = delegation && (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage))
       ? [{ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) }]
       : [];
-    return [...speech, ...calls, ...deleg];
+    /* The answer is news of its own: it arrives beside the character, wherever the request has risen to. */
+    const answer: Floater[] = delegation?.answer ? [{ kind: "answer", key: `answer:${delegation.callId}:${delegation.answer.reportId}`, delegation, settled: true }] : [];
+    return [...speech, ...calls, ...deleg, ...answer];
   }, [state.lines, state.calls, state.delegation, state.phase, paced]);
 
-  /* When each floater settled, so that it can leave on time; then what has not lingered long enough. */
+  /* When each element arrived and when it settled. The lane is ordered by arrival,
+     and one not stamped yet is the newest there is. */
+  const [arrival, setArrival] = useState<ReadonlyMap<string, number>>(new Map());
   const [settledAt, setSettledAt] = useState<ReadonlyMap<string, number>>(new Map());
+  const arrivals = useRef(0);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- stamping the moment a floater settled
+    const keys = new Set(candidates.map((floater) => floater.key));
+    setArrival((current) => {
+      const fresh = candidates.filter((floater) => !current.has(floater.key));
+      if (!fresh.length && [...current.keys()].every((key) => keys.has(key))) return current;
+      const next = new Map([...current].filter(([key]) => keys.has(key)));
+      for (const floater of fresh) next.set(floater.key, arrivals.current += 1);
+      return next;
+    });
     setSettledAt((current) => {
-      const keys = new Set(candidates.map((floater) => floater.key));
       const next = new Map([...current].filter(([key]) => keys.has(key)));
       const stamp = Date.now();
       for (const floater of candidates) {
@@ -300,79 +375,116 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       return next.size === current.size && [...next].every(([key, at]) => current.get(key) === at) ? current : next;
     });
   }, [candidates]);
-  const live = useMemo(() => {
-    const linger = (floater: Floater) => (floater.kind === "speech" ? SPEECH_LINGER_MS : floater.kind === "call" ? CALL_LINGER_MS : DELEGATION_LINGER_MS);
-    return candidates.filter((floater) => !settledAt.has(floater.key) || now - settledAt.get(floater.key)! < linger(floater));
-  }, [candidates, settledAt, now]);
+
+  /* The lane, oldest first and newest beside the character. It moves one way:
+     an element leaves from the far end, when its time is up and nothing older is
+     still there, or when the count or the room sends it off, and then everything
+     older goes with it. `gate` is the arrival of the newest element that left;
+     nothing at or before it comes back. */
+  const [gate, setGate] = useState(0);
+  const { floaters, departs } = useMemo(() => {
+    const order = (floater: Floater) => arrival.get(floater.key) ?? Number.POSITIVE_INFINITY;
+    const ordered = [...candidates].sort((left, right) => order(left) - order(right));
+    const lane = ordered.filter((floater) => order(floater) > gate);
+    const expired = (floater: Floater) => floater.kind !== "more" && settledAt.has(floater.key) && now - settledAt.get(floater.key)! >= LINGER_MS[floater.kind];
+    let cut = 0;
+    while (cut < lane.length && expired(lane[cut]!)) cut += 1;
+    for (const [kind, cap] of [["speech", SPEECH_CAP], ["call", CALL_CAP]] as const) {
+      const held = lane.flatMap((floater, index) => (floater.kind === kind && index >= cut ? [index] : []));
+      if (held.length > cap) cut = held[held.length - cap - 1]! + 1;
+    }
+    const shown = lane.slice(cut);
+    const departs = lane.slice(0, cut).reduce((latest, floater) => Math.max(latest, arrival.get(floater.key) ?? 0), 0);
+    /* Calls that left the lane while still at work: counted at the far end. */
+    const unseen = ordered.filter((floater) => floater.kind === "call" && !floater.settled && !shown.includes(floater)).length;
+    const more: Floater[] = unseen ? [{ kind: "more", key: `more:${Math.max(gate, departs)}`, count: unseen, settled: false }] : [];
+    return { floaters: [...more, ...shown], departs };
+  }, [candidates, arrival, settledAt, now, gate]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- what left stays out
+    if (departs > gate) setGate(departs);
+  }, [departs, gate]);
 
   /* A clock for the lingering, ticking only while something can still leave. */
-  const lingering = live.some((floater) => floater.settled);
+  const lingering = floaters.some((floater) => floater.settled);
   useEffect(() => {
     if (!lingering) return;
     const timer = setInterval(() => setNow(Date.now()), 400);
     return () => clearInterval(timer);
   }, [lingering]);
 
-  /* Keys measured not to fit the lane; the oldest speech goes first. */
-  const [overflow, setOverflow] = useState<ReadonlySet<string>>(new Set());
-  const floaters = useMemo(() => {
-    const speech = live.filter((floater) => floater.kind === "speech").slice(-SPEECH_CAP).filter((floater) => !overflow.has(floater.key));
-    const calls = live.filter((floater) => floater.kind === "call");
-    const shownCalls = calls.slice(-CALL_CAP);
-    const more: Floater[] = calls.length > CALL_CAP ? [{ kind: "more", key: "more-calls", count: calls.length - CALL_CAP, settled: false }] : [];
-    return [...speech, ...more, ...shownCalls, ...live.filter((floater) => floater.kind === "delegation")];
-  }, [live, overflow]);
-
   /* The lane's stack: fit, rise and leave. Measured after each commit and
      played back as transforms, so nothing animates layout. */
-  const positions = useRef(new Map<string, { top: number; height: number; width: number; left: number }>());
+  const positions = useRef(new Map<string, Place>());
   const contents = useRef(new Map<string, Floater>());
-  const [leaving, setLeaving] = useState<ReadonlyArray<{ floater: Floater; top: number; left: number; width: number }>>([]);
+  const [leaving, setLeaving] = useState<ReadonlyArray<{ floater: Floater; top: number; left: number; width: number; quick: boolean }>>([]);
   const lastEntry = useRef(0);
-  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? floater.text.length : floater.kind === "call" ? floater.call.status : floater.kind === "delegation" ? floater.delegation.stage : floater.count}`).join("|");
+  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? floater.text.length : floater.kind === "call" ? floater.call.status : floater.kind === "more" ? floater.count : floater.delegation.stage}:${arrival.get(floater.key) ?? ""}`).join("|");
   useLayoutEffect(() => {
     const stack = stackEl.current;
     if (!stack || !shownLane) { positions.current.clear(); return; }
     const nodes = [...stack.querySelectorAll<HTMLElement>(":scope > [data-floater]")];
-    /* Fit: the stack keeps to the lane, less the room a leaving bubble drifts into. */
-    const room = shownLane.rect.height - EXIT_ROOM;
-    const total = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8;
-    if (total > room) {
-      let excess = total - room;
-      const drop = new Set(overflow);
-      for (const node of nodes) {
-        if (excess <= 0 || !node.dataset.floater!.includes("#")) continue;
-        drop.add(node.dataset.floater!);
-        excess -= node.offsetHeight + 8;
-      }
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- a measured fit, settled before paint
-      if (drop.size !== overflow.size) { setOverflow(drop); return; }
-    }
-    const motion = !reducedMotion() && typeof stack.animate === "function";
+    const arrived = (node: HTMLElement) => (node.dataset.arrival ? Number(node.dataset.arrival) : null);
     const before = positions.current;
-    const after = new Map<string, { top: number; height: number; width: number; left: number }>();
+    /* An element never gives back height it had: one that shrank would pull the older ones toward the character. */
+    for (const node of nodes) {
+      const was = before.get(node.dataset.floater!);
+      if (was && node.offsetHeight < was.height) node.style.minHeight = `${was.height}px`;
+    }
+    /* Fit: the stack keeps to the lane, less the room a leaving element drifts into.
+       What does not fit leaves from the far end; the newest always stays. */
+    const room = shownLane.rect.height - EXIT_ROOM;
+    let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
+    let sent = 0;
+    for (const node of nodes.slice(0, -1)) {
+      if (excess <= 0) break;
+      if (node.dataset.kind === "more") continue;
+      excess -= node.offsetHeight + 8;
+      sent = Math.max(sent, arrived(node) ?? 0);
+    }
+    /* An element that went from the middle (the session dropped it) takes the older ones along. */
+    const here = new Set(nodes.map((node) => node.dataset.floater!));
+    for (const [key, was] of before) if (!here.has(key) && was.arrival !== null && nodes.some((node) => (arrived(node) ?? Number.POSITIVE_INFINITY) < was.arrival!)) sent = Math.max(sent, was.arrival);
+    /* Settled before paint: the pass that follows plays the departure. */
+    if (sent > gate) { setGate(sent); return; }
+    const motion = !reducedMotion() && typeof stack.animate === "function";
+    const after = new Map<string, Place>();
     let entered = 0;
     let rose = false;
-    for (const node of nodes) {
+    let moved = false;
+    /* The height the elements nearer the character have gained. An element grows in one step (a call's
+       result wrapping to a second line), so what stands beyond it steps by as much and is animated only
+       for the rest of its way: it is never under the part that grew. */
+    let grown = 0;
+    for (const node of [...nodes].reverse()) {
       const key = node.dataset.floater!;
-      const place = { top: node.offsetTop, height: node.offsetHeight, width: node.offsetWidth, left: node.offsetLeft };
+      const place = { top: node.offsetTop, height: node.offsetHeight, width: node.offsetWidth, left: node.offsetLeft, arrival: arrived(node) ?? before.get(key)?.arrival ?? null };
       after.set(key, place);
       const was = before.get(key);
+      const stepped = grown;
+      if (was) grown += Math.max(0, place.height - was.height);
       if (!motion) continue;
       if (!was) {
-        /* It grows out of the corner nearest the character, so it never crosses the lane's edge. */
-        node.animate([{ transform: "scale(0.9)", opacity: 0 }, { transform: "scale(1)", opacity: 1 }], { duration: ENTER_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+        /* It comes into view once the stack has risen out of its place, growing out of the corner
+           nearest the character, so it lies over no older element and never crosses the lane's edge. */
+        node.animate(
+          [{ transform: "scale(0.94)", opacity: 0 }, { opacity: 0, offset: ENTER_HIDDEN }, { transform: "scale(1)", opacity: 1 }],
+          { duration: ENTER_MS, easing: "linear" },
+        );
         entered += 1;
         mark(node.dataset.kind === "speech" ? "vc:bubble-in" : "vc:call-in", ENTER_MS);
       } else {
         /* The stack is anchored at the character's end: a rising lane at the bottom, a falling one at the top.
-           An element is moved by that edge, so one that grows or shrinks never crosses the lane's edge. */
+           An element is moved by that edge, so one that grows never crosses the lane's edge. */
         const shift = shownLane.direction === "up" ? was.top + was.height - (place.top + place.height) : was.top - place.top;
         if (shift === 0) continue;
+        moved = true;
         /* A rise already in flight continues from where it is. */
         const flying = new DOMMatrixReadOnly(getComputedStyle(node).transform).m42;
         for (const running of node.getAnimations()) if ((running as Animation & { id: string }).id === "rise") running.cancel();
-        const animation = node.animate([{ transform: `translate3d(0, ${shift + flying}px, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration: RISE_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)", composite: "replace" });
+        const travel = shift + flying - (shownLane.direction === "up" ? stepped : -stepped);
+        if (Math.abs(travel) < 1) continue;
+        const animation = node.animate([{ transform: `translate3d(0, ${travel}px, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration: RISE_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)", composite: "replace" });
         animation.id = "rise";
         rose = true;
       }
@@ -382,10 +494,12 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     const stamp = performance.now();
     if (entered > 1 || (entered === 1 && stamp - lastEntry.current < 400)) mark("vc:together", Math.max(ENTER_MS, RISE_MS));
     if (entered) lastEntry.current = stamp;
-    /* What left: it drifts away from the character and fades where it was. */
+    /* What left: it drifts away from the character and fades where it was. When the stack is rising
+       into its place it is gone at once, so no element shows through another. */
+    if (moved && motion) for (const node of stack.querySelectorAll<HTMLElement>(":scope > [data-leaving]")) fadeAtOnce(node);
     const gone = [...before.keys()].filter((key) => !after.has(key) && contents.current.has(key));
     if (gone.length && motion) {
-      setLeaving((current) => [...current.filter((item) => !gone.includes(item.floater.key)), ...gone.map((key) => ({ floater: contents.current.get(key)!, ...before.get(key)! }))]);
+      setLeaving((current) => [...current.filter((item) => !gone.includes(item.floater.key)), ...gone.map((key) => ({ floater: contents.current.get(key)!, ...before.get(key)!, quick: moved }))]);
       mark("vc:bubble-out", EXIT_MS);
     }
     positions.current = after;
@@ -393,12 +507,6 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     for (const key of contents.current.keys()) if (!after.has(key) && !gone.includes(key)) contents.current.delete(key);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per change of what the lane shows
   }, [floaterKeys, shownLane?.direction, shownLane?.side, shownLane?.rect.height, expanded]);
-  /* Overflow keys that no longer exist are forgotten. */
-  useEffect(() => {
-    const keys = new Set(live.map((floater) => floater.key));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- pruning a measured set
-    setOverflow((current) => { const next = new Set([...current].filter((key) => keys.has(key))); return next.size === current.size ? current : next; });
-  }, [live]);
   const leavingKeys = leaving.map((item) => item.floater.key).join("|");
   useEffect(() => {
     if (!leaving.length) return;
@@ -408,7 +516,9 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   }, [leavingKeys]);
   const leavingRef = useCallback((node: HTMLElement | null) => {
     if (!node || reducedMotion() || typeof node.animate !== "function" || node.dataset.leaving === "played") return;
+    const quick = node.dataset.leaving === "quick";
     node.dataset.leaving = "played";
+    if (quick) { fadeAtOnce(node); return; }
     const away = node.closest<HTMLElement>("[data-direction]")?.dataset.direction === "down" ? 16 : -16;
     node.animate([{ transform: "translate3d(0, 0, 0)", opacity: 1 }, { transform: `translate3d(0, ${away}px, 0)`, opacity: 0 }], { duration: EXIT_MS, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" });
   }, []);
@@ -507,12 +617,13 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const attention = stage === "awaiting-confirmation" || stage === "answered";
   const seconds = (value: number) => new Intl.NumberFormat(locale === "uk" ? "uk" : "en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 1000);
 
-  const renderFloater = (floater: Floater) => {
+  /* `nearest`: the element standing next to the character, which a comic bubble's tail points from. */
+  const renderFloater = (floater: Floater, nearest = false) => {
     if (floater.kind === "speech") {
       return (
-        <p className="vc-bubble" aria-hidden data-speaker={floater.speaker} data-newest={floater.newest ? "" : undefined} data-cut={floater.cut !== null ? "" : undefined} data-companion-bubble>
+        <p className="vc-bubble" aria-hidden data-speaker={floater.speaker} data-newest={nearest ? "" : undefined} data-cut={floater.cut !== null ? "" : undefined} data-companion-bubble>
           {floater.speaker === "operator" ? <span className="vc-who">{t("voiceCompanion.you")}</span> : null}
-          <span className="vc-text">{floater.text}</span>
+          <span className="vc-text">{tied(floater.text)}</span>
           {floater.cut !== null ? <span className="vc-cut" data-companion-cut>{t("voiceCompanion.cutAfter", { s: seconds(floater.cut) })}</span> : null}
         </p>
       );
@@ -533,8 +644,21 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     }
     const { delegation } = floater;
     const recipient = delegation.proposal?.recipient ?? delegation.delivery?.recipient ?? null;
+    if (floater.kind === "answer") {
+      return (
+        <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-companion-reply>
+          <div className="vc-deleg-head">
+            <span className="vc-call-icon" aria-hidden><Check size={14} /></span>
+            <span className="vc-deleg-title">{t("voiceCompanion.stage.answered")}</span>
+            {recipient ? <span className="vc-deleg-engine"><EngineMark engine={recipient.engine} size={14} />{ENGINE_NAME[recipient.engine]}</span> : null}
+          </div>
+          <p className="vc-answer" tabIndex={0} data-companion-answer>{delegation.answer?.text}</p>
+        </div>
+      );
+    }
     const target = recipient?.project ?? project;
-    const head = delegation.stage === "awaiting-confirmation" ? t("voiceCompanion.proposal", { project: target }) : t(`voiceCompanion.stage.${delegation.stage}`);
+    /* Once answered, the request reads as delivered; the answer stands beside the character as its own element. */
+    const head = delegation.stage === "awaiting-confirmation" ? t("voiceCompanion.proposal", { project: target }) : t(`voiceCompanion.stage.${delegation.stage === "answered" ? "delivered" : delegation.stage}`);
     const running = delegation.stage === "proposed" || delegation.stage === "sending";
     const failed = delegation.stage === "refused" || delegation.stage === "failed" || delegation.stage === "unknown";
     return (
@@ -547,7 +671,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         <span className="vc-call-name">request_orchestrator_delegation</span>
         {delegation.stage === "refused" ? <p className="vc-deleg-note">{t("voiceCompanion.refused")}</p> : null}
         {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn>{t("voiceCompanion.withdrawn")}</p> : null}
-        {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" ? (
+        {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" || delegation.stage === "answered" ? (
           <p className="vc-instruction" tabIndex={0} data-companion-instruction>{delegation.instruction}</p>
         ) : null}
         {delegation.stage === "awaiting-confirmation" ? (
@@ -563,7 +687,6 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
             <span className="vc-end" data-done={delegation.stage !== "sending" ? "" : undefined}>{recipient ? <EngineMark engine={recipient.engine} size={14} /> : null}</span>
           </div>
         ) : null}
-        {delegation.answer ? <p className="vc-answer" tabIndex={0} data-companion-answer><span className="vc-who">{t("voiceCompanion.orchestrator")}</span>{delegation.answer.text}</p> : null}
       </div>
     );
   };
@@ -603,11 +726,11 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
           style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height }}
         >
           <div className="vc-stack" ref={stackEl}>
-            {floaters.map((floater) => (
-              <div key={floater.key} className="vc-floater" data-floater={floater.key} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined}>{renderFloater(floater)}</div>
+            {floaters.map((floater, index) => (
+              <div key={floater.key} className="vc-floater" data-floater={floater.key} data-arrival={arrival.get(floater.key)} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined}>{renderFloater(floater, index === floaters.length - 1)}</div>
             ))}
-            {leaving.map(({ floater, top, left, width }) => (
-              <div key={`leaving:${floater.key}`} ref={leavingRef} className="vc-floater" aria-hidden inert data-leaving data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined} style={{ position: "absolute", top, left, width }}>{renderFloater(floater)}</div>
+            {leaving.map(({ floater, top, left, width, quick }) => (
+              <div key={`leaving:${floater.key}`} ref={leavingRef} className="vc-floater" aria-hidden inert data-leaving={quick ? "quick" : ""} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined} style={{ position: "absolute", top, left, width }}>{renderFloater(floater)}</div>
             ))}
           </div>
         </div>

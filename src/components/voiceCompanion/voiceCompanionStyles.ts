@@ -146,6 +146,8 @@ export const VOICE_COMPANION_CSS = `
   position: relative; margin: 0; padding: 8px 12px; font-size: 14px; line-height: 20px; font-weight: 500;
   overflow-wrap: anywhere; user-select: text; cursor: text;
 }
+/* The component ties a bubble's last two words together, so its last line is never one word left over by the wrap. */
+.vc-text { text-wrap: pretty; }
 .vc-bubble[data-speaker="operator"] { font-size: 13px; line-height: 18px; font-weight: 400; }
 .vc-who { font-weight: 700; margin-right: 6px; }
 .vc-cut { display: block; margin-top: 2px; font-size: 11px; line-height: 14px; font-style: italic; font-weight: 400; opacity: 0.8; }
@@ -233,7 +235,9 @@ export const VOICE_COMPANION_CSS = `
   max-height: 162px; overflow-y: auto; overscroll-behavior: contain;
 }
 .vc-instruction { padding: 6px 8px; border-radius: 8px; background: var(--color-raised); border: 1px solid color-mix(in srgb, var(--color-info) 25%, transparent); }
-.vc-answer .vc-who { color: var(--vc-teal-ink); }
+/* The orchestrator's answer: the delegation's teal, filled where the request is outlined. */
+.vc .vc-call.vc-reply { background: color-mix(in srgb, var(--color-info) 14%, var(--color-raised)); border-style: solid; }
+.vc-reply .vc-answer { font-weight: 500; }
 .vc-acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
 .vc-act {
   display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border-radius: 999px; cursor: pointer;

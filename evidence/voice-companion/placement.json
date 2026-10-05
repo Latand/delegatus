@@ -2,12 +2,20 @@
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion",
   "browser": "Chromium (headless)",
-  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; a shorter lane is tried before the companion collapses",
-  "controls": "a[href],button,input,select,textarea,summary,[contenteditable='true'],[draggable='true'],[role='button'],[role='link'],[role='tab'],[role='menuitem'],[role='switch'],[role='checkbox'],[role='option'],.kb .card",
+  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; a shorter lane is tried before the companion collapses; the collapsed shape also keeps 8 px from every line of the page's text",
+  "controls": "a[href],button,input,select,textarea,summary,[contenteditable='true'],[draggable='true'],[role='button'],[role='link'],[role='tab'],[role='menuitem'],[role='switch'],[role='checkbox'],[role='option'],[role='separator'],[role='slider'],[role='scrollbar'],.kb .card, and every element that shows a cursor other than auto, default or text (resize handles, dragging surfaces)",
   "required": {
     "overlapArea": 0,
     "pointerHits": 0,
-    "trappedLanePoints": 0
+    "trappedLanePoints": 0,
+    "handleArea": 0,
+    "handleGap": ">= 8",
+    "textUnderCharacterWhenCollapsed": 0
+  },
+  "readings": {
+    "pointerHits": "points of what the companion reserves, every 4 px, that land on a control or on any cursor other than auto, default or text once the companion is out of the hit test",
+    "handleArea": "px² of elements with a resize, grab or move cursor under what the companion reserves; handleGap is the distance to the nearest",
+    "textUnderCharacter": "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 collapsed, reported open"
   },
   "cases": [
     {
@@ -38,7 +46,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -46,7 +54,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 195,
+      "textUnderCharacter": 2227,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -60,8 +76,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 744,
         "width": 52,
         "height": 52
       },
@@ -71,15 +87,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -109,7 +130,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -117,7 +138,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2069,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -131,8 +160,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1280,
-        "y": 744,
+        "x": 1096,
+        "y": 752,
         "width": 140,
         "height": 44
       },
@@ -142,15 +171,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 11,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 11,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -164,14 +198,14 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 872,
-        "y": 488,
+        "x": 904,
+        "y": 376,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 582,
-        "y": 278,
+        "x": 614,
+        "y": 166,
         "width": 280,
         "height": 360
       },
@@ -180,15 +214,23 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2107,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -202,8 +244,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 736,
         "width": 56,
         "height": 56
       },
@@ -213,15 +255,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 8,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -251,7 +298,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -259,7 +306,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 195,
+      "textUnderCharacter": 2227,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -273,8 +328,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 744,
         "width": 52,
         "height": 52
       },
@@ -284,15 +339,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -322,7 +382,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -330,7 +390,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2069,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -344,8 +412,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1280,
-        "y": 744,
+        "x": 1096,
+        "y": 752,
         "width": 140,
         "height": 44
       },
@@ -355,15 +423,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 11,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 11,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -393,7 +466,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -401,7 +474,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2107,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -415,8 +496,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 736,
         "width": 56,
         "height": 56
       },
@@ -426,15 +507,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 8,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -464,7 +550,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -472,7 +558,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 195,
+      "textUnderCharacter": 2227,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -486,8 +580,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 744,
         "width": 52,
         "height": 52
       },
@@ -497,15 +591,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -535,7 +634,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -543,7 +642,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2069,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -557,8 +664,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1280,
-        "y": 744,
+        "x": 1096,
+        "y": 752,
         "width": 140,
         "height": 44
       },
@@ -568,15 +675,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 11,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 11,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -606,7 +718,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -614,7 +726,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2107,
+      "textCovered": [
+        "01:40",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -628,8 +748,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 736,
         "width": 56,
         "height": 56
       },
@@ -639,15 +759,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 8,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -677,7 +802,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -685,7 +810,12 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 83,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -699,8 +829,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 744,
         "width": 52,
         "height": 52
       },
@@ -710,15 +840,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 13,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -748,7 +883,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 13,
@@ -756,7 +891,15 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 201,
+      "textUnderCharacter": 2069,
+      "textCovered": [
+        "01:41",
+        "The upload lane cannot f"
+      ]
     },
     {
       "viewport": "1440x900",
@@ -770,8 +913,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1280,
-        "y": 744,
+        "x": 1096,
+        "y": 752,
         "width": 140,
         "height": 44
       },
@@ -781,15 +924,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 12,
+      "minClearance": 11,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 11,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -819,7 +967,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 12,
@@ -827,7 +975,12 @@
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -841,8 +994,8 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 1368,
-        "y": 776,
+        "x": 1376,
+        "y": 736,
         "width": 56,
         "height": 56
       },
@@ -852,7 +1005,88 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 80,
+      "controls": 82,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 13,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 0,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 28,
+      "handleArea": 0,
+      "handleGap": 13,
+      "textUnderCharacter": 0,
+      "textCovered": []
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "state": "open",
+      "layout": "expanded",
+      "yielded": false,
+      "phase": "offline",
+      "side": "left",
+      "direction": "up",
+      "block": {
+        "x": 840,
+        "y": 496,
+        "width": 132,
+        "height": 148
+      },
+      "lane": {
+        "x": 550,
+        "y": 284,
+        "width": 280,
+        "height": 360
+      },
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 51,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 8,
+      "pointerHits": 0,
+      "trapped": 0,
+      "passed": 1008,
+      "clipped": [],
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "state": "collapsed",
+      "layout": "collapsed",
+      "yielded": false,
+      "phase": "offline",
+      "side": null,
+      "direction": null,
+      "block": {
+        "x": 920,
+        "y": 592,
+        "width": 52,
+        "height": 52
+      },
+      "lane": null,
+      "floaters": 0,
+      "bubbles": [],
+      "calls": 0,
+      "insideViewport": true,
+      "floatersInsideLane": true,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -860,78 +1094,12 @@
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
-    },
-    {
-      "viewport": "1000x800",
-      "lang": "en",
-      "scheme": "light",
-      "variant": 1,
-      "state": "open",
-      "layout": "expanded",
-      "yielded": false,
-      "phase": "offline",
-      "side": "left",
-      "direction": "up",
-      "block": {
-        "x": 848,
-        "y": 496,
-        "width": 132,
-        "height": 148
-      },
-      "lane": {
-        "x": 558,
-        "y": 284,
-        "width": 280,
-        "height": 360
-      },
-      "floaters": 0,
-      "bubbles": [],
-      "calls": 0,
-      "insideViewport": true,
-      "floatersInsideLane": true,
-      "controls": 49,
-      "overlapArea": 0,
-      "covered": [],
-      "minClearance": 9,
-      "pointerHits": 0,
-      "trapped": 0,
-      "passed": 1008,
-      "clipped": [],
-      "pageOverflows": false
-    },
-    {
-      "viewport": "1000x800",
-      "lang": "en",
-      "scheme": "light",
-      "variant": 1,
-      "state": "collapsed",
-      "layout": "collapsed",
-      "yielded": false,
-      "phase": "offline",
-      "side": null,
-      "direction": null,
-      "block": {
-        "x": 928,
-        "y": 592,
-        "width": 52,
-        "height": 52
-      },
-      "lane": null,
-      "floaters": 0,
-      "bubbles": [],
-      "calls": 0,
-      "insideViewport": true,
-      "floatersInsideLane": true,
-      "controls": 49,
-      "overlapArea": 0,
-      "covered": [],
-      "minClearance": 9,
-      "pointerHits": 0,
-      "trapped": 0,
-      "passed": 0,
-      "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -945,13 +1113,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -961,15 +1129,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -983,7 +1156,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 840,
+        "x": 832,
         "y": 600,
         "width": 140,
         "height": 44
@@ -994,15 +1167,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1016,13 +1194,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1032,15 +1210,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1054,7 +1237,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 912,
         "y": 584,
         "width": 56,
         "height": 56
@@ -1065,15 +1248,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 12,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1087,13 +1275,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 284,
         "width": 280,
         "height": 360
@@ -1103,15 +1291,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1125,7 +1318,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 920,
         "y": 592,
         "width": 52,
         "height": 52
@@ -1136,15 +1329,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1158,13 +1356,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1174,15 +1372,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1196,7 +1399,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 840,
+        "x": 832,
         "y": 600,
         "width": 140,
         "height": 44
@@ -1207,15 +1410,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1229,13 +1437,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1245,15 +1453,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1267,7 +1480,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 912,
         "y": 584,
         "width": 56,
         "height": 56
@@ -1278,15 +1491,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 12,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1300,13 +1518,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 284,
         "width": 280,
         "height": 360
@@ -1316,15 +1534,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1338,7 +1561,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 920,
         "y": 592,
         "width": 52,
         "height": 52
@@ -1349,15 +1572,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1371,13 +1599,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1387,15 +1615,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1409,7 +1642,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 840,
+        "x": 832,
         "y": 600,
         "width": 140,
         "height": 44
@@ -1420,15 +1653,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1442,13 +1680,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1458,15 +1696,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1480,7 +1723,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 912,
         "y": 584,
         "width": 56,
         "height": 56
@@ -1491,15 +1734,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 12,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1513,13 +1761,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 284,
         "width": 280,
         "height": 360
@@ -1529,15 +1777,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1551,7 +1804,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 920,
         "y": 592,
         "width": 52,
         "height": 52
@@ -1562,15 +1815,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1584,13 +1842,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1600,15 +1858,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1622,7 +1885,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 840,
+        "x": 832,
         "y": 600,
         "width": 140,
         "height": 44
@@ -1633,15 +1896,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 9,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1655,13 +1923,13 @@
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 848,
+        "x": 840,
         "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 558,
+        "x": 550,
         "y": 278,
         "width": 280,
         "height": 360
@@ -1671,15 +1939,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 15,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 8,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1000x800",
@@ -1693,7 +1966,7 @@
       "side": null,
       "direction": null,
       "block": {
-        "x": 928,
+        "x": 912,
         "y": 584,
         "width": 56,
         "height": 56
@@ -1704,15 +1977,20 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 49,
+      "controls": 51,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 0,
       "clipped": [],
-      "pageOverflows": false
+      "pageOverflows": false,
+      "handles": 2,
+      "handleArea": 0,
+      "handleGap": 12,
+      "textUnderCharacter": 0,
+      "textCovered": []
     }
   ]
 }

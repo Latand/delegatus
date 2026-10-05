@@ -8,9 +8,9 @@
   },
   "method": "requestAnimationFrame intervals in the foreground page; T is the median interval of a 1.5 s idle reference on the same page; a window is the union of the stated durations after each performance mark the component sets when an animation starts",
   "windows": {
-    "bubblesRising": "a bubble or call entering (260 ms) and the stack rising under it (340 ms)",
+    "bubblesRising": "a bubble or call entering (340 ms, unseen for the first half of it) and the stack rising out of its place (340 ms)",
     "arrivingTogether": "two or more elements entering in one commit, or one within 400 ms of the previous",
-    "leaving": "an older bubble drifting away and fading (420 ms)",
+    "leaving": "the far end of the lane drifting 16 px away and fading (420 ms)",
     "calls": "a call element entering",
     "delegation": "the hand-off pellet going out (900 ms) and the answer coming back (700 ms)"
   },
@@ -31,6 +31,17 @@
       260,
       180
     ]
+  },
+  "lane": {
+    "order": "one chronology: the element that arrived last, speech or call, stands beside the character; the orchestrator's answer is an element of its own and arrives there too",
+    "leaving": "from the far end only: when an element's time is up and nothing older is left, or when a fifth bubble, a fifth call or the lane's height sends the oldest away with everything older than it",
+    "reading": "every animation frame of the recorded run, against the lane's end at the character: towardCharacterFrames counts frames in which an element moved more than 1 px toward the character; overlapFrames counts frames in which two elements of opacity >= 0.5 (leaving ones included) overlap by more than 2 px; entriesAwayFromCharacter counts arrivals (the elements first seen in one frame) whose nearest element stood more than 2 px from the character's end; orphanLastLines lists bubbles of more than two words whose last line holds one word",
+    "required": {
+      "towardCharacterFrames": 0,
+      "overlapFrames": 0,
+      "entriesAwayFromCharacter": 0,
+      "orphanLastLines": []
+    }
   },
   "limitations": [
     "Headless Chromium on the build machine with a software compositor: no physical display, no CPU throttling.",
@@ -57,7 +68,7 @@
       "windows": {
         "bubblesRising": {
           "marks": 1,
-          "frames": 15,
+          "frames": 20,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.7,
@@ -112,13 +123,13 @@
         }
       },
       "conversation": {
-        "frames": 218,
+        "frames": 216,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 33.3,
-        "framesOver1_5T": 1,
-        "missedFramesEstimate": 1,
-        "missedShare": 0.0046,
+        "p95Ms": 16.8,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
@@ -132,7 +143,7 @@
         "scenario-short-1440-en-light-v1-end.png"
       ],
       "geometry": {
-        "samples": 28,
+        "samples": 30,
         "maxBubbles": 1,
         "maxCalls": 0,
         "maxFloaters": 1,
@@ -141,6 +152,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 211,
+        "entries": 1,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 0,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 3,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -155,13 +180,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 55,
+          "frames": 60,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -216,7 +241,7 @@
         }
       },
       "conversation": {
-        "frames": 387,
+        "frames": 384,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8,
@@ -238,7 +263,7 @@
         "scenario-three-1440-uk-light-v2-end.png"
       ],
       "geometry": {
-        "samples": 53,
+        "samples": 55,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
@@ -247,6 +272,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 393,
+        "entries": 3,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 9,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 5,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -259,7 +298,7 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
         "p95Ms": 16.8,
         "maxMs": 16.8
@@ -267,9 +306,9 @@
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 55,
+          "frames": 60,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -291,8 +330,8 @@
           "marks": 1,
           "frames": 25,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
-          "maxMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
           "missedShare": 0,
@@ -322,7 +361,7 @@
         }
       },
       "conversation": {
-        "frames": 1075,
+        "frames": 1067,
         "medianMs": 16.7,
         "p95Ms": 16.8,
         "maxMs": 16.8,
@@ -344,7 +383,7 @@
         "scenario-paragraph-1440-en-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 148,
+        "samples": 149,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
@@ -353,6 +392,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 1064,
+        "entries": 3,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 18,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 17,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -365,15 +418,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 13,
-          "frames": 136,
+          "marks": 15,
+          "frames": 160,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -394,10 +447,10 @@
           "withinTarget": false
         },
         "leaving": {
-          "marks": 5,
-          "frames": 125,
+          "marks": 6,
+          "frames": 150,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
+          "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -430,7 +483,7 @@
       "conversation": {
         "frames": 2552,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8,
         "framesOver1_5T": 0,
         "missedFramesEstimate": 0,
@@ -447,18 +500,33 @@
       "screenshots": [
         "scenario-long-1440-uk-dark-v1-peak-2.png",
         "scenario-long-1440-uk-dark-v1-peak-3.png",
+        "scenario-long-1440-uk-dark-v1-peak-4.png",
         "scenario-long-1440-uk-dark-v1-end.png"
       ],
       "geometry": {
-        "samples": 354,
-        "maxBubbles": 3,
+        "samples": 355,
+        "maxBubbles": 4,
         "maxCalls": 0,
-        "maxFloaters": 3,
+        "maxFloaters": 4,
         "maxBubbleLines": 4,
         "maxBubbleWidth": 280,
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 2542,
+        "entries": 8,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 29,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 22,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -471,7 +539,7 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
@@ -479,7 +547,7 @@
       "windows": {
         "bubblesRising": {
           "marks": 19,
-          "frames": 198,
+          "frames": 202,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -534,7 +602,7 @@
         }
       },
       "conversation": {
-        "frames": 608,
+        "frames": 605,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8,
@@ -566,6 +634,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 622,
+        "entries": 10,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 9,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 12,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -578,17 +660,17 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
+        "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 15,
-          "frames": 215,
+          "marks": 11,
+          "frames": 116,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
+          "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -599,16 +681,16 @@
           "marks": 3,
           "frames": 31,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 16.8,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
           "missedShare": 0,
           "withinTarget": true
         },
         "leaving": {
-          "marks": 5,
-          "frames": 123,
+          "marks": 4,
+          "frames": 99,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -619,9 +701,9 @@
         },
         "calls": {
           "marks": 4,
-          "frames": 32,
+          "frames": 36,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -641,9 +723,9 @@
         }
       },
       "conversation": {
-        "frames": 801,
+        "frames": 800,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8,
         "framesOver1_5T": 0,
         "missedFramesEstimate": 0,
@@ -659,12 +741,12 @@
       "recording": "scenario-burst-1440-uk-light-v3.webm",
       "screenshots": [
         "scenario-burst-1440-uk-light-v3-peak-2.png",
-        "scenario-burst-1440-uk-light-v3-peak-4.png",
+        "scenario-burst-1440-uk-light-v3-peak-3.png",
         "scenario-burst-1440-uk-light-v3-peak-6.png",
         "scenario-burst-1440-uk-light-v3-end.png"
       ],
       "geometry": {
-        "samples": 112,
+        "samples": 113,
         "maxBubbles": 2,
         "maxCalls": 4,
         "maxFloaters": 6,
@@ -673,6 +755,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 810,
+        "entries": 8,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 20,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 13,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -687,13 +783,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
+        "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 32,
-          "frames": 425,
+          "marks": 23,
+          "frames": 258,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -704,9 +800,9 @@
         },
         "arrivingTogether": {
           "marks": 1,
-          "frames": 20,
+          "frames": 21,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -714,8 +810,8 @@
           "withinTarget": true
         },
         "leaving": {
-          "marks": 9,
-          "frames": 225,
+          "marks": 10,
+          "frames": 250,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -725,10 +821,10 @@
           "withinTarget": true
         },
         "calls": {
-          "marks": 1,
-          "frames": 16,
+          "marks": 2,
+          "frames": 40,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -748,19 +844,19 @@
         }
       },
       "conversation": {
-        "frames": 2156,
+        "frames": 2159,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 33.3,
-        "framesOver1_5T": 1,
-        "missedFramesEstimate": 1,
-        "missedShare": 0.0005,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 1,
-        "events": 138,
+        "events": 139,
         "proposal": {
           "dispatchesBefore": 0
         }
@@ -777,7 +873,7 @@
         "scenario-delegation-1440-en-dark-v1-conversation.png"
       ],
       "geometry": {
-        "samples": 300,
+        "samples": 299,
         "maxBubbles": 4,
         "maxCalls": 1,
         "maxFloaters": 4,
@@ -786,6 +882,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 2158,
+        "entries": 13,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 40,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 78,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -800,20 +910,20 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
+        "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 10,
-          "frames": 129,
+          "marks": 7,
+          "frames": 81,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 33.4,
-          "framesOver1_5T": 3,
-          "missedFramesEstimate": 3,
-          "missedShare": 0.0227,
-          "withinTarget": false
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
         },
         "arrivingTogether": {
           "marks": 0,
@@ -861,14 +971,14 @@
         }
       },
       "conversation": {
-        "frames": 551,
+        "frames": 562,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 50.1,
-        "framesOver1_5T": 14,
-        "missedFramesEstimate": 17,
-        "missedShare": 0.0299,
-        "withinTarget": false
+        "p95Ms": 16.7,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
+        "withinTarget": true
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -885,7 +995,7 @@
         "scenario-interrupt-1440-uk-dark-v2-end.png"
       ],
       "geometry": {
-        "samples": 78,
+        "samples": 79,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
@@ -894,6 +1004,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 562,
+        "entries": 4,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 20,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 23,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -914,7 +1038,7 @@
       "windows": {
         "bubblesRising": {
           "marks": 1,
-          "frames": 16,
+          "frames": 21,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.7,
@@ -971,12 +1095,12 @@
       "conversation": {
         "frames": 193,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "p95Ms": 16.7,
+        "maxMs": 216.7,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 12,
+        "missedShare": 0.0585,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -989,7 +1113,7 @@
         "scenario-short-1000-uk-dark-v2-end.png"
       ],
       "geometry": {
-        "samples": 26,
+        "samples": 27,
         "maxBubbles": 1,
         "maxCalls": 0,
         "maxFloaters": 1,
@@ -998,6 +1122,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 193,
+        "entries": 1,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 0,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 2,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1010,17 +1148,17 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 16.8
+        "p95Ms": 16.7,
+        "maxMs": 16.7
       },
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 57,
+          "frames": 61,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1073,14 +1211,14 @@
         }
       },
       "conversation": {
-        "frames": 367,
+        "frames": 388,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 50,
+        "maxMs": 283.3,
         "framesOver1_5T": 1,
-        "missedFramesEstimate": 2,
-        "missedShare": 0.0054,
-        "withinTarget": true
+        "missedFramesEstimate": 16,
+        "missedShare": 0.0396,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -1095,7 +1233,7 @@
         "scenario-three-1000-en-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 52,
+        "samples": 53,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
@@ -1104,6 +1242,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 380,
+        "entries": 3,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 9,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 4,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1118,13 +1270,13 @@
       "idle": {
         "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 56,
+          "frames": 60,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1179,9 +1331,9 @@
         }
       },
       "conversation": {
-        "frames": 1196,
+        "frames": 1187,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8,
         "framesOver1_5T": 0,
         "missedFramesEstimate": 0,
@@ -1210,6 +1362,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 1180,
+        "entries": 3,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 18,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 15,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1222,15 +1388,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 15,
-          "frames": 157,
+          "marks": 17,
+          "frames": 180,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -1251,10 +1417,10 @@
           "withinTarget": false
         },
         "leaving": {
-          "marks": 6,
-          "frames": 150,
+          "marks": 7,
+          "frames": 175,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1285,14 +1451,14 @@
         }
       },
       "conversation": {
-        "frames": 2791,
+        "frames": 2779,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "p95Ms": 16.7,
+        "maxMs": 200,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 11,
+        "missedShare": 0.0039,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -1312,11 +1478,25 @@
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
-        "maxBubbleLines": 4,
+        "maxBubbleLines": 3,
         "maxBubbleWidth": 280,
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 2787,
+        "entries": 9,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 18,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 25,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1331,13 +1511,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 19,
-          "frames": 197,
+          "frames": 202,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1392,14 +1572,14 @@
         }
       },
       "conversation": {
-        "frames": 581,
+        "frames": 583,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 200,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 11,
+        "missedShare": 0.0185,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -1415,7 +1595,7 @@
         "scenario-many-1000-uk-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 81,
+        "samples": 82,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
@@ -1424,6 +1604,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 589,
+        "entries": 10,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 9,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 12,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1436,15 +1630,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
         "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 15,
-          "frames": 169,
+          "marks": 11,
+          "frames": 117,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1458,17 +1652,17 @@
           "frames": 31,
           "medianMs": 16.7,
           "p95Ms": 16.7,
-          "maxMs": 16.7,
+          "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
           "missedShare": 0,
           "withinTarget": true
         },
         "leaving": {
-          "marks": 5,
+          "marks": 4,
           "frames": 98,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1477,7 +1671,7 @@
         },
         "calls": {
           "marks": 4,
-          "frames": 32,
+          "frames": 36,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1499,7 +1693,7 @@
         }
       },
       "conversation": {
-        "frames": 800,
+        "frames": 802,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8,
@@ -1532,6 +1726,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 804,
+        "entries": 8,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 20,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 18,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1546,24 +1754,24 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 32,
-          "frames": 401,
+          "marks": 25,
+          "frames": 271,
           "medianMs": 16.7,
           "p95Ms": 16.8,
-          "maxMs": 50,
-          "framesOver1_5T": 1,
-          "missedFramesEstimate": 2,
-          "missedShare": 0.005,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
           "withinTarget": true
         },
         "arrivingTogether": {
           "marks": 1,
-          "frames": 21,
+          "frames": 20,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.7,
@@ -1573,20 +1781,20 @@
           "withinTarget": true
         },
         "leaving": {
-          "marks": 9,
-          "frames": 221,
+          "marks": 10,
+          "frames": 248,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 50,
-          "framesOver1_5T": 1,
-          "missedFramesEstimate": 2,
-          "missedShare": 0.009,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
           "withinTarget": true
         },
         "calls": {
-          "marks": 1,
-          "frames": 16,
-          "medianMs": 16.6,
+          "marks": 2,
+          "frames": 40,
+          "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
@@ -1598,28 +1806,28 @@
           "marks": 2,
           "frames": 96,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 50,
-          "framesOver1_5T": 1,
-          "missedFramesEstimate": 2,
-          "missedShare": 0.0204,
-          "withinTarget": false
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
         }
       },
       "conversation": {
-        "frames": 2051,
+        "frames": 2069,
         "medianMs": 16.7,
         "p95Ms": 16.8,
-        "maxMs": 50,
-        "framesOver1_5T": 2,
-        "missedFramesEstimate": 3,
-        "missedShare": 0.0015,
+        "maxMs": 16.8,
+        "framesOver1_5T": 0,
+        "missedFramesEstimate": 0,
+        "missedShare": 0,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 1,
-        "events": 110,
+        "events": 112,
         "proposal": {
           "dispatchesBefore": 0
         }
@@ -1636,7 +1844,7 @@
         "scenario-delegation-1000-uk-light-v2-conversation.png"
       ],
       "geometry": {
-        "samples": 286,
+        "samples": 285,
         "maxBubbles": 4,
         "maxCalls": 1,
         "maxFloaters": 4,
@@ -1645,6 +1853,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 2049,
+        "entries": 13,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 39,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 54,
+        "orphanLastLines": [],
+        "running": false
       }
     },
     {
@@ -1659,13 +1881,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 9,
-          "frames": 115,
+          "marks": 7,
+          "frames": 81,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -1720,7 +1942,7 @@
         }
       },
       "conversation": {
-        "frames": 580,
+        "frames": 583,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8,
@@ -1744,7 +1966,7 @@
         "scenario-interrupt-1000-en-light-v3-end.png"
       ],
       "geometry": {
-        "samples": 80,
+        "samples": 81,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
@@ -1753,6 +1975,20 @@
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 579,
+        "entries": 4,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 20,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "bubblesRead": 29,
+        "orphanLastLines": [],
+        "running": false
       }
     }
   ]
