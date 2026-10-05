@@ -1,5 +1,5 @@
 {
-  "commit": "49bc176ddf053f3f898dcd8b33ffe96c53a7ef7a",
+  "commit": "942c85480f9963275537bd7af41b40e5c368e311",
   "case": "seat-composer",
   "transcriptFloor": 72,
   "draftLines": [
@@ -1202,7 +1202,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 655,
@@ -1211,7 +1211,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 653,
@@ -1220,7 +1220,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 700,
@@ -1229,7 +1229,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 698,
@@ -1296,7 +1296,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 655,
@@ -1305,7 +1305,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 653,
@@ -1314,7 +1314,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 700,
@@ -1323,7 +1323,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 698,
@@ -1390,7 +1390,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 655,
@@ -1399,7 +1399,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 653,
@@ -1408,7 +1408,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 700,
@@ -1417,7 +1417,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 698,
@@ -1559,7 +1559,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 315.5,
@@ -1568,7 +1568,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 313.5,
@@ -1577,7 +1577,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 360.5,
@@ -1586,7 +1586,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 358.5,
@@ -1653,7 +1653,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 405.5,
@@ -1662,7 +1662,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 403.5,
@@ -1671,7 +1671,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 450.5,
@@ -1680,7 +1680,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 448.5,
@@ -1747,7 +1747,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 411.5,
@@ -1756,7 +1756,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 409.5,
@@ -1765,7 +1765,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 456.5,
@@ -1774,7 +1774,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 454.5,
@@ -1916,7 +1916,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 315.5,
@@ -1925,7 +1925,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 313.5,
@@ -1934,7 +1934,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 360.5,
@@ -1943,7 +1943,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 358.5,
@@ -2010,7 +2010,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 405.5,
@@ -2019,7 +2019,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 403.5,
@@ -2028,7 +2028,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 450.5,
@@ -2037,7 +2037,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 448.5,
@@ -2104,7 +2104,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 916,
               "y": 411.5,
@@ -2113,7 +2113,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 952,
               "y": 409.5,
@@ -2122,7 +2122,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 337,
               "y": 456.5,
@@ -2131,7 +2131,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 959,
               "y": 454.5,
@@ -3344,7 +3344,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 580,
@@ -3353,7 +3353,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 578,
@@ -3362,7 +3362,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 625,
@@ -3371,7 +3371,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 623,
@@ -3438,7 +3438,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 580,
@@ -3447,7 +3447,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 578,
@@ -3456,7 +3456,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 625,
@@ -3465,7 +3465,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 623,
@@ -3532,7 +3532,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 580,
@@ -3541,7 +3541,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 578,
@@ -3550,7 +3550,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 625,
@@ -3559,7 +3559,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 623,
@@ -3701,7 +3701,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 390.5,
@@ -3710,7 +3710,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 388.5,
@@ -3719,7 +3719,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 435.5,
@@ -3728,7 +3728,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 433.5,
@@ -3795,7 +3795,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 480.5,
@@ -3804,7 +3804,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 478.5,
@@ -3813,7 +3813,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 525.5,
@@ -3822,7 +3822,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 523.5,
@@ -3889,7 +3889,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 486.5,
@@ -3898,7 +3898,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 484.5,
@@ -3907,7 +3907,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 531.5,
@@ -3916,7 +3916,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 529.5,
@@ -4058,7 +4058,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 390.5,
@@ -4067,7 +4067,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 388.5,
@@ -4076,7 +4076,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 435.5,
@@ -4085,7 +4085,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 433.5,
@@ -4152,7 +4152,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 480.5,
@@ -4161,7 +4161,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 478.5,
@@ -4170,7 +4170,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 525.5,
@@ -4179,7 +4179,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 523.5,
@@ -4246,7 +4246,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 900,
               "y": 486.5,
@@ -4255,7 +4255,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 936,
               "y": 484.5,
@@ -4264,7 +4264,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 273,
               "y": 531.5,
@@ -4273,7 +4273,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 943,
               "y": 529.5,
@@ -5486,7 +5486,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 465,
@@ -5495,7 +5495,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 463,
@@ -5504,7 +5504,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 510,
@@ -5513,7 +5513,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 508,
@@ -5580,7 +5580,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 465,
@@ -5589,7 +5589,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 463,
@@ -5598,7 +5598,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 510,
@@ -5607,7 +5607,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 508,
@@ -5674,7 +5674,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 465,
@@ -5683,7 +5683,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 463,
@@ -5692,7 +5692,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 510,
@@ -5701,7 +5701,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 508,
@@ -5843,7 +5843,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 350.5,
@@ -5852,7 +5852,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 348.5,
@@ -5861,7 +5861,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 395.5,
@@ -5870,7 +5870,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 393.5,
@@ -5937,7 +5937,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 440.5,
@@ -5946,7 +5946,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 438.5,
@@ -5955,7 +5955,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 485.5,
@@ -5964,7 +5964,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 483.5,
@@ -6031,7 +6031,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 446.5,
@@ -6040,7 +6040,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 444.5,
@@ -6049,7 +6049,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 491.5,
@@ -6058,7 +6058,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 489.5,
@@ -6200,7 +6200,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 350.5,
@@ -6209,7 +6209,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 348.5,
@@ -6218,7 +6218,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 395.5,
@@ -6227,7 +6227,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 393.5,
@@ -6294,7 +6294,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 440.5,
@@ -6303,7 +6303,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 438.5,
@@ -6312,7 +6312,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 485.5,
@@ -6321,7 +6321,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 483.5,
@@ -6388,7 +6388,7 @@
         "lineHeight": 18,
         "controls": [
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 816,
               "y": 446.5,
@@ -6397,7 +6397,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 852,
               "y": 444.5,
@@ -6406,7 +6406,7 @@
             }
           },
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
             "rect": {
               "x": 277,
               "y": 491.5,
@@ -6415,7 +6415,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 859,
               "y": 489.5,
@@ -6433,6 +6433,600 @@
       }
     },
     "setHeight": 160
+  },
+  "seat-composer-1440x900-en-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 305
+      },
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 325,
+        "y": 164.5,
+        "w": 678,
+        "h": 72
+      },
+      "strip": {
+        "x": 325,
+        "y": 236.5,
+        "w": 678,
+        "h": 37
+      },
+      "form": {
+        "x": 325,
+        "y": 273.5,
+        "w": 678,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 348,
+        "y": 286.5,
+        "w": 564,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 916,
+            "y": 285.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 952,
+            "y": 283.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 337,
+            "y": 330.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 959,
+            "y": 328.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 365,
+        "w": 1192,
+        "h": 852
+      }
+    }
+  },
+  "seat-composer-1440x900-uk-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 305
+      },
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 325,
+        "y": 164.5,
+        "w": 678,
+        "h": 72
+      },
+      "strip": {
+        "x": 325,
+        "y": 236.5,
+        "w": 678,
+        "h": 37
+      },
+      "form": {
+        "x": 325,
+        "y": 273.5,
+        "w": 678,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 348,
+        "y": 286.5,
+        "w": 564,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 916,
+            "y": 285.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 952,
+            "y": 283.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 337,
+            "y": 330.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 959,
+            "y": 328.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 365,
+        "w": 1192,
+        "h": 852
+      }
+    }
+  },
+  "seat-composer-1000x700-en-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1000,
+        "h": 700
+      },
+      "seat": {
+        "x": 260,
+        "y": 135,
+        "w": 728,
+        "h": 305
+      },
+      "head": {
+        "x": 261,
+        "y": 136,
+        "w": 726,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 261,
+        "y": 239.5,
+        "w": 726,
+        "h": 72
+      },
+      "strip": {
+        "x": 261,
+        "y": 311.5,
+        "w": 726,
+        "h": 37
+      },
+      "form": {
+        "x": 261,
+        "y": 348.5,
+        "w": 726,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 284,
+        "y": 361.5,
+        "w": 612,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 900,
+            "y": 360.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 936,
+            "y": 358.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 273,
+            "y": 405.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 943,
+            "y": 403.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 440,
+        "w": 752,
+        "h": 577
+      }
+    }
+  },
+  "seat-composer-1000x700-uk-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1000,
+        "h": 700
+      },
+      "seat": {
+        "x": 260,
+        "y": 135,
+        "w": 728,
+        "h": 305
+      },
+      "head": {
+        "x": 261,
+        "y": 136,
+        "w": 726,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 261,
+        "y": 239.5,
+        "w": 726,
+        "h": 72
+      },
+      "strip": {
+        "x": 261,
+        "y": 311.5,
+        "w": 726,
+        "h": 37
+      },
+      "form": {
+        "x": 261,
+        "y": 348.5,
+        "w": 726,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 284,
+        "y": 361.5,
+        "w": 612,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 900,
+            "y": 360.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 936,
+            "y": 358.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 273,
+            "y": 405.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 943,
+            "y": 403.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 440,
+        "w": 752,
+        "h": 577
+      }
+    }
+  },
+  "seat-composer-1280x600-en-dragged": {
+    "from": 450,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1280,
+        "h": 600
+      },
+      "seat": {
+        "x": 264,
+        "y": 95,
+        "w": 1000,
+        "h": 305
+      },
+      "head": {
+        "x": 265,
+        "y": 96,
+        "w": 998,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 265,
+        "y": 199.5,
+        "w": 638,
+        "h": 72
+      },
+      "strip": {
+        "x": 265,
+        "y": 271.5,
+        "w": 638,
+        "h": 37
+      },
+      "form": {
+        "x": 265,
+        "y": 308.5,
+        "w": 638,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 288,
+        "y": 321.5,
+        "w": 524,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 816,
+            "y": 320.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 852,
+            "y": 318.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 277,
+            "y": 365.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 859,
+            "y": 363.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 400,
+        "w": 1032,
+        "h": 517
+      }
+    }
+  },
+  "seat-composer-1280x600-uk-dragged": {
+    "from": 450,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1280,
+        "h": 600
+      },
+      "seat": {
+        "x": 264,
+        "y": 95,
+        "w": 1000,
+        "h": 305
+      },
+      "head": {
+        "x": 265,
+        "y": 96,
+        "w": 998,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 265,
+        "y": 199.5,
+        "w": 638,
+        "h": 72
+      },
+      "strip": {
+        "x": 265,
+        "y": 271.5,
+        "w": 638,
+        "h": 37
+      },
+      "form": {
+        "x": 265,
+        "y": 308.5,
+        "w": 638,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 288,
+        "y": 321.5,
+        "w": 524,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 816,
+            "y": 320.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 852,
+            "y": 318.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 277,
+            "y": 365.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 859,
+            "y": 363.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 400,
+        "w": 1032,
+        "h": 517
+      }
+    }
   },
   "seat-composer-390x844-en": {
     "seat": null,
@@ -6838,7 +7432,7 @@
         "lineHeight": 22,
         "controls": [
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
             "rect": {
               "x": 20,
               "y": 790,
@@ -6847,7 +7441,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 127.5,
               "y": 790,
@@ -6856,7 +7450,7 @@
             }
           },
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 173.5,
               "y": 790,
@@ -6865,7 +7459,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 326,
               "y": 790,
@@ -6912,7 +7506,7 @@
         "lineHeight": 22,
         "controls": [
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
             "rect": {
               "x": 20,
               "y": 790,
@@ -6921,7 +7515,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 127.5,
               "y": 790,
@@ -6930,7 +7524,7 @@
             }
           },
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 173.5,
               "y": 790,
@@ -6939,7 +7533,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 326,
               "y": 790,
@@ -6986,7 +7580,7 @@
         "lineHeight": 22,
         "controls": [
           {
-            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
             "rect": {
               "x": 20,
               "y": 790,
@@ -6995,7 +7589,7 @@
             }
           },
           {
-            "name": "Add files or images",
+            "name": "Додати файли або картинки",
             "rect": {
               "x": 127.5,
               "y": 790,
@@ -7004,7 +7598,7 @@
             }
           },
           {
-            "name": "Dictate",
+            "name": "Надиктувати",
             "rect": {
               "x": 173.5,
               "y": 790,
@@ -7013,7 +7607,7 @@
             }
           },
           {
-            "name": "Launch the agent",
+            "name": "Запустити агента",
             "rect": {
               "x": 326,
               "y": 790,
