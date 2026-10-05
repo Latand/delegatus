@@ -1,20 +1,20 @@
 /* What a launch refused for a pending update is told (#2515). Resolves state
    only when a caller reads it (#1905), and imports no liveness code, so the
    admission paths that refuse can load it without the readings behind it. */
+import { operatorLocale } from "@/lib/operator/settings";
+import { translate, type Locale, type MessageKey } from "@/lib/i18n/core";
 import { statePath } from "@/lib/configDir";
 
 import { readAuto } from "./auto";
 import type { DrainLease } from "./drain";
 import type { BusyReason, QuietBlockers } from "./quiet";
 
-const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
-
-const BUSY_WORDS: Record<BusyReason, string> = {
-  "update": "an update step already in progress",
-  "web": "the web process to become healthy",
-  "runtime-host": "the runtime host to become healthy",
-  "pipeline-controller": "the pipeline controller to finish its pass",
-  "seat-tick": "an orchestrator tick to finish",
+const BUSY_WORDS: Record<BusyReason, MessageKey> = {
+  "update": "selfUpdate.launchHold.busy.update",
+  "web": "selfUpdate.launchHold.busy.web",
+  "runtime-host": "selfUpdate.launchHold.busy.runtime-host",
+  "pipeline-controller": "selfUpdate.launchHold.busy.pipeline-controller",
+  "seat-tick": "selfUpdate.launchHold.busy.seat-tick",
 };
 
 /**
@@ -22,34 +22,32 @@ const BUSY_WORDS: Record<BusyReason, string> = {
  * to say only that work was draining, which reads the same whether two turns
  * are running or ninety rows of dead hosts are being counted.
  */
-export function describeUpdateWait(blockers: QuietBlockers | null | undefined): string {
-  if (!blockers) return "its first reading of what is running";
+export function describeUpdateWait(blockers: QuietBlockers | null | undefined, locale: Locale = "en"): string {
+  const t = (key: MessageKey, params?: Record<string, string | number>) => translate(locale, key, params);
+  if (!blockers) return t("selfUpdate.launchHold.firstRead");
   const work = [
-    ...(blockers.turns ? [count(blockers.turns, "running turn", "running turns")] : []),
-    ...(blockers.stages ? [count(blockers.stages, "pipeline stage", "pipeline stages")] : []),
+    ...(blockers.turns ? [t("selfUpdate.launchHold.turns", { count: blockers.turns })] : []),
+    ...(blockers.stages ? [t("selfUpdate.launchHold.stages", { count: blockers.stages })] : []),
   ];
   const held = blockers.unresolvedBlocking ?? 0;
-  const unresolved = held
-    ? ` (${count(held, "turn has", "turns have")} no liveness record and ${held === 1 ? "stops" : "stop"} counting within`
-      + ` ${Math.round((blockers.unresolvedGraceMs ?? 0) / 60_000)} minutes)`
-    : "";
-  if (work.length) return `${work.join(" and ")} to finish${unresolved}`;
+  const unresolved = held ? t("selfUpdate.launchHold.unresolved", { count: held, minutes: Math.round((blockers.unresolvedGraceMs ?? 0) / 60_000) }) : "";
+  if (work.length) return t("selfUpdate.launchHold.work", { work: work.join(t("selfUpdate.launchHold.join")), unresolved });
   const other = [
-    ...(blockers.busyReason ? [BUSY_WORDS[blockers.busyReason]] : blockers.busy ? ["a busy process to settle"] : []),
-    ...(blockers.operatorActiveAt ? [`the operator to be inactive for ${Math.round((blockers.operatorWindowMs ?? 0) / 60_000)} minutes`] : []),
-    ...(blockers.memoryMb !== null ? [`free memory to reach 4096 MB (${blockers.memoryMb} MB now)`] : []),
-    ...(blockers.unreadable ? [`state it could not read (${blockers.unreadable})`] : []),
+    ...(blockers.busyReason ? [t(BUSY_WORDS[blockers.busyReason])] : blockers.busy ? [t("selfUpdate.launchHold.busyOther")] : []),
+    ...(blockers.operatorActiveAt ? [t("selfUpdate.launchHold.operator", { minutes: Math.round((blockers.operatorWindowMs ?? 0) / 60_000) })] : []),
+    ...(blockers.memoryMb !== null ? [t("selfUpdate.launchHold.memory", { available: blockers.memoryMb })] : []),
+    ...(blockers.unreadable ? [t("selfUpdate.launchHold.unreadable", { reason: blockers.unreadable })] : []),
   ];
-  return other.length
-    ? `${other.join(" and ")}; no turn or stage is running`
-    : "one quiet minute before it starts; no turn or stage is running";
+  return other.length ? t("selfUpdate.launchHold.noLiveWork", { wait: other.join(t("selfUpdate.launchHold.join")) }) : t("selfUpdate.launchHold.quietMinute");
 }
 
 /** The blockers the pending update last recorded, and the wait they name. */
 export function updateHoldWait(
   blockers: QuietBlockers | null = readAuto(statePath("self-update", "auto.json")).lastBlockers,
-): { waitingFor: string; blockers: QuietBlockers | null } {
-  return { waitingFor: describeUpdateWait(blockers), blockers };
+): { error: string; waitingFor: string; blockers: QuietBlockers | null } {
+  const locale = operatorLocale() ?? "en";
+  const waitingFor = describeUpdateWait(blockers, locale);
+  return { error: translate(locale, "selfUpdate.launchHold.error", { waitingFor }), waitingFor, blockers };
 }
 
 export interface LaunchHoldRefusal {
@@ -66,7 +64,6 @@ export interface LaunchHoldRefusal {
 export function launchHoldRefusal(hold: Pick<DrainLease, "target" | "since">, blockers?: QuietBlockers | null): LaunchHoldRefusal {
   const wait = blockers === undefined ? updateHoldWait() : updateHoldWait(blockers);
   return {
-    error: `new launches are held while the automatic update waits for ${wait.waitingFor}`,
     code: "launch_held_for_update", target: hold.target, since: hold.since, ...wait,
   };
 }

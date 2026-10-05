@@ -397,21 +397,36 @@ function headlessHostEvidence(
 }
 
 /**
- * Whether a headless reviewer that a running flow round records for this
- * conversation still answers under its exact start identity (#2515).
+ * The process verdict of the headless round that owns this conversation
+ * (#2515), including a process whose start identity cannot be proven.
  *
  * A headless launch writes its process only to the flow round; the registry
  * row keeps no host for it. A liveness record finds that process through the
  * transcript, so this is the same check for a conversation whose transcript is
- * missing or moved and therefore has no record to read.
+ * missing or moved and therefore has no record to read. A round with no
+ * recorded pid adds no process evidence to the conversation's own verdict.
+ * An unbound dispatch is held separately by its launch markers.
  */
-export function headlessReviewerAlive(
+export function headlessReviewerProcess(
   flows: readonly Flow[],
   conversationId: string,
   transcriptPath: string | null,
   probe: LivenessProbe,
-): boolean {
-  return headlessHostEvidence(flows, transcriptPath, conversationId, probe) !== null;
+  registry: LivenessRegistrySnapshot,
+): "alive" | "gone" | "unproven" | null {
+  const canonicalId = canonicalConversationId(registry, conversationId);
+  let result: "gone" | null = null;
+  for (const flow of flows) {
+    if (flow.reviewerMode !== "headless" || !["spawning", "reviewing"].includes(flow.state)) continue;
+    const round = flow.rounds.at(-1);
+    if (!round || round.verdict || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
+      || (!transcriptPath || round.reviewerPath !== transcriptPath)
+      && (!round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
+    const verdict = headlessRoundProcess(round, probe);
+    if (verdict !== "gone") return verdict;
+    result = "gone";
+  }
+  return result;
 }
 
 /** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
@@ -426,7 +441,7 @@ function exactHeadlessIdentityAlive(
 
 /**
  * What the process a headless round records says about itself (#2515), for a
- * round that names no conversation to ask.
+ * bound or unbound round.
  *
  * `alive` is the recorded pid answering under its exact start identity. `gone`
  * is a pid that no longer answers, or one that answers under another start
@@ -558,14 +573,17 @@ export function livenessRecordIsLive(record: LivenessVerdict): boolean {
 }
 
 /** The conversation an id names once the registry's aliases are followed. */
+function canonicalConversationId(registry: LivenessRegistrySnapshot, conversationId: string): string {
+  return registry.conversationAliases && conversationId.startsWith("conversation_")
+    ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, conversationId as `conversation_${string}`)
+    : conversationId;
+}
+
 function canonicalConversation(
   registry: LivenessRegistrySnapshot,
   conversationId: string,
 ): LivenessRegistrySnapshot["conversations"][string] | undefined {
-  const id = registry.conversationAliases && conversationId.startsWith("conversation_")
-    ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, conversationId as `conversation_${string}`)
-    : conversationId;
-  return registry.conversations[id];
+  return registry.conversations[canonicalConversationId(registry, conversationId)];
 }
 
 export interface ConversationRegistryHost {

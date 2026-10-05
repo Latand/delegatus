@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
-import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerAlive, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -107,7 +107,7 @@ export function turnEvidenceReader(
     return {
       record,
       registryHost: conversationRegistryHost(liveness.registrySnapshot(), conversationId, liveness.probe),
-      headlessReviewerAlive: headlessReviewerAlive(liveness.flows?.() ?? [], conversationId, artifactPath ?? null, liveness.probe),
+      headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], conversationId, artifactPath ?? null, liveness.probe, liveness.registrySnapshot()),
       currentTurnIdle: currentHostTurnIdle(await host?.health()),
     };
   };

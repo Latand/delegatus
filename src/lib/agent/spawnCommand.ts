@@ -1007,7 +1007,6 @@ export async function executeSpawnRequest(
       /* The same wait the MCP refusal names (#2515). */
       const wait = updateHoldWait();
       return NextResponse.json({
-        error: `autonomous work is held while the automatic update waits for ${wait.waitingFor}`,
         code: "AUTO_UPDATE_DRAIN", ...wait,
       }, { status: 503 });
     }

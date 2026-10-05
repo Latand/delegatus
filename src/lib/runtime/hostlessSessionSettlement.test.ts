@@ -3,7 +3,7 @@
    by the registry's own writers; the runtime host is a journal small enough to
    read back. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -12,11 +12,13 @@ import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
 import { RuntimeJournal } from "../../runtime-host/journal";
+import { RuntimeHost } from "../../runtime-host/host";
+import { serveRuntimeHost } from "../../runtime-host/socket";
 import { productionDeps } from "../selfUpdate/instance";
 import { probeQuiet, type QuietPorts } from "../selfUpdate/quiet";
 import type { Snapshot } from "../selfUpdate/types";
-import type { RuntimeHostClient } from "./client";
-import type { RuntimeSession } from "./contracts";
+import { UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
+import type { RuntimeEventInput, RuntimeSession } from "./contracts";
 import { bindStructuredDeliveryQueue, settleHostlessSessionProjections } from "./structuredDeliveryController";
 
 let directory: string;
@@ -48,13 +50,18 @@ beforeEach(async () => {
     readSession: async ({ conversationId }: { conversationId: string }) => { keyedReads.push(conversationId); return sessions.get(conversationId) ?? null; },
     append: async (event: { kind: string; scope: { id: string }; payload: Partial<RuntimeSession> }) => {
       if (event.kind !== "session-status") return;
-      const merged = { ...sessions.get(event.scope.id), ...event.payload } as RuntimeSession;
+      const merged = { ...sessions.get(event.scope.id), ...event.payload, revision: (sessions.get(event.scope.id)?.revision ?? 0) + 1 } as RuntimeSession;
       sessions.set(event.scope.id, merged);
       appended.push({ conversationId: event.scope.id, host: merged.host, turn: merged.turn, activeTurnId: merged.activeTurnId });
     },
     effectBatch: async () => [],
     operationStatus: async () => null,
   } as unknown as RuntimeHostClient;
+  client.appendSessionFenced = async (event) => {
+    if (typeof event.scope !== "object") throw new Error("session scope is required");
+    if (sessions.get(event.scope.id)?.revision !== event.expectedSessionRevision) throw new Error("session revision changed");
+    return client.append(event);
+  };
 });
 
 afterEach(async () => {
@@ -73,7 +80,7 @@ function hosted(process: ProcessIdentity, row: Partial<RuntimeSession> = {}) {
     structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process,
       eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   sessions.set(conversation.id, { conversationId: conversation.id, sessionKey: key, hostKind: "codex-app-server",
-    host: "hosted", turn: "running", activeTurnId: "turn-1", provenance: "structured", artifactPath, attentionIds: [], ...row } as RuntimeSession);
+    revision: 1, host: "hosted", turn: "running", activeTurnId: "turn-1", provenance: "structured", artifactPath, attentionIds: [], ...row } as RuntimeSession);
   return { id: conversation.id, key };
 }
 
@@ -213,11 +220,22 @@ test("a process that publishes no delivery controller settles nothing", async ()
   expect(keyedReads).toEqual([]);
 });
 
+test("a client with no fenced append leaves settlement for a supporting host", async () => {
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  delete client.appendSessionFenced;
+  await bindStructuredDeliveryQueue([], { registry, client, hostlessSettleIntervalMs: 0 });
+  expect(await settleHostlessSessionProjections()).toBe(0);
+  expect(appended).toEqual([]);
+  expect(keyedReads).toEqual([]);
+  expect(sessions.get(fixture.id)).toMatchObject({ turn: "running", activeTurnId: "turn-1" });
+});
+
 test("a session row published open after the first reading is closed by the next sweep", async () => {
   /* The real journal, so a late write lands exactly as a host's own would. */
   const journal = new RuntimeJournal(join(directory, "runtime.sqlite"), { structuredHosts: true });
   const real = { snapshot: async () => journal.snapshot(), readSession: async (identity: { conversationId: string }) => journal.readSession(identity),
-    append: async (event: never) => journal.append(event), effectBatch: async () => [], operationStatus: async () => null } as unknown as RuntimeHostClient;
+    append: async (event: never) => journal.append(event), appendSessionFenced: async (event: never) => journal.append(event), effectBatch: async () => [], operationStatus: async () => null } as unknown as RuntimeHostClient;
   const fixture = hosted(deadProcess);
   end(fixture);
   /* A host the registry never ended, published open at the same moment. */
@@ -267,7 +285,8 @@ for (const held of ["read", "write"] as const) {
         if (held === "read") { entered(); await gate; }
         return session;
       },
-      append: async (event: never) => {
+      append: async (event: never) => journal.append(event),
+      appendSessionFenced: async (event: never) => {
         if (held === "write") { entered(); await gate; }
         return journal.append(event);
       } } as unknown as RuntimeHostClient;
@@ -306,3 +325,107 @@ for (const held of ["read", "write"] as const) {
     }
   });
 }
+
+/* An incumbent accepts ordinary append and ignores the new revision field.
+   Its dispatcher refuses the dedicated method. The real socket and client
+   reconnect to the successor's dispatcher on the same endpoint. */
+for (const incumbent of [true, false]) {
+  test(`a delayed settlement RPC preserves the live successor with ${incumbent ? "an incumbent" : "a fenced"} runtime host`, async () => {
+    const fixture = hosted(deadProcess);
+    end(fixture);
+    const journal = new RuntimeJournal(join(directory, "mixed.sqlite"), { structuredHosts: true });
+    const host = new RuntimeHost(journal);
+    const publish = (eventKey: string, payload: Partial<RuntimeSession>) => journal.append({ scope: { type: "session", id: fixture.id }, kind: "session-status",
+      producer: { kind: "codex-app-server", eventKey }, payload: { ...sessions.get(fixture.id)!, ...payload } });
+    publish("old-running", {});
+    let legacy = incumbent;
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const methods: string[] = [];
+    const socketPath = join(directory, "host.sock");
+    const server = serveRuntimeHost(socketPath, { handle: async (request) => {
+      if (request.method === "append" || request.method === "append-session-fenced") {
+        methods.push(request.method);
+        entered();
+        await gate;
+        if (legacy && request.method === "append-session-fenced") return { id: request.id, ok: false, error: "runtime request method is unsupported" };
+        if (legacy) {
+          const event = { ...request.params!.event as RuntimeEventInput };
+          delete event.expectedSessionRevision;
+          return host.handle({ ...request, params: { ...request.params, event } });
+        }
+      }
+      return host.handle(request);
+    } });
+    const real = new UnixRuntimeHostClient(socketPath);
+    const successor = Bun.spawn(["sleep", "60"]);
+    let sweep: Promise<number> | undefined;
+    setAgentRegistryForTests(registry);
+    try {
+      await bindStructuredDeliveryQueue([], { registry, client: real, hostlessSettleIntervalMs: 0 });
+      sweep = settleHostlessSessionProjections();
+      await reached;
+      registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!, status: "live", claimEpoch: 2, pendingAction: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:successor", process: captureProcessIdentity(successor.pid)!,
+          eventCursor: 10, protocolVersion: null, writerClaimEpoch: 2, activeTurnRef: "new-turn", pendingAttention: [], activeFlags: [] } });
+      publish("new-running", { host: "hosted", turn: "running", activeTurnId: "new-turn", writerClaim: "new-writer:2" });
+      const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
+      const ports = { ...productionDeps({ ...process.env }).quiet!, runtimeSnapshot: () => real.snapshot(), pipelines: () => [], flows: () => [],
+        seats: () => [], presence: () => [], registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 } as QuietPorts;
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      release();
+      expect(await sweep).toBe(0);
+      expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "hosted", turn: "running", activeTurnId: "new-turn" });
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      expect(methods).toEqual(["append-session-fenced"]);
+      successor.kill();
+      await successor.exited;
+      end(fixture);
+      /* The old host still cannot accept settlement. No ordinary-append retry. */
+      expect(await settleHostlessSessionProjections()).toBe(incumbent ? 0 : 1);
+      legacy = false;
+      expect(await settleHostlessSessionProjections()).toBe(incumbent ? 1 : 0);
+      expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    } finally {
+      release();
+      await sweep;
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      setAgentRegistryForTests(null);
+      successor.kill();
+      await successor.exited;
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      journal.close();
+    }
+  });
+}
+
+test("the sweep settles an aliased journal row with no artifact path after its canonical owner dies", async () => {
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  const alias = `conversation_${randomUUID()}`;
+  const intermediate = `conversation_${randomUUID()}`;
+  const disk = JSON.parse(readFileSync(registry.filename, "utf8"));
+  disk.conversationAliases[alias] = intermediate;
+  disk.conversationAliases[intermediate] = fixture.id;
+  writeFileSync(registry.filename, JSON.stringify(disk));
+  const journal = new RuntimeJournal(join(directory, "alias.sqlite"), { structuredHosts: true });
+  const socketPath = join(directory, "alias.sock");
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(journal));
+  const real = new UnixRuntimeHostClient(socketPath);
+  journal.append({ scope: { type: "session", id: alias }, kind: "session-status",
+    producer: { kind: "codex-app-server", eventKey: "aliased-turn" }, payload: { ...sessions.get(fixture.id)!, conversationId: alias, artifactPath: null } });
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client: real, hostlessSettleIntervalMs: 0 });
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(journal.readSession({ conversationId: alias })).toMatchObject({ conversationId: alias, host: "dead", turn: "unknown", activeTurnId: null });
+    expect(journal.readSession({ conversationId: fixture.id })).toBeNull();
+    expect(await settleHostlessSessionProjections()).toBe(0);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    journal.close();
+  }
+});

@@ -127,7 +127,7 @@ test("uncertain liveness keeps turns counted, and only severed stages are discou
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 2, settled: 0 });
   // A headless reviewer its flow records keeps both, whatever the rest of the evidence says.
   p.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_gone", turn: "running", host: "hosted" }] }) as never;
-  p.turnLiveness = async () => ({ record: null, registryHost: GONE_HOST, headlessReviewerAlive: true });
+  p.turnLiveness = async () => ({ record: null, registryHost: GONE_HOST, headlessReviewerProcess: "alive" });
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 3, turns: 1 });
 });
 

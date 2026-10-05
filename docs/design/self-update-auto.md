@@ -325,7 +325,14 @@ Two consequences shape the rule:
    (`expectedSessionRevision`). The journal compares that revision inside the
    transaction that records the event and refuses a row that moved, so the
    new owner's `hosted`/`running` row and its active turn stay as written and
-   keep blocking the restart.
+   keep blocking the restart. Settlement uses `append-session-fenced`, an RPC
+   whose handler requires that revision and enforces it in the journal's
+   transaction. During web-first succession, an older runtime host rejects
+   the method and the sweep leaves the row as published. It retries after host
+   succession on the same socket; it never retries through ordinary `append`
+   or caches a capability across host generations.
+   Historical alias ids are read under their canonical owner's hostless proof,
+   so their journal rows settle even when they carry no artifact path.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -338,7 +345,12 @@ Two consequences shape the rule:
    conversation's host is alive, while a launch is inside its grace, while a
    process its registry row records still answers, and while the headless
    reviewer its flow round records answers under the exact start identity
-   saved there, with or without a transcript to read. A turn no process owns
+   saved there, with or without a transcript to read. A recorded pid that still
+   answers with an absent or unreadable start identity keeps the stage and
+   turn counted as `unproven`, including bound rounds. A missing pid adds no
+   process evidence to a bound conversation's verdict. Journal and flow owner
+   ids follow the same registry aliases, even when the journal has no artifact
+   path. A turn no process owns
    that did not settle (open, or with no readable turn state) releases the
    stage at once: nothing is left to finish it, and the engine replaces the
    attempt after the restart. That covers a host that is gone and a transcript

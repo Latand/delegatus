@@ -91,13 +91,20 @@ test("an event bound to a session revision is recorded only while the row still 
     /* A new owner publishes after the reading; the stale verdict is refused whole. */
     journal.append(status({ host: "hosted", turn: "running", activeTurnId: "turn-two" }));
     const seq = journal.publishedSeq();
-    expect(await host.handle({ id: "stale", method: "append", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, read.revision) } }))
+    expect(await host.handle({ id: "stale", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, read.revision) } }))
       .toMatchObject({ ok: false, error: "the session row changed after this event's writer read it" });
     expect(journal.publishedSeq()).toBe(seq);
     const current = journal.readSession({ conversationId: "conversation_fenced" })!;
     expect(current).toMatchObject({ host: "hosted", turn: "running", activeTurnId: "turn-two" });
     /* The same verdict against the row as it stands is recorded. */
-    expect(await host.handle({ id: "current", method: "append", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
+    /* The dedicated RPC cannot omit the fence or apply it to another scope. */
+    for (const event of [status({ host: "dead" }), status({ host: "dead" }, -1), status({ host: "dead" }, 1.5),
+      { ...status({ host: "dead" }, current.revision), scope: runtimeScope("system", "fence") },
+      { ...status({ host: "dead" }, current.revision), kind: "delta" }]) {
+      expect(await host.handle({ id: "invalid", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
+      expect(journal.publishedSeq()).toBe(seq);
+    }
+    expect(await host.handle({ id: "current", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
       .toMatchObject({ ok: true });
     expect(journal.readSession({ conversationId: "conversation_fenced" })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
     /* A row that does not exist, and a scope that holds no session row, have no revision to match. */

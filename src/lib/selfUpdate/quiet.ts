@@ -64,15 +64,16 @@ export const UNRESOLVED_TURN_GRACE_MS = STARTING_GRACE_MS;
  * `record` is the row `agent_activity` answers for the conversation, and
  * `registryHost` is the host its registry row names when there is no record to
  * read. Both come from one liveness reading, so the drain and `agent_activity`
- * cannot disagree about a dead host. `headlessReviewerAlive` is the reviewer
+ * cannot disagree about a dead host. `headlessReviewerProcess` is the reviewer
  * process a flow round records, which the registry row does not hold and a
- * record finds only through a transcript. `currentTurnIdle` is what a host in
- * this Viewer says about its own turn right now.
+ * record finds only through a transcript. Its `unproven` verdict keeps a
+ * recorded process protected until it is proven gone. `currentTurnIdle` is
+ * what a host in this Viewer says about its own turn right now.
  */
 export interface TurnEvidence {
   record: LivenessVerdict | null;
   registryHost?: ConversationRegistryHost | null;
-  headlessReviewerAlive?: boolean;
+  headlessReviewerProcess?: "alive" | "gone" | "unproven" | null;
   currentTurnIdle?: boolean;
 }
 export interface QuietPorts {
@@ -104,7 +105,7 @@ type TurnVerdict = "blocks" | "discounted" | "unresolved";
 function judgeTurn(evidence: TurnEvidence): TurnVerdict {
   // Current host work wins over transcript and registry evidence read before
   // a replacement host was admitted for this conversation.
-  if (evidence.currentTurnIdle === false || evidence.headlessReviewerAlive) return "blocks";
+  if (evidence.currentTurnIdle === false || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
   const { record, registryHost } = evidence;
   if (!record) {
     if (!registryHost) return "unresolved";
@@ -129,7 +130,7 @@ function judgeTurn(evidence: TurnEvidence): TurnVerdict {
  * holds for a bounded time.
  */
 function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settled" | "unresolved" {
-  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive || evidence.headlessReviewerAlive) return "blocks";
+  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
   const { record, registryHost } = evidence;
   if (record) {
     if (livenessRecordIsLive(record)) return "blocks";
@@ -153,7 +154,7 @@ function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settl
  * the process the round itself records: once that process is proven gone the
  * round has no owner, and the launch markers left beside it say nothing more.
  */
-function currentReviewRound(flow: Flow | undefined, attemptConversationId: string, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null } | "dispatching" | null {
+function currentReviewRound(flow: Flow | undefined, attemptConversationId: string | null, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null } | "dispatching" | "gone" | null {
   if (!flow || (flow.state !== "spawning" && flow.state !== "reviewing")) return null;
   const round = flow.rounds.at(-1);
   if (!round || round.verdict) return null;
@@ -161,7 +162,7 @@ function currentReviewRound(flow: Flow | undefined, attemptConversationId: strin
     return round.reviewerConversationId === attemptConversationId ? null
       : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
   }
-  if (reviewerProcess?.(round) === "gone") return null;
+  if (reviewerProcess?.(round) === "gone") return "gone";
   return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
     ? "dispatching" : null;
 }
@@ -229,13 +230,15 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
-      if (["running", "reviewing"].includes(cursor.state) && conversationId) {
-        const owners = [{ conversationId, artifactPath: attempt?.agentPath ?? null }];
+      if (["running", "reviewing"].includes(cursor.state)) {
+        const owners = conversationId ? [{ conversationId, artifactPath: attempt?.agentPath ?? null }] : [];
         const round = cursor.state === "reviewing" && attempt?.flowId
           ? currentReviewRound(flows.find((flow) => flow.id === attempt.flowId), conversationId, ports.reviewerProcess) : null;
-        if (round && round !== "dispatching") owners.push(round);
+        if (round && round !== "dispatching" && round !== "gone") owners.push(round);
         // Every owner is asked, so each unresolved one starts its bound now.
-        let released = round !== "dispatching";
+        // The first review attempt may have no binding yet. A proven-gone
+        // round releases it; absence of any owner evidence proves nothing.
+        let released = round !== "dispatching" && (owners.length > 0 || round === "gone");
         for (const owner of owners) {
           const reading = await evidence(owner);
           const verdict = reading ? judgeStageOwner(reading) : "blocks";

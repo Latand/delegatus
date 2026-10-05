@@ -348,3 +348,109 @@ test("a review round that names no conversation is held by the process it record
     expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject(released);
   } finally { saveFlows([]); journal.close(); child.kill(); await child.exited; }
 });
+
+// Independent identity-read and incomplete-binding attacks.
+for (const missingIdentity of [false, true]) {
+ test(`attack: a bound live headless round preserves its stage when identity ${missingIdentity ? 'was not saved' : 'cannot be read'}`, async () => {
+  const previous = ended("open");
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewerPath = transcript("open");
+  reviewFlow("flow_identity_gap", previous.artifactPath, "reviewing", {});
+  const flow = loadFlows()[0]!;
+  flow.implementerConversationId = previous.conversation.id;
+  const begun = reserveReviewerSpawn(flow, newRound(flow, "button", null), flow.roles.reviewer, "fixture", registry);
+  const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: randomUUID() }, artifactPath: reviewerPath,
+    cwd: directory, accountId: "fixture", status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  reviewFlow("flow_identity_gap", previous.artifactPath, "reviewing", { reviewerPath, reviewerConversationId: settled.conversation.id,
+    reviewerPid: identity.pid, reviewerIdentity: missingIdentity ? null : identity.startIdentity, sessionId: settled.entry.key.sessionId,
+    launchId: begun.receipt.launchId, spawnStartedAt: new Date().toISOString() });
+  const disk = JSON.parse(readFileSync(registry.filename, "utf8"));
+  disk.entries[`codex:${settled.entry.key.sessionId}`].updatedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  writeFileSync(registry.filename, JSON.stringify(disk));
+  rmSync(reviewerPath);
+  const p = { ...ports([], [lane("lane_identity_gap", "reviewing", { conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId: "flow_identity_gap" })]), flows: loadFlows };
+  if (!missingIdentity) {
+    const { turnEvidenceReader } = await import("./instance");
+    p.turnLiveness = turnEvidenceReader(() => { const sources = productionLivenessSources(); return { ...sources, probe: { ...sources.probe, processIdentity: (pid: number) => pid === child.pid ? null : sources.probe.processIdentity(pid) } }; });
+  }
+  try {
+    expect(Bun.spawnSync(["kill", "-0", String(child.pid)]).exitCode).toBe(0);
+    for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    }
+    /* Readable evidence of a replaced process releases the bound stage. */
+    const { turnEvidenceReader } = await import("./instance");
+    p.turnLiveness = turnEvidenceReader();
+    const changed = loadFlows()[0]!;
+    changed.rounds.at(-1)!.reviewerIdentity = `${identity.startIdentity}-replaced`;
+    saveFlows([changed]);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+    changed.rounds.at(-1)!.reviewerIdentity = missingIdentity ? null : identity.startIdentity;
+    saveFlows([changed]);
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally { saveFlows([]); child.kill(); await child.exited; }
+ });
+}
+
+test("attack: an aliased live headless owner without a journal artifact path protects its open turn", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = hosted("open", deadProcess);
+  const stored = registry.readOnlySnapshot().entries[`codex:${reviewer.key.sessionId}`]!;
+  registry.upsert({ ...stored, status: "starting", structuredHost: null, pendingAction: "spawn" });
+  const alias = `conversation_${randomUUID()}`;
+  const disk = JSON.parse(readFileSync(registry.filename, "utf8"));
+  disk.conversationAliases[alias] = reviewer.conversation.id;
+  disk.entries[`codex:${reviewer.key.sessionId}`].updatedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  writeFileSync(registry.filename, JSON.stringify(disk));
+  reviewFlow("flow_alias", reviewer.artifactPath, "reviewing", { reviewerConversationId: reviewer.conversation.id,
+    reviewerPath: reviewer.artifactPath, reviewerPid: identity.pid, reviewerIdentity: identity.startIdentity });
+  const aliased = {...row(reviewer, "hosted"), conversationId: alias, artifactPath: null, sessionKey: reviewer.key};
+  const journal = journalOf("alias", [aliased]);
+  const p = {...ports([]), runtimeSnapshot: async () => journal.snapshot()};
+  try {
+    rmSync(reviewer.artifactPath);
+    const direct = await p.turnLiveness!({conversationId: reviewer.conversation.id, artifactPath: reviewer.artifactPath}, {});
+    expect(direct.headlessReviewerProcess).toBe("alive");
+    const result = await probeQuiet(snapshot, p, Date.now(), true);
+    expect(result).toMatchObject({quiet:false, blockers:{turns:1}});
+    reviewFlow("flow_alias", reviewer.artifactPath, "reviewing", { reviewerConversationId: reviewer.conversation.id,
+      reviewerPath: reviewer.artifactPath, reviewerPid: identity.pid, reviewerIdentity: `${identity.startIdentity}-replaced` });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({quiet:true, blockers:{turns:0}});
+    reviewFlow("flow_alias", reviewer.artifactPath, "reviewing", { reviewerConversationId: reviewer.conversation.id,
+      reviewerPath: reviewer.artifactPath, reviewerPid: identity.pid, reviewerIdentity: identity.startIdentity });
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({quiet:true, blockers:{turns:0}});
+  } finally { child.kill(); await child.exited; journal.close(); saveFlows([]); }
+});
+
+test("the initial review round is judged on its process before the attempt has a conversation binding", async () => {
+  const previous = ended("open");
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const round = (pid: number | null, saved: string | null) => reviewFlow("flow_first_round", previous.artifactPath, "reviewing", {
+    reviewerConversationId: null, reviewerPath: null, reviewerPid: pid, reviewerIdentity: saved,
+    launchId: "first-round", spawnStartedAt: new Date().toISOString() });
+  const p = { ...ports([], [lane("lane_first_round", "reviewing", { conversationId: null, agentPath: null, flowId: "flow_first_round" })]), flows: loadFlows };
+  try {
+    for (const saved of [identity.startIdentity, null]) {
+      round(identity.pid, saved);
+      for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
+        expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+      }
+    }
+    for (const [pid, saved] of [[deadProcess.pid, deadProcess.startIdentity], [identity.pid, `${identity.startIdentity}-replaced`]] as const) {
+      round(pid, saved);
+      for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
+        expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+      }
+    }
+    round(null, null);
+    expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+  } finally { saveFlows([]); child.kill(); await child.exited; }
+});

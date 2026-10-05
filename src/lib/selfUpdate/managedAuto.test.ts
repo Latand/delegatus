@@ -12,6 +12,7 @@ import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
 import { launchHoldRefusal } from "./launchHold";
+import { updateOperatorSettings } from "@/lib/operator/settings";
 import { UNRESOLVED_TURN_GRACE_MS } from "./quiet";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
@@ -1342,4 +1343,15 @@ test("a successful operator receipt predating the cohort cannot release its new 
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(id);
     expect(h.requests).toHaveLength(0);
   } finally { service.stop(); }
+});
+
+test("an update refusal names the live work in the operator's Ukrainian locale", () => {
+  const blocker = { turns: 2, stages: 3, busy: false, operatorActiveAt: null, unreadable: null, memoryMb: null };
+  try {
+    expect(updateOperatorSettings({ locale: "uk" })).not.toBeNull();
+    expect(launchHoldRefusal({ target: TARGET, since: "2026-01-01T00:00:00Z" }, blocker)).toMatchObject({
+      error: "Нові запуски призупинено: автоматичне оновлення чекає на завершення 2 активних ходів і 3 етапів пайплайнів",
+      waitingFor: "завершення 2 активних ходів і 3 етапів пайплайнів", blockers: blocker,
+    });
+  } finally { updateOperatorSettings({ locale: "en" }); }
 });

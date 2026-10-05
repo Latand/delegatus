@@ -579,6 +579,13 @@ function hostlessConversations(snapshot: RegistryFile): Map<string, { key: strin
       || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) continue;
     hostless.set(conversation.id, { key, endedAt: entry.updatedAt });
   }
+  /* Journal rows keep the id their writer knew, including aliases made by a
+     later conversation migration. Read each historical id under the same
+     canonical owner's proof, even when the row has no artifact path. */
+  for (const alias of Object.keys(snapshot.conversationAliases)) {
+    const owner = hostless.get(resolveConversationAlias(snapshot, alias as `conversation_${string}`));
+    if (owner) hostless.set(alias, owner);
+  }
   return hostless;
 }
 
@@ -1252,7 +1259,7 @@ export async function bindStructuredDeliveryQueue(
       && current.artifactPath === payload.artifactPath
       && current.activeTurnId === null) return;
     projectionRevision += 1;
-    await client.append({
+    const event: RuntimeEventInput = {
       scope: { type: "session", id: conversationId },
       kind: "session-status",
       producer: {
@@ -1260,8 +1267,12 @@ export async function bindStructuredDeliveryQueue(
         eventKey: `projection:${projectionEpoch}:${projectionRevision}`,
       },
       payload,
-      ...(expectedSessionRevision === undefined ? {} : { expectedSessionRevision }),
-    });
+    };
+    if (expectedSessionRevision === undefined) await client.append(event);
+    else {
+      if (!client.appendSessionFenced) throw new Error("runtime host session fence is unavailable");
+      await client.appendSessionFenced({ ...event, expectedSessionRevision });
+    }
   };
   const refreshCurrentProjection = async (conversationId: string | null): Promise<void> => {
     const republished = await republishCurrentHosts();
@@ -1299,11 +1310,14 @@ export async function bindStructuredDeliveryQueue(
      is read again after the session row, and the write names the revision of
      the session row it read, which the journal compares in the transaction
      that records it. A row that gained an owner, or a session row that moved,
-     is left to the next sweep. */
+     is left to the next sweep. The write uses a dedicated fenced RPC: a host
+     from before this fence rejects it, so a new web generation never settles
+     through an incumbent's ordinary append. After host succession the next
+     sweep retries through the same socket, with no cached capability verdict. */
   const settledRows = new Map<string, { endedAt: string; sweep: number }>();
   let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
-    if (superseded()) return 0;
+    if (superseded() || !client.appendSessionFenced) return 0;
     const registrySnapshot = registry.readOnlySnapshot();
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
