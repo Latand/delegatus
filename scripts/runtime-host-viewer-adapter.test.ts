@@ -16,6 +16,7 @@ import {
   serveMcpHealthProbeAdmissionChannel,
 } from "../src/runtime-host/mcpHealthProbeAdmissionChannel";
 import { probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
+import { mcpLauncherImports } from "../src/runtime-host/mcpRuntimeRelease";
 import { RuntimeHostFence } from "../src/runtime-host/runtimeHostFence";
 import { HostCommandViewerDeploymentAdapter } from "../src/runtime-host/deploymentAdapter";
 import { serveRuntimeHost } from "../src/runtime-host/socket";
@@ -1021,7 +1022,7 @@ function successorPackage(prefix: string, options: { revision: string; bundle?: 
   fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
   fs.mkdirSync(state, { recursive: true });
   fs.copyFileSync(path.join(root, "bin", "mcp-server.mjs"), path.join(packageRoot, "bin", "mcp-server.mjs"));
-  for (const name of ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"]) {
+  for (const name of mcpLauncherImports(path.join(root, "bin"))) {
     fs.copyFileSync(path.join(root, "bin", name), path.join(packageRoot, "bin", name));
   }
   if (options.bundle === undefined) fs.copyFileSync(path.join(root, "dist", "mcp-server.mjs"), path.join(packageRoot, "dist", "mcp-server.mjs"));

@@ -2,7 +2,7 @@
 # Request a durable production Viewer deployment from runtime-host.
 #
 # This is the whole release command, run from any checkout of the repository
-# (a worktree is fine). It reads nothing from the working tree and moves
+# (a worktree is fine). It builds nothing from the working tree and moves
 # nothing in it: the request names a revision, and the runtime host builds that
 # revision from its own canonical Git mirror of the same remote.
 set -euo pipefail
@@ -14,6 +14,11 @@ LLV_DEPLOY_REVISION="${DELEGATUS_DEPLOY_REVISION:-${LLV_DEPLOY_REVISION:-}}"
 LLV_DEPLOY_IDEMPOTENCY_KEY="${DELEGATUS_DEPLOY_IDEMPOTENCY_KEY:-${LLV_DEPLOY_IDEMPOTENCY_KEY:-}}"
 
 PORT="${PORT:-8898}"
+if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "${#PORT}" -gt 5 ] || (( 10#$PORT < 1 || 10#$PORT > 65535 )); then
+  echo "invalid deployment listener port" >&2
+  exit 1
+fi
+HTTP_CLIENT="$(cd -- "$(dirname -- "$0")" && pwd)/rebuild-http.ts"
 CANONICAL_REMOTE="${LLV_VIEWER_CANONICAL_REMOTE:-https://github.com/Latand/delegatus.git}"
 
 usage() {
@@ -90,7 +95,7 @@ BODY="$(bun -e 'const [revision, idempotencyKey] = process.argv.slice(1); proces
 # had started. A request whose response never arrives is the one case where the
 # key still has to be shown: that request may have been admitted, and the key
 # is what claims its receipt.
-if ! response="$(curl -sS --max-time 125 -H 'content-type: application/json' -d "$BODY" -w $'\n%{http_code}' "${BASE}/api/runtime/deployments")"; then
+if ! response="$(printf '%s' "$BODY" | bun "$HTTP_CLIENT" "${BASE}/api/runtime/deployments" request)"; then
   printf 'deployment request did not complete; it may still have been admitted — rerun with LLV_DEPLOY_IDEMPOTENCY_KEY=%q scripts/rebuild.sh %q to claim the original receipt\n' "$IDEMPOTENCY_KEY" "$REVISION" >&2
   exit 1
 fi
@@ -122,7 +127,7 @@ fi
 
 echo "deployment admitted: $deployment_id"
 while :; do
-  if status_json="$(curl -fsS --max-time 10 "${BASE}/api/runtime/deployments/${deployment_id}" 2>/dev/null)"; then
+  if status_json="$(bun "$HTTP_CLIENT" "${BASE}/api/runtime/deployments/${deployment_id}" status </dev/null)"; then
     read -r phase terminal error < <(bun -e 'const x=JSON.parse(process.argv[1]); console.log(x.phase, x.terminal ? "1" : "0", JSON.stringify(x.error || ""))' "$status_json")
     echo "deployment phase: $phase"
     if [ "$terminal" = "1" ]; then
@@ -133,6 +138,11 @@ while :; do
       printf '%s' "$status_json" | bun "$(dirname "$0")/deployment-failure-report.ts" >&2 || true
       exit 1
     fi
+  else
+    status_code=$?
+    # Succession gaps retry, while a redirect or an authentication refusal is
+    # permanent for this invocation. Neither may forward a control credential.
+    [ "$status_code" = "3" ] && exit 1
   fi
   sleep 1
 done
