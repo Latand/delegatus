@@ -299,6 +299,7 @@ test("the transcript's own record is adopted into the row the operator already h
     /* One message, one row, one copy — at every single instant. */
     expect(step.rows).toBe(1);
     expect(step.bubbles).toBe(1);
+    expect(step.row!.closest("[data-own-message]")).not.toBeNull();
     /* The SAME nodes: React never replaced the row or the body inside it. */
     expect(step.row).toBe(first.row);
     expect(step.bubble).toBe(first.bubble);
@@ -749,13 +750,13 @@ const projectReceipt = async (id: string, operationId: string, status: "queued" 
   if (patch) await settle(() => updateOutbox(CARD, id, patch));
 };
 
-test("a document's record lands in its row while the provenance read is still open", async () => {
+test.each(["Summarise the release notes and flag anything that blocks the rollout.", ""])(
+  "a document's record lands in its row while the provenance read is still open (%s)", async (words) => {
   const host = document.createElement("div");
   document.body.append(host);
   const root: Root = createRoot(host);
   const provenance = holdProvenance();
   const submittedAt = Date.now();
-  const words = "Summarise the release notes and flag anything that blocks the rollout.";
   enqueueOutbox(CARD, { id: "key-document", text: words, images: 0, files: 1, at: submittedAt });
   updateOutbox(CARD, "key-document", { state: "delivering" });
   await settle(() => root.render(feedOnly()));
@@ -787,13 +788,51 @@ test("a document's record lands in its row while the provenance read is still op
   expect(after.bubbleClass).toBe(before.bubbleClass);
   expect(after.position).toBe(before.position);
   expect(after.phase).toBe("confirmed");
-  /* The row keeps the operator's own words; the paths stay in the record. */
-  expect(after.bubble!.textContent).toContain(words);
-  expect(after.bubble!.textContent).not.toContain("release-notes.pdf");
+  /* A generated file path never supplies words the operator typed. */
+  expect(host.querySelectorAll("[data-own-message]")).toHaveLength(words ? 1 : 0);
+  if (words) {
+    expect(after.bubble!.textContent).toContain(words);
+    expect(after.bubble!.textContent).not.toContain("release-notes.pdf");
+  }
   /* Every committed state in between: one copy, and the original row. */
   for (const state of watch.seen) expect(state).toEqual({ bubbles: 1, attached: true });
   await act(async () => root.unmount());
   host.remove();
+});
+
+test("a document-only record above the page keeps the authored-text exclusion after remount", async () => {
+  const host = document.createElement("div");
+  const mount = document.createElement("div");
+  document.body.append(host, mount);
+  let root = createRoot(host);
+  holdProvenance();
+  const submittedAt = Date.now();
+  enqueueOutbox(CARD, { id: "key-document-only", text: "", images: 0, files: 1, at: submittedAt });
+  await projectReceipt("key-document-only", "operation-document-only", "delivered", submittedAt + 1000);
+  const documentLine = codexStructuredUserLine(new Date(submittedAt + 3000).toISOString(),
+    "/var/tmp/llv-evidence-home/.claude/viewer-inbox/files/4d2a1f7c9b03/release-notes.pdf",
+    deliveryDedupToken("operation-document-only"));
+  lines = [
+    ...Array.from({ length: 3 }, (_, index) => codexStructuredUserLine(new Date(submittedAt - 10000 + index * 1000).toISOString(), `Typed message ${index}`)),
+    documentLine,
+    ...Array.from({ length: 400 }, (_, index) => codexAgentLine(new Date(submittedAt + 4000 + index * 1000).toISOString(), `Agent reply ${index}`)),
+  ];
+  const pane = () => <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} compact stepsMount={mount} />;
+  try {
+    await settle(() => root.render(pane()));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+    expect(host.querySelectorAll("[data-own-message]")).toHaveLength(0);
+    expect(mount.querySelector('[data-own-step-control="count"]')?.textContent).toBe("3 / 3");
+    /* Reopen with the retained submission evidence, and a fresh row index. */
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await settle(() => root.render(pane()));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+    expect(mount.querySelector('[data-own-step-control="count"]')?.textContent).toBe("3 / 3");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove(); mount.remove();
+  }
 });
 
 test("an image-only record lands in its row and keeps its place while the read is open", async () => {
@@ -809,6 +848,7 @@ test("an image-only record lands in its row and keeps its place while the read i
   await projectReceipt("key-image-only", "operation-image-only", "delivered", submittedAt + 1_000);
   const before = messageRows(host);
   expect(before).toHaveLength(1);
+  expect(host.querySelectorAll("[data-own-message]")).toHaveLength(0);
   const watch = watchMutations(host, () => before[0]!.row);
 
   /* A native Codex user item: the picture, and a text part that is only the
@@ -844,6 +884,7 @@ test("an image-only record lands in its row and keeps its place while the read i
   const kinds = [...host.querySelectorAll("[data-feed-kind]")].map((row) => row.getAttribute("data-feed-kind"));
   const messageAt = after[0]!.position;
   /* Exactly one copy of the picture, and it sits below the message. */
+  expect(host.querySelectorAll("[data-own-message]")).toHaveLength(0);
   const attachments = kinds.filter((kind) => kind === "image");
   expect(attachments).toHaveLength(1);
   expect(kinds.indexOf("image")).toBeGreaterThan(messageAt);

@@ -1206,6 +1206,7 @@ function mountLongHistory(root: HTMLElement): void {
    the reading a scroll frame takes. */
 interface OwnStepsControls {
   keyboard: (px: number) => void;
+  settleSenders: () => void;
   arrive: (kind: OwnStepsArrival, count: number) => void;
   /** Median and mean ms of one reading across `runs` places in the feed, and
       how many selector passes over the feed those readings made. */
@@ -1258,11 +1259,44 @@ function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; su
 function mountOwnMessageSteps(root: HTMLElement): void {
   const lang = params.get("lang") === "uk" ? "uk" : "en";
   const days = Math.max(1, Number(params.get("days") ?? 1));
+  const claude = params.get("engine") === "claude";
   const first = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
+  const messages: Record<string, { origin: "operator" | "agent" }> = {};
+  if (claude) {
+    const converted: string[] = [];
+    let loadedFrom = 0;
+    for (const [index, line] of first.lines.entries()) {
+      if (index === first.loadedFrom) loadedFrom = converted.length;
+      const record = JSON.parse(line);
+      if (record.payload?.role === "user") {
+        const text = record.payload.content[0].text as string;
+        const uuid = ["8a4e7610", "1c2d", "4e3f", "9a5b", index.toString(16).padStart(12, "0")].join("-");
+        messages[uuid] = { origin: text.includes("origin=operator") ? "operator" : "agent" };
+        converted.push(JSON.stringify({ type: "user", uuid, timestamp: record.timestamp, promptSource: "sdk",
+          message: { role: "user", content: text.replace(/<!-- llv:structured-user[^>]*-->\n?/, "") } }));
+      } else if (record.payload?.type === "agent_message") {
+        converted.push(JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+          message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }));
+      }
+    }
+    first.lines = converted;
+    first.loadedFrom = loadedFrom;
+  }
   const all = [...first.lines];
   for (let day = 1; day < days; day += 1) all.push(...ownStepsTranscript(lang, OWN_STEPS_TOTAL, day).lines);
+  const trailing = Number(params.get("trailing") ?? 0);
+  for (const line of ownStepsArrival(lang, "replies", trailing, 0)) {
+    const record = JSON.parse(line);
+    all.push(claude ? JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }) : line);
+  }
   const olderLatency = Number(params.get("older") ?? 40);
-  let start = days > 1 ? 0 : first.loadedFrom;
+  let start = params.has("tailOnly") ? all.length - trailing : params.has("full") || days > 1 ? 0 : first.loadedFrom;
+  const trimLimit = Number(params.get("cap") ?? 0);
+  let capped = true;
+  let sendersSettled = false;
+  const heldSender = Object.keys(messages).find((id) => messages[id]!.origin === "operator"
+    && first.lines.slice(first.loadedFrom).some((line) => line.includes(id)));
   let arrivals = 0;
   let prependGen = 0;
   let loadingOlder = false;
@@ -1282,8 +1316,12 @@ function mountOwnMessageSteps(root: HTMLElement): void {
     return take;
   };
   (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps = {
+    settleSenders: () => { sendersSettled = true; },
     arrive: (kind, count) => {
       all.push(...ownStepsArrival(lang, kind, count, arrivals += 1));
+      /* Model useLogTail's append cap: prepends survive only after the feed
+         releases its magnet and passes cap=0 to the hook. */
+      if (trimLimit && capped) start = Math.max(start, all.length - trimLimit);
       announce();
     },
     readCost: (runs) => {
@@ -1317,18 +1355,33 @@ function mountOwnMessageSteps(root: HTMLElement): void {
   };
   setRuntimeUiEnabledForTests(false);
   setLogFeedDependenciesForTests({
-    useLogTail: () => useSyncExternalStore(
-      (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-      read,
-      read,
-    ),
+    useLogTail: (_file, _paused, cap) => {
+      capped = Boolean(cap);
+      return useSyncExternalStore(
+        (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        read,
+        read,
+      );
+    },
     ownMessageSteps: params.get("row") !== "0",
   });
   installFakeComposerHost();
+  if (claude) {
+    const transport = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (!url.startsWith("/api/log/provenance")) return transport(input, init);
+      await new Promise((resolve) => setTimeout(resolve, Number(params.get("ledger") ?? 2500)));
+      const answered = { ...messages };
+      if (params.has("partial") && !sendersSettled && heldSender) delete answered[heldSender];
+      return Response.json({ messages: answered });
+    }) as typeof fetch;
+  }
   const file = {
-    ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
+    ...((claude ? LIFE_CLAUDE_FILE : LIFE_CODEX_FILE) as unknown as Record<string, unknown>),
     title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
-    model: "gpt-6.1-sol",
+    model: claude ? "claude" : "gpt-6.1-sol",
+    userAuthored: true,
     activity: "idle",
     mtime: Math.floor(Date.now() / 1000) - 120,
   } as unknown as FileEntry;

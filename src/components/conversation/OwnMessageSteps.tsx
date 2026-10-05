@@ -142,7 +142,7 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   const settled = useRef<{ identity: string | null; total: number; olderUnloaded: boolean; offered: boolean } | null>(null);
   const frame = useRef(0);
   const landing = useRef(0);
-  const olderWait = useRef<number | null>(null);
+  const olderWait = useRef<{ until: number; sendersSince: number | null } | null>(null);
 
   const subscribe = useCallback((listener: () => void) => {
     const { listeners } = store.current;
@@ -220,7 +220,8 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     else if (direction < 0 && hasOlder(reading)) {
       /* The message before this one is in history the feed has not put on
          the page: ask for it, and finish the step when it is there. */
-      olderWait.current = performance.now() + OLDER_WAIT_MS;
+      now.markReaderScroll(-1);
+      olderWait.current = { until: performance.now() + OLDER_WAIT_MS, sendersSince: null };
       now.revealOlder();
     }
   }, [land]);
@@ -258,7 +259,17 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     const now = live.current;
     const scroller = now.scroller.current;
     if (olderWait.current === null || !scroller) return;
-    if (performance.now() > olderWait.current) { olderWait.current = null; return; }
+    /* A prepended Claude page may not have its operator bubbles until the
+       ledger answers. Its bounded retries can outlast the history deadline,
+       so that wait spends none of the time reserved for fetching pages. */
+    const wait = olderWait.current;
+    const time = performance.now();
+    if (now.sendersPending) { wait.sendersSince ??= time; return; }
+    if (wait.sendersSince !== null) {
+      wait.until += time - wait.sendersSince;
+      wait.sendersSince = null;
+    }
+    if (time > wait.until) { olderWait.current = null; return; }
     const { rows, reading } = readFeed(scroller, now);
     const target = stepTarget(reading, -1);
     if (target !== null) {
@@ -278,9 +289,9 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   return { shown, step, release, subscribe, read };
 }
 
-const STEP_BUTTON = "inline-flex h-full min-w-11 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[8px] px-2 text-label font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40";
+const STEP_BUTTON = "inline-flex h-full min-w-11 items-center justify-center gap-1 rounded-[8px] text-label font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40";
 
-function StepButton({ direction, state, onStep }: { direction: -1 | 1; state: StepState; onStep: (direction: -1 | 1) => void }) {
+function StepButton({ direction, state, onStep, phone }: { direction: -1 | 1; state: StepState; onStep: (direction: -1 | 1) => void; phone: boolean }) {
   const { t } = useLocale();
   const Icon = direction < 0 ? ChevronUp : ChevronDown;
   const label = t(direction < 0 ? "feed.ownPrevious" : "feed.ownNext");
@@ -291,11 +302,13 @@ function StepButton({ direction, state, onStep }: { direction: -1 | 1; state: St
       aria-label={label}
       title={`${label} · ${direction < 0 ? "Alt+↑" : "Alt+↓"}`}
       disabled={direction < 0 ? !state.canPrev : !state.canNext}
-      className={STEP_BUTTON}
+      className={`${STEP_BUTTON} ${phone ? "flex-1 px-1" : "shrink-0 whitespace-nowrap px-2"}`}
       onClick={() => onStep(direction)}
     >
       <Icon className="h-3.5 w-3.5" aria-hidden />
-      {t(direction < 0 ? "feed.ownPreviousShort" : "feed.ownNextShort")}
+      <span className={phone ? "min-w-0 whitespace-normal break-words leading-3" : undefined}>
+        {t(direction < 0 ? "feed.ownPreviousShort" : "feed.ownNextShort")}
+      </span>
     </button>
   );
 }
@@ -316,17 +329,17 @@ export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; 
       className={`box-content flex shrink-0 items-center border-t border-border ${phone ? "h-11 px-1" : "h-9 justify-center px-2"}`}
     >
       {phone ? <span aria-hidden className="h-11 w-11 shrink-0" /> : null}
-      <div className={`flex h-full items-center justify-center gap-1 ${phone ? "min-w-0 flex-1" : ""}`}>
-        <StepButton direction={-1} state={state} onStep={steps.step} />
+      <div className={`flex h-full items-center justify-center ${phone ? "min-w-0 flex-1 gap-0.5" : "gap-1"}`}>
+        <StepButton direction={-1} state={state} onStep={steps.step} phone={phone} />
         <span
           data-own-step-control="count"
           aria-label={t(state.olderUnloaded ? "feed.ownCountOlder" : "feed.ownCount", { position: state.position, total: state.total })}
           title="Alt+↑ / Alt+↓"
-          className={`shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-muted ${phone ? "px-1" : "px-2"}`}
+          className={`shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-muted ${phone ? "px-0" : "px-2"}`}
         >
           {stepCountLabel(state)}
         </span>
-        <StepButton direction={1} state={state} onStep={steps.step} />
+        <StepButton direction={1} state={state} onStep={steps.step} phone={phone} />
       </div>
       {phone ? <span className="flex h-11 w-11 shrink-0 items-center justify-center">{wayBack}</span> : null}
     </div>

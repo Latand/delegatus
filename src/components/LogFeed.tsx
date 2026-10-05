@@ -1777,25 +1777,39 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      (docs/design/own-message-steps.md). A delivered Claude record is a system
      row until the ledger names its sender, so while one is unanswered the
      count is not final. */
-  const sendersPending = useMemo(() => visibleItems.some(({ item }) => item.kind === "sysmsg"
+  const sendersPending = useMemo(() => feed.items.some(({ item }) => item.kind === "sysmsg"
     && Boolean(item.deliveredMessage?.engineMessageId)
     && !provenanceLookup.forItem(item)
-    && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [visibleItems, provenanceLookup]);
+    && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [feed.items, provenanceLookup]);
   const stepsHost = file && logFeedDependencies().ownMessageSteps ? stepsMount : null;
   /* The page shows the last rows of what is loaded, and that window slides
      on while the agent works. The own messages above it are counted from
      their records, by the verdict that marks a row on the page, so neither
      the count nor the row depends on how much history is on the page. */
   const mandateRecord = holdsMandate && heldMandate ? firstMandateRecord : null;
+  const submittedMessages = useMemo(() => new Map(outbox.map((entry) => [entry.id, entry])), [outbox]);
+  /* The transcript of a file-only send can contain a generated inbox path.
+     Where its submission still supplies the authored text, use that same
+     evidence on the page and above it. Older unproven bubbles inherit the
+     feed's verdict, as the design's known limits describe. */
+  const ownRecord = useCallback((item: FeedSnapshot["items"][number]["item"], sourceId: string): boolean => {
+    if (item === mandateRecord) return false;
+    const kind = resolveDeliveredItem(item, provenanceLookup).kind;
+    if (kind === "voice") return true;
+    if (kind !== "user") return false;
+    const bound = echoBindings.get(transcriptEchoObservationId({ generation: transcriptGeneration ?? undefined, id: sourceId, text: "" }));
+    const entry = bound ? submittedMessages.get(bound) : undefined;
+    return entry ? Boolean(entry.text.trim()) : true;
+  }, [mandateRecord, provenanceLookup, echoBindings, transcriptGeneration, submittedMessages]);
   const ownBeforePage = useMemo(() => {
     if (!stepsHost || !hiddenLocal) return 0;
     let own = 0;
     for (let index = 0; index < hiddenLocal; index += 1) {
-      const item = feed.items[index]!.item;
-      if (item !== mandateRecord && resolveDeliveredItem(item, provenanceLookup).kind === "user") own += 1;
+      const { item, anchorKey, key } = feed.items[index]!;
+      if (ownRecord(item, anchorKey ?? `key:${key}`)) own += 1;
     }
     return own;
-  }, [stepsHost, hiddenLocal, feed.items, mandateRecord, provenanceLookup]);
+  }, [stepsHost, hiddenLocal, feed.items, ownRecord]);
   const ownSteps = useOwnMessageSteps({
     scroller,
     mount: stepsHost,
@@ -2091,7 +2105,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
-                    data-own-message=""
+                    /* Attachment-only submissions draw a generated caption;
+                       only words the operator sent make this row a step. */
+                    data-own-message={(row.entry ? row.entry.text.trim() : row.canonical?.text.trim()) ? "" : undefined}
                     className={rowsSkipOffscreen ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
@@ -2126,7 +2142,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   data-feed-kind={row.live ? undefined : item.kind}
                   /* A step of the own-message row: what the feed draws as the
                      operator's bubble, whatever the record parsed as. */
-                  data-own-message={!row.live && resolveDeliveredItem(item, provenanceLookup).kind === "user" ? "" : undefined}
+                  data-own-message={!row.live && ownRecord(item, anchorKey ?? `key:${row.key}`) ? "" : undefined}
                   data-live-turn={row.live ? "" : undefined}
                   data-live-turn-item-id={row.live?.itemId ?? undefined}
                   data-tts-answer-index={speechIndex}

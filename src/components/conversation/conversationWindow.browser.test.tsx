@@ -2307,6 +2307,9 @@ describe("own-message step row", () => {
           await press(1);
           now = await measure(page, 0);
           if (position(now) !== position(stepped) + 1) fail("forward", `position ${position(now)} after ${position(stepped)}`);
+          const draft = "one\ntwo\nthree\nfour\nfive\nsix";
+          await page.locator("textarea").first().fill(draft);
+          await page.locator("textarea").first().evaluate((field) => { (field as HTMLTextAreaElement).setSelectionRange(5, 5); });
           await page.locator("textarea").first().focus();
           await page.keyboard.press("Alt+ArrowUp");
           await settled();
@@ -2316,6 +2319,12 @@ describe("own-message step row", () => {
           await settled();
           now = await measure(page, 0);
           if (position(now) !== position(stepped) + 1) fail("keys", `Alt+ArrowDown left the position at ${position(now)}`);
+          expect(await page.locator("textarea").first().inputValue()).toBe(draft);
+          expect(await page.locator("textarea").first().evaluate((field) => {
+            const input = field as HTMLTextAreaElement;
+            return [input.selectionStart, input.selectionEnd, document.activeElement === input];
+          })).toEqual([5, 5, true]);
+          await page.locator("textarea").first().fill("");
           await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
           /* All the way back. A step back from the oldest loaded message asks
@@ -2374,8 +2383,8 @@ describe("own-message step row", () => {
   }, 1_800_000);
 
   type Page = import("playwright-core").Page;
-  type Controls = { arrive: (kind: "work" | "replies" | "turn", count: number) => void };
-  const arrive = (page: Page, kind: "work" | "replies" | "turn", count: number) =>
+  type Controls = { arrive: (kind: "work" | "replies" | "turn" | "voice", count: number) => void };
+  const arrive = (page: Page, kind: "work" | "replies" | "turn" | "voice", count: number) =>
     page.evaluate(({ kind, count }) => (window as unknown as { ownSteps: Controls }).ownSteps.arrive(kind, count), { kind, count });
   const countOf = (page: Page) => page.locator('[data-own-step-control="count"]').textContent({ timeout: 1_000 }).catch(() => null);
   /** Where the feed is: how far from its end, whether it shows its way back,
@@ -2622,4 +2631,179 @@ describe("own-message step row", () => {
       served.stop();
     }
   }, 900_000);
+
+  browserTest("late senders, older history under append and voice turns are own-message steps", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const failures: string[] = [];
+    const sizes = [
+      { name: "desktop", width: 1440, height: 900, phone: false },
+      { name: "phone", width: 390, height: 844, phone: true },
+    ];
+    try {
+      for (const size of sizes) {
+        const open = (query: string) => openFixture(browser, `${served.base}?case=own-message-steps${query}`, size, "dark", "en", "reduce", size.phone);
+        const lands = size.phone ? 0 : 8;
+        /* Every loaded record counts toward pending, even above the first
+           sixty rows or above the page. A partial answer keeps waiting. */
+        for (const scenario of ["visible", "above-page", "partial", "full"]) {
+          const query = `&engine=claude&ledger=${scenario === "partial" ? 200 : 2500}&trailing=${scenario === "above-page" ? 400 : 100}${scenario === "partial" ? "&partial=1" : ""}${scenario === "full" ? "&full=1" : ""}`;
+          const { context, page, pageErrors } = await open(query);
+          const samples: unknown[] = [];
+          try {
+            for (let sample = 0; sample < 8; sample += 1) {
+              await page.waitForTimeout(250);
+              const now = await place(page);
+              samples.push(now);
+              if (now.count !== null) failures.push(`${size.name} ${scenario}: premature count ${now.count}`);
+            }
+            if (scenario === "partial") {
+              const own = await page.locator("[data-own-message]").count();
+              if (own < 2) failures.push(`${size.name} partial: no resolved bubbles to exercise the count`);
+              await page.evaluate(() => (window as unknown as { ownSteps: { settleSenders(): void } }).ownSteps.settleSenders());
+            }
+            const wanted = scenario === "full" ? "9 / 9" : "7 / 7+";
+            await page.waitForFunction((wanted) => document.querySelector('[data-own-step-control="count"]')?.textContent === wanted, wanted, { timeout: 8000 }).catch(() => undefined);
+            const after = await place(page);
+            if (after.count !== wanted) failures.push(`${size.name} ${scenario}: settled count ${after.count}`);
+            evidence[`senders-${size.name}-${scenario}`] = { samples, after };
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        /* From a tail with no own rows, release the cap before asking for
+           history. Appending during the load must retain the reply. */
+        for (const engine of ["codex", "claude"]) {
+          const { context, page, pageErrors } = await open(`&engine=${engine}&tailOnly=1&trailing=150&cap=150&older=600&ledger=300`);
+          try {
+            await page.locator('[data-own-step-control="previous"]').waitFor();
+            await page.waitForTimeout(650);
+            await page.locator('[data-own-step-control="previous"]').click();
+            await page.waitForTimeout(60);
+            const immediately = await place(page);
+            if (immediately.wayBack !== 1) failures.push(`${size.name} ${engine}: no way back before the older page`);
+            for (let append = 0; append < 6; append += 1) {
+              // The cap fixture's records are Codex arrivals; exercise the
+              // real append boundary on Codex and the ledger boundary on Claude.
+              if (engine === "codex") await arrive(page, "replies", 1);
+              await page.waitForTimeout(250);
+            }
+            await page.waitForTimeout(800);
+            const after = await place(page);
+            if (after.count !== "9 / 9") failures.push(`${size.name} ${engine}: older count ${after.count}`);
+            if (after.nearestOwnTop === null || Math.abs(after.nearestOwnTop - lands) > 2) failures.push(`${size.name} ${engine}: first press landed ${after.nearestOwnTop}`);
+            const reply = await page.evaluate(() => {
+              const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-own-message]"));
+              const last = rows.at(-1);
+              let reply = last?.nextElementSibling;
+              while (reply && !reply.matches('[data-feed-kind="prose"]')) reply = reply.nextElementSibling;
+              return reply?.textContent ?? "";
+            });
+            if (!reply.includes("Agreed: the search lane merges as soon as the browser check passes")) failures.push(`${size.name} ${engine}: the answer was trimmed: ${reply.slice(0, 80)}`);
+            evidence[`older-${size.name}-${engine}`] = { immediately, after, reply };
+            await page.screenshot({ path: path.join(OUT, `older-${size.name}-${engine}.png`) });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        const { context, page, pageErrors } = await open("");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(650);
+          await arrive(page, "voice", 1);
+          await arrive(page, "replies", 20);
+          await page.waitForTimeout(650);
+          const voice = page.locator('[data-feed-kind="voice"]');
+          if (await voice.getAttribute("data-own-message") === null) failures.push(`${size.name}: voice has no own-message marker`);
+          const atTail = await place(page);
+          if (atTail.count !== "8 / 8+") failures.push(`${size.name}: voice count ${atTail.count}`);
+          await page.locator('[data-own-step-control="previous"]').click();
+          await page.waitForTimeout(900);
+          const after = await place(page);
+          const voiceTop = await voice.evaluate((row) => row.getBoundingClientRect().top - document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect().top);
+          if (Math.abs(voiceTop - lands) > 2) failures.push(`${size.name}: voice landed ${voiceTop}`);
+          await page.screenshot({ path: path.join(OUT, `voice-${size.name}.png`) });
+          await page.locator('button:has([data-feed-jump-pill])').click();
+          await arrive(page, "work", 600);
+          await page.waitForTimeout(1000);
+          const abovePage = await place(page);
+          if (await voice.count() !== 0) failures.push(`${size.name}: voice did not move above the page`);
+          if (abovePage.count !== "8 / 8+") failures.push(`${size.name}: voice above-page count ${abovePage.count}`);
+          evidence[`voice-${size.name}`] = { atTail, after, voiceTop, abovePage };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close();
+      await server.close();
+      served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* The recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 180_000);
+
+
+  browserTest("long phone counts keep every control clear in both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    try {
+      for (const days of [25, 112]) for (const lang of LANGS) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-message-steps&days=${days}&lang=${lang}`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+        const readings: Record<string, unknown> = {};
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(900);
+          for (const moment of ["rest", "stepped", "draft", "keyboard"]) {
+            if (moment === "stepped") await page.locator('[data-own-step-control="previous"]').click();
+            if (moment === "draft") await page.locator("textarea").first().fill("one\ntwo\nthree\nfour\nfive\nsix");
+            if (moment === "keyboard") await page.evaluate((px) => (window as unknown as { ownSteps: { keyboard(px: number): void } }).ownSteps.keyboard(px), KEYBOARD_PX);
+            await page.waitForTimeout(650);
+            const reading = await measure(page, 0);
+            readings[moment] = reading;
+            expect(reading.count?.split(" / ")[1]).toBe(String(days * ALL_OWN));
+            expect(reading.row?.[3]).toBe(ROW_PX.phone);
+            expect(reading.overflowX).toBe(0);
+            if (moment !== "rest") expect(reading.controls.some((control) => control.name === "latest")).toBe(true);
+            for (const control of reading.controls) {
+              expect(control.hit).toBe(true);
+              expect(control.overlaps).toEqual([]);
+              expect(control.overFeed).toBe(false);
+              expect(control.insideWindow).toBe(true);
+              if (control.name !== "count") {
+                expect(control.box[2]).toBeGreaterThanOrEqual(44);
+                expect(control.box[3]).toBeGreaterThanOrEqual(44);
+              }
+            }
+            const labelsFit = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLButtonElement>('[data-own-step-control="previous"], [data-own-step-control="next"]')).every((button) => {
+              const text = button.lastElementChild as HTMLElement;
+              const inner = text.getBoundingClientRect();
+              const outer = button.getBoundingClientRect();
+              return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom
+                && text.scrollWidth <= text.clientWidth + 1 && text.scrollHeight <= text.clientHeight + 1;
+            }));
+            expect(labelsFit).toBe(true);
+            if (moment === "stepped") await page.screenshot({ path: path.join(OUT, `long-count-phone-${days}-${lang}.png`) });
+          }
+          evidence[`long-count-phone-${days}-${lang}`] = readings;
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 120_000);
+
 });

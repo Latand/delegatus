@@ -5,7 +5,7 @@
  * go to. Where a step lands and what the row costs the pane are measured in a
  * real browser by `conversationWindow.browser.test.tsx`.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -166,9 +166,10 @@ test("a step waiting for older history ends when something else moves the feed",
      message being read is 1000 px further down the page. */
   await act(async () => { previousOf("a").click(); });
   expect(reveals.a).toBe(1);
+  expect(reader.a).toEqual([-1]);
   scroller.scrollTop = 1000;
   await render({ id: "a", own: 3, olderUnloaded: true });
-  expect(reader.a).toEqual([-1]);
+  expect(reader.a).toEqual([-1, -1]);
   expect(scroller.scrollTop).toBe(0);
   /* The same wait, and the way back to the tail before the page arrives:
      the page changes nothing about where the reader is. */
@@ -177,7 +178,7 @@ test("a step waiting for older history ends when something else moves the feed",
   await act(async () => { releases.a!(); });
   scroller.scrollTop = 3000;
   await render({ id: "a", own: 4, olderUnloaded: true });
-  expect(reader.a).toEqual([-1]);
+  expect(reader.a).toEqual([-1, -1, -1]);
   expect(scroller.scrollTop).toBe(3000);
   /* A reader's own input on the feed ends it as well, trusted or not. */
   await scrollTo("a", 0);
@@ -186,7 +187,7 @@ test("a step waiting for older history ends when something else moves the feed",
   await act(async () => { scroller.dispatchEvent(new dom.Event("wheel") as unknown as Event); });
   scroller.scrollTop = 2500;
   await render({ id: "a", own: 5, olderUnloaded: true });
-  expect(reader.a).toEqual([-1]);
+  expect(reader.a).toEqual([-1, -1, -1, -1]);
   expect(scroller.scrollTop).toBe(2500);
 });
 
@@ -309,4 +310,26 @@ test("a field, a list or a dialog outside the pane keeps Alt+arrow for itself", 
   expect(reader.a).toEqual([-1]);
   (document.activeElement as unknown as HTMLElement | null)?.blur?.();
   expect((await pressKey("ArrowUp")).defaultPrevented).toBe(true);
+});
+
+
+test("a step from an empty tail waits through the older page's unread senders", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 0, olderUnloaded: true, operatorWrote: true, atTail: true });
+  await act(async () => { previousOf("a").click(); });
+  expect(reader.a).toEqual([-1]);
+  expect(reveals.a).toBe(1);
+  /* The last page arrived, but its Claude records await the ledger. */
+  await render({ id: "a", own: 0, pending: true, operatorWrote: true });
+  expect(reader.a).toEqual([-1]);
+  const scroller = feedOf("a");
+  scroller.scrollTop = 2500;
+  /* The ledger's 1.5 + 4 + 10 s revalidations exceed the page deadline. */
+  const later = performance.now() + 20_000;
+  const clock = spyOn(performance, "now").mockReturnValue(later);
+  try {
+    await render({ id: "a", own: 3, operatorWrote: true });
+    expect(scroller.scrollTop).toBe(2000);
+    expect(count("a")).toBe("3 / 3");
+  } finally { clock.mockRestore(); }
 });

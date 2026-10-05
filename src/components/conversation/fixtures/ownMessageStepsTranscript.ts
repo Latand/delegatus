@@ -165,17 +165,17 @@ export function ownStepsTranscript(lang: "en" | "uk", total: number = OWN_STEPS_
  * `replies` is `count` short answers and `turn` is one more message of the
  * operator's with its answer.
  */
-export type OwnStepsArrival = "work" | "replies" | "turn";
+export type OwnStepsArrival = "work" | "replies" | "turn" | "voice";
 export function ownStepsArrival(lang: "en" | "uk", kind: OwnStepsArrival, count: number, seq: number): string[] {
   const text = TEXT[lang];
   const lines: string[] = [];
   let clock = Date.parse("2026-11-01T06:00:00.000Z") + seq * 3_600_000;
   const at = () => new Date(clock += 1_000).toISOString();
   const agent = (body: string) => lines.push(JSON.stringify({ timestamp: at(), type: "event_msg", payload: { type: "agent_message", message: body } }));
-  if (kind === "turn") {
+  if (kind === "turn" || kind === "voice") {
     lines.push(JSON.stringify({
       timestamp: at(), type: "response_item",
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: `<!-- llv:structured-user origin=operator -->\n${text.own[seq % text.own.length]!}` }] },
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: kind === "voice" ? `<realtime_delegation><input>${text.own[seq % text.own.length]!}</input><transcript_delta>${text.own[seq % text.own.length]!}</transcript_delta></realtime_delegation>` : `<!-- llv:structured-user origin=operator -->\n${text.own[seq % text.own.length]!}` }] },
     }));
     agent(text.pipelineReply);
     return lines;
