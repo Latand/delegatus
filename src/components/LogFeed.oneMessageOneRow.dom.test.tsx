@@ -1383,3 +1383,56 @@ test("an unconfirmed context row offers only Check status", async () => {
   await act(async () => root.unmount());
   host.remove();
 });
+
+test.each(["wheel", "touch"])("forwarded suggestion %s releases an own-message landing", async (gesture) => {
+  const host = document.createElement("div");
+  const mount = document.createElement("div");
+  document.body.append(host, mount);
+  const root = createRoot(host);
+  serveProvenance({});
+  lines = Array.from({ length: 4 }, (_, index) => [
+    codexUserLine(new Date(1800000000000 + index * 2000).toISOString(), `Operator message ${index}`),
+    codexAgentLine(new Date(1800000001000 + index * 2000).toISOString(), `Reply ${index}`),
+  ]).flat();
+  try {
+    await settle(() => root.render(
+      <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false}
+        follow={false} setFollow={() => {}} stepsMount={mount} />,
+    ));
+    const scroller = host.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4008 });
+    const own = Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    expect(own).toHaveLength(4);
+    own.forEach((row, index) => {
+      row.getBoundingClientRect = () => ({
+        top: 8 + index * 1000 - scroller.scrollTop, bottom: 48 + index * 1000 - scroller.scrollTop,
+        left: 0, right: 0, width: 0, height: 40, x: 0, y: 0, toJSON: () => ({}),
+      });
+    });
+    scroller.scrollTop = 1500;
+    await settle(() => scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event));
+    await settle(() => mount.querySelector<HTMLButtonElement>('[data-own-step-control="previous"]')!.click());
+    expect(scroller.scrollTop).toBe(1000);
+    const overlay = scroller.previousElementSibling as HTMLElement;
+    expect(overlay.className).toContain("pointer-events-none");
+    await act(async () => {
+      if (gesture === "wheel") {
+        overlay.dispatchEvent(new dom.WheelEvent("wheel", { deltaY: -150, bubbles: true }) as unknown as Event);
+      } else {
+        for (const [type, clientY] of [["touchstart", 200], ["touchmove", 350]] as const) {
+          const event = new dom.Event(type, { bubbles: true });
+          Object.defineProperty(event, "touches", { value: [{ clientX: 100, clientY }] });
+          overlay.dispatchEvent(event as unknown as Event);
+        }
+      }
+      expect(scroller.scrollTop).toBe(850);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(scroller.scrollTop).toBe(850);
+    });
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    mount.remove();
+  }
+});

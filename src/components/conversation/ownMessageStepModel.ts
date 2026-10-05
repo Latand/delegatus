@@ -64,6 +64,10 @@ function firstPast(reading: StepReading, past: (top: number) => boolean): number
 /** An own message may exist before the first one on the page. */
 export const hasOlder = (reading: StepReading): boolean => reading.olderOwn > 0 || reading.olderUnloaded;
 
+/** A released feed still reads its last visible message at the physical end.
+    A followed phone feed can also rest short of that end (#1978). */
+const atEnd = (reading: StepReading) => reading.atTail || Math.abs(reading.maxScroll - reading.scrollTop) <= 1 || reading.maxScroll <= 0;
+
 /** Index of the own message a step lands on, or null when the page has none that way. */
 export function stepTarget(reading: StepReading, direction: -1 | 1): number | null {
   const anchor = reading.scrollTop + reading.pad;
@@ -73,7 +77,7 @@ export function stepTarget(reading: StepReading, direction: -1 | 1): number | nu
     return index < 0 ? null : index;
   }
   /* At the tail nothing below can come any closer to the reading line. */
-  if (reading.atTail) return null;
+  if (atEnd(reading)) return null;
   const index = firstPast(reading, (top) => top > anchor + STEP_SLACK_PX);
   return index === reading.count ? null : index;
 }
@@ -87,7 +91,7 @@ export function stepState(reading: StepReading): StepState {
   const anchor = reading.scrollTop + reading.pad;
   /* At the tail the last messages cannot reach the reading line, so the one
      being read is the last that has started anywhere on screen. */
-  const line = reading.atTail ? reading.scrollTop + reading.viewport - 1 : anchor + STEP_SLACK_PX;
+  const line = atEnd(reading) ? reading.scrollTop + reading.viewport - 1 : anchor + STEP_SLACK_PX;
   return {
     position: reading.olderOwn + firstPast(reading, (top) => top > line),
     total: reading.olderOwn + reading.count,

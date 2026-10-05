@@ -27,6 +27,12 @@ describe("own-message steps: the arithmetic", () => {
     expect(stepTarget(tail, -1)).toBe(3);
   });
 
+  test("the physical end reads the last visible own message while tail following is released", () => {
+    const end = reading(0, { tops: [113, 338], viewport: 600, maxScroll: 0 });
+    expect(stepState(end)).toMatchObject({ position: 2, total: 2, canPrev: false, canNext: false });
+    expect(stepTarget(end, 1)).toBeNull();
+  });
+
   test("the oldest loaded message has no previous unless older history is unloaded", () => {
     const oldest = reading(100 - STEP_PAD_PX);
     expect(stepState(oldest)).toMatchObject({ position: 1, canPrev: false, canNext: true });

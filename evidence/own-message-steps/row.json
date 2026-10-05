@@ -221,5 +221,56 @@
     "stepped": {"controls":[{"name":"previous","box":[49,696,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"count","box":[161.9,710.5,66.2,15],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"next","box":[230.1,696,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"latest","box":[341,696,44,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true}],"probes":{"header":[0,0,390,52],"title":[50,3.5,290,44],"feed":[1,57,388,638],"jump-pill":[347,702,32,32],"composer":[11,753,368,84],"field":[20,758,350,32],"header:button:Назад":[4,3.5,44,44],"header:button:Більше дій":[342,3.5,44,44],"tools:button:Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, low":[20,790,88,44],"tools:button:Режим контексту":[110,790,44,44],"tools:button:Додати файли або картинки":[156,790,44,44],"tools:button:Почати безперервну голосову розмову":[202,796,32,32],"tools:button:Надиктувати":[236,790,44,44],"tools:button:Надіслати агенту":[282,790,44,44],"tools:button:Дії відправки":[326,790,44,44]},"overflowX":0,"count":"1008 / 1008","row":[1,695,388,45],"own":22,"machine":90,"landedAt":1,"atFeedEnd":false,"replyOnScreen":true,"jumpStrips":0},
     "draft": {"controls":[{"name":"previous","box":[49,586,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"count","box":[161.9,600.5,66.2,15],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"next","box":[230.1,586,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"latest","box":[341,586,44,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true}],"probes":{"header":[0,0,390,52],"title":[50,3.5,290,44],"feed":[1,57,388,528],"jump-pill":[347,592,32,32],"composer":[11,643,368,194],"field":[20,648,350,142],"header:button:Назад":[4,3.5,44,44],"header:button:Більше дій":[342,3.5,44,44],"tools:button:Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, low":[20,790,88,44],"tools:button:Режим контексту":[110,790,44,44],"tools:button:Додати файли або картинки":[156,790,44,44],"tools:button:Почати безперервну голосову розмову":[202,796,32,32],"tools:button:Надиктувати":[236,790,44,44],"tools:button:Надіслати агенту":[282,790,44,44],"tools:button:Дії відправки":[326,790,44,44]},"overflowX":0,"count":"1008 / 1008","row":[1,585,388,45],"own":22,"machine":90,"landedAt":1,"atFeedEnd":false,"replyOnScreen":true,"jumpStrips":0},
     "keyboard": {"controls":[{"name":"previous","box":[49,250,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"count","box":[161.9,264.5,66.2,15],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"next","box":[230.1,250,110.9,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true},{"name":"latest","box":[341,250,44,44],"hit":true,"overlaps":[],"overFeed":false,"insideWindow":true}],"probes":{"header":[0,0,390,52],"title":[50,3.5,290,44],"feed":[1,57,388,192],"jump-pill":[347,256,32,32],"composer":[11,307,368,194],"field":[20,312,350,142],"header:button:Назад":[4,3.5,44,44],"header:button:Більше дій":[342,3.5,44,44],"tools:button:Модель і міркування — застосується до наступного повідомлення — GPT-6.1-Sol, low":[20,454,88,44],"tools:button:Режим контексту":[110,454,44,44],"tools:button:Додати файли або картинки":[156,454,44,44],"tools:button:Почати безперервну голосову розмову":[202,460,32,32],"tools:button:Надиктувати":[236,454,44,44],"tools:button:Надіслати агенту":[282,454,44,44],"tools:button:Дії відправки":[326,454,44,44]},"overflowX":0,"count":"1008 / 1008","row":[1,249,388,45],"own":22,"machine":90,"landedAt":1,"atFeedEnd":false,"replyOnScreen":true,"jumpStrips":0}
+  },
+  "empty-step-desktop-1440-en-1": {
+    "before": {"count":"1 / 1+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":446},
+    "after": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":482},
+    "replies": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":65}
+  },
+  "empty-step-desktop-1440-en-2": {
+    "before": {"count":"2 / 2+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":293},
+    "after": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":293},
+    "replies": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":29}
+  },
+  "empty-step-desktop-1440-uk-1": {
+    "before": {"count":"1 / 1+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":446},
+    "after": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":482},
+    "replies": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":65}
+  },
+  "empty-step-desktop-1440-uk-2": {
+    "before": {"count":"2 / 2+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":313},
+    "after": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":312},
+    "replies": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":48}
+  },
+  "empty-step-phone-390-en-1": {
+    "before": {"count":"1 / 1+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":351},
+    "after": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":351},
+    "replies": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":-326}
+  },
+  "empty-step-phone-390-en-2": {
+    "before": {"count":"2 / 2+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":114},
+    "after": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":114},
+    "replies": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":-326}
+  },
+  "empty-step-phone-390-uk-1": {
+    "before": {"count":"1 / 1+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":351},
+    "after": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":351},
+    "replies": {"count":null,"row":0,"toEnd":0,"wayBack":0,"nextDisabled":null,"nearestOwnTop":-326}
+  },
+  "empty-step-phone-390-uk-2": {
+    "before": {"count":"2 / 2+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":114},
+    "after": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":114},
+    "replies": {"count":"2 / 2","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":-326}
+  },
+  "empty-step-deadline-desktop-1440": {
+    "expired": {"count":"0 / 0+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":null},
+    "restoredAfterMs": 18675,
+    "replies": {"count":"0 / 0+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":null}
+  },
+  "empty-step-deadline-phone-390": {
+    "expired": {"count":"0 / 0+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":null},
+    "restoredAfterMs": 18758,
+    "replies": {"count":"0 / 0+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":null},
+    "latePage": {"count":"0 / 0+","row":1,"toEnd":0,"wayBack":0,"nextDisabled":true,"nearestOwnTop":null}
   }
 }

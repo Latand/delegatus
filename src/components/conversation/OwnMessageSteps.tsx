@@ -48,6 +48,8 @@ export interface OwnStepsFeed {
   revision: unknown;
   /** The scroll that follows is the reader's, in this direction. */
   markReaderScroll: (direction: -1 | 1) => void;
+  /** Resume the tail after an empty step that started there. */
+  restoreTail: () => void;
   revealOlder: () => void;
 }
 
@@ -106,9 +108,12 @@ interface KeyTarget { root: () => HTMLElement | null; step: (direction: -1 | 1) 
 const keyTargets = new Set<KeyTarget>();
 const onScreen = (root: HTMLElement | null): root is HTMLElement =>
   Boolean(root?.isConnected && root.getClientRects().length && !root.closest("[hidden], [inert]"));
+export function isOwnMessageStepKey(event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey">): boolean {
+  return event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    && (event.key === "ArrowUp" || event.key === "ArrowDown");
+}
 function onStepKey(event: KeyboardEvent): void {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  if (!isOwnMessageStepKey(event) || event.defaultPrevented) return;
   const visible = [...keyTargets].filter((target) => onScreen(target.root()));
   const focused = document.activeElement;
   const nowhere = !focused || focused === document.body || focused === document.documentElement;
@@ -144,7 +149,8 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   const settled = useRef<{ identity: string | null; total: number; olderUnloaded: boolean; offered: boolean } | null>(null);
   const frame = useRef(0);
   const landing = useRef(0);
-  const olderWait = useRef<{ until: number; sendersSince: number | null } | null>(null);
+  const olderWait = useRef<{ identity: string | null; until: number; sendersSince: number | null; restoreTail: boolean } | null>(null);
+  const olderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const subscribe = useCallback((listener: () => void) => {
     const { listeners } = store.current;
@@ -178,7 +184,32 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   const release = useCallback(() => {
     landing.current += 1;
     olderWait.current = null;
+    if (olderTimer.current !== null) clearTimeout(olderTimer.current);
+    olderTimer.current = null;
   }, []);
+
+  const finishEmptyStep = useCallback(() => {
+    const wait = olderWait.current;
+    const restore = wait?.identity === live.current.identity && wait?.restoreTail;
+    release();
+    if (restore) live.current.restoreTail();
+    schedule();
+  }, [release, schedule]);
+
+  /* A failed read may never change the rows again. The deadline must end the
+     wait without relying on another history revision to drive an effect. */
+  const armOlderDeadline = useCallback(() => {
+    if (olderTimer.current !== null) clearTimeout(olderTimer.current);
+    olderTimer.current = null;
+    const wait = olderWait.current;
+    if (!wait || wait.sendersSince !== null) return;
+    olderTimer.current = setTimeout(() => {
+      olderTimer.current = null;
+      if (olderWait.current !== wait) return;
+      if (live.current.sendersPending) { wait.sendersSince ??= performance.now(); return; }
+      finishEmptyStep();
+    }, Math.max(0, wait.until - performance.now()));
+  }, [finishEmptyStep]);
 
   /* Puts `row` on the reading line and keeps it there while the rows around
      it settle, letting go the moment anything else moves the feed. */
@@ -202,6 +233,7 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
       }
       /* A message that cannot reach the line ends at the tail, and the tail
          is the feed's own to hold. */
+      if (landing.current === token && exact >= reading.maxScroll && !now.atTail) now.restoreTail();
       return landing.current === token && exact < reading.maxScroll;
     };
     if (!place()) return;
@@ -217,16 +249,21 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     if (!scroller || !now.mount) return;
     const { rows, reading } = readFeed(scroller, now);
     const target = stepTarget(reading, direction);
-    olderWait.current = null;
+    /* A disabled direction also does nothing through its shortcut. In
+       particular it must leave an older-history wait free to finish. */
+    if (target === null && (direction > 0 || !hasOlder(reading))) return;
+    const restoreTail = now.atTail || (olderWait.current?.identity === now.identity && olderWait.current?.restoreTail === true);
+    release();
     if (target !== null) land(rows[target]!);
     else if (direction < 0 && hasOlder(reading)) {
       /* The message before this one is in history the feed has not put on
          the page: ask for it, and finish the step when it is there. */
       now.markReaderScroll(-1);
-      olderWait.current = { until: performance.now() + OLDER_WAIT_MS, sendersSince: null };
+      olderWait.current = { identity: now.identity, until: performance.now() + OLDER_WAIT_MS, sendersSince: null, restoreTail };
+      armOlderDeadline();
       now.revealOlder();
     }
-  }, [land]);
+  }, [land, release, armOlderDeadline]);
 
   useEffect(() => {
     const scroller = live.current.scroller.current;
@@ -234,12 +271,21 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     const resize = new ResizeObserver(schedule);
     resize.observe(scroller);
     scroller.addEventListener("scroll", schedule, { passive: true });
-    for (const type of RELEASING_INPUTS) scroller.addEventListener(type, release, { passive: true });
+    const releaseForInput = (event: Event) => {
+      /* The pane's shortcut runs later on window. Preserve its pending walk
+         until step() can retain ownership or leave a disabled direction alone. */
+      if (event.type === "keydown") {
+        const key = event as KeyboardEvent;
+        if (isOwnMessageStepKey(key) || ["Alt", "Control", "Meta", "Shift"].includes(key.key)) return;
+      }
+      release();
+    };
+    for (const type of RELEASING_INPUTS) scroller.addEventListener(type, releaseForInput, { passive: true });
     schedule();
     return () => {
       resize.disconnect();
       scroller.removeEventListener("scroll", schedule);
-      for (const type of RELEASING_INPUTS) scroller.removeEventListener(type, release);
+      for (const type of RELEASING_INPUTS) scroller.removeEventListener(type, releaseForInput);
       if (frame.current) cancelAnimationFrame(frame.current);
       frame.current = 0;
       release();
@@ -266,20 +312,20 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
        so that wait spends none of the time reserved for fetching pages. */
     const wait = olderWait.current;
     const time = performance.now();
-    if (now.sendersPending) { wait.sendersSince ??= time; return; }
+    if (now.sendersPending) { wait.sendersSince ??= time; armOlderDeadline(); return; }
     if (wait.sendersSince !== null) {
       wait.until += time - wait.sendersSince;
       wait.sendersSince = null;
     }
-    if (time > wait.until) { olderWait.current = null; return; }
+    if (time >= wait.until) { finishEmptyStep(); return; }
     const { rows, reading } = readFeed(scroller, now);
     const target = stepTarget(reading, -1);
     if (target !== null) {
-      olderWait.current = null;
+      release();
       land(rows[target]!);
-    } else if (hasOlder(reading)) now.revealOlder();
-    else olderWait.current = null;
-  }, [enabled, feed.revision, feed.atTail, feed.olderOwn, feed.olderUnloaded, feed.operatorWrote, feed.sendersPending, feed.identity, feed.phone, schedule, land]);
+    } else if (hasOlder(reading)) { armOlderDeadline(); now.revealOlder(); }
+    else finishEmptyStep();
+  }, [enabled, feed.revision, feed.atTail, feed.olderOwn, feed.olderUnloaded, feed.operatorWrote, feed.sendersPending, feed.identity, feed.phone, schedule, land, release, finishEmptyStep, armOlderDeadline]);
 
   const shown = enabled && offered !== null && offered.identity === feed.identity && offered.offered;
   const mount = feed.mount;
@@ -297,13 +343,27 @@ function StepButton({ direction, state, onStep, phone }: { direction: -1 | 1; st
   const { t } = useLocale();
   const Icon = direction < 0 ? ChevronUp : ChevronDown;
   const label = t(direction < 0 ? "feed.ownPrevious" : "feed.ownNext");
+  const button = useRef<HTMLButtonElement | null>(null);
+  const focused = useRef(false);
+  const disabled = direction < 0 ? !state.canPrev : !state.canNext;
+  /* Browsers drop a newly disabled button's focus onto body. Keep it in
+     this pane so Alt+arrow still has an owner when several panes are open. */
+  useLayoutEffect(() => {
+    const element = button.current;
+    if (disabled && focused.current && element && (document.activeElement === element || document.activeElement === document.body)) {
+      element.closest<HTMLElement>("[data-own-steps]")?.focus({ preventScroll: true });
+    }
+  }, [disabled]);
   return (
     <button
+      ref={button}
       type="button"
       data-own-step-control={direction < 0 ? "previous" : "next"}
       aria-label={label}
       title={`${label} · ${direction < 0 ? "Alt+↑" : "Alt+↓"}`}
-      disabled={direction < 0 ? !state.canPrev : !state.canNext}
+      disabled={disabled}
+      onFocus={() => { focused.current = true; }}
+      onBlur={(event) => { if (!event.currentTarget.disabled || event.relatedTarget) focused.current = false; }}
       className={`${STEP_BUTTON} ${phone ? "flex-1 px-1" : "shrink-0 whitespace-nowrap px-2"}`}
       onClick={() => onStep(direction)}
     >
@@ -328,6 +388,7 @@ export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; 
   return (
     <div
       data-own-steps
+      tabIndex={-1}
       className={`box-content flex shrink-0 items-center border-t border-border ${phone ? "h-11 px-1" : "h-9 justify-center px-2"}`}
     >
       {phone ? <span aria-hidden className="h-11 w-11 shrink-0" /> : null}

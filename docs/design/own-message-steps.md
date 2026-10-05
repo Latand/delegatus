@@ -83,6 +83,14 @@ step back disabled. A step that is waiting for that history ends, like a
 landing, the moment anything else moves the feed, so a late page never pulls
 the reader away from where they went meanwhile.
 
+When a step that started at the tail ends without a landing (no earlier own
+message, a failed read or the page deadline), the feed resumes holding its
+tail if the reader has left it alone. The deadline runs even when history
+produces no further update. Sender resolution pauses that deadline. At the
+physical end, the count still reads the last own message visible there while
+tail following is temporarily released. A step button that becomes disabled
+keeps focus in the step row, so the pane still owns its Alt+arrow keys.
+
 At the tail the last messages cannot reach the reading line, so the one being
 read is the last that has started on screen and there is no next. "At the
 tail" is the feed's own state: a phone feed that follows the tail rests up to

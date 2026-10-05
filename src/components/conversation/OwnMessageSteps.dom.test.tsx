@@ -46,6 +46,7 @@ const reader: Record<string, number[]> = {};
 const reveals: Record<string, number> = {};
 const releases: Record<string, () => void> = {};
 const feedRenders: Record<string, number> = {};
+const restored: Record<string, number> = {};
 /** A pane's layout: its own messages `gap` px apart, the first one a landing's
     gap under the top, in a feed `viewport` px tall. Without one a pane has
     happy-dom's boxes, all zeros. */
@@ -60,6 +61,7 @@ function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderU
     scroller, mount, identity, phone: false, atTail, olderOwn, olderUnloaded, operatorWrote, sendersPending: pending,
     revision: `${own}:${pending}:${olderOwn}`,
     markReaderScroll: (direction) => { (reader[id] ??= []).push(direction); },
+    restoreTail: () => { restored[id] = (restored[id] ?? 0) + 1; },
     revealOlder: () => { reveals[id] = (reveals[id] ?? 0) + 1; },
   });
   useLayoutEffect(() => { frameAtCommit?.(); });
@@ -114,7 +116,7 @@ afterEach(async () => {
   await act(async () => { root?.unmount(); });
   root = null;
   document.body.innerHTML = "";
-  for (const record of [reader, reveals, releases, feedRenders, geometry]) for (const key of Object.keys(record)) delete record[key];
+  for (const record of [reader, reveals, releases, feedRenders, geometry, restored]) for (const key of Object.keys(record)) delete record[key];
 });
 
 const feedOf = (id: string) => host().querySelector(`[data-pane="${id}"] > div`) as HTMLElement;
@@ -127,7 +129,16 @@ async function scrollTo(id: string, top: number): Promise<void> {
 }
 const pressKey = async (key: "ArrowUp" | "ArrowDown", target?: HTMLElement) => {
   const event = new dom.KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true });
-  await act(async () => { if (target) target.dispatchEvent(event as unknown as Event); else dom.dispatchEvent(event); });
+  await act(async () => {
+    const modifier = new dom.KeyboardEvent("keydown", { key: "Alt", altKey: true, bubbles: true });
+    if (target) {
+      target.dispatchEvent(modifier as unknown as Event);
+      target.dispatchEvent(event as unknown as Event);
+    } else {
+      dom.dispatchEvent(modifier);
+      dom.dispatchEvent(event);
+    }
+  });
   return event;
 };
 
@@ -215,6 +226,99 @@ test("the way back to the tail lets go of a landing that is still being held", a
   scroller.scrollTop = 3500;
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
   expect(scroller.scrollTop).toBe(3500);
+});
+
+test("an empty step returns the tail when history ends with one or two own messages on screen", async () => {
+  geometry.a = { gap: 100, viewport: 500 };
+  for (const own of [1, 2]) {
+    await render({ id: "a", own, olderUnloaded: true, atTail: true });
+    await act(async () => { previousOf("a").click(); });
+    await render({ id: "a", own, atTail: false });
+    expect(restored.a).toBe(own);
+    expect(count("a")).toBe(own === 1 ? null : "2 / 2");
+    if (own === 2) {
+      expect(previousOf("a").disabled).toBe(true);
+      expect((host().querySelector('[data-pane="a"] [data-own-step-control="next"]') as HTMLButtonElement).disabled).toBe(true);
+    }
+  }
+});
+
+test("an empty step's deadline restores the tail even without another history revision", async () => {
+  await render({ id: "a", own: 0, olderUnloaded: true, operatorWrote: true, atTail: true });
+  const timers: (() => void)[] = [];
+  const nativeTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+    if (ms >= 14_000) { timers.push(callback); return 0; }
+    return nativeTimeout(callback, ms);
+  }) as typeof setTimeout);
+  try {
+    await act(async () => { previousOf("a").click(); });
+    expect(timers).toHaveLength(1);
+    const clock = spyOn(performance, "now").mockReturnValue(performance.now() + 16_000);
+    try { await act(async () => { timers[0]!(); }); } finally { clock.mockRestore(); }
+    expect(restored.a).toBe(1);
+  } finally { timer.mockRestore(); }
+});
+
+test("a reader's input cancels an empty step's return to the tail", async () => {
+  geometry.a = { gap: 100, viewport: 500 };
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true });
+  await act(async () => { previousOf("a").click(); });
+  await act(async () => { feedOf("a").dispatchEvent(new dom.Event("wheel") as unknown as Event); });
+  await render({ id: "a", own: 2 });
+  expect(restored.a).toBeUndefined();
+});
+
+test.each(["window", "feed"])("Alt+down from %s with no next leaves the empty step's tail return intact", async (source) => {
+  geometry.a = { gap: 100, viewport: 500 };
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true });
+  for (const element of host().querySelectorAll("section")) (element as HTMLElement).getClientRects = () => [{}] as unknown as DOMRectList;
+  await act(async () => { previousOf("a").click(); });
+  await pressKey("ArrowDown", source === "feed" ? feedOf("a") : undefined);
+  await render({ id: "a", own: 2 });
+  expect(restored.a).toBe(1);
+});
+
+test("repeating Previous during an empty wait retains the original tail ownership", async () => {
+  geometry.a = { gap: 100, viewport: 500 };
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true });
+  await act(async () => { previousOf("a").click(); });
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: false });
+  await act(async () => { previousOf("a").click(); });
+  await render({ id: "a", own: 2 });
+  expect(restored.a).toBe(1);
+});
+
+test("a deadline between commit and passive effects cannot restore a different conversation", async () => {
+  await render({ id: "a", own: 0, olderUnloaded: true, operatorWrote: true, atTail: true });
+  const timers: (() => void)[] = [];
+  const nativeTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+    if (ms >= 14_000) { timers.push(callback); return 0; }
+    return nativeTimeout(callback, ms);
+  }) as typeof setTimeout);
+  try {
+    await act(async () => { previousOf("a").click(); });
+    expect(timers).toHaveLength(1);
+    frameAtCommit = () => { frameAtCommit = null; timers[0]!(); };
+    await render({ id: "a", own: 3, identity: "other" });
+    expect(restored.a).toBeUndefined();
+  } finally { frameAtCommit = null; timer.mockRestore(); }
+});
+
+test("a button disabled by an empty step keeps Alt+arrow in its pane", async () => {
+  geometry.a = { gap: 100, viewport: 500 };
+  geometry.b = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 2, olderUnloaded: true, atTail: true }, { id: "b", own: 3 });
+  for (const element of host().querySelectorAll("section")) (element as HTMLElement).getClientRects = () => [{}] as unknown as DOMRectList;
+  previousOf("a").focus();
+  await act(async () => { previousOf("a").click(); });
+  await render({ id: "a", own: 2 }, { id: "b", own: 3 });
+  expect(document.activeElement?.hasAttribute("data-own-steps")).toBe(true);
+  await scrollTo("a", 100);
+  expect((await pressKey("ArrowUp")).defaultPrevented).toBe(true);
+  expect(reader.a).toEqual([-1, -1]);
+  expect(reader.b).toBeUndefined();
 });
 
 test("a scroll redraws the row and never the feed that holds it", async () => {

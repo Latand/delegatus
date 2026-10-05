@@ -24,7 +24,7 @@ import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from 
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
-import { OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
+import { isOwnMessageStepKey, OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -1057,7 +1057,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const request = {};
       olderRequestRef.current = request;
       void tail.loadOlder().then((added) => {
-        if (historyOwnerRef.current === owner && added > 0) {
+        if (historyOwnerRef.current === owner && added > 0 && !magnetRef.current) {
           growVisibleBy(revealStep, true);
         }
       }).finally(() => {
@@ -1769,6 +1769,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const forwardPillVerticalDelta = (row: HTMLElement | null, deltaY: number): void => {
     const el = scroller.current;
     if (!el || !deltaY || (row && canScrollVertically(row, deltaY))) return;
+    releaseOwnStep.current();
     markUserScroll(deltaY);
     el.scrollTop += deltaY;
   };
@@ -1822,6 +1823,23 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     sendersPending,
     revision: conversationRows,
     markReaderScroll: markUserScroll,
+    restoreTail: () => {
+      /* The abandoned step no longer needs to reveal more rows. A slow ramp
+         must not keep prepending after the tail has been restored. */
+      rampTargetRef.current = null;
+      if (rampHandleRef.current !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rampHandleRef.current);
+        else clearTimeout(rampHandleRef.current);
+        rampHandleRef.current = null;
+      }
+      /* The history request's upward tag has no gesture behind it. Retiring
+         it prevents a late layout scroll from releasing the restored tail. */
+      scrollCauseRef.current = { kind: "programmatic" };
+      gestureRestPending.current = false;
+      readerAnchor.current = null;
+      setMagnet(true);
+      glue();
+    },
     revealOlder: () => revealOlder("explicit"),
   });
   const releaseStep = ownSteps.release;
@@ -1953,6 +1971,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
+          if (isOwnMessageStepKey(event)) return;
           if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);

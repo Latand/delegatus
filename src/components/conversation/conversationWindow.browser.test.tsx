@@ -2188,12 +2188,13 @@ describe("own-message step row", () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
     const served = await serveEvidenceFixture(OUT, FIXTURE);
-    let browser: Browser | undefined;
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
     const failures: string[] = [];
     const evidence: Record<string, Record<string, unknown>> = {};
     const totals: Record<string, { readings: number; hitTestPasses: number; intersections: number; overFeed: number; outsideWindow: number; underSize: number; undeclaredChanges: number }> = {};
     try {
-      browser = await chromium.launch(LAUNCH);
       for (const viewport of VIEWPORTS) for (const lang of LANGS) {
         const where = `${viewport.name}-${lang}`;
         const query = `case=own-message-steps&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}&surface=${viewport.surface}`;
@@ -2377,8 +2378,10 @@ describe("own-message step row", () => {
       writeEvidence({ totals, ...evidence });
       expect(failures).toEqual([]);
     } finally {
-      await browser?.close();
-      served.stop();
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
     }
   }, 1_800_000);
 
@@ -2405,10 +2408,115 @@ describe("own-message step row", () => {
     };
   });
 
+  browserTest("empty steps return an untouched tail and its last visible own message", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    try {
+      for (const size of [
+        { name: "desktop-1440", width: 1440, height: 900, phone: false },
+        { name: "phone-390", width: 390, height: 844, phone: true },
+      ]) for (const lang of LANGS) for (const turns of [1, 2]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=own-message-steps&lang=${lang}&own=0&trailing=150&tailOnly=1&row=1`, size, "dark", lang, "reduce", size.phone);
+        try {
+          await page.locator("[data-log-feed-scroller]").waitFor();
+          for (let turn = 0; turn < turns; turn += 1) await arrive(page, "turn", 1);
+          await page.locator('[data-own-step-control="previous"]').waitFor();
+          await page.waitForTimeout(650);
+          const before = await place(page);
+          expect(before.count).toBe(`${turns} / ${turns}+`);
+          const previous = page.locator('[data-own-step-control="previous"]');
+          if (size.phone) await previous.tap(); else await previous.click();
+          await page.waitForTimeout(650);
+          const after = await place(page);
+          expect(after.wayBack).toBe(0);
+          expect(after.toEnd).toBe(0);
+          expect(after.count).toBe(turns === 1 ? null : "2 / 2");
+          if (turns === 2) {
+            expect(await previous.isDisabled()).toBe(true);
+            expect(after.nextDisabled).toBe(true);
+            if (!size.phone) expect(await page.evaluate(() => document.activeElement?.hasAttribute("data-own-steps"))).toBe(true);
+          }
+          await arrive(page, "replies", 6);
+          await page.waitForTimeout(650);
+          const replies = await place(page);
+          expect(replies.toEnd).toBe(0);
+          expect(replies.wayBack).toBe(0);
+          evidence[`empty-step-${size.name}-${lang}-${turns}`] = { before, after, replies };
+          await page.screenshot({ path: path.join(OUT, `empty-step-${size.name}-${lang}-${turns}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      /* A slow page need not produce another revision before the deadline.
+         On the phone also exercise the long reply interval under CPU 4x. */
+      for (const size of [
+        { name: "desktop-1440", width: 1440, height: 900, phone: false },
+        { name: "phone-390", width: 390, height: 844, phone: true },
+      ]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=own-message-steps&own=0&trailing=${size.phone ? 4000 : 150}&tailOnly=1&older=30000`, size, "dark", "en", "reduce", size.phone);
+        try {
+          if (size.phone) await (await context.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          await page.locator('[data-own-step-control="previous"]').waitFor();
+          await page.waitForTimeout(650);
+          const previous = page.locator('[data-own-step-control="previous"]');
+          if (size.phone) await previous.tap(); else await previous.click();
+          await page.waitForTimeout(100);
+          /* Shortcuts from a control inside the scroller must retain the
+             original tail ownership through a repeat and a disabled direction. */
+          await page.locator("[data-log-feed-scroller] button").last().focus();
+          expect(await page.evaluate(() => document.querySelector("[data-log-feed-scroller]")!.contains(document.activeElement))).toBe(true);
+          await page.keyboard.press("Alt+ArrowUp");
+          await page.keyboard.press("Alt+ArrowDown");
+          const waitStarted = await page.evaluate(() => performance.now());
+          await page.waitForTimeout(18_000);
+          /* CPU throttling can leave a commit in flight when the timer is
+             due. Read the settled result; it must arrive within the review's
+             forty-second observation window even through that long frame. */
+          await page.waitForFunction(() => !document.querySelector("[data-feed-jump-pill]"), undefined, { timeout: 20_000 });
+          await page.waitForTimeout(650);
+          const expired = await place(page);
+          const restoredAfterMs = Math.round(await page.evaluate(() => performance.now()) - waitStarted);
+          expect(restoredAfterMs).toBeLessThanOrEqual(40_000);
+          evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs };
+          writeEvidence(evidence);
+          await page.screenshot({ path: path.join(OUT, `empty-step-deadline-${size.name}.png`) });
+          expect({ scenario: size.name, ...expired }).toMatchObject({ wayBack: 0, toEnd: 0 });
+          await arrive(page, "replies", 6);
+          await page.waitForTimeout(1000);
+          const replies = await place(page);
+          expect(replies.wayBack).toBe(0);
+          expect(replies.toEnd).toBe(0);
+          evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs, replies };
+          if (size.phone) {
+            await page.waitForTimeout(13_000);
+            const latePage = await place(page);
+            expect(latePage.wayBack).toBe(0);
+            expect(latePage.toEnd).toBe(0);
+            evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs, replies, latePage };
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 120_000);
+
   browserTest("the row holds through a long turn, a way back mid-step, the phone's resting tail and arriving rows", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     const served = await serveEvidenceFixture(OUT, FIXTURE);
-    let browser: Browser | undefined;
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
     const failures: string[] = [];
     const evidence: Record<string, Record<string, unknown>> = {};
     const SIZES = [
@@ -2416,7 +2524,6 @@ describe("own-message step row", () => {
       { name: "phone-390", width: 390, height: 844, phone: true },
     ] as const;
     try {
-      browser = await chromium.launch(LAUNCH);
       const open = (query: string, size: { width: number; height: number }, lang: "en" | "uk", phone: boolean) =>
         openFixture(browser!, `${served.base}?case=own-message-steps&lang=${lang}${query}`, size, "dark", lang, "reduce", phone);
       const ready = async (page: Page) => {
@@ -2627,8 +2734,10 @@ describe("own-message step row", () => {
       writeEvidence(evidence);
       expect(failures).toEqual([]);
     } finally {
-      await browser?.close();
-      served.stop();
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
     }
   }, 900_000);
 
