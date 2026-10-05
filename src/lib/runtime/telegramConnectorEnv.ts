@@ -4,6 +4,7 @@ import { telegramMcpUrl } from "@/lib/telegram/packaging";
 /** Refuses a new launch that asked for the tool; operator-facing, so plain. */
 export const TELEGRAM_LAUNCH_UNAVAILABLE = "Telegram is not connected, so an agent that needs the Telegram tool cannot start. Reconnect Telegram, or start the agent without it.";
 export const TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH = "telegram MCP grant was revoked before launch";
+export const TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH = "telegram MCP orchestrator seat is no longer active";
 /** The one line a relaunched agent reads when its run starts without the tool. */
 export const TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE = "The Telegram tool is unavailable in this run because the operator's Telegram connection is off; it returns on the next start after Telegram is reconnected.";
 

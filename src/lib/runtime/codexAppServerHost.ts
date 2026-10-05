@@ -1536,9 +1536,15 @@ export class CodexAppServerHost implements EngineHost {
           : { sandbox: options.sandbox ?? "read-only" }),
         approvalPolicy: options.approvalPolicy ?? "never",
       };
+      /* A new thread reads its developer instructions as it builds its first
+         context. A resumed thread keeps the context it already has and sends
+         the model only what changed, so there the line goes into its history
+         below, where the next turn reads it. An engine too old to take a
+         history item still gets the instructions. */
+      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory();
       /* The thread parameter replaces the account's own developer
          instructions, so the notice is added to them. */
-      const runNotice = telegram.unavailable
+      const runNotice = telegram.unavailable && !noticeIntoHistory
         ? {
           developerInstructions: [
             typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
@@ -1584,6 +1590,9 @@ export class CodexAppServerHost implements EngineHost {
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
       await provisional.initializeNativeQueue();
+      /* Before the queue's head can start a turn, so the first turn of this
+         run already reads it. */
+      if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
       return provisional;
     } catch (error) {
@@ -1669,6 +1678,19 @@ export class CodexAppServerHost implements EngineHost {
       return;
     }
     if (this.imageInputSupport === "supported") this.setSessionStatus(this.engineStatus, this.activeFlags);
+  }
+
+  /**
+   * One developer line for this run, appended to the resumed thread's history.
+   * It is a courtesy to the agent: a launch that could not place it goes on.
+   */
+  private async injectRunNotice(text: string): Promise<void> {
+    try {
+      await this.rpc("thread/inject_items", {
+        threadId: this.identity.threadId,
+        items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }],
+      }, this.requestTimeoutMs, true);
+    } catch { /* the run starts without the line */ }
   }
 
   private supportsNativeHistory(): boolean {

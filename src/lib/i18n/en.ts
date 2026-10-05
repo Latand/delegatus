@@ -807,6 +807,7 @@ export const en = {
   "composer.receiptRecovering": "recovering",
   "composer.deliveryChecking": "Checking delivery…",
   "composer.deliveryNotDelivered": "Not delivered — send again",
+  "composer.deliveryFailed": "Not delivered",
   "composer.deliveryCheckingDetail": "We are checking the original attempt. Another status check will not send a second message.",
   "composer.receiptFailed": "not delivered",
   "composer.deliveredEcho": "Delivered — appearing in the feed",
@@ -917,8 +918,10 @@ export const en = {
   "receipt.human.verbatim": "not delivered: {reason}",
   "receipt.cause.hostUnavailable": "runtime host unavailable",
   "receipt.cause.timedOut": "request timed out",
-  "receipt.cause.telegramOff": "Telegram is not connected — reconnect it, then send again",
-  "receipt.cause.telegramWithdrawn": "this agent no longer has Telegram access — start a new agent to continue",
+  "receipt.cause.telegramOff": "Telegram is not connected",
+  "receipt.remedy.telegramOff": "Reconnect Telegram, then send the message again.",
+  "receipt.cause.telegramWithdrawn": "Telegram access withdrawn",
+  "receipt.remedy.telegramWithdrawn": "This agent no longer has Telegram access. Start a new agent to continue.",
 
   // DraftAgentPane
   "spawnCard.starting": "Launch admitted. Starting the agent.",

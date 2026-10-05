@@ -1,0 +1,258 @@
+{
+  "off-phone-390-en": {
+    "closed": {
+      "line": "Not delivered — Telegram is not connected",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Not delivered — Telegram is not connected",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "Reconnect Telegram, then send the message again.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "not delivered: Telegram is not connected",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "off-phone-390-uk": {
+    "closed": {
+      "line": "Не доставлено — Telegram не підключено",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Не доставлено — Telegram не підключено",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "Підключіть Telegram і надішліть повідомлення ще раз.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "не доставлено: Telegram не підключено",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "off-desktop-1440-en": {
+    "closed": {
+      "line": "Not delivered — Telegram is not connected",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Not delivered — Telegram is not connected",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "Reconnect Telegram, then send the message again.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "not delivered: Telegram is not connected",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "off-desktop-1440-uk": {
+    "closed": {
+      "line": "Не доставлено — Telegram не підключено",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Не доставлено — Telegram не підключено",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "Підключіть Telegram і надішліть повідомлення ще раз.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "не доставлено: Telegram не підключено",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "withdrawn-phone-390-en": {
+    "closed": {
+      "line": "Not delivered — Telegram access withdrawn",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Not delivered — Telegram access withdrawn",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "This agent no longer has Telegram access. Start a new agent to continue.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "not delivered: Telegram access withdrawn",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "withdrawn-phone-390-uk": {
+    "closed": {
+      "line": "Не доставлено — Telegram відкликано",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Не доставлено — Telegram відкликано",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "Цей агент більше не має доступу до Telegram. Запустіть нового агента, щоб продовжити.",
+      "detailInsideViewport": true,
+      "detailLines": 2,
+      "chip": "не доставлено: Telegram відкликано",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "withdrawn-desktop-1440-en": {
+    "closed": {
+      "line": "Not delivered — Telegram access withdrawn",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Not delivered — Telegram access withdrawn",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "This agent no longer has Telegram access. Start a new agent to continue.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "not delivered: Telegram access withdrawn",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "withdrawn-desktop-1440-uk": {
+    "closed": {
+      "line": "Не доставлено — Telegram відкликано",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Не доставлено — Telegram відкликано",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "Цей агент більше не має доступу до Telegram. Запустіть нового агента, щоб продовжити.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "не доставлено: Telegram відкликано",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  }
+}

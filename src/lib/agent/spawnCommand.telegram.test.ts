@@ -204,7 +204,9 @@ type LaunchEvidence = { tokenPresent: boolean; tokenMatches: boolean; telegramDe
 
 /** Only the external engine protocol is synthetic; admission, deferral,
     structured startup, and both host configuration builders stay real. */
-function deferredLaunch(engine: "claude" | "codex", token: string | null, codexServers?: Record<string, unknown>, beforeClaudeAuth?: () => void) {
+function deferredLaunch(engine: "claude" | "codex", token: string | null, codexServers?: Record<string, unknown>, beforeClaudeAuth?: () => void,
+  /** Let a resumed Codex thread go on to its first turn instead of stopping at resume. */
+  codexResumes = false) {
   const work: Array<() => Promise<void>> = [];
   const evidence: LaunchEvidence = { tokenPresent: false, tokenMatches: false, telegramDefinition: null, reachedEngine: false, runNotice: null };
   const client = {
@@ -238,7 +240,7 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
             return new CodexProtocolCapture((definition, notice) => {
               evidence.telegramDefinition = definition;
               evidence.runNotice = notice;
-            }, codexServers) as never;
+            }, (notice) => { evidence.runNotice = notice; }, codexServers, codexResumes) as never;
           },
         },
       });
@@ -259,7 +261,9 @@ class CodexProtocolCapture extends EventEmitter {
 
   constructor(
     private readonly capture: (definition: unknown, notice: string | null) => void,
+    private readonly notice: (notice: string | null) => void,
     private readonly configuredServers: Record<string, unknown> = { viewer: { command: "viewer-mcp" } },
+    private readonly resumes = false,
   ) {
     super();
     this.stdin.on("data", (chunk) => {
@@ -268,15 +272,28 @@ class CodexProtocolCapture extends EventEmitter {
         const message = JSON.parse(this.pending.slice(0, newline)) as { id?: number; method?: string; params?: Record<string, unknown> };
         this.pending = this.pending.slice(newline + 1);
         if (typeof message.id !== "number") continue;
+        const stop = () => this.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "synthetic Codex protocol stopped after launch capture" } }) + "\n");
         if (message.method === "thread/start" || message.method === "thread/resume") {
           this.capture(
             (message.params?.config as { mcp_servers?: Record<string, unknown> })?.mcp_servers?.telegram,
             typeof message.params?.developerInstructions === "string" ? message.params.developerInstructions : null,
           );
-          this.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "synthetic Codex protocol stopped after launch capture" } }) + "\n");
+          /* A resumed thread goes on to its first turn, so what the host adds
+             to its history on the way there is captured too. */
+          if (message.method === "thread/resume" && this.resumes) {
+            this.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: message.params?.threadId, path: null, turns: [] } } }) + "\n");
+            continue;
+          }
+          stop();
           continue;
         }
-        const result = message.method === "initialize" ? { userAgent: "test" }
+        if (message.method === "thread/inject_items") {
+          for (const item of (message.params?.items ?? []) as Array<{ role?: string; content?: Array<{ text?: string }> }>) {
+            if (item.role === "developer") this.notice(item.content?.[0]?.text ?? null);
+          }
+        }
+        if (message.method === "turn/start") { stop(); continue; }
+        const result = message.method === "initialize" ? { userAgent: "codex_cli_rs/0.159.3 (Linux)" }
           : message.method === "account/read" ? { account: { type: "chatgpt", planType: "pro" } }
           : message.method === "model/list" ? { data: [] }
           : message.method === "config/read" ? { config: { mcp_servers: this.configuredServers } }
@@ -648,7 +665,7 @@ for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine
   async () => withRegistryMode("sqlite", async () => {
     const target = await grantedConversationWithoutHost(engine);
     clearTelegramConnection();
-    const probe = deferredLaunch(engine, null);
+    const probe = deferredLaunch(engine, null, undefined, undefined, true);
     const { refusals } = await sendToGoneHost(engine, target, probe);
     /* The relaunch reaches the engine. The synthetic protocol stops it there,
        so the only refusal recovery may report is that stop. */
@@ -663,7 +680,7 @@ for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine
       .toEqual(["viewer", "telegram"]);
     /* Reconnected, the next start of the same conversation carries the tool again. */
     const token = connected();
-    const reconnected = deferredLaunch(engine, token);
+    const reconnected = deferredLaunch(engine, token, undefined, undefined, true);
     await sendToGoneHost(engine, target, reconnected);
     expect(reconnected.evidence.reachedEngine).toBe(true);
     expect(reconnected.evidence.tokenMatches).toBe(true);

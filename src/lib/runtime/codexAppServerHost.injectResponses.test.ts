@@ -4,11 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "bun:test";
-import { CodexAppServerHost } from "./codexAppServerHost";
+import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { FileRuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { clearTelegramConnection } from "@/lib/telegram/sessionStore";
 
 // Real Codex protocol and real canonical history. Only account/read is shimmed:
 // the Viewer requires a subscription account, while this local Responses
@@ -74,7 +76,7 @@ plugins = false
   const notes: { at: number; method: string; params?: { turn?: { id?: string } } }[] = [];
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: home, CODEX_HOME: codexHome, TMPDIR: path.join(root, "t"), LANG: "C.UTF-8" };
 
-  const host = await CodexAppServerHost.start({
+  const hostOptions: CodexAppServerHostOptions = {
     cwd,
     binary: codexBinary,
     codexHome,
@@ -132,7 +134,8 @@ plugins = false
       });
       return child;
     },
-  }).catch(error => {
+  };
+  const host = await CodexAppServerHost.start(hostOptions).catch(error => {
     releaseFirst();
     processChild?.kill("SIGKILL");
     server.stop(true);
@@ -157,6 +160,10 @@ plugins = false
   }, () => host);
   return {
     host, requests, rpcOut, notes, queue, releaseFirst,
+    /** The same thread in a new app-server process, as a relaunch opens it. */
+    resume: (extra: Partial<CodexAppServerHostOptions>) => CodexAppServerHost.adopt(host.identity.threadId, {
+      ...hostOptions, eventStore: new FileRuntimeEventStore(fs.mkdtempSync(path.join(root, "events-"))), ...extra,
+    }),
     async interrupt(turnId: string) {
       journal.append({ scope: { type: "session", id: "fixture-conversation" }, kind: "session-status",
         payload: { turn: "running", activeTurnId: turnId } });
@@ -271,3 +278,29 @@ for (const loss of ["child exit", "host release"] as const) {
     } finally { await f.stop(); }
   }, 20_000);
 }
+
+test("real Codex: a resumed thread's next model request carries the Telegram notice once", async () => {
+  const f = await fixture();
+  let resumed: CodexAppServerHost | undefined;
+  try {
+    /* A thread with history: one finished turn before the relaunch. */
+    f.releaseFirst();
+    await f.host.send({ id: "turn-before-the-relaunch", text: "turn before the relaunch" });
+    await until(() => f.requests.length === 1 && f.notes.some(note => note.method === "turn/completed"));
+    await f.host.release();
+    const modelInput = (index: number) => JSON.stringify(f.requests[index]!.body);
+    const mentions = (text: string, phrase: string) => text.split(phrase).length - 1;
+
+    /* The relaunch: a new app-server process resumes the thread while Telegram
+       is disconnected, and the operator's message starts its first turn. */
+    clearTelegramConnection();
+    resumed = await f.resume({ mcpServers: ["viewer", "telegram"], telegramOptional: true });
+    await resumed.send({ id: "first-message-of-the-run", text: "are you there?" });
+    await until(() => f.requests.length === 2);
+    expect(mentions(modelInput(1), TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE)).toBe(1);
+    expect(mentions(modelInput(0), TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE)).toBe(0);
+  } finally {
+    await resumed?.release().catch(() => {});
+    await f.stop();
+  }
+}, 60_000);

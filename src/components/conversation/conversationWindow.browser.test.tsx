@@ -612,6 +612,118 @@ describe("a restart refused for Telegram reads as one line with what to do", () 
   }, 240_000);
 });
 
+describe("the composer's notice for a Telegram refusal fits a phone and says what to do", () => {
+  /*
+   * The composer's own notice for the same refusal is one clipping line, and
+   * its chip is another. With the whole sentence in both, a 390 px phone cut
+   * the line before the action, said "send again" twice, and kept the rest in
+   * a hover title a phone never shows.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "composer's notice for a Telegram refusal"
+   *
+   * `?case=telegram-refused-composer` — one message that failed twice — for
+   * both refusals (Telegram disconnected, and the grant withdrawn), at 390 and
+   * 1440 px in en and uk, at rest and expanded: the line and the chip carry the
+   * short cause unclipped, the action is a wrapped sentence in the expanded
+   * detail, and no line of the notice repeats another. Readings go to
+   * `evidence/telegram-refusal/composer-notice.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, unclipped, with the action in the expanded detail", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const refusal of ["off", "withdrawn"] as const) for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=telegram-refused-composer&cause=${refusal}&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="telegram-refused-composer"]');
+            await page.waitForSelector("[data-delivery-notice-cause]");
+            const read = () => page.evaluate(() => {
+              const clipped = (element: HTMLElement | null) => element ? Math.max(0, element.scrollWidth - element.clientWidth) : null;
+              const inside = (element: Element | null) => {
+                const box = element?.getBoundingClientRect();
+                return box ? box.width > 0 && box.left >= 0 && box.right <= window.innerWidth : false;
+              };
+              const line = document.querySelector<HTMLElement>("[data-delivery-notice-cause]");
+              const detail = document.querySelector<HTMLElement>("[data-delivery-notice-sentence]");
+              const open = document.querySelector<HTMLDetailsElement>("[data-delivery-notice]")?.open ?? false;
+              const chip = document.querySelector<HTMLElement>("[data-receipt-status] .truncate");
+              return {
+                line: line?.textContent ?? null,
+                lineClippedPx: clipped(line),
+                lineWidth: line ? Math.round(line.getBoundingClientRect().width) : 0,
+                attempts: document.querySelector("[data-delivery-notice-count] [aria-hidden]")?.textContent ?? null,
+                detail: open ? detail?.textContent ?? null : null,
+                detailInsideViewport: open ? inside(detail) : false,
+                detailLines: open && detail ? Math.round(detail.getBoundingClientRect().height / parseFloat(getComputedStyle(detail).lineHeight)) : 0,
+                chip: open ? chip?.textContent ?? null : null,
+                chipClippedPx: open ? clipped(chip) : null,
+                chipInsideViewport: open ? inside(chip) : false,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(document.body.innerText),
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            });
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-delivery-notice] > summary").click({ position: { x: 8, y: 20 } });
+            await page.waitForSelector("[data-delivery-notice-sentence]", { state: "visible" });
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            const cause = translate(lang, refusal === "off" ? "receipt.cause.telegramOff" : "receipt.cause.telegramWithdrawn");
+            const remedy = translate(lang, refusal === "off" ? "receipt.remedy.telegramOff" : "receipt.remedy.telegramWithdrawn");
+            for (const reading of [closed, open]) {
+              /* One line for two failed attempts, with the short cause whole. */
+              expect(reading.line).toBe(`${translate(lang, "composer.deliveryFailed")} — ${cause}`);
+              expect(reading.lineClippedPx).toBe(0);
+              expect(reading.attempts).toBe("×2");
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.overflowX).toBe(0);
+            }
+            /* What to do is read without hover: a wrapped sentence on the page. */
+            expect(open.detail).toBe(remedy);
+            expect(open.detailInsideViewport).toBe(true);
+            expect(open.chip).toBe(translate(lang, "receipt.human.verbatim", { reason: cause }));
+            expect(open.chipClippedPx).toBe(0);
+            expect(open.chipInsideViewport).toBe(true);
+            /* No line of the notice is a copy of another. */
+            expect(new Set([open.line, open.detail, open.chip]).size).toBe(3);
+            expect(open.line).not.toContain(remedy);
+            expect(open.chip).not.toContain(remedy);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
 describe("send latency slice 3: one message, one row", () => {
   /*
    * Rendered evidence for the operator's complaint that a sent message passes

@@ -65,7 +65,7 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
-import { TELEGRAM_LAUNCH_UNAVAILABLE } from "@/lib/runtime/telegramConnectorEnv";
+import { TELEGRAM_LAUNCH_UNAVAILABLE, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "./capabilityHeader";
 import { activeDrain } from "@/lib/selfUpdate/drain";
@@ -1013,7 +1013,7 @@ export async function executeSpawnRequest(
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
-      const reason = "telegram MCP orchestrator seat is no longer active";
+      const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
       if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
       else registry.failSpawn(begun.receipt.launchId, reason);
       return refuse(reason);

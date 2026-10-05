@@ -126,12 +126,20 @@ test("a Telegram refusal is one cause whatever wrapper carried it, said once in 
   expect(run!.attempts.map((attempt) => attempt.operationId)).toEqual(["op-t2", "op-t1"]);
   for (const lang of ["en", "uk"] as const) {
     const say = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
-    const sentence = translate(lang, "receipt.cause.telegramOff");
-    expect(describeReceiptFailure(say, fromQueue)).toEqual({ cause: sentence, full: sentence, detail: null });
-    expect(describeReceiptFailure(say, fromSend)).toEqual({ cause: sentence, full: sentence, detail: null });
-    expect(describeReceiptFailure(say, "structured host recovery failed: telegram MCP grant was revoked before launch").cause)
-      .toBe(translate(lang, "receipt.cause.telegramWithdrawn"));
-    expect(sentence).not.toMatch(/MCP|connector|_/i);
+    /* The one-line row and the chip clip on a phone, so they carry the cause
+       alone; what to do is the detail, which wraps and is read without hover. */
+    const cause = translate(lang, "receipt.cause.telegramOff");
+    const remedy = translate(lang, "receipt.remedy.telegramOff");
+    const described = { cause, full: `${cause}. ${remedy}`, detail: { sentence: remedy, remediation: null }, saysWhatToDo: true };
+    expect(describeReceiptFailure(say, fromQueue)).toEqual(described);
+    expect(describeReceiptFailure(say, fromSend)).toEqual(described);
+    expect(describeReceiptFailure(say, "structured host recovery failed: telegram MCP grant was revoked before launch")).toMatchObject({
+      cause: translate(lang, "receipt.cause.telegramWithdrawn"),
+      detail: { sentence: translate(lang, "receipt.remedy.telegramWithdrawn"), remediation: null },
+    });
+    /* The action is said once, in the detail: the row and the chip carry none. */
+    expect(`${translate(lang, "composer.deliveryFailed")} — ${cause}`).not.toMatch(/again|ще раз|знову/i);
+    expect(`${cause} ${remedy}`).not.toMatch(/MCP|connector|_/i);
   }
   expect(failureCauseKey(fromQueue)).not.toBe(failureCauseKey("structured host recovery failed: telegram MCP grant was revoked before launch"));
 });

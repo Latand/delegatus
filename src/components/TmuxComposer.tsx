@@ -467,10 +467,13 @@ export function RuntimeComposerReceipts({
       </> : null}
     </span>
   );
-  const supersededStatusLabels = (attempts: RuntimeReceipt[]): string[] => {
+  /* An earlier attempt that ended the way the current one did adds nothing to
+     read: the row's chip says it and its counter says how many times. */
+  const supersededStatusLabels = (attempts: RuntimeReceipt[], current = attempts[0] ? receiptStatusText(attempts[0]) : null): string[] => {
     const counts = new Map<string, number>();
     for (const attempt of attempts.slice(1)) {
       const label = receiptStatusText(attempt);
+      if (label === current) continue;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     return [...counts].map(([label, count]) => (count > 1 ? `${label} ×${count}` : label));
@@ -504,7 +507,12 @@ export function RuntimeComposerReceipts({
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
   const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
-  const noticeLabel = t(noticeUnknown ? "composer.deliveryChecking" : "composer.deliveryNotDelivered");
+  /* A cause that says what to do in its own detail leaves the row to the cause:
+     "send again" beside it was the action said twice, and on a phone it took
+     the width the cause needed. */
+  const noticeLabel = t(noticeUnknown
+    ? "composer.deliveryChecking"
+    : noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`
@@ -909,7 +917,7 @@ export function RuntimeComposerReceipts({
                   ? receiptStatusText(group.current)
                   : (wait && deliveryWaitText(t, wait, group.current.queuePosition))
                     ?? receiptStatusText(group.current);
-                return [current, ...supersededStatusLabels(group.attempts)].join(" · ");
+                return [current, ...supersededStatusLabels(group.attempts, current)].join(" · ");
               }),
               ...textlessRows.map((bucket) => (bucket.length > 1
                 ? `${receiptStatusText(bucket[0]!)} ×${bucket.length}`

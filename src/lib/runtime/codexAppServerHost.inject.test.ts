@@ -17,6 +17,8 @@ import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
 /* An isolated, short scratch root. Nothing here reads or writes the operator's
    own state: the rollout each test uses is created under it and removed after. */
@@ -171,6 +173,8 @@ class InjectAppServer extends EventEmitter {
       return this.respond(message.id, { thread: { id: this.threadId, path: this.rolloutPath, turns: [] } });
     }
     if (method === "thread/queue/list") return this.respond(message.id, { items: [] });
+    if (method === "thread/turns/list") return this.respond(message.id, { data: [], nextCursor: null });
+    if (method === "turn/start") return this.respond(message.id, { turn: { id: `turn-${++this.turn}` } });
     if (method === "thread/inject_items") {
       if (this.swallowInject) return;
       if (this.injectErrorCode !== null) {
@@ -741,4 +745,69 @@ test("writer ownership lost during the canonical read refuses before the injecti
   expect(failure).toBeInstanceOf(StructuredInjectError);
   expect((failure as StructuredInjectError).phase).toBe("refused");
   await host.release();
+});
+
+/** A relaunch of an existing thread that holds the Telegram tool: the thread is
+    resumed, and the first message of the run is on its way to the engine. */
+async function resumeGrantedThread(protocol: string) {
+  const server = new InjectAppServer(scratchRoot(), INVENTED_THREAD_ID, protocol);
+  const host = await CodexAppServerHost.adopt(server.threadId, {
+    cwd: "/repo",
+    requestTimeoutMs: 500,
+    deliveryConfirmationTimeoutMs: 50,
+    eventStore: new MemoryEventStore(),
+    spawnProcess: (() => server as unknown as ChildProcessWithoutNullStreams),
+    pidAlive: () => true,
+    processIdentity: () => "6161:owned",
+    mcpServers: ["viewer", "telegram"],
+    telegramOptional: true,
+  });
+  const delivery = host.send({ id: "first-message-of-the-run", text: "are you there?" }).catch(() => null);
+  for (let waited = 0; waited < 100 && !server.requests.some((request) => request.method === "turn/start"); waited += 1) await Bun.sleep(10);
+  const methods = server.requests.map((request) => request.method);
+  await host.release();
+  await delivery;
+  return {
+    methods,
+    /* Everything the host handed the engine for the model to read. */
+    mentions: JSON.stringify(server.requests).split(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE).length - 1,
+    resume: server.requests.find((request) => request.method === "thread/resume")!.params,
+    injected: server.injectedItems,
+  };
+}
+
+test("a resumed thread reads that Telegram is unavailable from its history, once, before the first turn of the run", async () => {
+  clearTelegramConnection();
+  const run = await resumeGrantedThread("0.159.3");
+  /* A resumed thread sends the model only what changed since its last turn, so
+     developer instructions given at resume never reach it. */
+  expect(run.resume.developerInstructions).toBeUndefined();
+  expect(run.injected).toEqual([[{ type: "message", role: "developer",
+    content: [{ type: "input_text", text: TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE }] }]]);
+  expect(run.methods).toContain("turn/start");
+  expect(run.methods.indexOf("thread/inject_items")).toBeGreaterThan(run.methods.indexOf("thread/resume"));
+  expect(run.methods.indexOf("thread/inject_items")).toBeLessThan(run.methods.indexOf("turn/start"));
+  expect(run.mentions).toBe(1);
+});
+
+test("an engine that cannot take a history item is still told at resume that Telegram is unavailable", async () => {
+  clearTelegramConnection();
+  const run = await resumeGrantedThread("0.152.0");
+  expect(run.resume.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+  expect(run.injected).toEqual([]);
+  expect(run.mentions).toBe(1);
+});
+
+test("a resumed thread whose Telegram is connected is told nothing", async () => {
+  const session = saveTelegramSession("placeholder-session-for-run-notice-test");
+  writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
+  try {
+    const run = await resumeGrantedThread("0.159.3");
+    expect(run.methods).toContain("turn/start");
+    expect(run.injected).toEqual([]);
+    expect(run.mentions).toBe(0);
+  } finally {
+    clearTelegramConnection();
+  }
 });
