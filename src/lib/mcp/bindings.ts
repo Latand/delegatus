@@ -1842,6 +1842,12 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
+  const findings = scrubIssueReport(stored, await issueReportDenyList(control, dependencies));
+  if (findings.length) throw refuse("the stored preview no longer passes the private data check and was not published; preview a reworded report", "issue_report_private_data", { findings });
+  /* Finish asynchronous privacy reads before reading the operator's standing
+     answer. A withdrawal or edit during those reads must prevent the claim.
+     Keep approval validation and the synchronous claim together, with no
+     asynchronous work between them. */
   const messages = await (dependencies.operatorMessages
     ? dependencies.operatorMessages(seat)
     : operatorMessagesOf(seat, dependencies.registrySnapshot()));
@@ -1854,8 +1860,6 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
       "issue_report_approval_required", { status: 403, reason: approval.reason, approvalReplies },
     );
   }
-  const findings = scrubIssueReport(stored, await issueReportDenyList(control, dependencies));
-  if (findings.length) throw refuse("the stored preview no longer passes the private data check and was not published; preview a reworded report", "issue_report_private_data", { findings });
   const claim: IssueReportPublication = {
     by: seat, approval: approval.message.text, approvedAt: new Date(approval.message.at).toISOString(), startedAt: new Date().toISOString(),
   };

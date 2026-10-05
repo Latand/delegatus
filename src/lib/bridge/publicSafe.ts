@@ -95,9 +95,9 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["domain", new RegExp(`\\b(?:[a-z0-9-]+\\.)+${TLD}\\b(?![.\\w])`, "i")],
   ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/i],
   ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
-  /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
+  /* A path starts a token: `/x/y`, `~/x`, `~user/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
-  ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
+  ["path", /(?:^|[\s(«"'`=:])(?:~[\p{L}\p{N}_.$-]*\/|\$HOME\b|\$\{HOME\})/u],
   /* Folder names are letters of any script, so `\w` would miss most of them,
      and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
      space-separated run counts only once a later slash closes the folder. */
@@ -148,8 +148,15 @@ export interface PrivateClassOptions {
   strict?: boolean;
 }
 
-/* Names a private network resolves that the root zone never will. */
-const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion"]);
+/* Private and special-use endings need no delegation in the root zone. */
+const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt"]);
+/* A single-label hostname is private when the text explicitly names it.
+   Merely discussing a hostname field or detector names no machine. */
+const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|хост|ім['’]я\s+хоста)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
+/* Explicitly labeled remote identities are private even if this machine
+   has never seen that user or account in its local deny list. */
+const NAMED_USER = /(?<![\p{L}\p{N}_])(?:user[\s_-]*name|ім['’]я\s+користувача)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?\S/iu;
+const NAMED_ACCOUNT = /(?<![\p{L}\p{N}_])account[\s_-]+(?:name|label|id)["'`]?\s*(?:(?:is|was)\s+|[:=]\s*)["'`“«‹]?\S/iu;
 const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
 /* Labels of any script, joined by any of the dots IDNA reads as one. */
 const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\()?/giu;
@@ -177,11 +184,17 @@ const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
 const PLAN_TIER = "(?:free|paid|basic|starter|business|premium|max|pro|plus|team|enterprise)";
 const SUBSCRIPTION_PRODUCT = "(?:ChatGPT|Claude)";
 const USAGE_ACCOUNT = "(?:account|session|weekly|monthly|daily|subscription|billing)";
+const TOKEN_COUNT = "\\d+(?:[.,]\\d+)?\\s*(?:[kmb]|thousand|million|billion)?";
+const CURRENCY = "(?:USD|EUR|GBP|UAH|CAD|AUD|JPY|CNY|CHF|[$€£₴¥₹]|dollars?|euros?|pounds?|грив(?:ень|ні|ня)|долар(?:ів|и)?)";
 const STRICT_USAGE = [
   new RegExp(`\\b${PLAN_TIER}[\\s-]+(?:plan|tier|subscription)\\b`, "i"),
   new RegExp(`\\b(?:plan|tier|subscription)\\s*(?:is|was|:|=)\\s*(?:${SUBSCRIPTION_PRODUCT}\\s+)?${PLAN_TIER}\\b`, "i"),
   new RegExp(`\\b${SUBSCRIPTION_PRODUCT}\\s+${PLAN_TIER}\\b`, "i"),
-  /\b\d+(?:[.,]\d+)?\s*(?:(?:input|output|cached|cache|total|prompt|completion)[\s-]+)?(?:tokens?|credits?)\b/i,
+  new RegExp(`\\b${TOKEN_COUNT}\\s*(?:(?:input|output|cached|cache|total|prompt|completion)[\\s-]+)?(?:tokens?|credits?)\\b`, "i"),
+  new RegExp(`(?<!\\p{L})${CURRENCY}\\s*\\d+(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?\\s*${CURRENCY}(?!\\p{L})`, "iu"),
+  /* A stated subscription price needs no currency symbol or code. Do not
+     mistake a technical billing retry's duration for its cost. */
+  /\b(?:subscription|billing|plan|tier|account)\s+(?:(?:costs?|price|paid|payment|fee)\s*(?:(?:is|was|of|:|=)\s*)?)\d+(?:[.,]\d+)?\b/i,
   /\b(?:tokens?|credits?)\s*(?::|=|(?:used|remaining)\s*)?\s*\d+\b/i,
   new RegExp(`${LIMIT_WORD}[^.;\\n]{0,40}?\\d+(?:[.,]\\d+)?`, "iu"),
   new RegExp(`\\b${USAGE_ACCOUNT}\\b[^;\\n]{0,80}?\\d+(?:[.,]\\d+)?\\s*%`, "i"),
@@ -193,7 +206,7 @@ const STRICT_USAGE = [
 ];
 /* Host endpoints need no dot. A bare bind port also names private state.
    Keep timestamps and ordinary prose colons readable. */
-const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\d{1,5}\b/u;
+const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\s*\d{1,5}\b/u;
 const STRICT_PORT_FIELD = /\b(?:port|listen_?port|server_?port)["'`]?\s*(?:(?:is|was|number|:|=)\s*)?\d{1,5}\b/i;
 
 function topLevelDomain(ending: string): boolean {
@@ -256,6 +269,8 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
+    if (NAMED_HOST.test(text)) found.add("host");
+    if (NAMED_USER.test(text) || NAMED_ACCOUNT.test(text)) found.add("account");
     if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");

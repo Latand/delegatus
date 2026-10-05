@@ -46,7 +46,7 @@ const REPORT = {
 
 type Publisher = (report: { title: string; body: string }, repository: string) => Promise<string>;
 
-function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList } = {}) {
+function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void> } = {}) {
   const published: { title: string; body: string; repository: string }[] = [];
   /* What the operator wrote, per conversation: the fake of the transcript read. */
   const said = new Map<string, { at: number; text: string }[]>();
@@ -64,7 +64,8 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         ? { kind: "worker", conversationId: caller.conversationId, role: caller.role }
         : { kind: "unidentified" }),
       callerAttribution: () => caller,
-      publicDenyList: () => options.deny ?? DENY,
+      publicDenyList: options.privacyRead ? undefined : () => options.deny ?? DENY,
+      viewerProjects: () => ["repo-report"],
       issueReportsDir: () => sandbox,
       issueReportRepository: () => REPOSITORY,
       operatorMessages: async (conversationId: string) => said.get(conversationId) ?? [],
@@ -74,7 +75,15 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         return options.publisher ? options.publisher(report, repository) : ISSUE_URL;
       },
     };
-    return createMcpToolService(viewerMcpBindings(undefined, undefined, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
+    const control = options.privacyRead ? {
+      post: async () => { throw new Error("unexpected control mutation"); },
+      get: async (url: string) => {
+        expect(url).toBe("/api/telegram/bot/agent?op=chats");
+        await options.privacyRead!();
+        return { chats: [] };
+      },
+    } : undefined;
+    return createMcpToolService(viewerMcpBindings(undefined, control, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
   };
   let next = 0;
   const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
@@ -289,6 +298,106 @@ test("account observations, qualified token counts and bare endpoints never crea
     action: "preview", title: REPORT.title,
     body: "The check ran at 12:30 and took 20 seconds. The usedPercent field failed to refresh. The investigation plan is to read the event stream.",
   })).toMatchObject({ ok: true, state: "preview" });
+});
+
+test("privacy bypasses are refused before storage and rechecked before publication", async () => {
+  const h = harness({ deny: {
+    accounts: ["Account Bee"], people: ["Person Bee"], local: [],
+    projects: [{ repository: null, names: ["Project Bee"] }],
+  } });
+  const cases: [string, string][] = [
+    ["person", "Person<br>Bee observed the refusal."],
+    ["account", "Account<br/>Bee observed the refusal."],
+    ["project", "Project<br />Bee observed the refusal."],
+    ["person", "<div>Person</div><div>Bee observed the refusal.</div>"],
+    ["person", "Per~son~ Bee observed the refusal."],
+    ...["test", "invalid", "example", "localhost", "alt"].map((ending): [string, string] => ["domain", `The failing hostname was ${"remote-worker"}.${ending}.`]),
+    ["host", "The failing hostname is remote-worker."],
+    ["host", "The hostname was `remote-worker`."],
+    ["host", "The remote host: buildbox failed."],
+    ["host", "HOST=buildbox"],
+    ["host", '{"hostname":"buildbox"}'],
+    ["account", "username: builduser"],
+    ["account", "account_name: user-alias"],
+    ["account", '{"user_name":"builduser"}'],
+    ["quote", "The operator wrote: `restart every agent now`."],
+    ["quote", "The operator wrote `restart every agent now`."],
+    ["quote", "Оператор написав `перезапусти всіх агентів зараз`."],
+    ["quote", "The operator said: ‹restart every agent now›."],
+    ["quote", "Оператор написав: `перезапусти всіх агентів зараз`."],
+    ["quote", "Користувач сказав: ‹перезапусти всіх агентів зараз›."],
+    ["path", `The evidence is ${["~other-user", "private", "notes.txt"].join("/")}.`],
+    ["path", `The evidence is [${["~other-user", "private", "notes.txt"].join("/")}](#evidence).`],
+    ["usage", "The account has 1M input tokens."],
+    ["usage", "The account has 1.5k output tokens."],
+    ["usage", "The account cost USD 20 per month."],
+    ["usage", "The subscription cost 20 dollars per month."],
+    ["usage", "The subscription costs 20 per month."],
+    ["usage", "The account cost USD20."],
+    ["usage", "The subscription cost £20."],
+    ["port", "The listener bound to : 8898."],
+    ["port", "The endpoint was remote-worker: 8898."],
+  ];
+  const forms = [(body: string) => body, encodeURIComponent, (body: string) => [...body].map((char) => `&#${char.codePointAt(0)};`).join("")];
+  for (const [kind, body] of cases) for (const encode of forms) {
+    const report = { title: REPORT.title, body: encode(body) };
+    const refused = await h.call(REPORTER, { action: "preview", ...report });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+    expect(JSON.stringify(refused)).not.toContain(body);
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  /* Stored by an older version: publication must refuse every form too. */
+  for (const [, body] of cases) for (const encode of forms) {
+    const report = { title: REPORT.title, body: encode(body) };
+    const { digest } = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox });
+    const replies = await shown(h, digest);
+    h.operatorSays(replies.en);
+    const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(JSON.stringify(refused)).not.toContain(body);
+    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+  const clean = {
+    title: REPORT.title,
+    body: "README.md describes Date.now() and src/lib/mcp/bindings.ts. The tool returned `connection refused during startup`. The check ran at 12:30 and took 20 seconds. Symptom: the listener refused a connection.",
+  };
+  const digest = await previewed(h, clean);
+  const replies = await shown(h, digest);
+  h.operatorSays(replies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
+});
+
+test("a withdrawal or edit during async privacy reads prevents a claim and publication", async () => {
+  for (const [index, words] of ["Wait, do not publish", "Change the title first", "Ні, не публікуй", "Зміни текст спочатку"].entries()) {
+    let holdRead = false;
+    let release = () => {};
+    let entered = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const h = harness({ privacyRead: async () => { if (holdRead) { entered(); await held; } } });
+    const report = { ...REPORT, body: `${REPORT.body}\nReproduction ${index + 1}.` };
+    const digest = await previewed(h, report);
+    const replies = await shown(h, digest);
+    h.operatorSays(replies.en);
+    holdRead = true;
+    const publishing = h.call(SEAT_CALLER, { action: "publish", digest });
+    try {
+      await started;
+      h.operatorSays(words);
+    } finally { release(); }
+    expect(await publishing).toMatchObject({ ok: false, code: "issue_report_approval_required" });
+    expect(h.published).toEqual([]);
+    expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+    /* A fresh approval still files the same preview exactly once. */
+    h.operatorSays(replies.uk);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
+  }
 });
 
 test("the seat reads the preview back, and the operator's approving reply files exactly that text, once", async () => {

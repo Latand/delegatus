@@ -94,6 +94,38 @@ test("a finding names the class, where it is and the lines, and never the value"
 const entity = (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join("");
 const percent = (text: string) => [...text].map((char) => `%${char.codePointAt(0)!.toString(16).padStart(2, "0")}`).join("");
 
+test("HTML breaks and block boundaries preserve whitespace inside known names", () => {
+  const deny: PublicDenyList = {
+    accounts: ["Account Bee"], people: ["Person Bee"], local: ["Host Bee"],
+    projects: [{ repository: null, names: ["Project Bee"] }],
+  };
+  for (const [kind, name] of [["account", "Account Bee"], ["person", "Person Bee"], ["host", "Host Bee"], ["project", "Project Bee"]] as const) {
+    for (const boundary of ["<br>", "<br/>", "<br />", "</div><div>", "</p><p>", "</td><td>", "<hr>"]) {
+      const text = name.replace(" ", boundary);
+      for (const form of [text, entity(text), percent(text)]) {
+        expect(classes(`${form} observed the refusal.`, deny)).toContain(kind);
+      }
+    }
+  }
+  expect(classes("Per<b>son</b> Bee observed the refusal.", deny)).toContain("person");
+  expect(classes("Per~son~ Bee observed the refusal.", deny)).toContain("person");
+  expect(classes("The call to <code>Date.now()</code> in src/lib/mcp/bindings.ts returned.")).toEqual([]);
+});
+
+test("attributed operator words remain a quotation inside code spans or single guillemets", () => {
+  for (const body of [
+    "The operator wrote: `restart every agent now`.",
+    "The operator said: ‹restart every agent now›.",
+    "Оператор написав: `перезапусти всіх агентів зараз`.",
+    "Користувач сказав: ‹перезапусти всіх агентів зараз›.",
+    "The operator wrote: ``restart every agent now``.",
+    "The operator wrote `restart every agent now`.",
+    "Оператор написав `перезапусти всіх агентів зараз`.",
+  ]) for (const form of [body, entity(body), encodeURIComponent(body)]) expect(classes(form)).toContain("quote");
+  expect(classes("The tool returned `connection refused during startup`.")).toEqual([]);
+  expect(classes("The operator asked for the tool to be restarted.")).toEqual([]);
+});
+
 test("a domain gets no blanket call or source-extension exemption", () => {
   for (const ending of ["tools", "sh", "md", "py", "rs", "cc"]) {
     const host = `${"buildbox"}.${ending}`;

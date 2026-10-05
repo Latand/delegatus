@@ -74,3 +74,54 @@ for (const text of CLEAN) {
     expect(privateClasses(text, DENY)).toEqual([]);
   });
 }
+
+test("strict reports refuse special-use domains and explicitly named single-label hosts", () => {
+  for (const ending of ["test", "invalid", "example", "localhost", "alt"]) {
+    expect(privateClasses(`The failing hostname was ${"remote-worker"}.${ending}.`, undefined, { strict: true })).toContain("domain");
+  }
+  for (const line of ["The failing hostname is remote-worker.", "The hostname was `remote-worker`.", "hostname: remote-worker", "Ім'я хоста: remote-worker"]) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+  }
+  for (const line of ["The remote host: buildbox failed", "HOST=buildbox"]) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+  }
+  for (const line of ["See README.md and src/lib/mcp/bindings.ts.", "Date.now() returned.", "The hostname field never refreshed."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("explicitly labeled usernames and account names need no local deny-list entry", () => {
+  for (const line of ["username: builduser", "account_name: user-alias", '{"user_name":"builduser"}']) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("account");
+  }
+  for (const line of ["The username field was missing.", "The account_name field was missing."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("named home paths are private and repository-relative paths stay readable", () => {
+  for (const user of ["other-user", "other_user", "інший", "other.user"]) {
+    expect(privateClasses(`The evidence is ${[`~${user}`, "private", "notes.txt"].join("/")}.`, undefined, { strict: true })).toContain("path");
+  }
+  expect(privateClasses("See src/lib/mcp/bindings.ts.", undefined, { strict: true })).toEqual([]);
+});
+
+test("strict reports refuse compact token counts and explicit billing amounts", () => {
+  for (const line of [
+    "The account has 1M input tokens.", "The account has 1.5k output tokens.", "The account has 2B cached tokens.",
+    "The account cost USD 20 per month.", "The account cost 20 USD per month.",
+    "The subscription costs 20 dollars per month.", "The subscription costs 20 per month.",
+  ]) expect(privateClasses(line, undefined, { strict: true })).toContain("usage");
+  for (const line of ["The billing retry took 20 seconds.", "The usage meter did not refresh.", "The investigation plan has 3 steps."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("strict endpoint ports allow whitespace after the colon", () => {
+  for (const gap of [" ", "\t", "\n"]) for (const endpoint of [`:${gap}8898`, `remote-worker:${gap}8898`]) {
+    expect(privateClasses(`The listener bound to ${endpoint}.`, undefined, { strict: true })).toContain("port");
+  }
+  for (const line of ["The check ran at 12:30 and took 20 seconds.", "Symptom: the listener refused a connection."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});

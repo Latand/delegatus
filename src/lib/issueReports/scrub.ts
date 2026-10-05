@@ -73,10 +73,15 @@ const QUOTATION = [
   /"[^"\s][^"]*\s[^"]*[^"\s]"/,
   /(?<![\p{L}\p{N}])"\s*[^"\s]+\s+[^"\s][^"]*"(?![\p{L}\p{N}])/u,
   /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/,
+  /‹[^‹›]*\S\s+\S[^‹›]*›/,
   new RegExp(`(?<![\\p{L}\\p{N}])['‘]\\s*${QUOTED_WORD_CHAR}+\\s+${QUOTED_WORD_CHAR}(?:\\s|${QUOTED_WORD_CHAR})*['’](?![\\p{L}\\p{N}])`, "u"),
 ];
 /* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
 const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
+/* Explicit attribution remains a conversation quote inside a code span.
+   Technical code spans without that attribution stay readable. */
+const OPERATOR_SPEECH = "(?:wrote|said|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
+const ATTRIBUTED_OPERATOR_WORDS = new RegExp(`(?<!\\p{L})(?:operator|user|human|оператор|користувач|людина)\\s*(?:(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S|${OPERATOR_SPEECH}\\s+[\x60‹“«"'‘])`, "iu");
 /* An image in any form: inline, or by reference (`![board][ref]`, `![board]`). */
 const EMBEDDED_IMAGE = /!\[|<img\b/i;
 
@@ -85,7 +90,8 @@ const OWN_WORDS = "say what happened in your own words";
 /*
  * What a reader sees of a line once Markdown drew it: the inline markup is
  * gone and the characters on either side of it meet. `*` and `~` mark up
- * inside a word too; `_` only at a word's edge, which is why `issue_report`
+ * inside a word too; a home path's opening `~` stays.
+ * `_` marks up only at a word's edge, which is why `issue_report`
  * keeps its underscore. A link shows its text; its address stays in the
  * written view, where the URL rule reads it. That holds for a reference link
  * too: its label goes, and so do the brackets of whatever is left, since a
@@ -94,15 +100,19 @@ const OWN_WORDS = "say what happened in your own words";
  */
 /* An address may hold one level of brackets of its own: `[x](a(b)c)`. */
 const INLINE_LINK = /\[([^\[\]]*)\]\((?:\([^()]*\)|[^()])*\)/g;
+/* HTML break and block boundaries separate visible words. Inline tags still
+   join their contents, as in `Per<b>son</b>`. */
+const HTML_BOUNDARY = /<\/?(?:br|hr|address|article|aside|blockquote|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)(?:\s[^<>]*)?\/?>/gi;
 
 function markdownVisible(text: string): string {
   return text
     .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(HTML_BOUNDARY, " ")
     .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi, "")
     .replace(INLINE_LINK, "$1")
     .replace(/\[([^\[\]]*)\]\[[^\[\]]*\]/g, "$1")
     .replace(/[[\]]/g, "")
-    .replace(/[*~`]+/g, "")
+    .replace(/[*`]+|~+(?![\p{L}\p{N}_.$-]*\/)/gu, "")
     .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
 }
 
@@ -132,6 +142,7 @@ function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingCl
     for (const kind of staticSensitiveClasses(view)) found.set(kind, STATIC_LABELS[kind]);
     if (QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", QUOTATION_LABEL);
     if (SPEAKER_LINE.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
+    if (ATTRIBUTED_OPERATOR_WORDS.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
     if (QUOTED_BLOCK.test(view)) found.set("quote", `a quoted block; ${OWN_WORDS}`);
     if (EMBEDDED_IMAGE.test(view)) found.set("image", "an embedded image; a screenshot is added by the operator after redaction");
   }
