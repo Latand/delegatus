@@ -453,3 +453,37 @@ for (const locale of ["en", "uk"] as const) {
     expect(folded).not.toMatch(/<\/summary><p/);
   });
 }
+
+/* #2519: a delegation the operator confirmed through the voice companion is
+   the operator's own instruction on the voice channel. It takes its own tint
+   and label, by the ledger id on Claude and by the occurrence on Codex, and a
+   channel on anything else changes nothing. */
+for (const locale of ["en", "uk"] as const) {
+  test(`a voice-channel delivery renders as the voice Delegatus card on both joins in ${locale}`, () => {
+    setLocale(locale);
+    const label = locale === "en" ? "From voice Delegatus · requested by you" : "Від голосового Delegatus · на ваше прохання";
+    const byId = renderWithProvenance(DELIVERED_ROW, { messages: { [ENGINE_MESSAGE_ID]: { origin: "operator", channel: "voice-delegatus" } } });
+    const codex = codexItems([codexUserLine(MANDATE)]);
+    const byOccurrence = renderAll(codex, { occurrences: [occurrence(MANDATE, at(1_200), { origin: "operator", channel: "voice-delegatus" })] }).join("");
+    for (const html of [byId, byOccurrence]) {
+      expect(html).toContain("data-voice-relay");
+      expect(html).toContain("bg-info-soft");
+      expect(html).toContain(label);
+      expect(html).not.toContain("bg-accent-soft");
+      expect(html).not.toContain("bg-user");
+      expect(html).not.toContain("data-agent-author");
+    }
+    expect(byId).toContain("please rerun the failing check");
+    expect(byOccurrence).toContain(MANDATE);
+    setLocale("en");
+  });
+}
+
+test("a channel never rides an agent's relay, and an operator delivery without one keeps the bubble", () => {
+  setLocale("en");
+  const lookup = provenanceLookupFor({ messages: { [ENGINE_MESSAGE_ID]: { origin: "agent", senderRole: "reviewer", channel: "voice-delegatus" } } }, [DELIVERED_ROW]);
+  const agent = renderToStaticMarkup(<MessageProvenanceProvider value={lookup}><FeedItem item={DELIVERED_ROW} /></MessageProvenanceProvider>);
+  expect(agent).toContain("data-agent-author");
+  expect(agent).not.toContain("data-voice-relay");
+  expect(renderWithProvenance(DELIVERED_ROW, { messages: { [ENGINE_MESSAGE_ID]: { origin: "operator" } } })).not.toContain("data-voice-relay");
+});

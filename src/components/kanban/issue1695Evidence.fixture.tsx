@@ -11,6 +11,10 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
+import { VoiceCompanion, type CompanionVariant } from "@/components/voiceCompanion/VoiceCompanion";
+import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import { DEMO_IDS, demoAnswer, demoInstruction, demoScript } from "@/lib/voiceCompanion/demoScript";
+import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -102,6 +106,15 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
+/* The floating voice companion (#2519, docs/design/voice-companion-research.md): the default board with the
+   companion's window over it, driven by the simulator on the shared event contract. `&variant=1|2|3` picks the
+   numbered window, `&collapsed=1` starts it as its small shape, `&delivered=1` opens with the delegated message
+   and the orchestrator's answer already in the seat's conversation, and `&engine=codex` seats a Codex orchestrator. */
+const VOICE = SCENARIO === "voice-companion";
+const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, events: [] as CompanionEvent[] };
+const VOICE_RELAY_UUID = "engine_message_voice_delegation";
+const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
+const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
 const FEED_FAILURES = SCENARIO === "feed-failures";
 /* `&reload=1`: a window opened fresh on a long conversation. The host still
    keeps the replies of the turns it ran, and this window watched none arrive. */
@@ -537,6 +550,7 @@ function fmApply() {
   else adopted(undefined);
 }
 if (FIRST_MESSAGE && !FM_SEAT) fmApply();
+if (VOICE && new URLSearchParams(location.search).get("engine") === "codex") seatOn("codex", "gpt-5.6-sol", "high", "voice");
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
@@ -1947,6 +1961,22 @@ function transcriptOf(pathname: string): string {
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
     ].join("\n")}\n`;
   }
+  if (VOICE && file === orchestrator) {
+    const codex = file.engine === "codex";
+    /* A message Delegatus delivered: the SDK's record on Claude, a user-role response item on Codex. */
+    const relayed = (secondsAgo: number, uuid: string, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: uuid, role: "user", content: [{ type: "input_text", text }] } })
+      : line(secondsAgo, { type: "user", uuid, message: { role: "user", content: text }, promptSource: "sdk" });
+    const answered = (secondsAgo: number, text: string) => codex
+      ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: "voice_answer", role: "assistant", content: [{ type: "output_text", text }] } })
+      : said(secondsAgo, text);
+    return `${[
+      relayed(5 * MIN, VOICE_INTERNAL_UUID, voiceInternalText()),
+      answered(4 * MIN, L("Noted. The retry banner lane can merge.", "Прийнято. Смугу банера повтору можна зливати.")),
+      ...(voice.delivered ? [relayed(40, VOICE_RELAY_UUID, demoInstruction(UK ? "uk" : "en"))] : []),
+      ...(voice.answered ? [answered(10, demoAnswer(UK ? "uk" : "en"))] : []),
+    ].join("\n")}\n`;
+  }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[
       asked(12 * MIN, "Where are we on the release? Give me the whole picture before I decide what to cut."),
@@ -2990,7 +3020,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }
@@ -2999,6 +3029,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
     if (FM_HANDOVER) await fmEvidenceGate;
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
+  /* The delegated message is the operator's own instruction on the voice channel; the reviewer's relay beside it is
+     ordinary internal traffic. Both joins are answered: the engine id (Claude) and the occurrence (Codex). */
+  if (url.pathname === "/api/log/provenance" && VOICE) {
+    const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
+    const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
+    return json({
+      messages: { [VOICE_INTERNAL_UUID]: internal, ...(voice.delivered ? { [VOICE_RELAY_UUID]: relay } : {}) },
+      occurrences: [
+        { ...internal, textDigest: messageTextDigest(voiceInternalText()), deliveredAt: iso(5 * MIN) },
+        ...(voice.delivered ? [{ ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) }] : []),
+      ],
+    });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
@@ -3091,7 +3134,31 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
-createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+/* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
+   message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
+   The page gives up the strip the companion docks into, as a host surface is asked to. */
+function voiceCompanionScene() {
+  const params = new URLSearchParams(location.search);
+  const variant = (Number(params.get("variant")) || 1) as CompanionVariant;
+  const adapter = createSimulatedCompanion({
+    script: demoScript(UK ? "uk" : "en"),
+    recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
+    dispatch: () => { voice.dispatches += 1; voice.delivered = true; },
+  });
+  adapter.subscribe((event) => {
+    if (event.type !== "playback.level") voice.events.push(event);
+    if (event.type === "orchestrator.answer") voice.answered = true;
+  });
+  Object.assign(window, { voiceCompanion: voice });
+  return (
+    <>
+      <style>{"#root { height: calc(100dvh - var(--voice-companion-reserve, 0px)) !important; }"}</style>
+      <Viewer />
+      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card, [data-phone-card]" />
+    </>
+  );
+}
+createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene() : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

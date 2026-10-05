@@ -71,6 +71,20 @@ export interface DeliveredMessageProvenance {
    * absence binds nothing — never "probably this one".
    */
   submissionId?: string;
+  /**
+   * The surface an operator's message was spoken through (#2519). Today the
+   * one value is the voice companion, whose confirmed delegation is the
+   * operator's own instruction and reads apart from a typed one. Presentation
+   * only: it grants no authority and names no agent. Nothing stamps it yet;
+   * the feed draws it when delivery evidence carries it.
+   */
+  channel?: MessageChannel;
+}
+
+export type MessageChannel = "voice-delegatus";
+
+export function messageChannel(value: unknown): MessageChannel | undefined {
+  return value === "voice-delegatus" ? value : undefined;
 }
 
 /**

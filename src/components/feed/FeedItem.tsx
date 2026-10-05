@@ -67,6 +67,7 @@ export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): 
     const text = resolved?.matchedRawUserText ? rawUserTextFor(item)! : item.text;
     if (resolved?.mandate) return mandateCard(item.ts, text, resolved.mandate);
     if (resolved?.origin === "agent") return internalCard(item.ts, text, resolved);
+    if (resolved?.origin === "operator" && resolved.channel === "voice-delegatus") return voiceRelayCard(item.ts, text);
     if (resolved?.origin === "operator" && item.kind === "tmsg") return { kind: "user", ts: item.ts, text,
       ...(resolved.selectedContext ? { selectedContext: resolved.selectedContext } : {}) };
     if (item.kind === "user" && resolved?.selectedContext) return { ...item, text, selectedContext: resolved.selectedContext };
@@ -76,6 +77,7 @@ export function resolveDeliveredItem(item: Item, provenance: ProvenanceLookup): 
   const resolved = provenance.forItem(item);
   if (resolved?.mandate) return mandateCard(item.deliveredMessage.ts, item.text, resolved.mandate);
   if (resolved?.origin === "agent") return internalCard(item.deliveredMessage.ts, item.text, resolved);
+  if (resolved?.origin === "operator" && resolved.channel === "voice-delegatus") return voiceRelayCard(item.deliveredMessage.ts, item.text);
   if (resolved?.origin === "operator") {
     return {
       kind: "user",
@@ -103,6 +105,13 @@ function internalCard(ts: unknown, text: string, sender: { senderRole?: string; 
     ...(sender.senderProject ? { senderProject: sender.senderProject } : {}),
     ...(sender.senderConversationId ? { senderConversationId: sender.senderConversationId } : {}),
   };
+}
+
+/* The voice companion's confirmed delegation (#2519): Delegatus relayed it, so
+   it sits with the internal cards; the operator asked for it, so it names no
+   agent and takes its own tint. */
+function voiceRelayCard(ts: unknown, text: string): Item {
+  return { kind: "tmsg", ts, dir: "in", peer: "voice-delegatus", summary: "", text, internal: true, voiceRelay: true };
 }
 
 function agentRoleLabel(role: string, t: TFunction): string {
@@ -324,9 +333,9 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
     /* The row draws the summary's pictures before the text's. */
     const first = mdImages(item.summary).length;
     return (
-      <div className={`my-3 ${indent}overflow-hidden rounded-surface border border-accent/25 bg-accent-soft shadow-1`}>
+      <div className={`my-3 ${indent}overflow-hidden rounded-surface border shadow-1 ${item.voiceRelay ? "border-info/30 bg-info-soft" : "border-accent/25 bg-accent-soft"}`} data-voice-relay={item.voiceRelay ? "" : undefined}>
         <div className="flex items-center gap-2 px-3.5 pt-2">
-          <span className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <span className={`flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg ${item.voiceRelay ? "bg-info-soft text-info" : "bg-accent-soft text-accent"}`}>
             {/* Internal traffic is relayed by Delegatus itself, so it carries the
                 product's mark; a peer's own team message keeps the envelope. */}
             {item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
@@ -334,12 +343,23 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
           {/* #1117: an MCP/structured relay says outright that it is internal
               traffic, and the peer pill names the sender ROLE, so the operator
               never mistakes it for their own words or for scaffold. */}
-          {item.internal ? (
+          {item.voiceRelay ? (
+            /* Teal on its soft fill is 3.4:1, so the words take the darker ink
+               the companion's own window uses for the same colour. */
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-info/45 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[color:color-mix(in_srgb,var(--color-info)_66%,var(--color-primary))]">
+              <Mic className="h-3 w-3" aria-hidden />
+              {tr("render.voiceDelegatusTag")}
+            </span>
+          ) : item.internal ? (
             <span className="rounded-full border border-accent/40 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent">
               {tr("render.internalTag")}
             </span>
           ) : null}
-          {item.internal ? (
+          {item.voiceRelay ? (
+            <span className="min-w-0 text-[11px] font-semibold text-[color:color-mix(in_srgb,var(--color-info)_66%,var(--color-primary))]" data-voice-relay-author>
+              {tr("render.voiceDelegatusLabel")}
+            </span>
+          ) : item.internal ? (
             <span className="min-w-0 text-[11px] font-semibold text-accent" data-agent-author data-agent-role={item.peer}>
               {t("render.agentLabel")}{item.peer === "agent" || item.peer === t("render.agentPeer") ? null : ` · ${agentRoleLabel(item.peer, t)}`}
               {item.senderProject ? <span className="inline-block max-w-full truncate whitespace-nowrap align-bottom" data-agent-project title={item.senderProject}>{` · ${item.senderProject}`}</span> : null}

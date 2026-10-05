@@ -99,7 +99,7 @@ Evidence convention: **Observed** identifies checkout evidence by `file:line`, o
 
 ## 6. Shared typed event contract
 
-**Proposal — contract v1:** both the simulator and future official adapter implement the interface below. These are normalized application events, derived from provider, playback and existing delivery/report events. They are not a claim that OpenAI emits an `orchestrator.answer` or an audio RMS field. Only adapters normalize sources; the UI consumes one reducer with no simulator branch. Implementation should place this type in a small shared module when the prototype stage is authorized. This stage keeps it in the note.
+**Proposal — contract v1:** both the simulator and future official adapter implement the interface below. These are normalized application events, derived from provider, playback and existing delivery/report events. They are not a claim that OpenAI emits an `orchestrator.answer` or an audio RMS field. Only adapters normalize sources; the UI consumes one reducer with no simulator branch. **Observed —** since the prototype stage the type lives in `src/lib/voiceCompanion/contract.ts`, word for word the block below, and the reducer in `src/lib/voiceCompanion/reducer.ts` (§9).
 
 ```ts
 type Id = string;
@@ -251,3 +251,81 @@ All steps below are **Proposals**. They separate prototype acceptance from later
 **Observed — document validation:** the extracted contract passes strict TypeScript compilation; all cited repository file/ranges exist; the writing scan found no forbidden antithesis; both research files pass the privacy gate with committed fingerprints (observation record:44-50). These checks validate document/contract syntax and publication hygiene. They supply no runtime, browser, provider or performance acceptance.
 
 **Proposal — requirement validation:** ordinary conversation uses direct official voice; only an explicit confirmed request can reach the selected project's existing Claude/Codex orchestrator. The shared contract covers speech, transcripts, played audio levels, tool proposal/result, delivery and correlated answer. The prototype brief preserves character visibility, rising lines, visible delegation, numbered window/shape variants, distinct production-feed tint, no-control-overlap evidence, recordings and smoothness checks at both widths/languages/themes. This research stage is complete. Prototype UI, recordings, measurements and live integration acceptance still require their named steps; their results are not inferred here.
+
+## 9. Prototype as built
+
+Originating requirement for this section, 2026-10-05, controller assignment for the prototype stage of [issue #2519](https://github.com/Latand/delegatus/issues/2519), verbatim:
+
+> Build the prototype part: the numbered window variants, the tinted delegated message, the simulator on the stated contract, the recorded demo and the smoothness measurements.
+
+Everything in this section is **Observed** in this checkout unless it says **Proposal**. Nothing here starts a voice session, asks for a key or reaches an orchestrator. No production view mounts the window.
+
+### What exists
+
+| Piece | Where | What it is |
+| --- | --- | --- |
+| Contract v1 | `src/lib/voiceCompanion/contract.ts` | The §6 types and the `VoiceCompanionAdapter` interface the simulator implements and a real adapter will implement. |
+| Reducer | `src/lib/voiceCompanion/reducer.ts` | The one reducer the window reads. It drops duplicate events and retired generations, keys lines by speaker and item, keeps the mouth open until playback stops, and admits a tool result, a settlement and an answer only when they join the confirmed proposal. |
+| Simulator | `src/lib/voiceCompanion/simulator.ts`, `demoScript.ts` | The §7 scripted conversation in English and Ukrainian, on a clock: virtual time in tests, `requestAnimationFrame` in the browser. Its one effect is a `dispatch` callback, called once after a `confirmation` command says send. |
+| Placement | `src/lib/voiceCompanion/placement.ts` | The rule below as pure geometry. |
+| Window | `src/components/voiceCompanion/` | Three numbered variants, expanded and collapsed, with the character's mouth, the rising lines and the delegation strip. It carries its own stylesheet, so the product's global stylesheet is unchanged. |
+| Tinted row | `src/components/feed/FeedItem.tsx`, `messageProvenance.tsx`, `deliveredOccurrences.ts`, `src/lib/runtime/messageOrigin.ts` | An optional `channel: "voice-delegatus"` on operator delivery evidence. The production feed draws such a row in teal with the label "From voice Delegatus · requested by you". Nothing stamps the channel yet, so no existing conversation changes. |
+| Fixture | `src/components/kanban/issue1695Evidence.fixture.tsx`, `?scenario=voice-companion` | The real Viewer with the window over it. `&variant=1\|2\|3`, `&collapsed=1`, `&delivered=1`, `&engine=codex`. |
+| Driver | `src/components/kanban/kanbanBoard.browser.test.tsx`, block "floating voice companion" | Four cases: default placement, yielding and states, the tint, the recorded and measured conversation. |
+
+### The three numbered variants
+
+| Variant | Expanded | Collapsed |
+| --- | --- | --- |
+| **1. Character card** | 304 × 300. The character in a round perch beside its status, the lines rising beneath. | A 60 px circle with the state ring. |
+| **2. Caption rail** | 456 × 156. The character at the left, the lines beside it, the controls in their own column. | A 176 × 52 capsule with the character and the state in words. |
+| **3. Lantern** | 248 × 328. A large character in a lit square, the lines in a tray under it. | A 64 px rounded square. |
+
+Each window prints its number in the corner in the fixture. All three run the same reducer and the same script. Docked (see below) the three share one row layout and keep their own perch and collapsed shape.
+
+### Stated behaviour: the window yields
+
+1. **Default.** The window asks for the bottom-right corner and takes the free rectangle nearest to it: a rectangle that keeps 8 px from every control. Controls are links, buttons, inputs, summaries, editable and draggable elements and the ARIA button, link, tab, menu-item, switch, checkbox and option roles, cut to the part a pointer can reach; the host adds its own (the fixture adds board cards).
+2. **No free rectangle.** The window docks into a strip at the bottom edge and publishes the strip's height as `--voice-companion-reserve`. The host surface gives up that strip, so the page reflows and nothing sits under the window. This is the phone's normal state on the board, where cards fill the screen.
+3. **Dragging.** The window follows the pointer while it is held, over anything. Where it is dropped is a request: it settles in the free rectangle nearest the drop, or docks. A control under the drop keeps its hit test.
+4. **The page changes under it.** 250 ms after the page changes, a floating window checks its rectangle and moves when a control has appeared beneath it.
+5. **It stays.** There is no close control. End stops the conversation and brings back Talk; the collapsed shape remains, and a proposal or an answer that arrives while it is collapsed raises a teal flag on it.
+6. **Keyboard.** The grip (and the collapsed shape) moves by arrow keys, 16 px or 64 px with Shift, and Home returns it to its default place.
+
+Text content is not a control: on the desktop the default rectangle lies over the report column's prose. **Proposal —** whether the window should also avoid long text is an open design choice for the operator; the rule above is the one the issue asks to prove.
+
+### Explicit-only delegation in the prototype
+
+The simulator proposes a delegation only at the scripted explicit request, and the application gate of §5 is represented by the confirmation command: the window's Send and Cancel. The unit tests and the browser driver both read the event log: zero delegation events before the request, zero sends before the confirmation, one send after it, zero after Cancel, and a confirmation for another proposal ignored. The bounded request grammar, spoken confirmation and the server admission of §5 are not built; they belong to step 4 of §8.
+
+### Measurements
+
+The records are `evidence/voice-companion/placement.json`, `yield.json`, `tint.json` and `demo-smoothness.json`, written by the driver in Chromium 151.0.7922.34 (headless) from an isolated state directory. The recordings (six `.webm` files, one per row of the smoothness table) and the screenshots stay in `$HOME/Projects/delegatus-wt/handoff/voice-companion/` and are not committed.
+
+**Default placement covers no control.** 48 cases: desktop 1440×900 and phone 390×844, en and uk, light and dark, three variants, expanded and collapsed. In every case the area of the window over controls is 0 px² and, with the window taken out of the hit test, no point under it lands on a control or on anything with a pointer cursor. The 24 desktop cases float, 8 to 13 px from the nearest control. The 24 phone cases dock: the surface is 640 px tall under the 204 px expanded strip and 784 px under the 60 px collapsed one, and the composer sits above the strip. On the phone board even the 60 px shape finds no free rectangle, so the collapsed shape is docked there too; in the phone conversation view it floats.
+
+**Yielding.** Dropped on the seat's composer and on the toolbar the desktop card moved to a free rectangle, 0 px² over controls, and the composer under the drop still took the hit test. Three Shift+Arrow presses moved it and Home returned the default rectangle exactly. On the phone the capsule lifted out of the dock onto a card went back to the dock. A proposal arriving while the window was collapsed raised the flag with nothing sent; Cancel sent nothing; after End the window stayed, offered Talk again and kept its transcript.
+
+**Tint.** 16 cases in the production `LogFeed`: desktop seat panel and phone conversation view, en and uk, light and dark, a Claude seat (joined by engine message id) and a Codex seat (joined by occurrence). The delegated row is teal (`rgb(229, 245, 243)` light, `rgb(16, 36, 31)` dark) beside the purple internal row (`rgb(236, 235, 251)`, `rgb(38, 35, 71)`), names no agent, and its label, tag and body read at 5.62:1 or better.
+
+**Conversation and smoothness.** Six runs of the whole script, three variants at each width, each measured before any recording was made. In all six the event log shows no delegation event before the explicit request, no send before the tap on Send and exactly one after it; on the desktop the tinted row and the orchestrator's answer then appear in the seat's conversation. Frame times are `requestAnimationFrame` intervals; T is the idle median on the same page (16.7 ms). Cells read p95 ms / max ms / estimated missed frames.
+
+| Run | T | Rising lines | Hand-off out | Answer in | Whole conversation, missed |
+| --- | --- | --- | --- | --- | --- |
+| 1440x900 en light, variant 1 (float) | 16.7 | 16.8 / 33.3 / 2 of 247 | 16.7 / 16.8 / 0 of 54 | 16.8 / 16.8 / 0 of 42 | 31 of 2181 (1.40%) |
+| 1440x900 uk dark, variant 2 (float) | 16.7 | 16.8 / 33.3 / 1 of 247 | 16.8 / 33.4 / 2 of 52 | 16.7 / 16.8 / 0 of 42 | 40 of 2072 (1.89%) |
+| 1440x900 en light, variant 3 (float) | 16.7 | 16.8 / 33.4 / 9 of 279 | 33.3 / 33.3 / 3 of 52 | 33.3 / 33.4 / 3 of 39 | 122 of 2109 (5.47%) |
+| 390x844 uk light, variant 1 (dock) | 16.7 | 16.7 / 16.8 / 0 of 345 | 16.7 / 16.8 / 0 of 54 | 16.7 / 16.7 / 0 of 42 | 3 of 2100 (0.14%) |
+| 390x844 en dark, variant 2 (dock) | 16.7 | 16.8 / 16.8 / 0 of 344 | 16.8 / 16.8 / 0 of 54 | 16.7 / 16.8 / 0 of 42 | 1 of 2180 (0.05%) |
+| 390x844 uk light, variant 3 (dock) | 16.7 | 16.8 / 33.3 / 1 of 343 | 16.8 / 16.8 / 0 of 54 | 16.7 / 16.8 / 0 of 42 | 1 of 2092 (0.05%) |
+
+The proposed target of §7 (p95 ≤ 1.5 T, max ≤ 4 T, at most 1% of frames missed) holds in 14 of 18 windows: 9 of 9 on the phone and 5 of 9 on the desktop. p95 stays at one frame in 16 of 18. No frame was sampled in a hidden tab. A hand-off window is about 50 frames, so one missed frame already exceeds 1% there.
+
+The desktop loses more frames than the phone across the whole conversation, outside the animation windows too. Two further readings on the desktop, taken outside the driver: with the window's page watcher switched off the count did not change (11 and 11 missed of about 1 270 frames between Talk and the proposal), so the watcher is not the cause; and without the driver's own reads the same stretch lost about 0.9% of frames, against 0 of 480 while idle. What costs those frames is not attributed. **Proposal —** the next round takes a Chromium trace of one desktop run before any visual change is judged for cost.
+
+### What this prototype does not show
+
+- A real voice, a real provider event stream or real audio levels. The mouth follows a synthetic envelope derived from the caption text.
+- The phone keyboard case of §7, a Chromium compositor trace, CPU throttling and a physical device.
+- A delegated message produced by a real delivery: the fixture answers `/api/log/provenance` with the channel. Stamping it at admission and carrying it through the Claude ledger and the Codex marker is step 4 of §8.
+- The reply-correlation projection of §4. The simulator emits the correlated answer itself.

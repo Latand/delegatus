@@ -1,0 +1,141 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion",
+  "behaviour": "the window follows the pointer while held; on the drop it moves to the nearest free rectangle, or docks when none exists",
+  "desktop": {
+    "before": {
+      "x": 1120,
+      "y": 328,
+      "width": 304,
+      "height": 300
+    },
+    "overComposer": {
+      "heldOverControls": true,
+      "held": {
+        "x": 505,
+        "y": 600,
+        "width": 304,
+        "height": 300
+      },
+      "dropped": {
+        "layout": "float",
+        "phase": "offline",
+        "bounds": {
+          "x": 544,
+          "y": 344,
+          "width": 304,
+          "height": 300
+        },
+        "insideViewport": true,
+        "controls": 80,
+        "overlapArea": 0,
+        "covered": [],
+        "minClearance": 10,
+        "pointerHits": 0,
+        "clipped": [],
+        "reserve": null,
+        "surfaceHeight": 900,
+        "pageOverflows": false
+      }
+    },
+    "overToolbar": {
+      "heldOverControls": true,
+      "held": {
+        "x": 827,
+        "y": 5,
+        "width": 304,
+        "height": 300
+      },
+      "dropped": {
+        "layout": "float",
+        "phase": "offline",
+        "bounds": {
+          "x": 592,
+          "y": 48,
+          "width": 304,
+          "height": 300
+        },
+        "insideViewport": true,
+        "controls": 80,
+        "overlapArea": 0,
+        "covered": [],
+        "minClearance": 9,
+        "pointerHits": 0,
+        "clipped": [],
+        "reserve": null,
+        "surfaceHeight": 900,
+        "pageOverflows": false
+      }
+    },
+    "nudged": {
+      "x": 528,
+      "y": 48,
+      "width": 304,
+      "height": 300
+    },
+    "home": {
+      "x": 1120,
+      "y": 328,
+      "width": 304,
+      "height": 300
+    }
+  },
+  "phone": {
+    "before": {
+      "x": 0,
+      "y": 784,
+      "width": 390,
+      "height": 60
+    },
+    "beforeLayout": "dock",
+    "heldOverControls": true,
+    "held": {
+      "x": 0,
+      "y": 255,
+      "width": 176,
+      "height": 52
+    },
+    "dropped": {
+      "layout": "dock",
+      "phase": "offline",
+      "bounds": {
+        "x": 0,
+        "y": 784,
+        "width": 390,
+        "height": 60
+      },
+      "insideViewport": true,
+      "controls": 18,
+      "overlapArea": 0,
+      "covered": [],
+      "minClearance": 6,
+      "pointerHits": 0,
+      "clipped": [],
+      "reserve": "60px",
+      "surfaceHeight": 784,
+      "pageOverflows": false
+    }
+  },
+  "collapsedProposal": {
+    "flagged": {
+      "x": 1360,
+      "y": 560,
+      "width": 64,
+      "height": 64
+    },
+    "cancel": {
+      "dispatches": 0,
+      "delivered": false,
+      "answers": 0
+    },
+    "ended": {
+      "bounds": {
+        "x": 1360,
+        "y": 560,
+        "width": 64,
+        "height": 64
+      },
+      "phase": "offline"
+    }
+  }
+}

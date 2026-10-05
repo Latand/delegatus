@@ -1,0 +1,446 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion",
+  "browser": "Chromium 151.0.7922.34 (headless)",
+  "method": "requestAnimationFrame intervals in the foreground page; T is the median interval of a 2 s idle reference on the same page; a window is the stated duration after each performance mark the component sets when an animation starts",
+  "target": {
+    "p95": "<= 1.5 T",
+    "max": "<= 4 T",
+    "missedShare": "<= 0.01"
+  },
+  "missedFramesEstimate": "sum over intervals of max(0, round(dt / T) - 1); an estimate of missed animation opportunities, read from the frame clock; no compositor trace and no video frame counter was taken",
+  "limitations": [
+    "Headless Chromium on the build machine with a software compositor: no physical display, no phone hardware, no CPU throttling.",
+    "The mouth follows a synthetic level envelope; there is no audio, so lip sync against real speech is untested.",
+    "The recordings are a separate run of the same script, made after every measured run; no frame number in this file was taken while recording.",
+    "The board behind the window is the fixture's, with its own animations running."
+  ],
+  "cases": [
+    {
+      "label": "desktop-1440-en-light-v1",
+      "surface": "desktop",
+      "viewport": "1440x900",
+      "deviceEmulation": "none",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 1,
+      "layout": "float",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 120,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 13,
+          "frames": 247,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.3,
+          "framesOver1_5T": 2,
+          "missedFramesEstimate": 2,
+          "missedShare": 0.008,
+          "withinTarget": true
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 54,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 42,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2181,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 66.6,
+        "framesOver1_5T": 28,
+        "missedFramesEstimate": 31,
+        "missedShare": 0.014,
+        "withinTarget": false
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 130
+      },
+      "recording": "demo-desktop-1440-en-light-v1.webm"
+    },
+    {
+      "label": "desktop-1440-uk-dark-v2",
+      "surface": "desktop",
+      "viewport": "1440x900",
+      "deviceEmulation": "none",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "layout": "float",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 120,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 13,
+          "frames": 247,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.3,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 1,
+          "missedShare": 0.004,
+          "withinTarget": true
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 52,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.4,
+          "framesOver1_5T": 2,
+          "missedFramesEstimate": 2,
+          "missedShare": 0.037,
+          "withinTarget": false
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 42,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2072,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 66.7,
+        "framesOver1_5T": 35,
+        "missedFramesEstimate": 40,
+        "missedShare": 0.0189,
+        "withinTarget": false
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 106
+      },
+      "recording": "demo-desktop-1440-uk-dark-v2.webm"
+    },
+    {
+      "label": "desktop-1440-en-light-v3",
+      "surface": "desktop",
+      "viewport": "1440x900",
+      "deviceEmulation": "none",
+      "lang": "en",
+      "scheme": "light",
+      "variant": 3,
+      "layout": "float",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 118,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 33.3
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 15,
+          "frames": 279,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.4,
+          "framesOver1_5T": 9,
+          "missedFramesEstimate": 9,
+          "missedShare": 0.0313,
+          "withinTarget": false
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 52,
+          "medianMs": 16.7,
+          "p95Ms": 33.3,
+          "maxMs": 33.3,
+          "framesOver1_5T": 3,
+          "missedFramesEstimate": 3,
+          "missedShare": 0.0545,
+          "withinTarget": false
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 39,
+          "medianMs": 16.7,
+          "p95Ms": 33.3,
+          "maxMs": 33.4,
+          "framesOver1_5T": 3,
+          "missedFramesEstimate": 3,
+          "missedShare": 0.0714,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 2109,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 133.3,
+        "framesOver1_5T": 105,
+        "missedFramesEstimate": 122,
+        "missedShare": 0.0547,
+        "withinTarget": false
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 130
+      },
+      "recording": "demo-desktop-1440-en-light-v3.webm"
+    },
+    {
+      "label": "phone-390-uk-light-v1",
+      "surface": "phone",
+      "viewport": "390x844",
+      "deviceEmulation": "touch, mobile viewport",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 1,
+      "layout": "dock",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 119,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 18,
+          "frames": 345,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 54,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 42,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2100,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 33.4,
+        "framesOver1_5T": 3,
+        "missedFramesEstimate": 3,
+        "missedShare": 0.0014,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 106
+      },
+      "recording": "demo-phone-390-uk-light-v1.webm"
+    },
+    {
+      "label": "phone-390-en-dark-v2",
+      "surface": "phone",
+      "viewport": "390x844",
+      "deviceEmulation": "touch, mobile viewport",
+      "lang": "en",
+      "scheme": "dark",
+      "variant": 2,
+      "layout": "dock",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 119,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 18,
+          "frames": 344,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 54,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 42,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2180,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 33.3,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0005,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 129
+      },
+      "recording": "demo-phone-390-en-dark-v2.webm"
+    },
+    {
+      "label": "phone-390-uk-light-v3",
+      "surface": "phone",
+      "viewport": "390x844",
+      "deviceEmulation": "touch, mobile viewport",
+      "lang": "uk",
+      "scheme": "light",
+      "variant": 3,
+      "layout": "dock",
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 119,
+        "medianMs": 16.7,
+        "p95Ms": 16.7,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "caption-rise": {
+          "marks": 18,
+          "frames": 343,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.3,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 1,
+          "missedShare": 0.0029,
+          "withinTarget": true
+        },
+        "delegation-out": {
+          "marks": 1,
+          "frames": 54,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "delegation-in": {
+          "marks": 1,
+          "frames": 42,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        }
+      },
+      "conversation": {
+        "frames": 2092,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 33.3,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0005,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatchesBeforeConfirmation": 0,
+        "dispatchesAfter": 1,
+        "delegationEventsBeforeRequest": 0,
+        "events": 106
+      },
+      "recording": "demo-phone-390-uk-light-v3.webm"
+    }
+  ]
+}
