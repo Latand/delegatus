@@ -21,7 +21,11 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
+import { BranchPane } from "@/components/BranchPane";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
+import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
+import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
@@ -35,6 +39,7 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
+import { OWN_STEPS_TOTAL, ownStepsTranscript } from "./fixtures/ownMessageStepsTranscript";
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -89,7 +94,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
-  | "agent-images";
+  | "agent-images"
+  | "own-message-steps";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -930,6 +936,15 @@ function mountLifecycle(root: HTMLElement): void {
       loadOlder: async () => 0, prependGen: 0,
     }),
   });
+  installFakeComposerHost();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(<LifecycleFixture />);
+}
+
+/** The composer's side of the fake host: a hosted structured session, its
+    receipts and the transport behind Send. */
+function installFakeComposerHost(): void {
   setTmuxComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
@@ -955,9 +970,6 @@ function mountLifecycle(root: HTMLElement): void {
      forgetting them — the language seeded into localStorage stays. */
   try { sessionStorage.clear(); } catch { /* opaque origin */ }
   resetOutboxForTests();
-  fakeHost.lines = [LIFE_OPENING];
-  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
 }
 
 /* #2075: one conversation per engine, each viewing pictures the way that
@@ -1182,6 +1194,106 @@ function mountLongHistory(root: HTMLElement): void {
   );
 }
 
+/* The own-message step row (docs/design/own-message-steps.md) in the
+   production pane, over an orchestrator's day. `row=0` is the same pane
+   without the row, the baseline every measurement compares against;
+   `surface=orchestrator` is the dock's conversation; `pane` is a board-node
+   width. The loaded window starts two own messages in, and the feed's own
+   older-history load brings the rest. */
+const noop = () => undefined;
+
+function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator"; paneWidth: number }) {
+  const phone = useIsMobile();
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    /* The on-screen keyboard's overlap, as the phone shell pads it away. */
+    (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps = { keyboard: setKeyboard };
+  }, []);
+  if (phone) {
+    return (
+      <div
+        data-testid="mobile-chat-shell"
+        className="relative flex h-dvh min-h-0 min-w-0 max-w-[100dvw] flex-col overflow-hidden overflow-x-clip bg-canvas text-primary"
+        style={keyboard > 0 ? { paddingBottom: keyboard } : undefined}
+      >
+        <MobileShell
+          screen="chat"
+          screenId={file.conversationId ?? file.path}
+          title={<MobileBarTitle meta={<span className="truncate text-label text-muted">idle</span>}>{file.title}</MobileBarTitle>}
+          back
+          renderSheet={() => null}
+        >
+          <BranchPane file={file} tasks={[]} isRoot chromeInMenu onClose={noop} />
+        </MobileShell>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 self-center p-3" style={{ width: paneWidth ? paneWidth + 24 : "100%" }}>
+        {surface === "orchestrator" ? (
+          <div data-link-path={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-card">
+            <OrchestratorConversation file={file} projectName="delegatus" />
+          </div>
+        ) : (
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function mountOwnMessageSteps(root: HTMLElement): void {
+  const lang = params.get("lang") === "uk" ? "uk" : "en";
+  const { lines: all, loadedFrom } = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
+  let start = loadedFrom;
+  let prependGen = 0;
+  let loadingOlder = false;
+  const listeners = new Set<() => void>();
+  let snapshot: LogTailState | null = null;
+  const announce = () => { snapshot = null; for (const listener of listeners) listener(); };
+  const loadOlder = async (): Promise<number> => {
+    if (loadingOlder || start <= 0) return 0;
+    loadingOlder = true;
+    announce();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const take = start;
+    start = 0;
+    prependGen += 1;
+    loadingOlder = false;
+    announce();
+    return take;
+  };
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: start > 0, loadingOlder, loadOlder, prependGen,
+  };
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({
+    useLogTail: () => useSyncExternalStore(
+      (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      read,
+      read,
+    ),
+    ownMessageSteps: params.get("row") !== "0",
+  });
+  installFakeComposerHost();
+  const file = {
+    ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
+    title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
+    model: "gpt-6.1-sol",
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 120,
+  } as unknown as FileEntry;
+  createRoot(root).render(
+    <OwnMessageStepsPane
+      file={file}
+      surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
+      paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
+    />,
+  );
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1190,4 +1302,5 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
+else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) createRoot(root).render(<Fixture id={requested} />);

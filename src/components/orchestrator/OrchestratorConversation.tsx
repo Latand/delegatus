@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
@@ -42,6 +42,8 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
   const deadHost = caps.surface === "dead";
   const sendCap = caps.controls.send;
   const sendBlockedReason = !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
+  /* The own-message step row, straight above the composer as in `BranchPane`. */
+  const [stepsMount, setStepsMount] = useState<HTMLDivElement | null>(null);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
       {deadHost ? <DeadHostBanner file={file} /> : null}
@@ -56,11 +58,13 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
             follow
             setFollow={noop}
             compact
+            stepsMount={stepsMount}
           />
         </ToolDisclosurePolicy>
       )}
       {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
       <AgentControlStrip file={file} />
+      <div ref={setStepsMount} className="contents" />
       <TmuxComposer
         file={file}
         deadHost={deadHost}

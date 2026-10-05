@@ -1876,3 +1876,411 @@ describe("delivery outcome settlement", () => {
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
 });
+
+describe("own-message step row", () => {
+  /*
+   * The row that steps between the operator's own messages
+   * (docs/design/own-message-steps.md): a row of its own between the feed and
+   * the composer. The fixture's `own-message-steps` case mounts the production
+   * pane over an orchestrator's day, with the row (`row=1`) and without it
+   * (`row=0`), and the two are driven side by side: every moment is measured
+   * in both, so whatever the row changed about the pane is on record.
+   *
+   * Per control: a hit-test at its centre and four corners answers with the
+   * control itself, its box intersects no other interactive element and no
+   * part of the feed's viewport, it is inside the window, and on the phone a
+   * button is at least 44 x 44. Per pane: against the pane without the row,
+   * only the feed's height and the place of the rows riding above the step
+   * row may differ, by the row's own height.
+   *
+   * Frames go to `.artifacts/own-message-steps/` (not committed); the
+   * measurements to `evidence/own-message-steps/row.json`.
+   */
+  const OUT = path.resolve(".artifacts/own-message-steps");
+  const EVIDENCE = path.resolve("evidence/own-message-steps");
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, phone: false, pane: 0, surface: "pane" },
+    { name: "desktop-1000", width: 1000, height: 800, phone: false, pane: 0, surface: "pane" },
+    /* A board-node-sized pane: the narrowest the desktop draws. */
+    { name: "desktop-1000-pane-440", width: 1000, height: 800, phone: false, pane: 440, surface: "pane" },
+    /* The orchestrator's conversation in its dock column. */
+    { name: "desktop-1000-orchestrator-440", width: 1000, height: 800, phone: false, pane: 440, surface: "orchestrator" },
+    { name: "phone-390", width: 390, height: 844, phone: true, pane: 0, surface: "pane" },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  /** The on-screen keyboard's height on a 390 x 844 phone. */
+  const KEYBOARD_PX = 336;
+  const LOADED_OWN = 7;
+  const ALL_OWN = 9;
+  /** What the row costs the feed. */
+  const ROW_PX = { desktop: 37, phone: 45 } as const;
+  /** The feed's own way-back row, which the phone's step row takes in. */
+  const JUMP_PX = 44;
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface ControlReading {
+    name: string;
+    box: Box;
+    /** Centre and four corners all answer with the control itself. */
+    hit: boolean;
+    /** Other interactive elements whose box intersects this one. */
+    overlaps: string[];
+    /** Any part of it lies inside the feed's viewport. */
+    overFeed: boolean;
+    insideWindow: boolean;
+  }
+  interface Reading {
+    controls: ControlReading[];
+    probes: Record<string, Box>;
+    overflowX: number;
+    /** The count as the row prints it; null without the row. */
+    count: string | null;
+    row: Box | null;
+    /** Own messages on the page, and how many of them start at or above the reading line. */
+    own: number;
+    machine: number;
+    /** Where the own message being read sits under the feed's top edge. */
+    landedAt: number | null;
+    atFeedEnd: boolean;
+    /** The agent's answer to that message has started inside the feed's viewport. */
+    replyOnScreen: boolean;
+    jumpStrips: number;
+  }
+  interface Moved { probe: string; delta: Box }
+
+  const measure = (page: import("playwright-core").Page, fromEnd: number) => page.evaluate((fromEnd): Reading => {
+    const box = (element: Element): [number, number, number, number] => {
+      const rect = element.getBoundingClientRect();
+      return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10) as [number, number, number, number];
+    };
+    const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    const shown = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none"
+        && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
+    };
+    const name = (element: Element) => {
+      const text = element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("data-testid")
+        ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
+      return `${element.tagName.toLowerCase()}:${text}`;
+    };
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const feed = scroller.getBoundingClientRect();
+    const controls = Array.from(document.querySelectorAll<HTMLElement>("[data-own-step-control]")).filter(shown);
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"], [tabindex]:not([tabindex="-1"])',
+    )).filter(shown);
+    const readings = controls.map((control) => {
+      const rect = control.getBoundingClientRect();
+      /* A rounded corner is not part of the control, so the corner points sit
+         just inside the rounding. */
+      const inset = Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1;
+      const points = [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+      return {
+        name: control.dataset.ownStepControl!,
+        box: box(control),
+        hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
+        /* A row scrolled out of the feed is clipped by it, so what counts
+           of a control inside the feed is the part the feed shows. */
+        overlaps: interactive
+          .filter((other) => other !== control && !other.contains(control) && !control.contains(other))
+          .filter((other) => {
+            const at = other.getBoundingClientRect();
+            if (!scroller.contains(other)) return cut(rect, at) > 1;
+            const top = Math.max(at.top, feed.top);
+            const bottom = Math.min(at.bottom, feed.bottom);
+            return bottom > top && cut(rect, new DOMRect(at.left, top, at.width, bottom - top)) > 1;
+          })
+          .map(name),
+        overFeed: cut(rect, feed) > 1,
+        insideWindow: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      };
+    });
+
+    /* The rest of the pane, by name: its structure, then every interactive
+       element outside the feed (rows inside it move with the scroll) and
+       outside the step row. */
+    const probes: Record<string, [number, number, number, number]> = {};
+    const put = (key: string, element: Element | null | undefined) => { if (element && shown(element)) probes[key] = box(element); };
+    const header = document.querySelector("[data-mobile2-bar]") ?? document.querySelector("[data-link-path] > header");
+    put("header", header);
+    put("title", document.querySelector("[data-mobile2-title]") ?? header?.querySelector(".truncate"));
+    put("feed", scroller);
+    put("jump-strip", document.querySelector("[data-feed-jump-strip]"));
+    put("jump-pill", document.querySelector("[data-feed-jump-pill]"));
+    const last = scroller.parentElement?.parentElement?.lastElementChild;
+    put("turn-status", last === scroller.parentElement || last?.matches("[data-feed-jump-strip]") ? null : last);
+    put("composer", document.querySelector('[data-testid="composer-input-unit"]'));
+    put("field", document.querySelector("textarea"));
+    const seen = new Map<string, number>();
+    for (const element of interactive) {
+      if (scroller.contains(element) || element.closest("[data-own-steps]") || element.tagName === "TEXTAREA") continue;
+      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-input-unit"]') ? "composer"
+        : element.closest("[data-mobile2-bar], [data-link-path] > header") ? "header" : element.closest('[role="dialog"]') ? "sheet" : "control";
+      const key = `${group}:${name(element)}`;
+      const count = (seen.get(key) ?? 0) + 1;
+      seen.set(key, count);
+      probes[count > 1 ? `${key} #${count}` : key] = box(element);
+    }
+
+    const rows = Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    const current = rows[rows.length - 1 - fromEnd];
+    let reply: Element | null = current?.nextElementSibling ?? null;
+    while (reply && reply.getAttribute("data-feed-kind") !== "prose") reply = reply.nextElementSibling;
+    const replyTop = reply?.getBoundingClientRect().top ?? Infinity;
+    const row = document.querySelector("[data-own-steps]");
+    return {
+      controls: readings,
+      probes,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      count: document.querySelector('[data-own-step-control="count"]')?.textContent ?? null,
+      row: row ? box(row) : null,
+      own: rows.length,
+      machine: scroller.querySelectorAll('[data-feed-kind="tmsg"]').length,
+      landedAt: current ? Math.round(current.getBoundingClientRect().top - feed.top) : null,
+      atFeedEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1,
+      replyOnScreen: replyTop >= feed.top && replyTop < feed.bottom,
+      jumpStrips: document.querySelectorAll("[data-feed-jump-strip]").length,
+    };
+  }, fromEnd);
+
+  /* The pane without the row has no step of its own, so it is put where the
+     pane with the row went: the same own message on the reading line, as a
+     reader's scroll, with older history brought the same way. */
+  const follow = (page: import("playwright-core").Page, fromEnd: number, own: number, phone: boolean) => page.evaluate(async ({ fromEnd, own, phone }) => {
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const asReader = (to: number) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: to > scroller.scrollTop ? 1 : -1, bubbles: true }));
+      if (scroller.scrollTop === to) scroller.dispatchEvent(new Event("scroll"));
+      else scroller.scrollTop = to;
+    };
+    const rows = () => Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    for (const deadline = performance.now() + 6_000; rows().length < own && performance.now() < deadline;) {
+      asReader(0);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    const row = rows()[rows().length - 1 - fromEnd];
+    if (!row) return;
+    for (const until = performance.now() + 600; performance.now() < until;) {
+      const top = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const wanted = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, phone ? Math.floor(top) : Math.round(top - 8)));
+      if (Math.abs(wanted - scroller.scrollTop) >= 1) asReader(wanted);
+      await frame();
+    }
+  }, { fromEnd, own, phone });
+
+  const moved = (baseline: Reading, reading: Reading): Moved[] => {
+    const out: Moved[] = [];
+    for (const probe of new Set([...Object.keys(baseline.probes), ...Object.keys(reading.probes)])) {
+      const was = baseline.probes[probe];
+      const now = reading.probes[probe];
+      if (!was || !now) { out.push({ probe: `${probe} ${was ? "gone" : "new"}`, delta: [0, 0, 0, 0] }); continue; }
+      const delta = now.map((value, index) => Math.round((value - was[index]!) * 10) / 10) as Box;
+      if (delta.some((value) => Math.abs(value) > 0.5)) out.push({ probe, delta });
+    }
+    return out;
+  };
+  const position = (reading: Reading) => Number(reading.count?.split(" / ")[0] ?? NaN);
+  const total = (reading: Reading) => Number.parseInt(reading.count?.split(" / ")[1] ?? "", 10);
+
+  browserTest("the row covers nothing and costs the feed its own height, at every width, in both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const totals: Record<string, { readings: number; hitTestPasses: number; intersections: number; overFeed: number; outsideWindow: number; underSize: number; undeclaredChanges: number }> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) {
+        const where = `${viewport.name}-${lang}`;
+        const query = `case=own-message-steps&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}&surface=${viewport.surface}`;
+        const size = { width: viewport.width, height: viewport.height };
+        const withRow = await openFixture(browser, `${served.base}?${query}&row=1`, size, "dark", lang, "reduce", viewport.phone);
+        const without = await openFixture(browser, `${served.base}?${query}&row=0`, size, "dark", lang, "reduce", viewport.phone);
+        const page = withRow.page;
+        const base = without.page;
+        const sum = totals[viewport.name] ??= { readings: 0, hitTestPasses: 0, intersections: 0, overFeed: 0, outsideWindow: 0, underSize: 0, undeclaredChanges: 0 };
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const settled = () => page.waitForTimeout(650);
+        const cost = viewport.phone ? ROW_PX.phone : ROW_PX.desktop;
+        const press = async (direction: -1 | 1) => {
+          await page.locator(`[data-own-step-control="${direction < 0 ? "previous" : "next"}"]`).click();
+          await settled();
+        };
+        const record = async (moment: string, fromEnd: number, shot: boolean): Promise<Reading> => {
+          const reading = await measure(page, fromEnd);
+          const baseline = await measure(base, fromEnd);
+          /* The pane without the row shows its way-back row exactly while the
+             reader is away from the tail. */
+          const away = baseline.jumpStrips > 0;
+          /* What the row says it changes. The feed gives up the row's height;
+             on the phone, away from the tail, the feed's own way-back row is
+             a cell of the step row, so the feed gives up the difference. */
+          const feedCost = viewport.phone && away ? cost - JUMP_PX : cost;
+          const changes = moved(baseline, reading);
+          const undeclared = changes.filter(({ probe, delta }) => {
+            if (probe === "feed") return !(delta[0] === 0 && delta[1] === 0 && delta[2] === 0 && Math.abs(delta[3] + feedCost) <= 0.5);
+            if (viewport.phone) return !/^(jump-strip gone|jump-pill|control:button:.* gone)$/.test(probe);
+            return !(/^(jump-strip|jump-pill|turn-status|control:.*)$/.test(probe) && delta[0] === 0 && delta[2] === 0 && delta[3] === 0 && Math.abs(delta[1] + cost) <= 0.5);
+          });
+          for (const change of undeclared) fail(moment, `undeclared change to "${change.probe}" by ${JSON.stringify(change.delta)}`);
+          if (!changes.some((change) => change.probe === "feed")) fail(moment, "the feed did not give up the row's height");
+          if (!reading.row || Math.abs(reading.row[3] - cost) > 0.5) fail(moment, `the row is ${reading.row?.[3]} px tall, expected ${cost}`);
+          if (baseline.row) fail(moment, "the pane without the row drew one");
+          const buttons = reading.controls.filter((control) => control.name !== "count");
+          if (buttons.length < 2 || !reading.controls.some((control) => control.name === "count")) fail(moment, "the row is missing a control");
+          for (const control of reading.controls) {
+            sum.readings += 1;
+            if (control.hit) sum.hitTestPasses += 1; else fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+            if (control.overlaps.length) { sum.intersections += control.overlaps.length; fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`); }
+            if (control.overFeed) { sum.overFeed += 1; fail(moment, `${control.name} lies over the feed`); }
+            if (!control.insideWindow) { sum.outsideWindow += 1; fail(moment, `${control.name} leaves the window`); }
+            if (viewport.phone && control.name !== "count" && (control.box[2] < 44 || control.box[3] < 44)) { sum.underSize += 1; fail(moment, `${control.name} is ${control.box[2]} x ${control.box[3]}, under 44 px`); }
+          }
+          sum.undeclaredChanges += undeclared.length;
+          if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+          if (viewport.phone && away && reading.jumpStrips) fail(moment, "the phone spends a second row on the way back");
+          if (viewport.phone && away && !reading.controls.some((control) => control.name === "latest")) fail(moment, "the way back is not in the step row");
+          if (!viewport.phone && away && reading.jumpStrips !== 1) fail(moment, "the desktop lost its way-back row");
+          (evidence[where] ??= {})[moment] = { count: reading.count, row: reading.row, controls: reading.controls, changedAgainstNoRow: changes };
+          if (shot) {
+            await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+            await base.screenshot({ path: path.join(OUT, `${where}-${moment}-no-row.png`) });
+          }
+          return reading;
+        };
+        try {
+          for (const each of [page, base]) {
+            await each.locator("[data-own-message]").first().waitFor();
+            await each.waitForTimeout(650);
+          }
+
+          /* At rest: the tail, nothing typed. Only what the operator typed is
+             counted; wakes, notices and pipeline messages are relay cards. */
+          const rest = await record("rest", 0, true);
+          expect(rest.own).toBe(LOADED_OWN);
+          expect(rest.machine).toBeGreaterThanOrEqual(20);
+          expect(rest.count).toBe(`${LOADED_OWN} / ${LOADED_OWN}+`);
+          expect(await page.locator('[data-own-step-control="next"]').isDisabled()).toBe(true);
+
+          /* Three steps back: the message stepped to is at the top of the feed
+             and its answer is under it. */
+          await press(-1); await press(-1); await press(-1);
+          let now = await measure(page, 0);
+          let fromEnd = total(now) - position(now);
+          await follow(base, fromEnd, now.own, viewport.phone);
+          const stepped = await record("stepped", fromEnd, true);
+          /* From the tail the first step goes to the message the reply on
+             screen answers, which is the last one unless it is still in view. */
+          expect([LOADED_OWN - 3, LOADED_OWN - 2]).toContain(position(stepped));
+          expect(stepped.count).toBe(`${position(stepped)} / ${LOADED_OWN}+`);
+          const lands = viewport.phone ? 0 : 8;
+          if (stepped.landedAt === null || Math.abs(stepped.landedAt - lands) > 2) fail("stepped", `the message landed ${stepped.landedAt}px under the feed's top`);
+          if (!stepped.replyOnScreen) fail("stepped", "the reply to the message is not on screen");
+          /* The phone's feed moves itself to a row boundary after a reader's
+             scroll (#1978); a landing it accepts is still there later. */
+          await page.waitForTimeout(900);
+          const rested = await measure(page, fromEnd);
+          if (rested.landedAt !== stepped.landedAt) fail("stepped", `the feed moved the landed message from ${stepped.landedAt}px to ${rested.landedAt}px`);
+
+          /* A draft of several lines; on the phone, the keyboard up as well. */
+          for (const each of [page, base]) await each.locator("textarea").first().fill("one\ntwo\nthree\nfour\nfive\nsix");
+          await page.waitForTimeout(300);
+          await record("six-line-draft", fromEnd, true);
+          if (viewport.phone) {
+            for (const each of [page, base]) await each.evaluate((px) => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(px), KEYBOARD_PX);
+            await page.waitForTimeout(300);
+            await record("keyboard", fromEnd, true);
+            for (const each of [page, base]) await each.evaluate(() => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(0));
+          }
+          for (const each of [page, base]) {
+            await each.locator("textarea").first().fill("");
+            await each.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          }
+          await page.waitForTimeout(300);
+
+          /* A step forward comes back to where the count says, and the keys
+             do what the buttons do, from inside the composer too. */
+          await press(1);
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped) + 1) fail("forward", `position ${position(now)} after ${position(stepped)}`);
+          await page.locator("textarea").first().focus();
+          await page.keyboard.press("Alt+ArrowUp");
+          await settled();
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped)) fail("keys", `Alt+ArrowUp left the position at ${position(now)}`);
+          await page.keyboard.press("Alt+ArrowDown");
+          await settled();
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped) + 1) fail("keys", `Alt+ArrowDown left the position at ${position(now)}`);
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+          /* All the way back. A step back from the oldest loaded message asks
+             the feed for the page before it and finishes there, so the walk
+             ends on the conversation's first own message with the count no
+             longer open-ended and nothing left to step back to. */
+          for (let presses = 0; presses < ALL_OWN + 2; presses += 1) {
+            if (await page.locator('[data-own-step-control="previous"]').isDisabled()) break;
+            await press(-1);
+          }
+          now = await measure(page, 0);
+          fromEnd = total(now) - position(now);
+          await follow(base, fromEnd, ALL_OWN, viewport.phone);
+          const oldest = await record("oldest", fromEnd, true);
+          expect(oldest.count).toBe(`1 / ${ALL_OWN}`);
+          expect(oldest.own).toBe(ALL_OWN);
+          if (!oldest.replyOnScreen) fail("oldest", "the reply to the message is not on screen");
+          if (oldest.landedAt === null || Math.abs(oldest.landedAt - lands) > 2) fail("oldest", `the message landed ${oldest.landedAt}px under the feed's top`);
+          expect(await page.locator('[data-own-step-control="previous"]').isDisabled()).toBe(true);
+
+          /* The way back, from the step row on the phone and from the feed's
+             own row on the desktop, returns to the tail. */
+          await page.locator('button:has([data-feed-jump-pill])').click();
+          await settled();
+          const tail = await measure(page, 0);
+          if (await page.locator("[data-feed-jump-pill]").count()) fail("tail", "the way back did not reach the tail");
+          expect(tail.count).toBe(`${ALL_OWN} / ${ALL_OWN}`);
+          expect([...withRow.pageErrors, ...without.pageErrors]).toEqual([]);
+        } finally {
+          await withRow.context.close();
+          await without.context.close();
+        }
+      }
+
+      /* Fewer than two own messages: nothing to step between, so no row. */
+      for (const own of [1, 2] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-message-steps&own=${own}`, { width: 1440, height: 900 }, "dark", "en", "reduce");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(650);
+          expect(await page.locator("[data-own-message]").count()).toBe(own);
+          expect(await page.locator("[data-own-steps]").count()).toBe(own === 2 ? 1 : 0);
+          (evidence["own-messages"] ??= {})[String(own)] = { row: own === 2 };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      fs.writeFileSync(
+        path.join(EVIDENCE, "row.json"),
+        `{\n  "totals": {\n${Object.entries(totals).map(([name, sum]) => `    ${JSON.stringify(name)}: ${JSON.stringify(sum)}`).join(",\n")}\n  },\n${
+          Object.entries(evidence).map(([where, moments]) => `  ${JSON.stringify(where)}: {\n${
+            Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
+          }\n  }`).join(",\n")}\n}\n`,
+      );
+      expect(failures).toEqual([]);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 1_800_000);
+});

@@ -1831,12 +1831,20 @@ browserTest("#1978: copy controls stay apart and followed content and released p
  *     appears, so the line being read at the top does not move;
  *   - a tap returns to the tail and the strip leaves with it.
  *
+ * A conversation with two or more of the operator's own messages also has the
+ * step row there (docs/design/own-message-steps.md), and then the control is a
+ * cell of that row, so the phone spends one row under the feed: the same
+ * gates hold for that row, 45 px with its border, and its control says «down»
+ * by its name alone.
+ *
  * Readings go to `evidence/issue-2072/jump-strip.json`; frames to `.artifacts/jump-strip/`.
  */
 const JUMP_OUT = path.resolve(".artifacts/jump-strip");
 const JUMP_EVIDENCE = path.resolve("evidence/issue-2072");
 
 interface JumpReading {
+  /** The control shares the own-message step row. */
+  shared: boolean;
   strip: Rect | null;
   control: Rect | null;
   pill: Rect | null;
@@ -1872,8 +1880,9 @@ const readJump = (page: Page) => page.evaluate((): JumpReading => {
     }
     return out;
   };
-  const strip = document.querySelector("[data-feed-jump-strip]");
-  const control = strip?.querySelector("button") ?? null;
+  const pillAt = document.querySelector("[data-feed-jump-pill]");
+  const strip = pillAt?.closest("[data-feed-jump-strip], [data-own-steps]") ?? null;
+  const control = pillAt?.closest("button") ?? null;
   const feed = document.querySelector("[data-log-feed-scroller]")!;
   /* Every text outside the strip, as the ink it paints. */
   const inkOnStrip: string[] = [];
@@ -1895,14 +1904,23 @@ const readJump = (page: Page) => page.evaluate((): JumpReading => {
   const controlsCrossing = control
     ? [...document.querySelectorAll("button, a[href], textarea, input")]
       .filter((other) => other !== control && !control.contains(other) && !other.contains(control))
-      .filter((other) => other.getClientRects().length && meets(box(other), box(control)))
+      /* A row's control scrolled past the feed's end is clipped by the feed,
+         so what can cross is the part its overflow ancestors show. */
+      .filter((other) => {
+        if (!other.getClientRects().length) return false;
+        const b = box(other);
+        const c = clip(other);
+        const seen = { l: Math.max(b.l, c.l), t: Math.max(b.t, c.t), r: Math.min(b.r, c.r), b: Math.min(b.b, c.b) };
+        return seen.r > seen.l && seen.b > seen.t && meets(seen, box(control));
+      })
       .map((other) => other.getAttribute("aria-label") ?? other.tagName.toLowerCase())
     : [];
   const composer = document.querySelector("textarea");
   return {
+    shared: Boolean(strip?.matches("[data-own-steps]")),
     strip: rect(strip),
     control: rect(control),
-    pill: rect(strip?.querySelector("[data-feed-jump-pill]") ?? null),
+    pill: rect(pillAt),
     feed: rect(feed)!,
     composerTop: composer ? box(composer.parentElement ?? composer).t : null,
     inkOnStrip,
@@ -1954,11 +1972,11 @@ browserTest("#2072: away from the tail, the jump control is a row of its own and
           const before = feed.scrollTop;
           const row = firstRow();
           const rowTop = row?.getBoundingClientRect().top ?? null;
-          for (let i = 0; i < 30 && !document.querySelector("[data-feed-jump-strip]"); i += 1) await frame();
+          for (let i = 0; i < 30 && !document.querySelector("[data-feed-jump-pill]"); i += 1) await frame();
           await frame();
           await frame();
           return {
-            mounted: Boolean(document.querySelector("[data-feed-jump-strip]")),
+            mounted: Boolean(document.querySelector("[data-feed-jump-pill]")),
             before,
             after: feed.scrollTop,
             rowMoved: row && rowTop !== null ? row.getBoundingClientRect().top - rowTop : null,
@@ -1974,7 +1992,8 @@ browserTest("#2072: away from the tail, the jump control is a row of its own and
         const { strip, control, pill, feed } = away;
         if (!strip || !control || !pill) fail(`strip, control and pill: ${JSON.stringify({ strip, control, pill })}`);
         else {
-          if (Math.abs(strip.height - 44) > 0.5) fail(`the strip is ${strip.height} px tall, expected 44`);
+          const tall = away.shared ? 45 : 44;
+          if (Math.abs(strip.height - tall) > 0.5) fail(`the strip is ${strip.height} px tall, expected ${tall}`);
           if (control.width < 44 - 0.5 || control.height < 44 - 0.5) fail(`the control's target is ${control.width}x${control.height}`);
           if (Math.abs(pill.height - 32) > 0.5) fail(`the pill is ${pill.height} px tall, expected 32`);
           if (feed.y + feed.height > strip.y + 0.5) fail(`the feed ends at ${feed.y + feed.height}, below the strip's top ${strip.y}`);
@@ -1985,14 +2004,14 @@ browserTest("#2072: away from the tail, the jump control is a row of its own and
         if (away.controlsCrossing.length) fail(`controls crossing the jump control: ${JSON.stringify(away.controlsCrossing)}`);
         if (away.overflowX > 0.5) fail(`the page overflows sideways by ${away.overflowX} px`);
         const word = translate(lang, "feed.down");
-        if (!away.label.includes(word) && !/\d/.test(away.label)) fail(`the control reads «${away.label}», expected «${word}» or a count`);
+        if (away.shared ? !/^\d*$/.test(away.label) : !away.label.includes(word) && !/\d/.test(away.label)) fail(`the control reads «${away.label}», expected «${word}» or a count`);
 
-        await page.locator("[data-feed-jump-strip] button").click();
+        await page.locator("button:has([data-feed-jump-pill])").click();
         await pause(page, 600);
         await feedAtRest(page);
         const back = await page.evaluate(() => {
           const feed = document.querySelector("[data-log-feed-scroller]")!;
-          return { strip: Boolean(document.querySelector("[data-feed-jump-strip]")), fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
+          return { strip: Boolean(document.querySelector("[data-feed-jump-pill]")), fromBottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop };
         });
         if (back.strip) fail("the strip stayed after returning to the tail");
         if (back.fromBottom > 60) fail(`the tap left the feed ${back.fromBottom} px from the tail`);

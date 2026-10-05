@@ -2,6 +2,7 @@
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
 import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -23,6 +24,7 @@ import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from 
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
+import { OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -379,9 +381,12 @@ interface Props {
   /** The seat's deputies to draw as blocks. Absent: read from the seat's own
       poll for this conversation, which is empty for every non-seat feed. */
   deputies?: readonly SeatDeputyView[];
+  /** The slot the pane keeps between the feed and its composer for the row
+      that steps between the operator's own messages. Absent: no such row. */
+  stepsMount?: HTMLElement | null;
 }
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -1759,6 +1764,45 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     el.scrollTop += deltaY;
   };
 
+  /* Stepping between the operator's own messages
+     (docs/design/own-message-steps.md). A delivered Claude record is a system
+     row until the ledger names its sender, so while one is unanswered the
+     count is not final. */
+  const sendersPending = useMemo(() => visibleItems.some(({ item }) => item.kind === "sysmsg"
+    && Boolean(item.deliveredMessage?.engineMessageId)
+    && !provenanceLookup.forItem(item)
+    && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [visibleItems, provenanceLookup]);
+  const ownSteps = useOwnMessageSteps({
+    scroller,
+    mount: file && logFeedDependencies().ownMessageSteps ? stepsMount : null,
+    identity: memoryKey && tailPath ? `${memoryKey}\0${tailPath}` : null,
+    phone,
+    olderUnloaded: canRevealOlder,
+    sendersPending,
+    revision: conversationRows,
+    markReaderScroll: markUserScroll,
+    revealOlder: () => revealOlder("explicit"),
+  });
+  const awayFromTail = Boolean(file && feed.items.length && !magnet);
+  /* On the phone the way back shares the step row while both are needed, so
+     only one row is spent under the feed. */
+  const wayBackInStepRow = phone && ownSteps.shown && stepsMount !== null;
+  const wayBack = (shared: boolean) => (
+    <button
+      className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
+      aria-label={t("feed.backToLive")}
+      data-own-step-control={shared ? "latest" : undefined}
+      onClick={jumpToTail}
+    >
+      <span
+        data-feed-jump-pill
+        className={`inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 justify-center px-2" : "px-3"}`}
+      >
+        <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {shared ? newCount || null : newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
+      </span>
+    </button>
+  );
+
   return (
     <RawLineProvider value={getRawLine}>
     <MessageProvenanceProvider value={provenanceLookup}>
@@ -2013,6 +2057,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
+                    data-own-message=""
                     className={rowsSkipOffscreen ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
@@ -2045,6 +2090,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
                   data-feed-kind={row.live ? undefined : item.kind}
+                  /* A step of the own-message row: what the feed draws as the
+                     operator's bubble, whatever the record parsed as. */
+                  data-own-message={!row.live && resolveDeliveredItem(item, provenanceLookup).kind === "user" ? "" : undefined}
                   data-live-turn={row.live ? "" : undefined}
                   data-live-turn-item-id={row.live?.itemId ?? undefined}
                   data-tts-answer-index={speechIndex}
@@ -2164,22 +2212,16 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         feed, never over it. It exists only while the reader is away from the
         tail, which is exactly when a line of text would sit under a floating
         control. When it appears the feed's viewport ends 44 px higher and the
-        line being read, anchored at the top, stays where it is. */}
-    {file && feed.items.length && !magnet ? (
+        line being read, anchored at the top, stays where it is. On the phone,
+        beside the own-message step row, it is a cell of that row. */}
+    {awayFromTail && !wayBackInStepRow ? (
       <div data-feed-jump-strip className="flex h-11 shrink-0 items-center justify-center border-t border-border">
-        <button
-          className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
-          aria-label={t("feed.backToLive")}
-          onClick={jumpToTail}
-        >
-          <span
-            data-feed-jump-pill
-            className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-3 text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40"
-          >
-            <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
-          </span>
-        </button>
+        {wayBack(false)}
       </div>
+    ) : null}
+    {ownSteps.shown && stepsMount ? createPortal(
+      <OwnMessageStepRow steps={ownSteps} phone={phone} wayBack={awayFromTail ? wayBack(true) : null} />,
+      stepsMount,
     ) : null}
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
         Completed totals stay beside their response rows in the scroller. Not on
