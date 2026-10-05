@@ -355,9 +355,11 @@ export async function durableStageTurnEvidence(
       && !evidenceRead.prefixTruncated
       && evidenceRead.records.length === 1
       && evidenceRead.records[0]?.type === "session_meta",
-    /* Gated on the same turn reading the rest of the engine trusts: a provider
-       error the CLI may still retry inside an open turn keeps the busy
-       projection (#516), and so never reads as the end of the turn here. */
+    /* Gated on the turn reading above: a provider error the CLI may still
+       retry inside an open turn keeps the busy projection (#516) and carries
+       no notice. The one reading past the shared projection is a Claude API
+       error stamped with a closing stop reason, which ends the stage attempt
+       whatever its class (`claudeApiErrorClosedAttempt`). */
     terminalProviderMessage: terminal ? terminalNotice : null,
     ...(codex
       ? { backgroundTasks: [], backgroundReportedAt: null }

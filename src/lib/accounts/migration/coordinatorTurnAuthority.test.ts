@@ -197,6 +197,80 @@ describe.each(["claude", "codex"] as const)("a %s host inside a turn outranks th
   });
 });
 
+/** A turn that opened and never closed: what a session that died mid-turn
+    leaves behind, and what a resumed host has not appended to yet. */
+function turnLeftOpen(engine: Engine): Record<string, unknown>[] {
+  return engine === "codex"
+    ? [{ type: "event_msg", timestamp: "2026-09-01T10:00:00.000Z", payload: { type: "task_started", turn_id: "turn-previous" } }]
+    : [
+        { type: "user", timestamp: "2026-09-01T10:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "go" }] } },
+        {
+          type: "assistant",
+          timestamp: "2026-09-01T10:00:01.000Z",
+          message: { role: "assistant", model: "claude-opus-5", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu-one", name: "Read", input: {} }] },
+        },
+      ];
+}
+
+/* The dead-turn rule releases a stalled transcript while no host exists, and
+   that release is cached against the file's size and mtime. A host that then
+   takes a turn has not written yet, so the cached release still matches. */
+describe.each(["claude", "codex"] as const)("a %s host inside a turn outranks a composer release cached before it started", (engine) => {
+  async function fixture(host: { alive: boolean; activeTurnRef: string | null }) {
+    const { registry, sandbox } = sandboxRegistry();
+    const pathname = path.join(sandbox, `${engine}-released.jsonl`);
+    writeTranscript(pathname, turnLeftOpen(engine), 600);
+    registry.reconcileConversations([observation(engine, pathname, "busy")]);
+    const conversation = registry.conversationForPath(pathname)!;
+    const sessionId = conversation.generations[0]!.id;
+
+    const entry = scannedEntry(engine, pathname);
+    expect(entry).toMatchObject({ activity: "stalled", activityReason: "jsonl_turn_stalled" });
+    await reconcileMigrationInventory(registry, [entry]);
+    const stat = fs.statSync(pathname);
+    expect(transcriptTurnResult(pathname, stat.size, stat.mtimeMs, engine).composerReleased).toBe(true);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("idle");
+
+    registerStructuredHost(registry, engine, sessionId, pathname, host);
+    registry.requestConversationReseat(conversation.id, "healthy");
+    return { registry, pathname, conversationId: conversation.id, sessionId, provider: countingProvider(path.join(sandbox, "successor.jsonl")) };
+  }
+
+  test("the reseat waits while the live host holds an active turn, and proceeds once the host reports it over", async () => {
+    const { registry, pathname, conversationId, sessionId, provider } = await fixture({ alive: true, activeTurnRef: "turn-next" });
+
+    await advanceConversationMigration(conversationId, registry, provider);
+
+    expect(provider.created).toBe(0);
+    expect(registry.conversation(conversationId)?.migration?.phase).not.toBe("committed");
+    expect(registry.conversation(conversationId)?.generations).toHaveLength(1);
+
+    registerStructuredHost(registry, engine, sessionId, pathname, { alive: true, activeTurnRef: null });
+    await advanceConversationMigration(conversationId, registry, provider);
+
+    expect(provider.created).toBe(1);
+    expect(registry.conversation(conversationId)?.migration?.phase).toBe("committed");
+  });
+
+  test("a live host at its composer leaves the cached release standing", async () => {
+    const { registry, conversationId, provider } = await fixture({ alive: true, activeTurnRef: null });
+
+    await advanceConversationMigration(conversationId, registry, provider);
+
+    expect(provider.created).toBe(1);
+    expect(registry.conversation(conversationId)?.migration?.phase).toBe("committed");
+  });
+
+  test("a host row whose process is gone holds nothing open: the cached release still frees the reseat", async () => {
+    const { registry, conversationId, provider } = await fixture({ alive: false, activeTurnRef: "turn-next" });
+
+    await advanceConversationMigration(conversationId, registry, provider);
+
+    expect(provider.created).toBe(1);
+    expect(registry.conversation(conversationId)?.migration?.phase).toBe("committed");
+  });
+});
+
 /** The three record shapes the CLI stamps `stop_sequence` on by itself. */
 const cliAuthoredStops: { name: string; record: Record<string, unknown> }[] = [
   { name: "a server_error API error", record: { isApiErrorMessage: true, error: "server_error" } },

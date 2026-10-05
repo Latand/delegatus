@@ -683,6 +683,13 @@ function completeProviderTurnObservation(
     return false;
   }
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return false;
+  /* A verified live host inside a turn speaks before any reading of the file
+     (#1810). It has not journaled its prompt yet, so the tail is the turn
+     before, and so is a composer release cached against these same bytes: a
+     dead stalled turn released while no host existed stays cached until the
+     file changes, and the host that has since taken a turn has not changed
+     it. A host whose process is gone fails the check and fences nothing. */
+  if (structuredHostTurnActive(registry, conversation.engine, source)) return false;
   /* An explicit composer release is the operator's own signal and outranks
      the recovery-tail host fence: a live-but-idle host at the composer must
      not hold the reseat hostage. */
@@ -696,9 +703,6 @@ function completeProviderTurnObservation(
   /* A host registered between inventory and creation still owns a recovery
      tail's turn (issue #516), so its release must not reach the provider. */
   if (observed.recoveryReleased && hasActiveRegisteredHost(registry, source.path)) return false;
-  /* The transcript speaks only when no live host can: one that is inside a
-     turn has not journaled it yet, and a terminal tail is the turn before. */
-  if (structuredHostTurnActive(registry, conversation.engine, source)) return false;
   if (observed.turn.state === "terminal") return true;
 
   /* A crashed Codex rollout can retain its final task_started record forever.
