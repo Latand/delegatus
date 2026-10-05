@@ -68,6 +68,7 @@ import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sess
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "./capabilityHeader";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { updateHoldWait } from "@/lib/selfUpdate/launchHold";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -1002,7 +1003,14 @@ export async function executeSpawnRequest(
         existingAttempt?.accountPin ?? (body.accountId !== undefined),
       ));
     }, { holder: "spawn admission", caller: "spawn" });
-    if (!begun) return NextResponse.json({ error: "autonomous work is held for the automatic update", code: "AUTO_UPDATE_DRAIN" }, { status: 503 });
+    if (!begun) {
+      /* The same wait the MCP refusal names (#2515). */
+      const wait = updateHoldWait();
+      return NextResponse.json({
+        error: `autonomous work is held while the automatic update waits for ${wait.waitingFor}`,
+        code: "AUTO_UPDATE_DRAIN", ...wait,
+      }, { status: 503 });
+    }
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";

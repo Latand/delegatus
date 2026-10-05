@@ -1,6 +1,7 @@
 import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
@@ -259,6 +260,11 @@ export function defaultEvidenceByteBudget(limit: number): number {
   return Math.max(1, limit) * EVIDENCE_TAIL_BYTES;
 }
 
+/** What a liveness read takes from the registry. The aliases are optional so an
+    injected snapshot that predates them still reads; production always has them. */
+export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
+  & Partial<Pick<RegistryFile, "conversationAliases">>;
+
 export interface AgentLivenessSources {
   now(): number;
   /** The clock the phase timings are read on. Production omits it and times on
@@ -282,7 +288,7 @@ export interface AgentLivenessSources {
   listFiles?(): Promise<FileEntry[]>;
   /** One transcript by path, described with no sweep of any kind. */
   describeTranscript(transcriptPath: string): Promise<LivenessTranscript | null>;
-  registrySnapshot(): Pick<RegistryFile, "entries" | "conversations">;
+  registrySnapshot(): LivenessRegistrySnapshot;
   pipelines(): Pipeline[];
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
@@ -496,6 +502,76 @@ export function evaluateLiveness(input: {
   return { lifecycle: "running", reason: "host_alive_turn_active" };
 }
 
+/** The part of a liveness record that says whether a process still owns it. */
+export type LivenessVerdict = Pick<AgentLivenessRecord, "lifecycle" | "reason" | "turnState">
+  & { host: Pick<AgentLivenessRecord["host"], "state"> };
+
+/**
+ * Whether a process could still be working on the conversation a record names.
+ *
+ * This is the `liveOnly` filter of `agent_activity` and the update drain's
+ * answer to "is this turn really running" (#2515). The two used to be separate
+ * readings of the same registry, and they disagreed about every host that had
+ * died: `agent_activity` listed three conversations while the drain counted
+ * ninety-three turns and held every launch for hours. One predicate, so a dead
+ * host reads the same wherever it is asked about.
+ */
+export function livenessRecordIsLive(record: LivenessVerdict): boolean {
+  return record.lifecycle !== "gone" && record.host.state !== "gone" && record.reason !== "launch_unproven_expired";
+}
+
+/** The conversation an id names once the registry's aliases are followed. */
+function canonicalConversation(
+  registry: LivenessRegistrySnapshot,
+  conversationId: string,
+): LivenessRegistrySnapshot["conversations"][string] | undefined {
+  const id = registry.conversationAliases && conversationId.startsWith("conversation_")
+    ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, conversationId as `conversation_${string}`)
+    : conversationId;
+  return registry.conversations[id];
+}
+
+export interface ConversationRegistryHost {
+  /** The host verdict `agent_activity` derives from the same row. */
+  state: AgentHostState;
+  /** A process the row records still answers under its recorded identity,
+      whatever status word the row carries. */
+  processAlive: boolean;
+}
+
+/**
+ * Host evidence for a conversation's current generation, read off its registry
+ * row alone (#2515).
+ *
+ * A liveness record needs a transcript the scanner can describe, so an id whose
+ * transcript was deleted or moved has no record at all. The row still says who
+ * hosts the conversation, and that is the whole question a restart asks: `gone`
+ * proves no process owns it, and `processAlive` names one that does. Null when
+ * the registry holds no row to read, which proves nothing either way.
+ */
+export function conversationRegistryHost(
+  registry: LivenessRegistrySnapshot,
+  conversationId: string,
+  probe: LivenessProbe,
+): ConversationRegistryHost | null {
+  const conversation = canonicalConversation(registry, conversationId);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return null;
+  const entry = registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
+    ?? entryForPath(registry, generation.path);
+  if (!entry) return null;
+  const recorded = [
+    entry.host?.agent,
+    entry.host?.panePid,
+    entry.structuredHost?.process,
+    ...(entry.structuredTerminationSurvivors ?? []),
+  ];
+  return {
+    state: hostEvidence(entry, probe).state,
+    processAlive: recorded.some((identity) => identityAlive(identity, probe)),
+  };
+}
+
 /** Pipeline attempts indexed by the conversation and transcript they own, so a
     stalled agent can be named with its stage lineage. */
 function pipelineIndex(pipelines: Pipeline[]): {
@@ -687,7 +763,10 @@ export async function agentLivenessSnapshot(
   const targeted = Boolean(request.transcriptPath || request.conversationId);
   if (request.transcriptPath) requestedPaths.add(request.transcriptPath);
   if (request.conversationId) {
-    const conversation = registry.conversations[request.conversationId];
+    /* Through the aliases: a journal row or a card can still hold the id a
+       conversation had before its canonical owner adopted it, and that id
+       names the same transcript (#2515). */
+    const conversation = canonicalConversation(registry, request.conversationId);
     const path = conversation?.generations.at(-1)?.path;
     if (path) requestedPaths.add(path);
   }

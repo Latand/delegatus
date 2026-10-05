@@ -14,8 +14,11 @@ import type { FileEntry } from "@/lib/types";
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
   agentLivenessSnapshot,
+  conversationRegistryHost,
   evaluateLiveness,
   HOSTED_RECOVERY_MAX,
+  livenessRecordIsLive,
+  STARTING_GRACE_MS,
   type AgentLivenessSources,
 } from "./liveness";
 import { projectLivenessEvents } from "./projector";
@@ -731,6 +734,86 @@ test("a targeted query with an unknown conversation id returns an empty snapshot
 
   expect(snapshot.count).toBe(0);
   expect(snapshot.conversations).toEqual([]);
+});
+
+/* ------------------------------------------------------------------------- *
+ * #2515 — one answer to "can a process still be working on this?", shared by
+ * `agent_activity liveOnly` and the update drain.
+ * ------------------------------------------------------------------------- */
+
+test("the liveOnly predicate keeps every verdict a process can still stand behind and drops the rest", () => {
+  const verdict = (host: "alive" | "gone" | "unknown", turnState: "busy" | "idle" | "unknown", silentForMs: number | null) => {
+    const evaluated = evaluateLiveness({ host: { state: host }, turnState, silentForMs, stallAfterMs: 10 * 60_000 });
+    return livenessRecordIsLive({ ...evaluated, turnState, host: { state: host } });
+  };
+  /* A live host counts whatever its turn says, a silent one included. */
+  expect(verdict("alive", "busy", 0)).toBe(true);
+  expect(verdict("alive", "busy", 11 * 24 * 60 * 60_000)).toBe(true);
+  expect(verdict("alive", "idle", 0)).toBe(true);
+  /* A launch still inside its grace counts; past it, it does not. */
+  expect(verdict("unknown", "busy", STARTING_GRACE_MS - 1)).toBe(true);
+  expect(verdict("unknown", "busy", STARTING_GRACE_MS)).toBe(false);
+  expect(verdict("unknown", "idle", 12 * 24 * 60 * 60_000)).toBe(false);
+  /* A dead host never counts: the zombie with its turn open, and the one that settled. */
+  expect(verdict("gone", "busy", 11 * 24 * 60 * 60_000)).toBe(false);
+  expect(verdict("gone", "idle", 0)).toBe(false);
+});
+
+test("a conversation's registry row says who hosts it without a transcript to read", () => {
+  const transcript = "/sessions/host-evidence.jsonl";
+  const conversation = { id: "conversation_host", engine: "codex", generations: [{ id: "session-zombie", path: transcript }] };
+  const registry = (entry: AgentRegistryEntry | null, aliases: Record<string, string> = {}) => ({
+    entries: entry ? { "codex:session-zombie": entry } : {},
+    conversations: { conversation_host: conversation },
+    conversationAliases: aliases,
+  }) as unknown as RegistryFile;
+  const probe = (alive: boolean) => ({ now: () => NOW, pidAlive: () => alive, processIdentity: () => alive ? "start-token-of-a-dead-host" : null });
+  const hosted = structuredEntry(transcript, 4242);
+
+  /* A hosted row whose process answers under its recorded identity. */
+  expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  /* The same row once the process is gone, and after the registry ended it. */
+  expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const ended = { ...hosted, status: "dead", structuredHost: null } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(ended), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  /* A status word that says dead over a process that still answers: named, so a restart cannot land on it. */
+  expect(conversationRegistryHost(registry({ ...hosted, status: "dead" }), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: true });
+  /* A process that survived its termination is still a process. */
+  const survivor = { ...ended, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "start-token-of-a-dead-host" }] } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: true });
+  /* A hosted row with no process yet is a launch inside its grace, then rot. */
+  const launching = { ...hosted, structuredHost: null, status: "starting", updatedAt: new Date(NOW - 60_000).toISOString() } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(launching), "conversation_host", probe(false))).toEqual({ state: "unknown", processAlive: false });
+  const rotted = { ...launching, updatedAt: new Date(NOW - STARTING_GRACE_MS).toISOString() } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(rotted), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  /* An id the registry reaches only through an alias names the same row. */
+  expect(conversationRegistryHost(registry(ended, { conversation_before: "conversation_host" }), "conversation_before", probe(false)))
+    .toEqual({ state: "gone", processAlive: false });
+  /* No conversation, or no row for its generation: nothing to read, and nothing proven. */
+  expect(conversationRegistryHost(registry(ended), "conversation_elsewhere", probe(false))).toBeNull();
+  expect(conversationRegistryHost(registry(null), "conversation_host", probe(false))).toBeNull();
+});
+
+test("a targeted query follows the registry's aliases to the conversation's transcript", async () => {
+  const transcript = "/sessions/aliased.jsonl";
+  const registry = {
+    entries: { "codex:session-zombie": structuredEntry(transcript, 4242) },
+    conversations: { conversation_owner: { id: "conversation_owner", engine: "codex", generations: [{ id: "session-zombie", path: transcript }] } },
+    conversationAliases: { conversation_before: "conversation_owner" },
+  } as unknown as RegistryFile;
+  const read = (conversationId: string) => agentLivenessSnapshot({ conversationId }, sources({
+    listFiles: async () => { throw new Error("a targeted query must not run the inventory sweep"); },
+    describeTranscript: async (requested) => ({ path: requested, project: "viewer", title: "stage agent", engine: "codex",
+      mtimeMs: FROZEN_AT, conversationId: null, activity: null, activityReason: null }),
+    registrySnapshot: () => registry,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: FROZEN_AT }),
+  }));
+
+  const aliased = await read("conversation_before");
+  expect(aliased.conversations).toMatchObject([{ transcriptPath: transcript, lifecycle: "stalled", reason: "host_gone_turn_open", host: { state: "gone" } }]);
+  expect((await read("conversation_owner")).conversations).toMatchObject([{ transcriptPath: transcript, reason: "host_gone_turn_open" }]);
+  expect((await read("conversation_nowhere")).conversations).toEqual([]);
 });
 
 /* ------------------------------------------------------------------------- *

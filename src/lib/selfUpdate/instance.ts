@@ -4,9 +4,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentLivenessSnapshot, conversationRegistryHost, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
-import { conversationTurnLiveness } from "@/lib/runtime/liveness";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -27,7 +26,7 @@ import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
 import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
-import { currentHostTurnIdle } from "./quiet";
+import { currentHostTurnIdle, type QuietPorts } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
 
@@ -71,6 +70,60 @@ async function prepareOnce(directory: string, mirrorObjects: string): Promise<st
     }
   }
   return directory;
+}
+
+/**
+ * The evidence a restart judges one journal row on: the row `agent_activity`
+ * answers for the conversation, read through the same snapshot it uses, then
+ * the host its registry row names, then what a host in this Viewer says about
+ * its own turn (#2515).
+ *
+ * The drain used to ask a second liveness reading that answers only for a
+ * registry row still carrying its structured host columns. A host that died
+ * has those columns cleared, so every such row came back with no answer, and
+ * no answer blocked the update for as long as the row existed.
+ */
+export function turnEvidenceReader(
+  sources: () => AgentLivenessSources = productionLivenessSources,
+): NonNullable<QuietPorts["turnLiveness"]> {
+  let base: AgentLivenessSources | null = null;
+  const perProbe = new WeakMap<object, AgentLivenessSources>();
+  return async ({ conversationId, artifactPath }, probe) => {
+    base ??= sources();
+    const liveness = perProbe.get(probe) ?? probeSources(base);
+    perProbe.set(probe, liveness);
+    const read = async (request: { conversationId: string } | { transcriptPath: string }) =>
+      (await agentLivenessSnapshot({ ...request, limit: 1 }, liveness)).conversations[0] ?? null;
+    /* By id first. The transcript the journal row itself names is the second
+       reading, for an id the registry no longer resolves. */
+    const record = await read({ conversationId }) ?? (artifactPath ? await read({ transcriptPath: artifactPath }) : null);
+    const host = structuredDeliveryHostForConversation(conversationId);
+    return {
+      record,
+      registryHost: conversationRegistryHost(liveness.registrySnapshot(), conversationId, liveness.probe),
+      currentTurnIdle: currentHostTurnIdle(await host?.health()),
+    };
+  };
+}
+
+/**
+ * The liveness sources as one probe consumes them. A probe asks about every
+ * journal row in turn, and each answer would otherwise reload the registry, the
+ * flows and every pipeline. The pipelines only name a row's stage lineage,
+ * which no verdict reads, so they are left out; the other two are read once
+ * for all the rows of one probe, and afresh by the next.
+ */
+function probeSources(base: AgentLivenessSources): AgentLivenessSources {
+  const once = <T>(read: () => T): (() => T) => {
+    let held: { value: T } | null = null;
+    return () => (held ??= { value: read() }).value;
+  };
+  return {
+    ...base,
+    registrySnapshot: once(base.registrySnapshot),
+    pipelines: () => [],
+    ...(base.flows ? { flows: once(base.flows) } : {}),
+  };
 }
 
 export function productionDeps(env: Readonly<Record<string, string | undefined>> = process.env): ServiceDeps {
@@ -127,13 +180,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       },
       pipelines: loadPipelinesForList,
       flows: () => loadFlows(),
-      turnLiveness: async (id) => {
-        const verdict = await conversationTurnLiveness(agentRegistry(), id);
-        if (!verdict) return null;
-        const host = structuredDeliveryHostForConversation(id);
-        const current = await host?.health();
-        return { ...verdict, currentTurnIdle: currentHostTurnIdle(current) };
-      },
+      turnLiveness: turnEvidenceReader(),
       seats: () => activeOrchestratorSeats().filter((seat): seat is typeof seat & { conversationId: string } => !!seat.conversationId),
       controllerBusyReason: async () => {
         if (!(await import("@/lib/pipelines/controller")).flowPipelineController().idle()) return "pipeline-controller";

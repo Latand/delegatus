@@ -1,8 +1,8 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import type { HostProcessLivenessEvidence, TurnLiveness } from "@/lib/runtime/liveness";
+import { STARTING_GRACE_MS, livenessRecordIsLive, type ConversationRegistryHost, type LivenessVerdict } from "@/lib/lifecycle/liveness";
 import type { HostState } from "@/lib/runtime/engineHost";
-import type { RuntimeSnapshot } from "@/lib/runtime/contracts";
+import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import type { RegistryRecordIssue } from "@/lib/state/registryRecords";
@@ -12,13 +12,24 @@ import type { StoredViewSession } from "@/lib/view/types";
 import type { Snapshot } from "./types";
 
 export type BusyReason = "update" | "web" | "runtime-host" | "pipeline-controller" | "seat-tick";
-export interface BlockingTurn { conversationId: string; engine: string; project: string | null; stage: { pipelineId: string; stageId: string } | null; seat: boolean }
+export interface BlockingTurn { conversationId: string; engine: string; project: string | null; stage: { pipelineId: string; stageId: string } | null; seat: boolean;
+  /** Listed while nothing says whether a process owns it; see `unresolved`. */
+  unresolved?: true }
 export interface BlockingStage { pipelineId: string; stageId: string; cursor: string; task: string; conversationId: string | null }
 export interface QuietBlockers {
   busyReason?: BusyReason | null;
   turnList?: BlockingTurn[];
   stageList?: BlockingStage[];
+  /** Journal rows that claim an open turn whose host is proven gone. */
   discounted?: number;
+  /** Journal rows that claim an open turn and have neither a liveness record
+      nor a registry row, so nothing says whether a process owns them. */
+  unresolved?: number;
+  /** The part of `unresolved` still inside `unresolvedGraceMs`; these are also
+      counted in `turns`. */
+  unresolvedBlocking?: number;
+  /** How long an unresolved row blocks, counted from the first probe that saw it. */
+  unresolvedGraceMs?: number;
   operatorWindowMs?: number;
   turns: number;
   stages: number;
@@ -27,6 +38,33 @@ export interface QuietBlockers {
   unreadable: string | null;
   memoryMb: number | null;
   registryIssues?: RegistryRecordIssue[];
+}
+
+/**
+ * How long a journal row nothing can resolve keeps blocking a restart, counted
+ * from the first probe that saw it (#2515).
+ *
+ * It is the launch grace the liveness verdict already gives a conversation
+ * with no host evidence, under its own name here because it is counted from a
+ * different moment: a row with no transcript has no silence to age it by. A
+ * launch whose registry row has not been written yet is the one honest reason
+ * such a row can be alive, and it has a row well inside this.
+ */
+export const UNRESOLVED_TURN_GRACE_MS = STARTING_GRACE_MS;
+
+/**
+ * What one journal row is judged on (#2515).
+ *
+ * `record` is the row `agent_activity` answers for the conversation, and
+ * `registryHost` is the host its registry row names when there is no record to
+ * read. Both come from one liveness reading, so the drain and `agent_activity`
+ * cannot disagree about a dead host. `currentTurnIdle` is the one thing neither
+ * holds: what a host in this Viewer says about its own turn right now.
+ */
+export interface TurnEvidence {
+  record: LivenessVerdict | null;
+  registryHost?: ConversationRegistryHost | null;
+  currentTurnIdle?: boolean;
 }
 export interface QuietPorts {
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
@@ -37,7 +75,9 @@ export interface QuietPorts {
   controllerIdle?(): Promise<boolean>;
   registryHealth?(): RegistryRecordIssue[];
   controllerBusyReason?(): Promise<BusyReason | null>;
-  turnLiveness?(conversationId: string): Promise<{ state: TurnLiveness; currentTurnIdle?: boolean; hostEvidence?: Pick<HostProcessLivenessEvidence, "present" | "observedIdentity" | "expected"> } | null>;
+  /** `probe` is one object for every row a single probe asks about, so a
+      reader can share what it loads across them and no further. */
+  turnLiveness?(session: Pick<RuntimeSession, "conversationId" | "artifactPath">, probe: object): Promise<TurnEvidence>;
   seats?(): readonly { conversationId: string; project: string }[];
 }
 export function currentHostTurnIdle(current: Pick<HostState, "status" | "activeTurnRef"> | undefined): boolean | undefined {
@@ -45,33 +85,56 @@ export function currentHostTurnIdle(current: Pick<HostState, "status" | "activeT
   return current.status === "idle" && current.activeTurnRef === null;
 }
 
+type TurnVerdict = "blocks" | "discounted" | "unresolved";
+
+function judgeTurn(evidence: TurnEvidence): TurnVerdict {
+  // Current host work wins over transcript and registry evidence read before
+  // a replacement host was admitted for this conversation.
+  if (evidence.currentTurnIdle === false) return "blocks";
+  const { record, registryHost } = evidence;
+  if (!record) {
+    if (!registryHost) return "unresolved";
+    // A row that records no live process and is past its launch grace proves
+    // no process owns the conversation, with or without a transcript.
+    return registryHost.processAlive || registryHost.state !== "gone" ? "blocks" : "discounted";
+  }
+  // A settled transcript cannot hide a newly admitted turn. Only the host
+  // that would run it can say none was.
+  if (record.turnState === "idle" && evidence.currentTurnIdle === true) return "discounted";
+  // A status word can lag a process the row still records. The restart would
+  // land on that process, so it counts while it answers.
+  if (registryHost?.processAlive) return "blocks";
+  return livenessRecordIsLive(record) ? "blocks" : "discounted";
+}
+
+/** An open turn whose host is proven gone: nothing is left to finish the stage. */
+function stageHostGone(evidence: TurnEvidence): boolean {
+  return evidence.currentTurnIdle !== false && !evidence.registryHost?.processAlive
+    && evidence.record?.host.state === "gone" && evidence.record.turnState === "busy";
+}
+
+/* When each unresolved row was first seen, per set of ports: one for the life
+   of the Viewer in production, a fresh one for each test. Kept beside the
+   ports so no caller can forget to carry it, which would make the bound
+   restart on every probe and hold the drain for good. */
+const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
+
 export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers }> {
   const busyReason: BusyReason | null = snapshot.busy === "update" ? "update"
     : snapshot.busy === "restart-web" || snapshot.processes.web.state !== "healthy" ? "web"
     : snapshot.busy === "restart-runtime-host" || snapshot.processes.runtimeHost.state !== "healthy" ? "runtime-host" : null;
   const blockers: QuietBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: !!busyReason, busyReason,
-    turnList: [], stageList: [], discounted: 0, operatorWindowMs: (draining ? 2 : 10) * 60_000, unreadable: null, memoryMb: null };
-  const verdicts = new Map<string, Promise<TurnLiveness | null>>();
-  const liveness = (id: string): Promise<TurnLiveness | null> => {
-    if (!verdicts.has(id)) verdicts.set(id, (async () => {
-      try {
-        const verdict = await ports.turnLiveness?.(id);
-        // Current host work wins over transcript/process evidence read before
-        // a replacement host was admitted for this conversation.
-        if (verdict?.currentTurnIdle === false) return "working";
-        const host = verdict?.hostEvidence;
-        const processGone = !!host?.expected && (!host.present || !!host.expected.startIdentity && !!host.observedIdentity && host.expected.startIdentity !== host.observedIdentity);
-        if (verdict?.state === "settled" && !processGone && verdict.currentTurnIdle !== true) return "unknown";
-        if (verdict?.state === "severed") {
-          // The shared liveness verdict also covers stalled *live* hosts. Only
-          // process absence or verified pid reuse is safe for restart admission.
-          if (!processGone) return "unknown";
-        }
-        return verdict?.state ?? null;
-      }
-      catch { return null; } // Uncertain liveness always blocks admission.
+    turnList: [], stageList: [], discounted: 0, unresolved: 0, unresolvedBlocking: 0, unresolvedGraceMs: UNRESOLVED_TURN_GRACE_MS,
+    operatorWindowMs: (draining ? 2 : 10) * 60_000, unreadable: null, memoryMb: null };
+  const readings = new Map<string, Promise<TurnEvidence | null>>();
+  const probe = {};
+  const evidence = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">): Promise<TurnEvidence | null> => {
+    const id = session.conversationId;
+    if (!readings.has(id)) readings.set(id, (async () => {
+      try { return await ports.turnLiveness?.(session, probe) ?? null; }
+      catch { return null; } // Evidence that could not be read always blocks admission.
     })());
-    return verdicts.get(id)!;
+    return readings.get(id)!;
   };
   if (ports.memoryAvailableMb) {
     const mb = ports.memoryAvailableMb();
@@ -93,7 +156,10 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
-      if (["running", "reviewing"].includes(cursor.state) && conversationId && await liveness(conversationId) === "severed") continue;
+      if (["running", "reviewing"].includes(cursor.state) && conversationId) {
+        const reading = await evidence({ conversationId, artifactPath: attempt?.agentPath ?? null });
+        if (reading && stageHostGone(reading)) continue;
+      }
       stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId });
     }
     blockers.stages = stages.length;
@@ -102,20 +168,37 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const runtime = await ports.runtimeSnapshot();
     const turns: BlockingTurn[] = [];
     const seen = new Set<string>();
+    const unresolved = new Set<string>();
+    const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
+    firstUnresolved.set(ports, memory);
     for (const session of runtime.sessions) {
       if (!["running", "interrupt_requested"].includes(session.turn) && !["registering", "recovering"].includes(session.host)) continue;
-      // A fallback can publish unhosted/running while the registry still owns
-      // a live process. Host labels alone cannot establish restart admission.
-      const verdict = await liveness(session.conversationId);
-      if (verdict === "severed" || verdict === "settled") { blockers.discounted!++; continue; }
+      // The journal's own words cannot settle this either way: a fallback can
+      // publish unhosted/running over a live process, and a row can keep
+      // hosted/running for days after its host died.
+      const reading = await evidence(session);
+      const verdict = reading ? judgeTurn(reading) : "blocks";
+      if (verdict === "discounted") { blockers.discounted!++; continue; }
       if (seen.has(session.conversationId)) continue;
       seen.add(session.conversationId);
+      if (verdict === "unresolved") {
+        unresolved.add(session.conversationId);
+        const since = memory.get(session.conversationId) ?? now;
+        memory.set(session.conversationId, since);
+        if (now - since >= UNRESOLVED_TURN_GRACE_MS) continue;
+      }
       const stage = stages.find((stage) => stage.conversationId === session.conversationId);
       turns.push({ conversationId: session.conversationId, engine: session.sessionKey?.engine ?? "unknown",
         project: session.cwd ? projectInfoFromCwd(session.cwd)?.project ?? null : null,
         stage: stage ? { pipelineId: stage.pipelineId, stageId: stage.stageId } : null,
-        seat: seats.some((seat) => seat.conversationId === session.conversationId) });
+        seat: seats.some((seat) => seat.conversationId === session.conversationId),
+        ...(verdict === "unresolved" ? { unresolved: true as const } : {}) });
     }
+    // A row that resolved, or left the journal, starts a new bound if it is
+    // ever unresolved again.
+    for (const id of memory.keys()) if (!unresolved.has(id)) memory.delete(id);
+    blockers.unresolved = unresolved.size;
+    blockers.unresolvedBlocking = turns.filter((turn) => turn.unresolved).length;
     blockers.turns = turns.length;
     blockers.turnList = turns.slice(0, 20);
     const controller = ports.controllerBusyReason ? await ports.controllerBusyReason()

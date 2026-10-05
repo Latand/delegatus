@@ -241,6 +241,35 @@ Two consequences shape the rule:
    (Claude, Codex, Copilot), orchestrator seats, deputies, flows and ad-hoc
    conversations alike. A snapshot that cannot be read is a blocker
    ("cannot read what agents are doing").
+
+   A session row is only a claim, because the host that would close a turn is
+   the one that can die with it. Each claiming row is therefore judged on the
+   record `agent_activity` answers for its conversation
+   (`agentLivenessSnapshot`, read by `turnEvidenceReader` in
+   `src/lib/selfUpdate/instance.ts`), with `livenessRecordIsLive` as the one
+   predicate both surfaces use (#2515):
+
+   - a row whose host is gone never counts, whether its turn was left open or
+     had settled; it is reported in `blockers.discounted`;
+   - a row counts while its host is alive, while a launch is inside its
+     five-minute grace, while its registry row records a process that still
+     answers, and whenever a host in this Viewer holds an active turn for it;
+   - a conversation with no transcript to read is judged on its registry row
+     alone (`conversationRegistryHost`): a row with no live host releases it at
+     once;
+   - a row with neither a record nor a registry row is unresolved. It counts
+     for five minutes from the first probe that saw it
+     (`UNRESOLVED_TURN_GRACE_MS`) and is reported in `blockers.unresolved`
+     for as long as it exists;
+   - evidence that cannot be read counts.
+
+   The rows themselves are corrected at the source: once a minute the
+   delivery controller publishes the registry's verdict over a session row
+   that still claims an open turn for a conversation the registry proves
+   hostless (`settleHostlessSessions` in
+   `src/lib/runtime/structuredDeliveryController.ts`). The sweep runs in the
+   Viewer, which is the only process that publishes projections, and stays out
+   of startup: each ended row costs one keyed session read, once.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -248,7 +277,9 @@ Two consequences shape the rule:
    `pending` does not block: a pending stage has nothing in flight and may
    wait hours for an account. Only pipelines in state `running` count, so the
    stale `running` attempts left on closed pipelines (five on this host) never
-   block.
+   block. A `running` or `reviewing` stage whose conversation has an open turn
+   under a host that is gone does not count either: nothing is left to finish
+   it, and the engine replaces the attempt after the restart.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.

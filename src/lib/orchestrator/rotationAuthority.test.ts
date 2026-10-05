@@ -345,10 +345,12 @@ test.each(["route", "tool"] as const)("%s holds a new agent rotation during upda
     const answer = await routeRotation("seat", args);
     expect(answer.status).toBe(409);
     expect(answer.body.code).toBe("launch_held_for_update");
+    // No reading of the blockers was recorded for this drain, and the refusal says so.
+    expect(answer.body).toMatchObject({ waitingFor: "its first reading of what is running", blockers: null });
   } else {
     const answer = await toolRotation(args);
     expect(answer.failed).toBe(true);
-    expect(answer.payload.error).toContain("new launches are held while the automatic update drains running work");
+    expect(answer.payload.error).toContain("new launches are held while the automatic update waits for its first reading of what is running");
   }
   expect(spawns).toHaveLength(0);
   expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(SEAT_ID);

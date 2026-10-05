@@ -72,6 +72,7 @@ import { queryLifecycleEvents, type LifecycleEventQuery } from "@/lib/lifecycle/
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
 import {
   agentLivenessSnapshot,
+  livenessRecordIsLive,
   productionLivenessSources,
   DEFAULT_EVIDENCE_DEADLINE_MS,
   type AgentLivenessSources,
@@ -116,8 +117,7 @@ import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orch
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import { recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
-import { statePath } from "@/lib/configDir";
-import { readAuto } from "@/lib/selfUpdate/auto";
+import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
@@ -1446,10 +1446,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   }
   const hold = dependencies ? activeDrain() : null;
   if (hold && autonomous) {
-    throw new McpToolRefusal("new launches are held while the automatic update drains running work", {
-      code: "launch_held_for_update", target: hold.target, since: hold.since,
-      blockers: readAuto(statePath("self-update", "auto.json")).lastBlockers,
-    });
+    const { error, ...details } = launchHoldRefusal(hold);
+    throw new McpToolRefusal(error, details);
   }
   validateExplicitMcpLaunchModel(args);
   if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
@@ -5523,7 +5521,7 @@ async function agentActivity(
     }, sources);
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
     const liveOnly = args.liveOnly === true && args.includeGone !== true;
-    const conversations = liveOnly ? snapshot.conversations.filter(row => row.lifecycle !== "gone" && row.host.state !== "gone" && row.reason !== "launch_unproven_expired") : snapshot.conversations;
+    const conversations = liveOnly ? snapshot.conversations.filter(livenessRecordIsLive) : snapshot.conversations;
     const excludedGoneCount = snapshot.conversations.length - conversations.length;
     const filtered = { ...snapshot, conversations, count: conversations.length,
       stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
