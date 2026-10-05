@@ -93,13 +93,15 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["host", /\b[\w-]+\.local\b/i],
   ["host", /\blocalhost\b/i],
   ["domain", new RegExp(`\\b(?:[a-z0-9-]+\\.)+${TLD}\\b(?![.\\w])`, "i")],
-  ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/i],
   ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
   /* A path starts a token: `/x/y`, `~/x`, `~user/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
   /* A shell tilde prefix ends at its first slash. NSS user names can contain
      combining marks and punctuation; Markdown can surround the prefix. */
   ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/|\$HOME\b|\$\{HOME\})/u],
+  /* A complete shell home expression needs no slash. Keep approximate
+     numbers and Markdown strike-through readable. */
+  ["path", /(?:^|[\s[(«“‹"'`=:>*_])~(?!~)(?:[\p{L}\p{M}_][\p{L}\p{M}\p{N}_.+-]*)?(?=$|[\s/)\]»”›"'`,.;:!?*_])/u],
   /* Folder names are letters of any script, so `\w` would miss most of them,
      and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
      space-separated run counts only once a later slash closes the folder. */
@@ -151,10 +153,10 @@ export interface PrivateClassOptions {
 }
 
 /* Private and special-use endings need no delegation in the root zone. */
-const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt"]);
+const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt", "consul", "svc"]);
 /* A single-label hostname is private when the text explicitly names it.
    Merely discussing a hostname field or detector names no machine. */
-const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|хост|ім['’]я\s+хоста)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
+const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node)[\s_-]*(?:name|host(?:[\s_-]*name)?)|хост|ім['’]я\s+(?:хоста|машини|вузла))["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
 /* Explicitly labeled remote identities are private even if this machine
    has never seen that user or account in its local deny list. */
 const NAMED_USER = /(?<![\p{L}\p{N}_])(?:user[\s_-]*name|ім['’]я\s+користувача)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?\S/iu;
@@ -174,6 +176,10 @@ const RELATIVE_SOURCE_PREFIX = /(?:^|[\s`[(])(?:\.{1,2}\/)?[\p{L}\p{N}_.-]+(?:\/
    something other than a second slash, a star, a space or the `>` of a
    self-closing tag. A closing tag (`</b>`) is markup. */
 const SLASH_OPENED_PATH = /(?<![\p{L}\p{M}\p{N}_.*\/])(?<!<(?=\/[A-Za-z][A-Za-z0-9-]*\s*>))\/(?![\/*>\s])/u;
+/* A quoted absolute path may begin with spaces in its first component.
+   Requiring the opening mark keeps prose separators such as `either / or`
+   readable. The ASCII closing mark must be the one that opened it. */
+const QUOTED_SPACED_PATH = /([`"'])[ \t]*\/[ \t]+[^\r\n]*?\1|[“«‹][ \t]*\/[ \t]+[^\r\n]*?[”»›]|<code\b[^<>]*>[ \t]*\/[ \t]+[^\r\n]*?<\/code\s*>/iu;
 /* Both UNC spellings, and Windows root-relative paths. Decoding Markdown's
    escaped backslash can reduce a UNC prefix to one backslash, which remains
    a local path, even when it holds only one component. */
@@ -207,9 +213,26 @@ const STRICT_USAGE = [
   /\b(?:plan(?:_?type)?|subscription(?:_?type)?|tier)["'`]?\s*[:=]\s*["'`]?\w/i,
 ];
 /* Host endpoints need no dot. A bare bind port also names private state.
-   Keep timestamps and ordinary prose colons readable. */
-const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\s*\d{1,5}\b/u;
+   Match each occurrence so a technical reference cannot exempt a later port. */
+const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\s*\d{1,5}\b/gu;
+const DOTTED_PORT = /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/gi;
+/* These explicit observations describe tool behaviour. Unknown labels retain
+   the strict endpoint reading, including single-label remote hosts. */
+const TECHNICAL_NUMBER_LABEL = /(?:\bHTTP\s+status|\bretryAfterMs|\b(?:observed|expected)\s+attempts)$/iu;
 const STRICT_PORT_FIELD = /\b(?:port|listen_?port|server_?port)["'`]?\s*(?:(?:is|was|number|:|=)\s*)?\d{1,5}\b/i;
+
+function portMatches(text: string, pattern: RegExp): boolean {
+  for (const match of text.matchAll(pattern)) {
+    const colon = match[0].indexOf(":");
+    if (TECHNICAL_NUMBER_LABEL.test(text.slice(0, match.index + colon))) continue;
+    const name = match[0].slice(0, colon);
+    if (VERIFIED_ROOT_SOURCE_FILES.has(name)) continue;
+    const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+    if (SOURCE_EXTENSIONS.has(extension) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
+    return true;
+  }
+  return false;
+}
 
 function topLevelDomain(ending: string): boolean {
   const lower = ending.toLowerCase();
@@ -268,15 +291,16 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   for (const [kind, pattern] of PATTERNS) {
     if (!found.has(kind) && pattern.test(text)) found.add(kind);
   }
+  if (portMatches(text, DOTTED_PORT)) found.add("port");
   const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
     if (NAMED_HOST.test(text)) found.add("host");
     if (NAMED_USER.test(text) || NAMED_ACCOUNT.test(text)) found.add("account");
-    if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
+    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
-    if (STRICT_PORT.test(text) || STRICT_PORT_FIELD.test(text)) found.add("port");
+    if (portMatches(text, STRICT_PORT) || STRICT_PORT_FIELD.test(text)) found.add("port");
   }
   if (namesHit(text, deny.accounts, usable)) found.add("account");
   if (namesHit(text, deny.people, usable)) found.add("person");

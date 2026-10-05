@@ -81,7 +81,18 @@ const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human
 /* Explicit attribution remains a conversation quote inside a code span.
    Technical code spans without that attribution stay readable. */
 const OPERATOR_SPEECH = "(?:wrote|said|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
-const ATTRIBUTED_OPERATOR_WORDS = new RegExp(`(?<!\\p{L})(?:operator|user|human|оператор|користувач|людина)\\s*(?:(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S|${OPERATOR_SPEECH}\\s+[\x60‹“«"'‘])`, "iu");
+const OPERATOR = "(?:operator|user|human|оператор|користувач|людина)";
+/* Connecting words and possessive attribution still name whose words the
+   code span holds. Ordinary technical spans carry no speech attribution. */
+const SPEECH_CONNECTOR = "(?:(?:with|using|exactly|as|follows|the|following|these|in|words|exact|saying|словами|так|дослівно)(?!\\p{L})\\s*){0,6}";
+const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<code\\b[^<>]*>)";
+const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
+  `(?<!\\p{L})(?:${OPERATOR}\\s*(?:`,
+  `(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S`,
+  `|${OPERATOR_SPEECH}\\s+${SPEECH_CONNECTOR}[:—]?\\s*${QUOTE_OPEN}`,
+  `|['’]s\\s+(?:exact\\s+)?(?:reply|response|words|message)\\s*(?:(?:was|were|is|are)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
+  `|(?:точна\\s+)?(?:відповідь|слова|повідомлення)\\s+(?:оператора|користувача|людини)\\s*(?:(?:була|були|було|є)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
+].join(""), "iu");
 /* An image in any form: inline, or by reference (`![board][ref]`, `![board]`). */
 const EMBEDDED_IMAGE = /!\[|<img\b/i;
 

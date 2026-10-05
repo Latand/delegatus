@@ -125,3 +125,42 @@ test("strict endpoint ports allow whitespace after the colon", () => {
     expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
   }
 });
+
+test("complete shell homes and quoted leading-space absolute paths are private", () => {
+  for (const home of ["~", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"]) {
+    for (const line of [`The directory is \`${home}\`.`, `The directory is (${home}),`, `The directory is '${home}';`]) {
+      expect(privateClasses(line)).toContain("path");
+      expect(privateClasses(line, undefined, { strict: true })).toContain("path");
+    }
+  }
+  for (const path of [["", " My notes", "log.txt"].join("/"), ["", " leading.txt"].join("/"), ["", "\tМої записи", "звіт.txt"].join("/")]) {
+    for (const quoted of [`\`${path}\``, `'${path}'`, `“${path}”`]) {
+      expect(privateClasses(`The log is in ${quoted}.`, undefined, { strict: true })).toContain("path");
+    }
+  }
+  for (const line of ["The ~~old~~ state differs.", "The estimate was ~5 minutes.", "Either / or was shown.", "See src/lib/mcp/bindings.ts."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("internal DNS suffixes and explicit machine or node fields need no local deny list", () => {
+  for (const suffix of ["consul", "svc"]) {
+    expect(privateClasses(`The failure occurred on ${["buildbox", "node", suffix].join(".")}.`, undefined, { strict: true })).toContain("domain");
+  }
+  for (const line of ["The machine name is runner-q.", "The node name was `runner-q`.", '{"machine_name":"runner-q"}', '{"node_name":"runner-q"}', "Ім’я машини: runner-q", "Ім’я вузла: runner-q"]) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+  }
+  for (const line of ["Date.now() and rows.map(render) returned.", "The machine name field was missing.", "The node name field was missing.", "See src/lib/mcp/bindings.ts."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("technical numeric labels and source locations grant no exemption to a later endpoint", () => {
+  for (const line of ["HTTP status: 503.", "retryAfterMs: 1000.", "Observed attempts: 3; expected attempts: 1.", "src/lib/mcp/bindings.ts:1767.", "README.md:12."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+    expect(privateClasses(`${line} The endpoint was buildbox: 8898.`, undefined, { strict: true })).toContain("port");
+  }
+  for (const line of ["The endpoint was buildbox: 8898.", "The endpoint was remote-worker: 9.", "The listener used port: 9.", "The listener bound to : 8898."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("port");
+  }
+});

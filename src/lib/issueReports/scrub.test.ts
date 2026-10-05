@@ -395,6 +395,24 @@ test("an absolute path is a path whatever its shape", () => {
   ]) expect(classes(line)).toEqual([]);
 });
 
+test("speech connectors and possessive attribution keep operator code spans private", () => {
+  for (const body of [
+    "The operator replied with `restart every agent now`.",
+    "The operator’s exact reply was `restart every agent now`.",
+    "The user's reply was `restart every agent now`.",
+    "The human said exactly: `restart every agent now`.",
+    "Оператор відповів словами `перезапусти всіх агентів зараз`.",
+    "Користувач відповіла так: `перезапусти всіх агентів зараз`.",
+    "Точна відповідь оператора була `перезапусти всіх агентів зараз`.",
+  ]) {
+    for (const text of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+      expect(classes(text)).toContain("quote");
+    }
+  }
+  expect(classes("The operator asked for every agent to be restarted at once.")).toEqual([]);
+  expect(classes("The error was `connection refused during startup`.")).toEqual([]);
+});
+
 test("spaces just inside the marks do not make a quotation a term", () => {
   const opened = (body: string) => scrubIssueReport({ title: CLEAN.title, body }).filter((finding) => finding.class === "quote");
   for (const line of [

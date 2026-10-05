@@ -373,6 +373,82 @@ test("privacy bypasses are refused before storage and rechecked before publicati
   expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
 });
 
+test("attributed code quotes, complete home expressions, spaced absolute paths and remote machine names cannot cross either privacy boundary", async () => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  const cases: [string, string][] = [
+    ["quote", "The operator replied with `restart every agent now`."],
+    ["quote", "The operator’s exact reply was `restart every agent now`."],
+    ["quote", "The user's reply was `restart every agent now`."],
+    ["quote", "The human said exactly: `restart every agent now`."],
+    ["quote", "The operator replied using `restart every agent now`."],
+    ["quote", "The operator said exactly the following: `restart every agent now`."],
+    ["quote", "The operator's exact words: `restart every agent now`."],
+    ["quote", "The operator replied with <code>restart every agent now</code>."],
+    ["quote", "Оператор відповів словами `перезапусти всіх агентів зараз`."],
+    ["quote", "Користувач відповіла так: `перезапусти всіх агентів зараз`."],
+    ["quote", "Точна відповідь оператора була `перезапусти всіх агентів зараз`."],
+    ...["~", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"].map((home): [string, string] => ["path", `The state directory is \`${home}\`.`]),
+    ["path", "The state directory is (~reportuser), and the read failed."],
+    ["path", "The state directory is '~'."],
+    ["path", "The state directory is **~reportuser**."],
+    ["path", `The log is in \`${["", " My notes", "log.txt"].join("/")}\`.`],
+    ["path", `The log is in '${["", " My notes", "log.txt"].join("/")}'.`],
+    ["path", `The log is in “${["", " Мої записи", "звіт.txt"].join("/")}”.`],
+    ["path", `The log is in \`${["", " leading.txt"].join("/")}\`.`],
+    ["path", `The log is in <code>${["", " My notes", "log.txt"].join("/")}</code>.`],
+    ["path", `The log is in \` ${["", " leading.txt"].join("/")} \`.`],
+    ["path", `The log is in \`${["", " "].join("/")}\`.`],
+    ["domain", `The failure occurred on ${["buildbox", "node", "consul"].join(".")}.`],
+    ["domain", `The failure occurred on ${["buildbox", "default", "svc"].join(".")}.`],
+    ["host", "The machine name is runner-q."],
+    ["host", "The node name was `runner-q`."],
+    ["host", '{"machine_name":"runner-q"}'],
+    ["host", '{"node_name":"runner-q"}'],
+    ["host", "Ім’я машини: runner-q"],
+    ["host", "Ім’я вузла: runner-q"],
+  ];
+  const forms = [(body: string) => body, encodeURIComponent, (body: string) => [...body].map((char) => `&#${char.codePointAt(0)};`).join("")];
+  for (const [kind, body] of cases) for (const encode of forms) {
+    const report = { title: REPORT.title, body: encode(body) };
+    const refused = await h.call(REPORTER, { action: "preview", ...report });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+    expect(JSON.stringify(refused)).not.toContain(body);
+  }
+  for (const [, body] of cases) for (const encode of forms) {
+    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encode(body) }, REPORTER.conversationId!, { directory: sandbox });
+    const replies = await shown(h, digest);
+    h.operatorSays(replies.uk);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+  const clean = { title: REPORT.title, body: "The error was `connection refused during startup`. Date.now() and rows.map(render) returned. See src/lib/mcp/bindings.ts. The **read/write** split and ~~removed~~ state differ; either / or was shown." };
+  const digest = await previewed(h, clean);
+  h.operatorSays((await shown(h, digest)).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
+});
+
+test("technical numeric evidence and source line references remain publishable", async () => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  for (const body of [
+    "The response carried HTTP status: 503.",
+    "The receipt had retryAfterMs: 1000.",
+    "Observed attempts: 3; expected attempts: 1.",
+    "The settlement path is src/lib/mcp/bindings.ts:1767.",
+    "See README.md:12 and ./src/lib/mcp/bindings.ts:1767.",
+  ]) {
+    const report = { title: REPORT.title, body };
+    const digest = await previewed(h, report);
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
+  }
+});
+
 test("a withdrawal or edit during async privacy reads prevents a claim and publication", async () => {
   for (const [index, words] of ["Wait, do not publish", "Change the title first", "Ні, не публікуй", "Зміни текст спочатку"].entries()) {
     let holdRead = false;
