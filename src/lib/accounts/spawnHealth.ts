@@ -178,6 +178,7 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
   ]);
   if (catalogIdentity(original.account) !== catalogIdentity(account)) throw new AccountAdmissionChangedError();
   const credentialIdentity = claudeProbeCredentialIdentity(original.account.home);
+  if (credentialIdentity === null) throw new ClaudeCredentialUnavailableError();
   for (let attempt = 0; attempt < (retryUnrelatedRevision ? 3 : 1); attempt += 1) {
     let snapshot = original;
     if (attempt > 0) {
@@ -192,7 +193,8 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
     if (snapshot.identity !== original.identity) throw new AccountAdmissionChangedError();
     const result = await liveValidityProbe(snapshot.account);
     const currentCredentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
-    if (credentialIdentity === null || currentCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+    // Becoming unreadable after the snapshot is an admission change too.
+    // It must not enter the pinned fallback and burn a failed receipt.
     if (credentialIdentity !== currentCredentialIdentity) throw new AccountAdmissionChangedError();
     const unchanged = await withAccountMutationLockAsync(() => {
       if (accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();

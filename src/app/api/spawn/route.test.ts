@@ -232,7 +232,7 @@ test("an automatic bound-project health revision race stays retryable and preser
   }
 });
 
-for (const change of ["unrelated refusal", "unrelated refusal with fallback", "pinned catalog", "pinned credential", "continuous unrelated writes"] as const) test(`a pinned Claude health probe handles ${change} before reserving once`, async () => {
+for (const change of ["unrelated refusal", "unrelated refusal with fallback", "pinned catalog", "pinned credential", "pinned unreadable credential", "pinned removed credential", "continuous unrelated writes"] as const) test(`a pinned Claude health probe handles ${change} before reserving once`, async () => {
   const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
   const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
   const { readAccountSource, writeAccountSource } = await import("@/lib/accounts/accountsStore");
@@ -250,6 +250,7 @@ for (const change of ["unrelated refusal", "unrelated refusal with fallback", "p
   }
   const deps: SpawnRouteTestDependencies = {
     ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolvePinnedSpawnAdmission: undefined,
     resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
   };
   const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
@@ -269,6 +270,10 @@ for (const change of ["unrelated refusal", "unrelated refusal with fallback", "p
         const catalog = read.body as { accounts: { id: string; label: string }[] };
         catalog.accounts.find(row => row.id === account.id)!.label = "Changed pin";
         writeAccountSource("claude-accounts.json", catalog);
+      } else if (change === "pinned unreadable credential") {
+        fs.writeFileSync(path.join(account.home, ".credentials.json"), "{invalid json", { mode: 0o600 });
+      } else if (change === "pinned removed credential") {
+        fs.unlinkSync(path.join(account.home, ".credentials.json"));
       } else if (change === "pinned credential") {
         fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
       } else {
