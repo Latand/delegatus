@@ -14,7 +14,7 @@ const PREVIOUS_STATE = process.env.LLV_STATE_DIR;
 const PREVIOUS_HOME = process.env.LLV_CLAUDE_HOME;
 const PREVIOUS_FETCH = globalThis.fetch;
 let providerReads = 0;
-let providerReply: (() => Response) | null = null;
+let providerReply: (() => Response | Promise<Response>) | null = null;
 process.env.LLV_STATE_DIR = path.join(STATE_SANDBOX, "state");
 process.env.LLV_CLAUDE_HOME = path.join(STATE_SANDBOX, "legacy-claude");
 globalThis.fetch = (async () => {
@@ -426,6 +426,38 @@ test("a validity probe whose catalog revision moved returns replayable admission
     await expect(selectHealthyClaudeAccount([selected], selected.id)).rejects.toMatchObject({ name: "AccountAdmissionChangedError" });
   } finally { providerReply = null; }
 });
+
+test.each(["revision", "busy"] as const)("automatic bound-project admission preserves replayable %s failures", async (failure) => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const { bindAccountToProject } = await import("./projectBindings");
+  const { resolveHealthySpawnAccount } = await import("./manager");
+  const { ACCOUNT_MUTATION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE } = await import("./accountMutation");
+  const { foreignAccountHolder } = await import("./accountMutation.fixture");
+  const created = createManagedClaudeAccount("Bound admission fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const project = `repo-bound-admission-${failure}`;
+  expect(bindAccountToProject("claude", created.id, project).ok).toBe(true);
+  let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  providerReply = async () => {
+    if (failure === "revision") createManagedClaudeAccount("Concurrent bound-project writer");
+    else {
+      holder = await foreignAccountHolder();
+      holder.releaseAfter(ACCOUNT_MUTATION_WAIT_MS + 150);
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const error = await resolveHealthySpawnAccount("claude", undefined, project).then(() => null, (caught: unknown) => caught);
+    expect(error).toMatchObject({
+      name: failure === "revision" ? "AccountAdmissionChangedError" : "AccountMutationBusyError",
+      message: failure === "revision" ? "The account changed while preparing the launch; try again shortly." : ACCOUNT_STORE_BUSY_MESSAGE,
+    });
+    expect((error as Error).message).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+  } finally {
+    providerReply = null;
+    await holder?.close();
+  }
+}, 20_000);
 
 test("concurrent admissions coalesce refresh validation for one account", async () => {
   const expired = account("concurrent", NOW - 1);

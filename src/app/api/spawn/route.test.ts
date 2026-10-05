@@ -190,6 +190,48 @@ test("a catalog write between spawn snapshot and reservation answers a retryable
   }
 });
 
+test("an automatic bound-project health revision race stays retryable and preserves the same request key", async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { bindAccountToProject } = await import("@/lib/accounts/projectBindings");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "bound-health-revision-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const account = createManagedClaudeAccount("Bound route fixture");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const project = "repo-bound-health-revision";
+  expect(bindAccountToProject("claude", account.id, project).ok).toBe(true);
+  const deps: SpawnRouteTestDependencies = {
+    ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+  };
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let raced = false;
+  globalThis.fetch = (async () => {
+    if (!raced) { raced = true; createManagedClaudeAccount("Concurrent bound route writer"); }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  }) as unknown as typeof globalThis.fetch;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "claude", project, cwd, title: "Bound health revision", prompt: "Review", clientAttemptId: "bound-health-revision-key" }),
+  });
+  try {
+    const refused = await POST.withDependencies(request(), deps);
+    expect(refused.status).toBe(503);
+    const body = await refused.json();
+    expect(body).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+    expect(body.error).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+    expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
 test("spawn admission rejects malformed MCP allowlists", async () => {
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST",
