@@ -41,7 +41,7 @@ const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", co
 let metadataState: string;
 let previousMetadataState: string | undefined;
 let restoreFeatures: () => void;
-const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.plugins=false"];
+const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.collab=false", "-c", "features.plugins=false"];
 beforeEach(() => {
   restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
   previousMetadataState = process.env.LLV_STATE_DIR;
@@ -133,6 +133,7 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
 test("fresh and adopted app-server hosts enforce native delegation at process and thread boundaries", async () => {
   for (const allowed of [false, true]) for (const resumed of [false, true]) {
     const server = new FakeAppServer("policy-thread");
+    server.features = { memory_tool: true, telepathy: true, connectors: true, unlisted_worker: true };
     const captured: { args?: string[] } = {};
     const options = { cwd: "/repo", allowSubagents: allowed, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
     const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
@@ -144,6 +145,7 @@ test("fresh and adopted app-server hosts enforce native delegation at process an
       expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed } });
       if (!allowed) {
         expect(config).toMatchObject({ approvals_reviewer: "user" });
+        expect(config).toMatchObject({ features: { memory_tool: false, telepathy: false, connectors: false, unlisted_worker: false } });
         expect(params).toMatchObject({ approvalsReviewer: "user" });
       } else {
         expect(config).not.toHaveProperty("approvals_reviewer");
@@ -237,6 +239,7 @@ class FakeAppServer extends EventEmitter {
      with excludeTurns succeeds and omits thread.turns. */
   paginatedResume = false;
   shellPolicy: Record<string, unknown> = {};
+  features: Record<string, unknown> = {};
   mcpServers: Record<string, unknown> = {
     playwright: { command: "npx", enabled: true },
     "telegram-readonly": { command: "uv", enabled: true },
@@ -355,6 +358,7 @@ class FakeAppServer extends EventEmitter {
       config: {
         mcp_servers: this.mcpServers,
         shell_environment_policy: this.shellPolicy,
+        features: this.features,
       },
     });
     if (method === "thread/start" || method === "thread/resume") {

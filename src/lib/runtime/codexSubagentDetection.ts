@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentRegistry, SpawnReceipt } from "@/lib/agent/registry";
 import { appendLifecycleEvents, type LifecycleEventInput } from "@/lib/lifecycle/journal";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -9,6 +11,49 @@ import type { RuntimeEvent } from "./engineHost";
 const nativeMethods = new Set(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent",
   "spawn_agent", "resume_agent", "send_input", "close_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]);
 const transcriptObservations = new WeakMap<AgentRegistry, Map<string, string>>();
+const childObservations = new WeakMap<AgentRegistry, Set<string>>();
+const v1Methods = new Set(["spawn_agent", "resume_agent", "send_input", "wait", "wait_agent", "close_agent"]);
+const v2Methods = new Set(["spawn_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]);
+
+/** The native transcript stores namespace separately from the method name. */
+export function nativeCodexFunctionCallMethod(payload: Record<string, unknown>, toolNamespaces: ReadonlySet<string> = new Set(["collaboration"])): string | null {
+  const name = payload.name;
+  if (typeof name !== "string") return null;
+  const namespace = payload.namespace;
+  if (namespace != null) {
+    if (typeof namespace !== "string" || namespace.startsWith("mcp__")) return null;
+    return toolNamespaces.has(namespace) && v2Methods.has(name) ? name : null;
+  }
+  if (!v1Methods.has(name)) return null;
+  if (name === "wait") {
+    try {
+      const args = typeof payload.arguments === "string" ? JSON.parse(payload.arguments) : payload.arguments;
+      if (!args || typeof args !== "object" || "cell_id" in args || !Array.isArray(args.ids)
+        || !args.ids.length || !args.ids.every((id: unknown) => typeof id === "string")) return null;
+    } catch { return null; }
+  }
+  return name;
+}
+
+/** Read only the namespace setting for an unusual tool namespace. Session
+ * roots identify their account home without opening mutable account stores. */
+function configuredToolNamespaces(entry: FileEntry): Set<string> {
+  const namespaces = new Set(["collaboration"]);
+  const sessionRoot = entry.path.lastIndexOf(`${path.sep}sessions${path.sep}`);
+  const configs = [
+    ...(sessionRoot >= 0 ? [path.join(entry.path.slice(0, sessionRoot), "config.toml")] : []),
+    ...(entry.cwd ? [path.join(entry.cwd, ".codex", "config.toml")] : []),
+  ];
+  for (const filename of configs) {
+    try {
+      if (fs.statSync(filename).size > 1024 * 1024) continue;
+      const config = Bun.TOML.parse(fs.readFileSync(filename, "utf8")) as { features?: { multi_agent_v2?: { tool_namespace?: unknown } } };
+      const namespace = config.features?.multi_agent_v2?.tool_namespace;
+      if (typeof namespace === "string" && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(namespace) && !namespace.startsWith("mcp__")) namespaces.add(namespace);
+    } catch { /* Missing or unreadable config supplies no namespace evidence. */ }
+  }
+  return namespaces;
+}
 
 /** Native events contain task text. Only a fixed method label enters the alert. */
 export function nativeCodexActivityMethod(item: unknown): string | null {
@@ -66,7 +111,19 @@ export function observeCodexSubagentEvent(registry: AgentRegistry, parentPath: s
 /** Covers terminal CLI and headless exec as well as a child whose live parent
  * event was missed. Native headers and typed tool records provide evidence. */
 export function observeCodexSubagentTranscripts(registry: AgentRegistry, entries: readonly FileEntry[]): void {
+  try { collectCodexSubagentTranscripts(registry, entries); }
+  catch {
+    // Keep pipelines, migrations and the other controllers running. No
+    // observation is acknowledged until its journal transaction succeeds.
+    console.error("[codex sub-agent policy] transcript observation could not be recorded; retrying next tick");
+  }
+}
+
+function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: readonly FileEntry[]): void {
   const parents = new Map<string, string>();
+  const children = childObservations.get(registry) ?? new Set<string>();
+  childObservations.set(registry, children);
+  const completedChildren: string[] = [];
   let receipts: SpawnReceipt[] | undefined;
   const events: LifecycleEventInput[] = [];
   const at = new Date().toISOString();
@@ -82,9 +139,11 @@ export function observeCodexSubagentTranscripts(registry: AgentRegistry, entries
     const parentPath = parent ? parents.get(parent) : null;
     const child = codexThreadIdFromPath(entry.path);
     if (parentPath && child) {
+      const key = `${parentPath}:${child}`;
+      if (children.has(key)) continue;
       receipts ??= Object.values(registry.readOnlySnapshot().receipts);
-      recordCodexSubagentViolation(registry, parentPath, `child:${child}`, "thread_spawn", at,
-        collect, receipts, entry.sessionStartedAt ?? at);
+      if (recordCodexSubagentViolation(registry, parentPath, `child:${child}`, "thread_spawn", at,
+        collect, receipts, entry.sessionStartedAt ?? at)) completedChildren.push(key);
     }
   }
   // Calls whose child never materializes are still native activity. Reuse the
@@ -105,13 +164,15 @@ export function observeCodexSubagentTranscripts(registry: AgentRegistry, entries
     remaining -= bytes;
     const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
     if (!tail.complete) continue;
+    let namespaces: ReadonlySet<string> | undefined;
     for (const row of tail.records) {
       const payload = row.payload as Record<string, unknown> | undefined;
       if (!payload || typeof payload !== "object") continue;
       let method: string | null = null;
       if (row.type === "response_item" && payload.type === "function_call" && typeof payload.name === "string") {
-        const name = payload.name.replace(/^(collaboration|functions)\./, "");
-        if (nativeMethods.has(name)) method = name;
+        if (typeof payload.namespace === "string" && payload.namespace !== "collaboration"
+          && !payload.namespace.startsWith("mcp__") && v2Methods.has(payload.name)) namespaces ??= configuredToolNamespaces(entry);
+        method = nativeCodexFunctionCallMethod(payload, namespaces);
       } else if (row.type === "event_msg") method = nativeCodexActivityMethod(payload);
       if (!method) continue;
       const id = payload.call_id ?? payload.id;
@@ -123,7 +184,11 @@ export function observeCodexSubagentTranscripts(registry: AgentRegistry, entries
   }
   // One journal transaction and one receipt snapshot per inventory, including
   // historical children, rather than a registry/journal scan for each child.
-  appendLifecycleEvents(events);
+  if (events.length) appendLifecycleEvents(events);
+  for (const key of completedChildren) {
+    if (children.size >= 4096) children.delete(children.values().next().value!);
+    children.add(key);
+  }
   // A failed journal write leaves every candidate eligible for the next tick.
   for (const [pathname, signature] of completed) {
     if (observations.size >= 4096) observations.delete(observations.keys().next().value!);

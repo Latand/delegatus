@@ -148,7 +148,7 @@ export function headlessCodexThreadConfig(
        must be restated here or thread/realtime/start fails locally (#621). */
     features: {
       ...CODEX_VIEWER_SPAWN_FEATURES,
-      ...codexSubagentConfig(features, allowSubagents),
+      ...codexSubagentConfig(features, allowSubagents, Object.keys(record(config.features) ?? {})),
       plugins: granted.length > 0,
       multi_agent: allowSubagents,
       realtime_conversation: true,

@@ -16,6 +16,27 @@ export const CODEX_SINGLE_AGENT_FEATURES: ReadonlySet<string> = new Set([
   "view_image", "workspace_dependencies", "write_stdin_approval",
 ]);
 
+// Codex's legacy.rs aliases are absent from `features list`, but participate
+// in the merged feature map and can override a canonical false value.
+const CODEX_FEATURE_ALIASES: Readonly<Record<string, string>> = {
+  connectors: "apps",
+  enable_experimental_windows_sandbox: "experimental_windows_sandbox",
+  experimental_use_unified_exec_tool: "unified_exec",
+  request_permissions: "exec_permission_approvals",
+  web_search: "web_search_request",
+  imagegenext: "image_generation",
+  collab: "multi_agent",
+  memory_tool: "memories",
+  telepathy: "chronicle",
+  codex_hooks: "hooks",
+};
+
+function codexDeniedAliases(features: readonly CodexFeature[]): string[] {
+  const denied = new Set(codexDeniedFeatures(features));
+  return Object.entries(CODEX_FEATURE_ALIASES)
+    .filter(([, canonical]) => denied.has(canonical)).map(([alias]) => alias);
+}
+
 export interface CodexFeature {
   name: string;
   stage: string;
@@ -94,10 +115,15 @@ export function codexSubagentArgs(binary: string, allowSubagents = false, env: N
   // Older supported interpreters reject --disable for a feature they do not
   // know. Their reported inventory still determines every emitted CLI flag.
   const reported = new Set(features.map((feature) => feature.name));
-  return [...isolation, "-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', ...codexDeniedFeatures(features).filter((name) => reported.has(name))
+  return [...isolation, "-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"',
+    ...codexDeniedAliases(features).flatMap((alias) => ["-c", `features.${alias}=false`]),
+    ...codexDeniedFeatures(features).filter((name) => reported.has(name))
     .flatMap((feature) => ["--disable", feature])];
 }
 
-export function codexSubagentConfig(features: readonly CodexFeature[], allowSubagents: boolean): Record<string, boolean> {
-  return allowSubagents ? { multi_agent: true } : Object.fromEntries(codexDeniedFeatures(features).map((name) => [name, false]));
+export function codexSubagentConfig(features: readonly CodexFeature[], allowSubagents: boolean, configuredKeys: readonly string[] = []): Record<string, boolean> {
+  return allowSubagents ? { multi_agent: true } : Object.fromEntries([
+    ...codexDeniedFeatures(features), ...codexDeniedAliases(features),
+    ...configuredKeys.filter((key) => !CODEX_SINGLE_AGENT_FEATURES.has(CODEX_FEATURE_ALIASES[key] ?? key)),
+  ].map((name) => [name, false]));
 }

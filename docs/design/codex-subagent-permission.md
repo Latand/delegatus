@@ -53,7 +53,8 @@ contract; no matching child predates denied admission. Only the 2026-10-05 row
 grew, to 18 calls and 18 matching headers. Both snapshots recorded 0.159.3.
 
 The exact observed method was `spawn_agent`, recorded as a native
-`response_item` / `function_call`. Searches also covered `collabAgentToolCall`,
+`response_item` / `function_call` with `name="spawn_agent"` and
+`namespace="collaboration"`. Searches also covered `collabAgentToolCall`,
 `subAgentActivity`, and other spawning calls. Those two app-server item types
 were absent from these native transcript records. No conversation text,
 identities, transcript identifiers, or project names are published here.
@@ -114,6 +115,15 @@ denial at both levels prevents that replacement from reopening a background
 feature. The existing explicit approved-plugin grant remains honored at both
 levels. Older interpreters receive CLI `--disable` flags only for features they
 report, avoiding rejection of a newer unknown flag.
+Legacy feature aliases participate in the merged feature map even though
+`features list` omits them. Denied CLI and app-server processes override aliases
+of denied canonical features, including `memory_tool`, `telepathy`, `connectors`
+and `collab`. Each app-server thread also disables every effective feature key
+from `config/read` outside the allowlist, covering aliases and unlisted keys.
+The [upstream alias map](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/features/src/legacy.rs)
+explains why canonical flags alone did not override legacy account settings.
+The ephemeral relay's answer agent uses this same inventory policy in addition
+to its stricter tool restrictions and isolated configuration.
 The reviewed `computer_use` feature permits ordinary interaction by the current
 agent; the existing plugin allowlist still controls whether its tools are
 granted. Browser-agent integrations and local-automation features remain off.
@@ -133,6 +143,15 @@ Typed native calls in each denied parent's bounded transcript tail also alert
 when no child materializes. Unchanged tails are cached; one tick reads at most
 8 MiB across parents, continuing other candidates on subsequent ticks. Child
 headers and the durable app-server ledger cover activity outside that tail.
+Function calls are classified by the separate `namespace` and `name` fields:
+v2 uses `collaboration` or a configured `features.multi_agent_v2.tool_namespace`,
+and v1 uses unnamespaced native names. An unnamespaced legacy `wait` must have
+agent `ids` and no `cell_id`. Code Mode `wait` and all `mcp__*` namespaces stay
+clear. Successful child observations are cached too, so unchanged inventories
+take no journal lock. A scanner observation failure logs a fixed diagnostic
+and leaves its observations pending for the next tick; pipeline and account
+controllers continue while the journal is unavailable. The app-server ledger
+retains its stricter retry-before-acknowledgement behavior.
 
 A violation requires the exact parent generation to deny sub-agents and an
 explicit denied Delegatus launch receipt for its artifact. Imported standalone
@@ -208,6 +227,19 @@ root, plus `LLV_VIEWER_CONTROL_URL` on a closed port:
 - `src/lib/lifecycle/digest.test.ts`
 - `src/lib/lifecycle/journal.test.ts`
 - `src/lib/mcp/voiceUtteranceWiring.test.ts`
+- `src/lib/agent/ephemeral.test.ts`
+
+Follow-up regressions reproduce the review findings on the reviewed head:
+real namespace/name fixtures produced three extra MCP/Code Mode alerts;
+hostile legacy aliases left native CLI and app-server memory features enabled;
+and a truncated journal stopped the scanner before its pipeline tick. The
+fixed tests cover account and trusted-project aliases, permission-enabled CLI
+launches, real app-server feature state and a credential-free model turn with
+no `x-openai-subagent` request. The controller regression runs through
+`reconcileFileControllers`, reaches the pipeline tick despite journal damage,
+then records one child event after repair. A steady-state check proves no
+journal append is attempted for already-observed children or tails.
+The 13 exact-path suites passed with 371 tests after these corrections.
 
 Heavy commands use `scripts/gate-slot.sh`. Type checking and changed-file lint
 are also run. Publication uses the repository's local pre-commit and pre-push

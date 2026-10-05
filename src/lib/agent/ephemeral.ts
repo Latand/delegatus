@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { resolveBinary } from "@/lib/agent/cli";
+import { codexSubagentArgs } from "./codexSpawnPolicy";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import {
   claudeManagedEnvironment,
@@ -196,9 +197,9 @@ export function buildEphemeralCommand(
     request.runDir,
   );
   const output = path.join(request.runDir, "answer.json");
+  const binary = resolveBinary("codex");
   const args = [
-    "--disable",
-    "multi_agent",
+    ...codexSubagentArgs(binary, false, request.account.env),
     "--disable",
     "shell_tool",
     "--disable",
@@ -262,7 +263,7 @@ export function buildEphemeralCommand(
   ];
   args.push(...agentCodexPublicationArgs({}, request.account.env));
   return {
-    command: resolveBinary("codex"),
+    command: binary,
     args,
     env: answerEnvironment({ ...request.account.env, CODEX_HOME: home }),
     stdin: request.prompt,

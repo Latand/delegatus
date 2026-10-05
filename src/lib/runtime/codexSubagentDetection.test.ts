@@ -2,13 +2,14 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lifecycleJournalPath, queryLifecycleEvents } from "@/lib/lifecycle/journal";
+import * as journalModule from "@/lib/lifecycle/journal";
 import { pollLifecycleDigest } from "@/lib/lifecycle/digest";
 import type { FileEntry } from "@/lib/types";
-import { observeCodexSubagentEvent, observeCodexSubagentTranscripts, recordCodexSubagentViolation } from "./codexSubagentDetection";
+import { nativeCodexFunctionCallMethod, observeCodexSubagentEvent, observeCodexSubagentTranscripts, recordCodexSubagentViolation } from "./codexSubagentDetection";
 import { bindStructuredDeliveryQueue, type StructuredDeliveryHost } from "./structuredDeliveryController";
 import type { RuntimeHostClient } from "./client";
 
@@ -25,10 +26,11 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function launched(allowSubagents = false) {
+function launched(allowSubagents = false, accountLayout = false) {
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const sessionId = randomUUID();
-  const parentPath = path.join(root, `rollout-${sessionId}.jsonl`);
+  const parentPath = path.join(root, ...(accountLayout ? ["account", "sessions"] : []), `rollout-${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(parentPath), { recursive: true });
   fs.writeFileSync(parentPath, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
   const profile = emptyLaunchProfile({ cwd: root, title: "Exercise native delegation policy", allowSubagents });
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, origin: { kind: "operator" }, launchProfile: profile });
@@ -119,9 +121,12 @@ test("native transcript calls alert without a child while prose, MCP calls and p
   const timestamp = new Date().toISOString();
   const rows = [
     { timestamp, type: "response_item", payload: { type: "message", content: "spawn_agent PRIVATE TEXT" } },
-    { timestamp, type: "response_item", payload: { type: "function_call", name: "mcp__viewer__spawn_agent", call_id: "tracked-fixture" } },
+    { timestamp, type: "response_item", payload: { type: "function_call", name: "spawn_agent", namespace: "mcp__viewer", call_id: "tracked-fixture" } },
+    { timestamp, type: "response_item", payload: { type: "function_call", name: "send_message", namespace: "mcp__viewer", call_id: "message-fixture" } },
+    { timestamp, type: "response_item", payload: { type: "function_call", name: "wait", arguments: JSON.stringify({ cell_id: "1", yield_time_ms: 1000, max_tokens: 100 }), call_id: "code-mode-fixture" } },
     { timestamp: "2000-01-01T00:00:00.000Z", type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "historical-fixture" } },
-    { timestamp, type: "response_item", payload: { type: "function_call", name: "collaboration.spawn_agent", call_id: "native-fixture", arguments: "PRIVATE TASK" } },
+    { timestamp, type: "response_item", payload: { type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "native-fixture", arguments: "PRIVATE TASK" } },
+    { timestamp, type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "native-v1-fixture", arguments: "PRIVATE TASK" } },
     { timestamp, type: "event_msg", payload: { type: "guardian_assessment", id: "native-guardian-fixture", action: "PRIVATE GUARDIAN ACTION" } },
   ];
   fs.appendFileSync(parentPath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
@@ -129,10 +134,105 @@ test("native transcript calls alert without a child while prose, MCP calls and p
   observeCodexSubagentTranscripts(registry, [entry]);
   observeCodexSubagentTranscripts(registry, [entry]);
   const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-  expect(events).toHaveLength(2);
+  expect(events).toHaveLength(3);
   expect(events.some((event) => event.summary.includes("spawn_agent"))).toBe(true);
   expect(events.some((event) => event.summary.includes("autoApprovalReview"))).toBe(true);
   expect(JSON.stringify(events)).not.toContain("PRIVATE");
+});
+
+test("failed transcript writes retry children and tails, and settled children never reacquire the journal lock", () => {
+  const { registry, parentPath, sessionId, conversation } = launched();
+  const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
+  fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
+  fs.appendFileSync(parentPath, JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "retry-tail" } }) + "\n");
+  const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000 } as FileEntry));
+  const journal = lifecycleJournalPath();
+  fs.mkdirSync(path.dirname(journal), { recursive: true });
+  fs.writeFileSync(journal, "{");
+  expect(() => observeCodexSubagentTranscripts(registry, entries)).not.toThrow();
+  fs.unlinkSync(journal);
+  observeCodexSubagentTranscripts(registry, entries);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+  const persisted = fs.readFileSync(journal, "utf8");
+  // A held transaction lock would block a replay, even when it is deduplicated.
+  // A directory at the journal path makes any attempted transaction fail.
+  fs.unlinkSync(journal);
+  fs.mkdirSync(journal);
+  const append = spyOn(journalModule, "appendLifecycleEvents");
+  try {
+    expect(() => observeCodexSubagentTranscripts(registry, entries)).not.toThrow();
+    expect(append).not.toHaveBeenCalled();
+  } finally { append.mockRestore(); fs.rmdirSync(journal); fs.writeFileSync(journal, persisted); }
+  observeCodexSubagentTranscripts(registry, entries);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+});
+
+test("function-call classification distinguishes native v1, v2, Code Mode and MCP namespaces", () => {
+  for (const payload of [
+    { name: "wait", arguments: JSON.stringify({ cell_id: "1", ids: ["fixture"] }) },
+    { name: "wait", arguments: "{}" }, { name: "wait", arguments: "invalid" },
+    { name: "spawn_agent", namespace: "mcp__viewer" },
+    { name: "send_message", namespace: "mcp__viewer" },
+    { name: "spawn_agent", namespace: "unconfigured" },
+    { name: "send_message" }, { name: "collaboration.spawn_agent" },
+  ]) expect(nativeCodexFunctionCallMethod(payload)).toBeNull();
+  expect(nativeCodexFunctionCallMethod({ name: "wait", arguments: JSON.stringify({ ids: ["fixture"], timeout_ms: 1000 }) })).toBe("wait");
+  expect(nativeCodexFunctionCallMethod({ name: "spawn_agent" })).toBe("spawn_agent");
+  expect(nativeCodexFunctionCallMethod({ name: "spawn_agent", namespace: "collaboration" })).toBe("spawn_agent");
+});
+
+test("a corrupt detection journal leaves the scanner pipeline tick running and retries after repair", async () => {
+  const { registry, parentPath, sessionId, conversation } = launched();
+  const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
+  fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
+  const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000 } as FileEntry));
+  const [registryModule, links, flows, pipelines, workflows, inbox, membership] = await Promise.all([
+    import("@/lib/agent/registry"), import("@/lib/scanner/links"), import("@/lib/flows/engine"),
+    import("@/lib/pipelines/engine"), import("@/lib/workflows/engine"),
+    import("@/lib/tasks/inboxScanner"), import("@/lib/tasks/membership"),
+  ]);
+  const pipelineTick = spyOn(pipelines, "tickPipelines").mockResolvedValue({ pipelines: [], changed: false });
+  const spies = [pipelineTick,
+    spyOn(registryModule, "agentRegistry").mockReturnValue(registry),
+    spyOn(links, "linkEntries").mockResolvedValue(undefined),
+    spyOn(flows, "tickFlows").mockResolvedValue({ flows: [], changed: false }),
+    spyOn(workflows, "tickWorkflows").mockResolvedValue({ workflows: [], changed: false }),
+    spyOn(inbox, "tickTaskInbox").mockImplementation(() => {}),
+    spyOn(membership, "admitScannedConversations").mockReturnValue(0),
+  ];
+  try {
+    const { reconcileFileControllers } = await import("@/lib/scanner");
+    const journal = lifecycleJournalPath();
+    fs.mkdirSync(path.dirname(journal), { recursive: true });
+    fs.writeFileSync(journal, "{");
+    await reconcileFileControllers(entries);
+    expect(pipelineTick).toHaveBeenCalledTimes(1);
+    fs.unlinkSync(journal);
+    await reconcileFileControllers(entries);
+    await reconcileFileControllers(entries);
+    expect(pipelineTick).toHaveBeenCalledTimes(3);
+    expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
+  } finally { for (const spy of spies) spy.mockRestore(); }
+});
+
+test("a configured v2 namespace is recognized from the account or project while MCP stays clear", () => {
+  for (const layer of ["account", "project"]) {
+    const { registry, parentPath, conversation } = launched(false, layer === "account");
+    const configDir = layer === "account" ? path.join(root, "account") : path.join(root, ".codex");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "config.toml");
+    fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled=true\ntool_namespace="fixture_team"\n');
+    const namespaces = new Set(["collaboration", "fixture_team"]);
+    expect(nativeCodexFunctionCallMethod({ name: "spawn_agent", namespace: "fixture_team" }, namespaces)).toBe("spawn_agent");
+    fs.appendFileSync(parentPath, JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "spawn_agent", namespace: "fixture_team", call_id: "custom-native" } }) + "\n");
+    const entry = { engine: "codex", path: parentPath, cwd: root, size: fs.statSync(parentPath).size,
+      mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
+    observeCodexSubagentTranscripts(registry, [entry]);
+    expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
+    fs.unlinkSync(configPath);
+  }
 });
 
 test("the real controller pump retries a failed policy write before acknowledging the native item", async () => {

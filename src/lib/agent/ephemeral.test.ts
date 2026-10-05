@@ -11,6 +11,7 @@ import {
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { answerSchema } from "@/lib/externalRelay/protocol";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ephemeral-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -87,6 +88,14 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
     fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8"),
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
+});
+test("the relay answer profile denies newly reported agent features", () => {
+  const restore = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true"));
+  try {
+    const args = buildEphemeralCommand(fixture("codex")).args;
+    for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) expect(args[args.indexOf(feature) - 1]).toBe("--disable");
+    expect(args).toContain("agents.enabled=false");
+  } finally { restore(); }
 });
 test.each(["claude", "codex"] as const)("%s answer profile pins publication identity in env and engine settings", (engine) => {
   const request = fixture(engine);

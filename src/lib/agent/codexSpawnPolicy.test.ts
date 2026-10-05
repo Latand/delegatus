@@ -5,7 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { CODEX_SINGLE_AGENT_FEATURES, codexDeniedFeatures, codexSubagentArgs, parseCodexFeatures, readCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+import { CODEX_SINGLE_AGENT_FEATURES, codexDeniedFeatures, codexSubagentArgs, codexSubagentConfig, parseCodexFeatures, readCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 
 test("every agent-spawning feature of the installed CLI is classified by the policy", () => {
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
@@ -38,6 +39,42 @@ test("unknown features default off regardless of their spelling or default", () 
     expect(args).not.toContain("shell_tool");
     expect(codexSubagentArgs("fixture", true)).toEqual(["-c", "agents.enabled=true"]);
   } finally { restore(); }
+});
+
+test("native CLI denial overrides legacy aliases in account and trusted project config", () => {
+  const binary = process.env.LLV_CODEX_BINARY ?? "codex";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-alias-policy-test-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(home, ".codex");
+  const project = path.join(root, "project");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(path.join(root, "tmp"));
+  fs.mkdirSync(path.join(project, ".codex"), { recursive: true });
+  const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: home, CODEX_HOME: codexHome,
+    XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"),
+    LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+  const hostile = "[features]\nmemory_tool=true\ntelepathy=true\nconnectors=true\ncollab=true\n";
+  try {
+    expect(spawnSync("git", ["init", project], { env }).status).toBe(0);
+    for (const layer of ["account", "project"]) {
+      fs.writeFileSync(path.join(codexHome, "config.toml"), layer === "account" ? hostile
+        : `[projects.${JSON.stringify(project)}]\ntrust_level="trusted"\n`);
+      fs.writeFileSync(path.join(project, ".codex", "config.toml"), layer === "project" ? hostile : "");
+      const inventory = (args: string[]) => {
+        const result = spawnSync(binary, [...args, "features", "list"], { env, cwd: project, encoding: "utf8", timeout: 10_000 });
+        expect(result.status).toBe(0);
+        return parseCodexFeatures(result.stdout);
+      };
+      const before = inventory([]);
+      const after = inventory(codexSubagentArgs(binary, false, env, true));
+      const granted = inventory(codexSubagentArgs(binary, true, env, true));
+      for (const name of ["memories", "chronicle", "apps", "multi_agent"]) {
+        expect(before.find((feature) => feature.name === name)?.enabled).toBe(true);
+        expect(after.find((feature) => feature.name === name)?.enabled).toBe(false);
+        expect(granted.find((feature) => feature.name === name)?.enabled).toBe(true);
+      }
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("an explicit synchronous Guardian reviewer is overridden only for denied launches", async () => {
@@ -86,6 +123,103 @@ test("an explicit synchronous Guardian reviewer is overridden only for denied la
     }
   }
 }, 30_000);
+
+test("native app-server threads deny hostile legacy aliases and never request a background memory agent", async () => {
+  const binary = process.env.LLV_CODEX_BINARY ?? "codex";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-thread-alias-test-"));
+  const home = path.join(root, "home");
+  const codexHome = path.join(home, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(path.join(root, "tmp"));
+  const catalog = path.join(root, "models.json");
+  fs.writeFileSync(catalog, JSON.stringify({ models: [{
+    slug: "policy-fixture", display_name: "Policy fixture", description: null,
+    base_instructions: "Return the synthetic fixture answer.", supported_reasoning_levels: [],
+    shell_type: "shell_command", visibility: "list", supported_in_api: true, priority: 0,
+    availability_nux: null, upgrade: null, support_verbosity: false, default_verbosity: null,
+    apply_patch_tool_type: "freeform", truncation_policy: { mode: "tokens", limit: 10000 },
+    experimental_supported_tools: [], tool_mode: "direct", multi_agent_version: "v2", context_window: 32000,
+  }] }));
+  const subagentHeaders: Array<string | null> = [];
+  const provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    await request.arrayBuffer();
+    subagentHeaders.push(request.headers.get("x-openai-subagent"));
+    const output = { id: "fixture-message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Fixture complete", annotations: [] }] };
+    const events = [
+      { type: "response.created", response: { id: "fixture-response" } },
+      { type: "response.output_item.done", output_index: 0, item: output },
+      { type: "response.completed", response: { id: "fixture-response", status: "completed", output: [output], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+    ];
+    return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  } });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    'model="policy-fixture"', 'model_provider="fixture"', `model_catalog_json=${JSON.stringify(catalog)}`,
+    'approval_policy="never"', 'sandbox_mode="read-only"', 'web_search="disabled"',
+    "[model_providers.fixture]", 'name="fixture"', `base_url="http://127.0.0.1:${provider.port}/v1"`,
+    'wire_api="responses"', "requires_openai_auth=false", "supports_websockets=false",
+    "[features]", "memory_tool=true", "telepathy=true", "connectors=true", "plugins=false",
+    "[analytics]", "enabled=false",
+  ].join("\n"));
+  const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: home, CODEX_HOME: codexHome,
+    XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"),
+    LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+  const inventory = readCodexFeatures(binary, env);
+  // The real host's process overrides, followed by its real thread builder.
+  const args = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"',
+    ...Object.entries(codexSubagentConfig(inventory, false)).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
+    "app-server", "--enable", "realtime_conversation"];
+  const child = spawn(binary, args, { env, cwd: root, stdio: ["pipe", "pipe", "pipe"] });
+  const pid = child.pid;
+  child.stderr.resume();
+  let reaped = false;
+  const done = new Promise<void>((resolve) => child.once("close", () => { reaped = true; resolve(); }));
+  const lines = createInterface({ input: child.stdout });
+  let nextId = 0;
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  let complete!: () => void;
+  const turnDone = new Promise<void>((resolve) => { complete = resolve; });
+  lines.on("line", (line) => {
+    const response = JSON.parse(line);
+    if (response.method === "turn/completed") complete();
+    const request = pending.get(response.id);
+    if (!request) return;
+    pending.delete(response.id);
+    if (response.error) request.reject(new Error("Native policy fixture RPC failed"));
+    else request.resolve(response.result);
+  });
+  const rpc = (method: string, params: unknown): Promise<unknown> => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
+  });
+  const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(pid, "SIGKILL"); } catch { /* exited */ } } }, 15_000);
+  const run = async () => {
+    await rpc("initialize", { clientInfo: { name: "policy-fixture", version: "1" }, capabilities: { experimentalApi: true } });
+    child.stdin.write(JSON.stringify({ method: "initialized", params: {} }) + "\n");
+    const configRead = await rpc("config/read", { cwd: root, includeLayers: false });
+    const config = headlessCodexThreadConfig(configRead, false, [], [], "stdio", inventory);
+    const started = await rpc("thread/start", { cwd: root, config, approvalPolicy: "never", approvalsReviewer: "user", sandbox: "read-only" }) as { thread: { id: string } };
+    const threadId = started.thread.id;
+    const listed = await rpc("experimentalFeature/list", { threadId, limit: 200 }) as { data: Array<{ name: string; enabled: boolean }>; nextCursor: string | null };
+    expect(listed.nextCursor).toBeNull();
+    for (const name of ["memories", "chronicle", "apps"]) expect(listed.data.find((feature) => feature.name === name)?.enabled).toBe(false);
+    await rpc("turn/start", { threadId, input: [{ type: "text", text: "Return fixture complete." }] });
+    await turnDone;
+    expect(subagentHeaders).toHaveLength(1);
+    expect(subagentHeaders.every((header) => header === null)).toBe(true);
+  };
+  try {
+    await Promise.race([run(), done.then(() => { throw new Error("Native policy fixture exited before verification completed"); })]);
+  } finally {
+    lines.close();
+    child.stdin.end();
+    if (!reaped && pid) { try { process.kill(pid, "SIGTERM"); } catch { /* exited */ } }
+    await done;
+    clearTimeout(timer);
+    provider.stop(true);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 25_000);
 
 test("feature discovery refuses empty, malformed, duplicate and failed inventories", () => {
   for (const text of ["", "multi_agent stable unknown", "multi_agent stable true\nunparsed row", "multi_agent stable true\nmulti_agent stable false"]) {
