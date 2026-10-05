@@ -6,6 +6,7 @@ import type { Dictionary } from "./core";
 export const en = {
   "memory.status.projectOff": "Injection is off for this project. Turn on the switch to allow it.",
   "memory.status.noKey": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below.",
+  "memory.status.noKeyStaging": "Injection needs an OpenRouter key. Enter it in Settings on the production release.",
   "memory.status.capped": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
   "memory.status.notOwner": "This release does not own traffic. Open Settings on the active release to check injection.",
   "memory.status.ready": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",

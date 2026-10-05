@@ -60,6 +60,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -121,6 +123,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "The key contains spaces or characters outside printable ASCII. Paste the key again without them.",
       "pageErrors": []
     },
@@ -183,6 +187,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Could not save or read the key. Reopen Settings to check the source and retry.",
       "pageErrors": []
     },
@@ -245,6 +251,8 @@
       ],
       "status": "This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -306,6 +314,8 @@
       ],
       "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -367,6 +377,8 @@
       ],
       "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -428,12 +440,65 @@
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
       "lang": "en",
       "width": 1440,
       "state": "environment",
+      "left": 464,
+      "right": 976,
+      "top": 134.9375,
+      "bottom": 765.0625,
+      "overflow": 0,
+      "scrollHeight": 628,
+      "height": 628,
+      "rows": [
+        {
+          "top": 359.3125,
+          "bottom": 632.8125,
+          "height": 273.5,
+          "overflow": 0
+        },
+        {
+          "top": 652.8125,
+          "bottom": 744.0625,
+          "height": 91.25,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 155.9375,
+          "bottom": 199.9375
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 305.3125,
+          "bottom": 329.3125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 386.3125,
+          "bottom": 410.3125
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-env",
       "left": 464,
       "right": 976,
       "top": 109.8125,
@@ -477,55 +542,8 @@
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
-      "pageErrors": []
-    },
-    {
-      "lang": "en",
-      "width": 1440,
-      "state": "staging-env",
-      "left": 464,
-      "right": 976,
-      "top": 84.6875,
-      "bottom": 815.3125,
-      "overflow": 0,
-      "scrollHeight": 729,
-      "height": 729,
-      "rows": [
-        {
-          "top": 309.0625,
-          "bottom": 582.5625,
-          "height": 273.5,
-          "overflow": 0
-        },
-        {
-          "top": 602.5625,
-          "bottom": 794.3125,
-          "height": 191.75,
-          "overflow": 0
-        }
-      ],
-      "controls": [
-        {
-          "left": 898.09375,
-          "right": 955,
-          "top": 105.6875,
-          "bottom": 149.6875
-        },
-        {
-          "left": 915,
-          "right": 955,
-          "top": 255.0625,
-          "bottom": 279.0625
-        },
-        {
-          "left": 915,
-          "right": 955,
-          "top": 336.0625,
-          "bottom": 360.0625
-        }
-      ],
-      "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -534,22 +552,22 @@
       "state": "staging-file",
       "left": 464,
       "right": 976,
-      "top": 95.25,
-      "bottom": 804.75,
+      "top": 120.375,
+      "bottom": 779.625,
       "overflow": 0,
-      "scrollHeight": 708,
-      "height": 708,
+      "scrollHeight": 657,
+      "height": 657,
       "rows": [
         {
-          "top": 319.625,
-          "bottom": 593.125,
+          "top": 344.75,
+          "bottom": 618.25,
           "height": 273.5,
           "overflow": 0
         },
         {
-          "top": 613.125,
-          "bottom": 783.75,
-          "height": 170.625,
+          "top": 638.25,
+          "bottom": 758.625,
+          "height": 120.375,
           "overflow": 0
         }
       ],
@@ -557,24 +575,77 @@
         {
           "left": 898.09375,
           "right": 955,
-          "top": 116.25,
-          "bottom": 160.25
+          "top": 141.375,
+          "bottom": 185.375
         },
         {
           "left": 915,
           "right": 955,
-          "top": 265.625,
-          "bottom": 289.625
+          "top": 290.75,
+          "bottom": 314.75
         },
         {
           "left": 915,
           "right": 955,
-          "top": 346.625,
-          "bottom": 370.625
+          "top": 371.75,
+          "bottom": 395.75
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "staging-missing-key",
+      "left": 464,
+      "right": 976,
+      "top": 109.8125,
+      "bottom": 790.1875,
+      "overflow": 0,
+      "scrollHeight": 678,
+      "height": 678,
+      "rows": [
+        {
+          "top": 334.1875,
+          "bottom": 628.8125,
+          "height": 294.625,
+          "overflow": 0
+        },
+        {
+          "top": 648.8125,
+          "bottom": 769.1875,
+          "height": 120.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 898.09375,
+          "right": 955,
+          "top": 130.8125,
+          "bottom": 174.8125
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 280.1875,
+          "bottom": 304.1875
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 361.1875,
+          "bottom": 385.1875
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection needs an OpenRouter key. Enter it in Settings on the production release. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -635,6 +706,8 @@
         }
       ],
       "status": "Could not read injection status. Reopen Settings to retry.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -695,6 +768,8 @@
         }
       ],
       "status": "Could not read injection status. Reopen Settings to retry.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -703,21 +778,21 @@
       "state": "memory-write-failed",
       "left": 464,
       "right": 976,
-      "top": 167.5,
-      "bottom": 732.5,
+      "top": 69.25,
+      "bottom": 830.75,
       "overflow": 0,
-      "scrollHeight": 563,
-      "height": 563,
+      "scrollHeight": 760,
+      "height": 760,
       "rows": [
         {
-          "top": 391.875,
-          "bottom": 519.125,
-          "height": 127.25,
+          "top": 293.625,
+          "bottom": 617.375,
+          "height": 323.75,
           "overflow": 0
         },
         {
-          "top": 539.125,
-          "bottom": 711.5,
+          "top": 637.375,
+          "bottom": 809.75,
           "height": 172.375,
           "overflow": 0
         }
@@ -726,34 +801,43 @@
         {
           "left": 898.09375,
           "right": 955,
-          "top": 188.5,
-          "bottom": 232.5
+          "top": 90.25,
+          "bottom": 134.25
         },
         {
           "left": 915,
           "right": 955,
-          "top": 337.875,
-          "bottom": 361.875
+          "top": 239.625,
+          "bottom": 263.625
         },
         {
           "left": 915,
           "right": 955,
-          "top": 418.875,
-          "bottom": 442.875
+          "top": 320.625,
+          "bottom": 344.625
         },
         {
           "left": 485,
           "right": 863.40625,
-          "top": 667.5,
-          "bottom": 711.5
+          "top": 765.75,
+          "bottom": 809.75
         },
         {
           "left": 871.40625,
           "right": 955,
-          "top": 667.5,
-          "bottom": 711.5
+          "top": 765.75,
+          "bottom": 809.75
         }
       ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": {
+        "text": "Could not save the shared memory switch. Try again.",
+        "fontSize": "13px",
+        "lineHeight": "21.125px",
+        "gap": 8
+      },
       "pageErrors": []
     },
     {
@@ -815,6 +899,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -876,6 +962,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "The key contains spaces or characters outside printable ASCII. Paste the key again without them.",
       "pageErrors": []
     },
@@ -938,6 +1026,8 @@
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Could not save or read the key. Reopen Settings to check the source and retry.",
       "pageErrors": []
     },
@@ -1000,6 +1090,8 @@
       ],
       "status": "This release does not own traffic. Open Settings on the active release to check injection.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1061,6 +1153,8 @@
       ],
       "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1122,6 +1216,8 @@
       ],
       "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1183,6 +1279,8 @@
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1191,22 +1289,22 @@
       "state": "environment",
       "left": 16,
       "right": 374,
-      "top": 45,
-      "bottom": 855,
+      "top": 71.5625,
+      "bottom": 828.4375,
       "overflow": 0,
-      "scrollHeight": 826,
-      "height": 808,
+      "scrollHeight": 755,
+      "height": 755,
       "rows": [
         {
-          "top": 311.625,
-          "bottom": 648.5,
+          "top": 338.1875,
+          "bottom": 675.0625,
           "height": 336.875,
           "overflow": 0
         },
         {
-          "top": 668.5,
-          "bottom": 852.25,
-          "height": 183.75,
+          "top": 695.0625,
+          "bottom": 807.4375,
+          "height": 112.375,
           "overflow": 0
         }
       ],
@@ -1214,24 +1312,26 @@
         {
           "left": 296.09375,
           "right": 353,
-          "top": 66,
-          "bottom": 110
+          "top": 92.5625,
+          "bottom": 136.5625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 257.625,
-          "bottom": 281.625
+          "top": 284.1875,
+          "bottom": 308.1875
         },
         {
           "left": 313,
           "right": 353,
-          "top": 338.625,
-          "bottom": 362.625
+          "top": 365.1875,
+          "bottom": 389.1875
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1240,22 +1340,22 @@
       "state": "staging-env",
       "left": 16,
       "right": 374,
-      "top": 45,
-      "bottom": 855,
+      "top": 46.4375,
+      "bottom": 853.5625,
       "overflow": 0,
-      "scrollHeight": 877,
-      "height": 808,
+      "scrollHeight": 805,
+      "height": 805,
       "rows": [
         {
-          "top": 311.625,
-          "bottom": 648.5,
+          "top": 313.0625,
+          "bottom": 649.9375,
           "height": 336.875,
           "overflow": 0
         },
         {
-          "top": 668.5,
-          "bottom": 902.5,
-          "height": 234,
+          "top": 669.9375,
+          "bottom": 832.5625,
+          "height": 162.625,
           "overflow": 0
         }
       ],
@@ -1263,24 +1363,26 @@
         {
           "left": 296.09375,
           "right": 353,
-          "top": 66,
-          "bottom": 110
+          "top": 67.4375,
+          "bottom": 111.4375
         },
         {
           "left": 313,
           "right": 353,
-          "top": 257.625,
-          "bottom": 281.625
+          "top": 259.0625,
+          "bottom": 283.0625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 338.625,
-          "bottom": 362.625
+          "top": 340.0625,
+          "bottom": 364.0625
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1289,22 +1391,22 @@
       "state": "staging-file",
       "left": 16,
       "right": 374,
-      "top": 45,
-      "bottom": 855,
+      "top": 67.5625,
+      "bottom": 832.4375,
       "overflow": 0,
-      "scrollHeight": 834,
-      "height": 808,
+      "scrollHeight": 763,
+      "height": 763,
       "rows": [
         {
-          "top": 311.625,
-          "bottom": 648.5,
+          "top": 334.1875,
+          "bottom": 671.0625,
           "height": 336.875,
           "overflow": 0
         },
         {
-          "top": 668.5,
-          "bottom": 860.25,
-          "height": 191.75,
+          "top": 691.0625,
+          "bottom": 811.4375,
+          "height": 120.375,
           "overflow": 0
         }
       ],
@@ -1312,24 +1414,77 @@
         {
           "left": 296.09375,
           "right": 353,
-          "top": 66,
-          "bottom": 110
+          "top": 88.5625,
+          "bottom": 132.5625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 257.625,
-          "bottom": 281.625
+          "top": 280.1875,
+          "bottom": 304.1875
         },
         {
           "left": 313,
           "right": 353,
-          "top": 338.625,
-          "bottom": 362.625
+          "top": 361.1875,
+          "bottom": 385.1875
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
       "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "staging-missing-key",
+      "left": 16,
+      "right": 374,
+      "top": 46.4375,
+      "bottom": 853.5625,
+      "overflow": 0,
+      "scrollHeight": 805,
+      "height": 805,
+      "rows": [
+        {
+          "top": 313.0625,
+          "bottom": 692.1875,
+          "height": 379.125,
+          "overflow": 0
+        },
+        {
+          "top": 712.1875,
+          "bottom": 832.5625,
+          "height": 120.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 296.09375,
+          "right": 353,
+          "top": 67.4375,
+          "bottom": 111.4375
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 259.0625,
+          "bottom": 283.0625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 340.0625,
+          "bottom": 364.0625
+        }
+      ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection needs an OpenRouter key. Enter it in Settings on the production release. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1390,6 +1545,8 @@
         }
       ],
       "status": "Could not read injection status. Reopen Settings to retry.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1450,6 +1607,8 @@
         }
       ],
       "status": "Could not read injection status. Reopen Settings to retry.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1458,21 +1617,21 @@
       "state": "memory-write-failed",
       "left": 16,
       "right": 374,
-      "top": 113.25,
-      "bottom": 786.75,
+      "top": 45,
+      "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 672,
-      "height": 672,
+      "scrollHeight": 907,
+      "height": 808,
       "rows": [
         {
-          "top": 379.875,
-          "bottom": 552.25,
-          "height": 172.375,
+          "top": 311.625,
+          "bottom": 719.875,
+          "height": 408.25,
           "overflow": 0
         },
         {
-          "top": 572.25,
-          "bottom": 765.75,
+          "top": 739.875,
+          "bottom": 933.375,
           "height": 193.5,
           "overflow": 0
         }
@@ -1481,34 +1640,43 @@
         {
           "left": 296.09375,
           "right": 353,
-          "top": 134.25,
-          "bottom": 178.25
+          "top": 66,
+          "bottom": 110
         },
         {
           "left": 313,
           "right": 353,
-          "top": 325.875,
-          "bottom": 349.875
+          "top": 257.625,
+          "bottom": 281.625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 406.875,
-          "bottom": 430.875
+          "top": 338.625,
+          "bottom": 362.625
         },
         {
           "left": 37,
           "right": 261.40625,
-          "top": 721.75,
-          "bottom": 765.75
+          "top": 889.375,
+          "bottom": 933.375
         },
         {
           "left": 269.40625,
           "right": 353,
-          "top": 721.75,
-          "bottom": 765.75
+          "top": 889.375,
+          "bottom": 933.375
         }
       ],
+      "status": "Injection is off for this project. Turn on the switch to allow it. Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "overlaps": [],
+      "memoryError": {
+        "text": "Could not save the shared memory switch. Try again.",
+        "fontSize": "13px",
+        "lineHeight": "21.125px",
+        "gap": 8
+      },
       "pageErrors": []
     },
     {
@@ -1570,6 +1738,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1631,6 +1801,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Ключ містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
       "pageErrors": []
     },
@@ -1693,6 +1865,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Не вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
       "pageErrors": []
     },
@@ -1755,6 +1929,8 @@
       ],
       "status": "Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1816,6 +1992,8 @@
       ],
       "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1877,6 +2055,8 @@
       ],
       "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1938,6 +2118,8 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1946,22 +2128,22 @@
       "state": "environment",
       "left": 464,
       "right": 976,
-      "top": 88.6875,
-      "bottom": 811.3125,
+      "top": 124.375,
+      "bottom": 775.625,
       "overflow": 0,
-      "scrollHeight": 721,
-      "height": 721,
+      "scrollHeight": 649,
+      "height": 649,
       "rows": [
         {
-          "top": 313.0625,
-          "bottom": 607.6875,
+          "top": 348.75,
+          "bottom": 643.375,
           "height": 294.625,
           "overflow": 0
         },
         {
-          "top": 627.6875,
-          "bottom": 790.3125,
-          "height": 162.625,
+          "top": 663.375,
+          "bottom": 754.625,
+          "height": 91.25,
           "overflow": 0
         }
       ],
@@ -1969,24 +2151,26 @@
         {
           "left": 879.328125,
           "right": 955,
-          "top": 109.6875,
-          "bottom": 153.6875
+          "top": 145.375,
+          "bottom": 189.375
         },
         {
           "left": 915,
           "right": 955,
-          "top": 259.0625,
-          "bottom": 283.0625
+          "top": 294.75,
+          "bottom": 318.75
         },
         {
           "left": 915,
           "right": 955,
-          "top": 340.0625,
-          "bottom": 364.0625
+          "top": 375.75,
+          "bottom": 399.75
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -1995,22 +2179,22 @@
       "state": "staging-env",
       "left": 464,
       "right": 976,
-      "top": 63.5625,
-      "bottom": 836.4375,
+      "top": 99.25,
+      "bottom": 800.75,
       "overflow": 0,
-      "scrollHeight": 771,
-      "height": 771,
+      "scrollHeight": 700,
+      "height": 700,
       "rows": [
         {
-          "top": 287.9375,
-          "bottom": 582.5625,
+          "top": 323.625,
+          "bottom": 618.25,
           "height": 294.625,
           "overflow": 0
         },
         {
-          "top": 602.5625,
-          "bottom": 815.4375,
-          "height": 212.875,
+          "top": 638.25,
+          "bottom": 779.75,
+          "height": 141.5,
           "overflow": 0
         }
       ],
@@ -2018,24 +2202,26 @@
         {
           "left": 879.328125,
           "right": 955,
-          "top": 84.5625,
-          "bottom": 128.5625
+          "top": 120.25,
+          "bottom": 164.25
         },
         {
           "left": 915,
           "right": 955,
-          "top": 233.9375,
-          "bottom": 257.9375
+          "top": 269.625,
+          "bottom": 293.625
         },
         {
           "left": 915,
           "right": 955,
-          "top": 314.9375,
-          "bottom": 338.9375
+          "top": 350.625,
+          "bottom": 374.625
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2044,22 +2230,22 @@
       "state": "staging-file",
       "left": 464,
       "right": 976,
-      "top": 74.125,
-      "bottom": 825.875,
+      "top": 109.8125,
+      "bottom": 790.1875,
       "overflow": 0,
-      "scrollHeight": 750,
-      "height": 750,
+      "scrollHeight": 678,
+      "height": 678,
       "rows": [
         {
-          "top": 298.5,
-          "bottom": 593.125,
+          "top": 334.1875,
+          "bottom": 628.8125,
           "height": 294.625,
           "overflow": 0
         },
         {
-          "top": 613.125,
-          "bottom": 804.875,
-          "height": 191.75,
+          "top": 648.8125,
+          "bottom": 769.1875,
+          "height": 120.375,
           "overflow": 0
         }
       ],
@@ -2067,24 +2253,77 @@
         {
           "left": 879.328125,
           "right": 955,
-          "top": 95.125,
-          "bottom": 139.125
+          "top": 130.8125,
+          "bottom": 174.8125
         },
         {
           "left": 915,
           "right": 955,
-          "top": 244.5,
-          "bottom": 268.5
+          "top": 280.1875,
+          "bottom": 304.1875
         },
         {
           "left": 915,
           "right": 955,
-          "top": 325.5,
-          "bottom": 349.5
+          "top": 361.1875,
+          "bottom": 385.1875
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "staging-missing-key",
+      "left": 464,
+      "right": 976,
+      "top": 99.25,
+      "bottom": 800.75,
+      "overflow": 0,
+      "scrollHeight": 700,
+      "height": 700,
+      "rows": [
+        {
+          "top": 323.625,
+          "bottom": 639.375,
+          "height": 315.75,
+          "overflow": 0
+        },
+        {
+          "top": 659.375,
+          "bottom": 779.75,
+          "height": 120.375,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 879.328125,
+          "right": 955,
+          "top": 120.25,
+          "bottom": 164.25
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 269.625,
+          "bottom": 293.625
+        },
+        {
+          "left": 915,
+          "right": 955,
+          "top": 350.625,
+          "bottom": 374.625
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Для передавання пам’яті потрібен ключ OpenRouter. Введіть його в Налаштуваннях продакшен-версії. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2145,6 +2384,8 @@
         }
       ],
       "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2205,6 +2446,8 @@
         }
       ],
       "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2213,21 +2456,21 @@
       "state": "memory-write-failed",
       "left": 464,
       "right": 976,
-      "top": 144.9375,
-      "bottom": 755.0625,
+      "top": 48.125,
+      "bottom": 851.875,
       "overflow": 0,
-      "scrollHeight": 608,
-      "height": 608,
+      "scrollHeight": 802,
+      "height": 802,
       "rows": [
         {
-          "top": 369.3125,
-          "bottom": 520.5625,
-          "height": 151.25,
+          "top": 272.5,
+          "bottom": 617.375,
+          "height": 344.875,
           "overflow": 0
         },
         {
-          "top": 540.5625,
-          "bottom": 734.0625,
+          "top": 637.375,
+          "bottom": 830.875,
           "height": 193.5,
           "overflow": 0
         }
@@ -2236,34 +2479,43 @@
         {
           "left": 879.328125,
           "right": 955,
-          "top": 165.9375,
-          "bottom": 209.9375
+          "top": 69.125,
+          "bottom": 113.125
         },
         {
           "left": 915,
           "right": 955,
-          "top": 315.3125,
-          "bottom": 339.3125
+          "top": 218.5,
+          "bottom": 242.5
         },
         {
           "left": 915,
           "right": 955,
-          "top": 396.3125,
-          "bottom": 420.3125
+          "top": 299.5,
+          "bottom": 323.5
         },
         {
           "left": 485,
           "right": 826.15625,
-          "top": 690.0625,
-          "bottom": 734.0625
+          "top": 786.875,
+          "bottom": 830.875
         },
         {
           "left": 834.15625,
           "right": 955,
-          "top": 690.0625,
-          "bottom": 734.0625
+          "top": 786.875,
+          "bottom": 830.875
         }
       ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": {
+        "text": "Не вдалося зберегти перемикач спільної пам’яті. Спробуйте ще раз.",
+        "fontSize": "13px",
+        "lineHeight": "21.125px",
+        "gap": 8
+      },
       "pageErrors": []
     },
     {
@@ -2325,6 +2577,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2386,6 +2640,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Ключ містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
       "pageErrors": []
     },
@@ -2448,6 +2704,8 @@
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "keyError": "Не вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
       "pageErrors": []
     },
@@ -2510,6 +2768,8 @@
       ],
       "status": "Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2571,6 +2831,8 @@
       ],
       "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2632,6 +2894,8 @@
       ],
       "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2693,6 +2957,8 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2704,7 +2970,7 @@
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 932,
+      "scrollHeight": 839,
       "height": 808,
       "rows": [
         {
@@ -2715,8 +2981,8 @@
         },
         {
           "top": 731.875,
-          "bottom": 957.875,
-          "height": 226,
+          "bottom": 865.375,
+          "height": 133.5,
           "overflow": 0
         }
       ],
@@ -2742,6 +3008,8 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2753,7 +3021,7 @@
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 1003,
+      "scrollHeight": 911,
       "height": 808,
       "rows": [
         {
@@ -2764,8 +3032,8 @@
         },
         {
           "top": 731.875,
-          "bottom": 1029.25,
-          "height": 297.375,
+          "bottom": 936.75,
+          "height": 204.875,
           "overflow": 0
         }
       ],
@@ -2791,6 +3059,8 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2802,7 +3072,7 @@
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 940,
+      "scrollHeight": 847,
       "height": 808,
       "rows": [
         {
@@ -2813,8 +3083,8 @@
         },
         {
           "top": 731.875,
-          "bottom": 965.875,
-          "height": 234,
+          "bottom": 873.375,
+          "height": 141.5,
           "overflow": 0
         }
       ],
@@ -2840,6 +3110,59 @@
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
       "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "staging-missing-key",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 890,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 754.125,
+          "height": 442.5,
+          "overflow": 0
+        },
+        {
+          "top": 774.125,
+          "bottom": 915.625,
+          "height": 141.5,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        }
+      ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Для передавання пам’яті потрібен ключ OpenRouter. Введіть його в Налаштуваннях продакшен-версії. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2848,22 +3171,22 @@
       "state": "unavailable-spend",
       "left": 16,
       "right": 374,
-      "top": 91,
-      "bottom": 809,
+      "top": 101.5625,
+      "bottom": 798.4375,
       "overflow": 0,
-      "scrollHeight": 716,
-      "height": 716,
+      "scrollHeight": 695,
+      "height": 695,
       "rows": [
         {
-          "top": 357.625,
-          "bottom": 532.25,
+          "top": 368.1875,
+          "bottom": 542.8125,
           "height": 174.625,
           "overflow": 0
         },
         {
-          "top": 552.25,
-          "bottom": 788,
-          "height": 235.75,
+          "top": 562.8125,
+          "bottom": 777.4375,
+          "height": 214.625,
           "overflow": 0
         }
       ],
@@ -2871,35 +3194,37 @@
         {
           "left": 277.328125,
           "right": 353,
-          "top": 112,
-          "bottom": 156
+          "top": 122.5625,
+          "bottom": 166.5625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 303.625,
-          "bottom": 327.625
+          "top": 314.1875,
+          "bottom": 338.1875
         },
         {
           "left": 313,
           "right": 353,
-          "top": 384.625,
-          "bottom": 408.625
+          "top": 395.1875,
+          "bottom": 419.1875
         },
         {
           "left": 37,
           "right": 224.15625,
-          "top": 744,
-          "bottom": 788
+          "top": 733.4375,
+          "bottom": 777.4375
         },
         {
           "left": 232.15625,
           "right": 353,
-          "top": 744,
-          "bottom": 788
+          "top": 733.4375,
+          "bottom": 777.4375
         }
       ],
       "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2908,22 +3233,22 @@
       "state": "unavailable-pending",
       "left": 16,
       "right": 374,
-      "top": 91,
-      "bottom": 809,
+      "top": 101.5625,
+      "bottom": 798.4375,
       "overflow": 0,
-      "scrollHeight": 716,
-      "height": 716,
+      "scrollHeight": 695,
+      "height": 695,
       "rows": [
         {
-          "top": 357.625,
-          "bottom": 532.25,
+          "top": 368.1875,
+          "bottom": 542.8125,
           "height": 174.625,
           "overflow": 0
         },
         {
-          "top": 552.25,
-          "bottom": 788,
-          "height": 235.75,
+          "top": 562.8125,
+          "bottom": 777.4375,
+          "height": 214.625,
           "overflow": 0
         }
       ],
@@ -2931,35 +3256,37 @@
         {
           "left": 277.328125,
           "right": 353,
-          "top": 112,
-          "bottom": 156
+          "top": 122.5625,
+          "bottom": 166.5625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 303.625,
-          "bottom": 327.625
+          "top": 314.1875,
+          "bottom": 338.1875
         },
         {
           "left": 313,
           "right": 353,
-          "top": 384.625,
-          "bottom": 408.625
+          "top": 395.1875,
+          "bottom": 419.1875
         },
         {
           "left": 37,
           "right": 224.15625,
-          "top": 744,
-          "bottom": 788
+          "top": 733.4375,
+          "bottom": 777.4375
         },
         {
           "left": 232.15625,
           "right": 353,
-          "top": 744,
-          "bottom": 788
+          "top": 733.4375,
+          "bottom": 777.4375
         }
       ],
       "status": "Не вдалося прочитати стан передавання пам’яті. Відкрийте налаштування ще раз.",
+      "overlaps": [],
+      "memoryError": null,
       "pageErrors": []
     },
     {
@@ -2968,22 +3295,22 @@
       "state": "memory-write-failed",
       "left": 16,
       "right": 374,
-      "top": 92.125,
-      "bottom": 807.875,
+      "top": 45,
+      "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 714,
-      "height": 714,
+      "scrollHeight": 1013,
+      "height": 808,
       "rows": [
         {
-          "top": 358.75,
-          "bottom": 531.125,
-          "height": 172.375,
+          "top": 311.625,
+          "bottom": 804.375,
+          "height": 492.75,
           "overflow": 0
         },
         {
-          "top": 551.125,
-          "bottom": 786.875,
-          "height": 235.75,
+          "top": 824.375,
+          "bottom": 1039,
+          "height": 214.625,
           "overflow": 0
         }
       ],
@@ -2991,34 +3318,43 @@
         {
           "left": 277.328125,
           "right": 353,
-          "top": 113.125,
-          "bottom": 157.125
+          "top": 66,
+          "bottom": 110
         },
         {
           "left": 313,
           "right": 353,
-          "top": 304.75,
-          "bottom": 328.75
+          "top": 257.625,
+          "bottom": 281.625
         },
         {
           "left": 313,
           "right": 353,
-          "top": 385.75,
-          "bottom": 409.75
+          "top": 338.625,
+          "bottom": 362.625
         },
         {
           "left": 37,
           "right": 224.15625,
-          "top": 742.875,
-          "bottom": 786.875
+          "top": 995,
+          "bottom": 1039
         },
         {
           "left": 232.15625,
           "right": 353,
-          "top": 742.875,
-          "bottom": 786.875
+          "top": 995,
+          "bottom": 1039
         }
       ],
+      "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "overlaps": [],
+      "memoryError": {
+        "text": "Не вдалося зберегти перемикач спільної пам’яті. Спробуйте ще раз.",
+        "fontSize": "13px",
+        "lineHeight": "21.125px",
+        "gap": 8
+      },
       "pageErrors": []
     }
   ]

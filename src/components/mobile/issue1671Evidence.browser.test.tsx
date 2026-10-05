@@ -182,10 +182,22 @@ describe("shared memory settings", () => {
               const controls = [...node.querySelectorAll<HTMLElement>("input, button")].map(control => {
                 const r = control.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
               });
+              const elements = [...node.querySelectorAll<HTMLElement>("[data-memory-setting] p, [data-memory-setting] label, [data-memory-setting] input, [data-provider-key] p, [data-provider-key] label, [data-provider-key] input, [data-provider-key] button")];
+              const overlaps = elements.flatMap((a, i) => elements.slice(i + 1).filter(b => {
+                if (a.contains(b) || b.contains(a)) return false;
+                const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+                return Math.min(ar.right, br.right) - Math.max(ar.left, br.left) > 1
+                  && Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top) > 1;
+              }).map(b => ({ first: a.tagName, second: b.tagName })));
+              const memoryError = node.querySelector<HTMLElement>("[data-memory-setting] [role=alert]");
+              const errorStyle = memoryError ? getComputedStyle(memoryError) : null;
               return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
                 overflow: node.scrollWidth - node.clientWidth, scrollHeight: node.scrollHeight, height: node.clientHeight, rows, controls,
                 status: node.querySelector("[data-memory-status]")?.textContent,
                 counts: node.querySelector("[data-memory-counts]")?.textContent,
+                overlaps,
+                memoryError: memoryError ? { text: memoryError.textContent, fontSize: errorStyle!.fontSize, lineHeight: errorStyle!.lineHeight,
+                  gap: memoryError.getBoundingClientRect().top - memoryError.previousElementSibling!.getBoundingClientRect().bottom } : null,
                 keyError: node.querySelector("[data-provider-key] [role=alert]")?.textContent };
             });
             expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
@@ -194,6 +206,11 @@ describe("shared memory settings", () => {
             expect(geometry.rows[0].bottom).toBeLessThanOrEqual(geometry.rows[1].top);
             expect(geometry.rows.every(row => row.overflow <= 1)).toBe(true);
             expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
+            expect(geometry.overlaps).toEqual([]);
+            if (geometry.memoryError) {
+              expect(geometry.memoryError.fontSize).toBe("13px");
+              expect(geometry.memoryError.gap).toBe(8);
+            }
             cases.push({ lang, width, state, ...geometry, pageErrors });
             await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
             await page.locator("[data-provider-key]").scrollIntoViewIfNeeded();
@@ -241,6 +258,7 @@ describe("shared memory settings", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           await page.getByText(translate(lang, "providerKey.env"), { exact: true }).waitFor();
           expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
           await measure("environment");
           process.env.LLV_STAGING = "1";
           for (const source of ["env", "file"] as const) {
@@ -250,8 +268,19 @@ describe("shared memory settings", () => {
             await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
             expect(await page.locator("[data-provider-key] form").count()).toBe(0);
             expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+            expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
             await measure(`staging-${source}`);
           }
+          const { openRouterKeyPath } = await import("@/lib/asks/settings");
+          fs.rmSync(openRouterKeyPath(), { force: true });
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.noKeyStaging"));
+          expect(await page.locator("[data-memory-status]").textContent()).not.toContain(translate(lang, "memory.status.noKey"));
+          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+          await measure("staging-missing-key");
           delete process.env.LLV_STAGING;
           await page.reload();
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
@@ -285,10 +314,17 @@ describe("shared memory settings", () => {
           }
           const settingFile = path.join(stateRoot, "shared-memory-settings.json");
           const settingBefore = fs.readFileSync(settingFile, "utf8");
+          // Refresh the restored ledger before exercising a failed setting write.
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.locator("[data-memory-counts]").waitFor();
+          const statusBefore = await page.locator("[data-memory-status]").textContent();
+          const countsBefore = await page.locator("[data-memory-counts]").textContent();
           fs.writeFileSync(settingFile, "broken");
           await page.locator("[data-memory-setting] [role=switch]").click();
           await page.getByText(translate(lang, "memory.save.failed"), { exact: true }).waitFor();
           expect(await page.locator("[data-memory-setting] [role=switch]").isEnabled()).toBe(true);
+          expect(await page.locator("[data-memory-status]").textContent()).toBe(statusBefore);
+          expect(await page.locator("[data-memory-counts]").textContent()).toBe(countsBefore);
           await measure("memory-write-failed");
           fs.writeFileSync(settingFile, settingBefore);
           expect(pageErrors).toEqual([]);

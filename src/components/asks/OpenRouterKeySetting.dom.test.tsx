@@ -50,6 +50,16 @@ for (const lang of ["en", "uk"] as const) for (const source of [null, "file", "e
     expect(host.querySelector("form") === null).toBe(true);
     expect(host.querySelector("input") === null).toBe(true);
     expect(host.textContent).toContain(translate(lang, "providerKey.staging"));
+    expect(host.textContent).not.toContain(translate(lang, "providerKey.shared"));
     expect(host.textContent).toContain(translate(lang, source === "env" ? "providerKey.env" : source === "file" ? "providerKey.fileStatus" : "providerKey.missingStatus"));
   });
 }
+for (const lang of ["en", "uk"] as const) test(`${lang}: environment key hides the local-save instructions`, async () => {
+  setLocale(lang);
+  globalThis.fetch = (async () => Response.json({ present: true, source: "env" })) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<OpenRouterKeySetting />); });
+  expect(host.querySelector("input")).toBeNull();
+  expect(host.textContent).toContain(translate(lang, "providerKey.env"));
+  expect(host.textContent).not.toContain(translate(lang, "providerKey.shared"));
+});

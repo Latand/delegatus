@@ -22,10 +22,16 @@ beforeEach(() => {
 });
 afterEach(() => {
   memoryIndex().close();
-  for (const key of ["LLV_STATE_DIR", "OPENROUTER_API_KEY", "PORT"]) {
+  for (const key of ["LLV_STATE_DIR", "OPENROUTER_API_KEY", "PORT", "LLV_STAGING"]) {
     if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
   }
   fs.rmSync(root, { recursive: true, force: true });
+});
+test("staging without a key carries the production-settings destination to the browser", async () => {
+  delete process.env.OPENROUTER_API_KEY;
+  process.env.LLV_STAGING = "1";
+  const response = await GET(new NextRequest("http://localhost/api/memory/settings?project=fixture-project"));
+  expect(await response.json()).toMatchObject({ enabled: true, staging: true, reasons: ["noKey"] });
 });
 test("status explains every blocker and permits ready injection", () => {
   expect(memorySettingView("fixture-project", now).reasons).toEqual([]);

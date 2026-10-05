@@ -1,6 +1,7 @@
 import { openRouterKeySource, readAsksYouSettings } from "@/lib/asks/settings";
 import { currentSpend, loadOperatorAsks } from "@/lib/asks/store";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
+import { isStagingMode } from "@/lib/staging";
 import { sharedMemoryEnabled } from "./settings";
 import { memoryIndex } from "./service";
 import type { MemorySettingView } from "./viewTypes";
@@ -17,6 +18,6 @@ export function memorySettingView(project: string, now = new Date()): MemorySett
   if (!keySource) reasons.push("noKey");
   if (spend.usd + .01 > capUsd) reasons.push("capped");
   if (!ownsTraffic) reasons.push("notOwner");
-  return { enabled, reasons, keySource, capUsd, spentUsd: spend.usd, month: spend.month,
+  return { enabled, reasons, keySource, ...(isStagingMode() ? { staging: true } : {}), capUsd, spentUsd: spend.usd, month: spend.month,
     counts: memoryIndex().injectionActivity(now) };
 }

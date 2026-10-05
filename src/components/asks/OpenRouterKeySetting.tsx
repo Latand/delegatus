@@ -39,7 +39,7 @@ export function OpenRouterKeySetting() {
   return <div data-provider-key className="mt-5 border-t border-border pt-4">
     <label htmlFor={id} className="text-sm font-semibold">{t("providerKey.label")}</label>
     <p role="status" className="mt-2 text-[13px] leading-relaxed text-muted">{view ? t(view.source === "env" ? "providerKey.env" : view.present ? view.staging ? "providerKey.fileStatus" : "providerKey.file" : view.staging ? "providerKey.missingStatus" : "providerKey.missing") : t("providerKey.loading")}</p>
-    <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.shared")}</p>
+    {!view?.staging && view?.source !== "env" && <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.shared")}</p>}
     {view?.staging && <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.staging")}</p>}
     {!view?.staging && view?.source !== "env" && <form className="mt-2 flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); void save(); }}>
       <input id={id} type="password" autoComplete="off" spellCheck={false} ref={input} maxLength={4096}

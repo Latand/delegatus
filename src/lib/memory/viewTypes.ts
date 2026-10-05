@@ -3,6 +3,7 @@ export interface MemorySettingView {
   enabled: boolean;
   reasons: Array<"projectOff" | "noKey" | "capped" | "notOwner">;
   keySource: "env" | "file" | null;
+  staging?: boolean;
   capUsd: number;
   spentUsd: number;
   month: string;

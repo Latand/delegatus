@@ -45,10 +45,10 @@ export function MemorySetting({ project }: { project: string }) {
       <input type="checkbox" role="switch" aria-label={t("memory.label")} checked={view?.project === project && view.enabled} disabled={busy || view?.project !== project} onChange={e => void save(e.target.checked)} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
     </label>
     <p className="text-[13px] leading-relaxed text-muted">{t("memory.explanation")}</p>
-    {!error && view?.project === project && <>
-      <p role="status" data-memory-status className="mt-2 text-[13px] leading-relaxed">{view.status !== "unavailable" && view.reasons ? (view.reasons.length ? view.reasons.map(reason => t(`memory.status.${reason}`)).join(" ") : t("memory.status.ready")) : t("memory.status.failed")}</p>
+    {error && <p role="alert" className="mt-2 text-[13px] leading-relaxed">{t(error === "save" ? "memory.save.failed" : "memory.status.failed")}</p>}
+    {error !== "read" && view?.project === project && <>
+      <p role="status" data-memory-status className="mt-2 text-[13px] leading-relaxed">{view.status !== "unavailable" && view.reasons ? (view.reasons.length ? view.reasons.map(reason => t(`memory.status.${reason === "noKey" && view.staging ? "noKeyStaging" : reason}`)).join(" ") : t("memory.status.ready")) : t("memory.status.failed")}</p>
       {view.counts && view.month && <p data-memory-counts className="mt-2 text-[13px] leading-relaxed text-muted">{t("memory.counts", { month: view.month, ...view.counts })}</p>}
       {view.spentUsd !== undefined && view.capUsd !== undefined && <p className="mt-2 text-[13px] text-muted">{t("memory.spend", { spent: view.spentUsd.toFixed(3), cap: view.capUsd.toFixed(2) })}</p>}</>}
-    {error && <p role="alert">{t(error === "save" ? "memory.save.failed" : "memory.status.failed")}</p>}
   </div>;
 }
