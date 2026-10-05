@@ -433,6 +433,29 @@ test.each(REWRITTEN)("the address check fails behind %s and reports what arrived
   expect(check.seen).toEqual(Object.fromEntries(Object.entries(seen).map(([key, value]) => [key, value === "{upstream}" ? upstream : value])) as SeenRequest);
 });
 
+/** A name of exactly `length` characters in labels a resolver would accept. */
+const longName = (length: number) => `${"abcdefghi.".repeat(30).slice(0, length - 14)}x.example.test`;
+
+test("a name longer than the 200 characters the box shows still checks ok when the proxy keeps Host", async () => {
+  expect(await checkBehind(`http://${longName(204)}:{port}`, (headers) => headers)).toMatchObject({ code: "ok" });
+});
+
+test("a Host that only starts with a 200-character address is another site's", async () => {
+  const address = longName(200);
+  const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}.evil.example` }));
+  expect(check.code).toBe("host-rewritten");
+  expect(check.expected).toBe(address);
+  // The box shows 200 characters of a header and marks the cut.
+  expect(check.seen?.host).toBe(`${address.slice(0, 199)}…`);
+});
+
+test("a Host longer than any address names none", async () => {
+  const address = longName(250);
+  const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}${".".repeat(11)}` }));
+  expect(check.code).toBe("host-rewritten");
+  expect(check.seen?.host).toHaveLength(200);
+});
+
 test("an answer this server's own route never recorded proves nothing about the address", async () => {
   process.env.LLV_TOKEN = "test-access-key";
   // Something else answers at the address in the self-check's own words.

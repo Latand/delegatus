@@ -167,16 +167,22 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   return { self };
 }
 
-type PendingProbe = { expiry: number; seen: SeenRequest | null };
+type PendingProbe = { expiry: number; seen: SeenRequest | null; arrivedHost: string | null };
 const shared = globalThis as typeof globalThis & { __delegatusSelfProbes?: Map<string, PendingProbe> };
 const pending = shared.__delegatusSelfProbes ??= new Map<string, PendingProbe>();
+/** The longest Host that can name an address: 253 characters of name, a
+ * trailing dot, a colon and five digits of port. */
+const HOST_LIMIT = 260;
 /** The self-check route admits a nonce once and leaves here what it read. The
  * check rules on this record, which only a request that reached this process
- * can write, and never on the answer's body, which anything at the address can. */
-export function consumeSelfNonce(nonce: string, seen: SeenRequest): boolean {
+ * can write. The answer's body proves nothing: anything at the address can
+ * write it. `seen` is cut for display; `host` is the Host header whole, and
+ * one longer than any address is kept as absent, which names no address. */
+export function consumeSelfNonce(nonce: string, seen: SeenRequest, host: string | null): boolean {
   const probe = pending.get(nonce);
   if (!probe || probe.seen || probe.expiry < Date.now()) return false;
   probe.seen = seen;
+  probe.arrivedHost = host !== null && host.length <= HOST_LIMIT ? host : null;
   return true;
 }
 
@@ -196,11 +202,12 @@ function newNonce(): string {
     if (pending.size >= 32) pending.delete(pending.keys().next().value!);
   }
   const nonce = randomBytes(32).toString("base64url");
-  pending.set(nonce, { expiry: Date.now() + 30_000, seen: null });
+  pending.set(nonce, { expiry: Date.now() + 30_000, seen: null, arrivedHost: null });
   return nonce;
 }
 
-export type Probe = { status: number; host?: string; vouched?: boolean; seen: SeenRequest | null };
+/** `seen` and `arrivedHost` are read from this process's own record of the probe. */
+export type Probe = { status: number; host?: string; vouched?: boolean; seen: SeenRequest | null; arrivedHost: string | null };
 export function probeSelfAddress(url: URL, host: string, options: { certificateAuthority?: string; connectionHost?: string } = {}): Promise<Probe> {
   const nonce = newNonce();
   const name = url.hostname.replace(/^\[|\]$/g, "");
@@ -208,7 +215,7 @@ export function probeSelfAddress(url: URL, host: string, options: { certificateA
     let timer: ReturnType<typeof setTimeout>;
     let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; clearTimeout(timer); reject(error); };
-    const finish = (answer: Omit<Probe, "seen">) => { if (settled) return; settled = true; clearTimeout(timer); resolve({ ...answer, seen: pending.get(nonce)?.seen ?? null }); };
+    const finish = (answer: Omit<Probe, "seen" | "arrivedHost">) => { if (settled) return; settled = true; clearTimeout(timer); const record = pending.get(nonce); resolve({ ...answer, seen: record?.seen ?? null, arrivedHost: record?.arrivedHost ?? null }); };
     const request = (url.protocol === "https:" ? https : http).request({
       hostname: options.connectionHost ?? name, port: url.port || (url.protocol === "https:" ? 443 : 80),
       // SNI carries names only; Bun refuses an IP literal as the servername.
@@ -255,7 +262,7 @@ export async function checkAddress(url: URL): Promise<SelfCheck> {
   if (reach.status === 200 && reach.vouched === true) return result("open-to-internet");
   // Without this server's own record the answer came from something else at the address.
   if (reach.status !== 200 || reach.vouched !== false || !reach.seen) return result("unverified");
-  if (!hostNamesAddress(reach.seen.host, url)) return { ...result("host-rewritten"), expected: url.host, seen: reach.seen };
+  if (!hostNamesAddress(reach.arrivedHost, url)) return { ...result("host-rewritten"), expected: url.host, seen: reach.seen };
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   for (const host of LOOPBACK_PROBE_HOSTS(port)) {
     try {

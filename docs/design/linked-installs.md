@@ -576,8 +576,12 @@ install"):
 
      **What proves the address (#2516).** The route admits each nonce once
      and writes what it read (`Host`, `X-Forwarded-Host`,
-     `X-Forwarded-Proto`, `Forwarded`, 200 characters each) into the
-     process's own table of pending probes (`consumeSelfNonce`). Next writes
+     `X-Forwarded-Proto`, `Forwarded`) into the process's own table of
+     pending probes (`consumeSelfNonce`). The cut to 200 characters each, a
+     longer value ending in an ellipsis, applies only to what the error box
+     shows. The verdict reads `Host` whole, as it arrived, up to the 260
+     characters the longest "name:port" takes; a longer `Host` names no
+     address and reads as rewritten. Next writes
      `X-Forwarded-Host` from `Host` and `X-Forwarded-Proto: http` before any
      route runs when the proxy sent none, so the route keeps a value equal to
      that as null and names the header in `unknown`: it may be Next's own. The check

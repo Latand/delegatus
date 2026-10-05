@@ -517,7 +517,7 @@ Add the case to the existing driver; do not write a new script (AGENTS.md,
   works (`:5344, 5407-5409`). Run it with
   `LINKING_EVIDENCE_DIR=$HOME/Pictures/delegatus-review/linking-ux`.
 
-Frames, each at 1440 × 900 and 390 × 844, in en and uk (11 × 4 = 44 PNGs,
+Frames, each at 1440 × 900 and 390 × 844, in en and uk (12 × 4 = 48 PNGs,
 named `{width}-{lang}-{frame}.png`):
 
 | Frame | Role | Fixture |
