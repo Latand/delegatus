@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { agentLivenessSnapshot, conversationRegistryHost, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerAlive, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -80,8 +80,8 @@ async function prepareOnce(directory: string, mirrorObjects: string): Promise<st
 /**
  * The evidence a restart judges one journal row on: the row `agent_activity`
  * answers for the conversation, read through the same snapshot it uses, then
- * the host its registry row names, then what a host in this Viewer says about
- * its own turn (#2515).
+ * the host its registry row names, the headless reviewer a flow round names,
+ * then what a host in this Viewer says about its own turn (#2515).
  *
  * The drain used to ask a second liveness reading that answers only for a
  * registry row still carrying its structured host columns. A host that died
@@ -106,6 +106,7 @@ export function turnEvidenceReader(
     return {
       record,
       registryHost: conversationRegistryHost(liveness.registrySnapshot(), conversationId, liveness.probe),
+      headlessReviewerAlive: headlessReviewerAlive(liveness.flows?.() ?? [], conversationId, artifactPath ?? null, liveness.probe),
       currentTurnIdle: currentHostTurnIdle(await host?.health()),
     };
   };

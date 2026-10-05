@@ -297,7 +297,9 @@ Two consequences shape the rule:
      had settled; it is reported in `blockers.discounted`;
    - a row counts while its host is alive, while a launch is inside its
      five-minute grace, while its registry row records a process that still
-     answers, and whenever a host in this Viewer holds an active turn for it;
+     answers, while a headless reviewer its flow round records answers under
+     its exact start identity (`headlessReviewerAlive`), and whenever a host in
+     this Viewer holds an active turn for it;
    - a conversation with no transcript to read is judged on its registry row
      alone (`conversationRegistryHost`): a row with no live host releases it at
      once;
@@ -324,12 +326,21 @@ Two consequences shape the rule:
    `pending` does not block: a pending stage has nothing in flight and may
    wait hours for an account. Only pipelines in state `running` count, so the
    stale `running` attempts left on closed pipelines (five on this host) never
-   block. A `running` or `reviewing` stage whose conversation has an open turn
-   under a host that is gone does not count either: nothing is left to finish
-   it, and the engine replaces the attempt after the restart. The stage is
-   judged on the same evidence as a turn: a registry row that proves the host
-   gone releases it when the transcript cannot be read, and a conversation
-   nothing resolves holds it for the same five minutes
+   block. A `running` or `reviewing` stage is judged on the same evidence and
+   the same `livenessRecordIsLive` predicate as a turn. It counts while its
+   conversation's host is alive, while a launch is inside its grace, while a
+   process its registry row records still answers, and while the headless
+   reviewer its flow round records answers under the exact start identity
+   saved there, with or without a transcript to read. A turn no process owns
+   that did not settle (open, or with no readable turn state) releases the
+   stage at once: nothing is left to finish it, and the engine replaces the
+   attempt after the restart. That covers a host that is gone and a transcript
+   that aged out of its launch grace with no host ever recorded. A turn no
+   process owns that did settle leaves the controller a verdict to read, so it
+   holds the stage for five minutes from the first probe that saw it and is
+   counted in `blockers.settled` for as long as it lasts. A registry row that
+   proves the host gone releases the stage when the transcript cannot be read,
+   and a conversation nothing resolves holds it for the same five minutes
    (`blockers.unresolved`). A `reviewing` stage also asks about the reviewer
    of its flow's newest round, because the attempt takes that round's binding
    only on the pipeline's next pass: a live reviewer there, or a launch that

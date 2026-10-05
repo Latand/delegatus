@@ -29,8 +29,13 @@ export interface QuietBlockers {
   /** The part of `unresolved` still inside `unresolvedGraceMs`; these are also
       counted in `turns`, or in `stages` when only a stage names them. */
   unresolvedBlocking?: number;
-  /** How long an unresolved id blocks, counted from the first probe that saw it. */
+  /** How long an unresolved id blocks, counted from the first probe that saw it.
+      A settled stage holds for the same time. */
   unresolvedGraceMs?: number;
+  /** Running stages whose conversation settled its turn with no process left
+      to own it, so the controller has a verdict to read. Each is also counted
+      in `stages` while inside `unresolvedGraceMs`. */
+  settled?: number;
   operatorWindowMs?: number;
   turns: number;
   stages: number;
@@ -59,12 +64,15 @@ export const UNRESOLVED_TURN_GRACE_MS = STARTING_GRACE_MS;
  * `record` is the row `agent_activity` answers for the conversation, and
  * `registryHost` is the host its registry row names when there is no record to
  * read. Both come from one liveness reading, so the drain and `agent_activity`
- * cannot disagree about a dead host. `currentTurnIdle` is the one thing neither
- * holds: what a host in this Viewer says about its own turn right now.
+ * cannot disagree about a dead host. `headlessReviewerAlive` is the reviewer
+ * process a flow round records, which the registry row does not hold and a
+ * record finds only through a transcript. `currentTurnIdle` is what a host in
+ * this Viewer says about its own turn right now.
  */
 export interface TurnEvidence {
   record: LivenessVerdict | null;
   registryHost?: ConversationRegistryHost | null;
+  headlessReviewerAlive?: boolean;
   currentTurnIdle?: boolean;
 }
 export interface QuietPorts {
@@ -93,7 +101,7 @@ type TurnVerdict = "blocks" | "discounted" | "unresolved";
 function judgeTurn(evidence: TurnEvidence): TurnVerdict {
   // Current host work wins over transcript and registry evidence read before
   // a replacement host was admitted for this conversation.
-  if (evidence.currentTurnIdle === false) return "blocks";
+  if (evidence.currentTurnIdle === false || evidence.headlessReviewerAlive) return "blocks";
   const { record, registryHost } = evidence;
   if (!record) {
     if (!registryHost) return "unresolved";
@@ -111,14 +119,19 @@ function judgeTurn(evidence: TurnEvidence): TurnVerdict {
 }
 
 /**
- * What one conversation says about the stage it runs. `released` is an open
- * turn whose host is proven gone, so nothing is left to finish the stage. A
- * settled turn keeps the stage: the controller still has its verdict to read.
+ * What one conversation says about the stage it runs, on the same predicate a
+ * turn is judged on. `released` is a turn no process owns that did not settle,
+ * so nothing is left to finish the stage. `settled` is a turn no process owns
+ * that did settle: the controller still has its verdict to read, so the stage
+ * holds for a bounded time.
  */
-function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "unresolved" {
-  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive) return "blocks";
+function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settled" | "unresolved" {
+  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive || evidence.headlessReviewerAlive) return "blocks";
   const { record, registryHost } = evidence;
-  if (record) return record.host.state === "gone" && record.turnState === "busy" ? "released" : "blocks";
+  if (record) {
+    if (livenessRecordIsLive(record)) return "blocks";
+    return record.turnState === "idle" ? "settled" : "released";
+  }
   // No transcript to read. A host in this Viewer still answers for the
   // conversation; otherwise the registry row is the evidence, as it is for a turn.
   if (evidence.currentTurnIdle !== undefined) return "blocks";
@@ -147,10 +160,10 @@ function currentReviewRound(flow: Flow | undefined, attemptConversationId: strin
     ? "dispatching" : null;
 }
 
-/* When each unresolved id was first seen, per set of ports: one for the life
-   of the Viewer in production, a fresh one for each test. Kept beside the
-   ports so no caller can forget to carry it, which would make the bound
-   restart on every probe and hold the drain for good. */
+/* When each unresolved id or settled stage owner was first seen, per set of
+   ports: one for the life of the Viewer in production, a fresh one for each
+   test. Kept beside the ports so no caller can forget to carry it, which would
+   make the bound restart on every probe and hold the drain for good. */
 const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
 
 export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers; work: string[] }> {
@@ -158,7 +171,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     : snapshot.busy === "restart-web" || snapshot.processes.web.state !== "healthy" ? "web"
     : snapshot.busy === "restart-runtime-host" || snapshot.processes.runtimeHost.state !== "healthy" ? "runtime-host" : null;
   const blockers: QuietBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: !!busyReason, busyReason,
-    turnList: [], stageList: [], discounted: 0, unresolved: 0, unresolvedBlocking: 0, unresolvedGraceMs: UNRESOLVED_TURN_GRACE_MS,
+    turnList: [], stageList: [], discounted: 0, unresolved: 0, unresolvedBlocking: 0, settled: 0, unresolvedGraceMs: UNRESOLVED_TURN_GRACE_MS,
     operatorWindowMs: (draining ? 2 : 10) * 60_000, unreadable: null, memoryMb: null };
   // Every open turn and stage this probe saw, by identity. The lists in the
   // blockers are cut for display; an admission compares the whole set.
@@ -183,16 +196,20 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const flows = ports.flows?.() ?? [];
     const stages: BlockingStage[] = [];
     const unresolved = new Set<string>();
+    const settled = new Set<string>();
     const held = new Set<string>();
+    const observed = new Set<string>();
     const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
     firstUnresolved.set(ports, memory);
     /* One bound for an id, whether a journal row or a stage names it. */
-    const pastBound = (id: string): boolean => {
-      unresolved.add(id);
-      const since = memory.get(id) ?? now;
-      memory.set(id, since);
+    const pastBound = (id: string, kind: "unresolved" | "settled" = "unresolved"): boolean => {
+      const key = `${kind}:${id}`;
+      observed.add(key);
+      (kind === "unresolved" ? unresolved : settled).add(id);
+      const since = memory.get(key) ?? now;
+      memory.set(key, since);
       if (now - since >= UNRESOLVED_TURN_GRACE_MS) return true;
-      held.add(id);
+      if (kind === "unresolved") held.add(id);
       return false;
     };
     for (const pipeline of pipelines) {
@@ -216,7 +233,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         for (const owner of owners) {
           const reading = await evidence(owner);
           const verdict = reading ? judgeStageOwner(reading) : "blocks";
-          if (verdict === "blocks" || (verdict === "unresolved" && !pastBound(owner.conversationId))) released = false;
+          if (verdict === "blocks" || (verdict !== "released" && !pastBound(owner.conversationId, verdict))) released = false;
         }
         if (released) continue;
       }
@@ -249,8 +266,9 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     }
     // An id that resolved, or that nothing names any more, starts a new bound
     // if it is ever unresolved again.
-    for (const id of memory.keys()) if (!unresolved.has(id)) memory.delete(id);
+    for (const key of memory.keys()) if (!observed.has(key)) memory.delete(key);
     blockers.unresolved = unresolved.size;
+    blockers.settled = settled.size;
     blockers.unresolvedBlocking = held.size;
     blockers.turns = turns.length;
     work.push(...turns.map((turn) => `turn:${turn.conversationId}`));

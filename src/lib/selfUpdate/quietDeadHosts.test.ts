@@ -4,15 +4,17 @@
    Only what the Viewer reads from other processes is replaced: the journal's
    session rows, the pipelines, and the operator's presence. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
+import { newRound, reserveReviewerSpawn } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { RuntimeJournal } from "../../runtime-host/journal";
 
 import { productionDeps } from "./instance";
 import { probeQuiet, type QuietPorts } from "./quiet";
@@ -225,4 +227,91 @@ test("a review stage still bound to the ended previous reviewer is held by its f
     reviewFlow("flow_rebound", previous.artifactPath, "needs_decision", { launchId: "new-launch", spawnStartedAt: at });
     expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
   } finally { saveFlows([]); }
+});
+
+/** A journal that holds `rows` as open sessions, read back as the runtime host serves them. */
+function journalOf(name: string, rows: { conversationId: string; sessionKey: unknown }[]): RuntimeJournal {
+  const journal = new RuntimeJournal(join(directory, `${name}.sqlite`), { structuredHosts: true });
+  for (const row of rows) {
+    journal.append({ scope: { type: "session", id: row.conversationId }, kind: "session-status",
+      producer: { kind: "codex-app-server", eventKey: `${name}-${row.conversationId}` }, payload: row } as never);
+  }
+  return journal;
+}
+
+test("a headless reviewer whose transcript is gone still holds its stage while its process answers", async () => {
+  const previous = ended("open");
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewerPath = transcript("open");
+  /* Reserved and settled as `launchReviewer` does it: the process is written to the flow round only. */
+  reviewFlow("flow_headless", previous.artifactPath, "reviewing", {});
+  const flow = loadFlows()[0]!;
+  flow.implementerConversationId = previous.conversation.id;
+  const begun = reserveReviewerSpawn(flow, newRound(flow, "button", null), flow.roles.reviewer, "fixture", registry);
+  const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: randomUUID() }, artifactPath: reviewerPath,
+    cwd: directory, accountId: "fixture", status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  expect(settled.entry).toMatchObject({ status: "starting", host: null, pendingAction: "spawn" });
+  const round = (reviewerIdentity: string | null) => reviewFlow("flow_headless", previous.artifactPath, "reviewing", { reviewerPath,
+    reviewerConversationId: settled.conversation.id, reviewerPid: identity.pid, reviewerIdentity, sessionId: settled.entry.key.sessionId,
+    launchId: begun.receipt.launchId, spawnStartedAt: new Date().toISOString() });
+  round(identity.startIdentity);
+  /* The launch marker, aged past its grace: the registry alone now reads the reviewer as gone. */
+  const disk = JSON.parse(readFileSync(registry.filename, "utf8"));
+  disk.entries[`codex:${settled.entry.key.sessionId}`].updatedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  writeFileSync(registry.filename, JSON.stringify(disk));
+  const journal = journalOf("headless", [{ ...row(previous, "hosted"), sessionKey: previous.key }]);
+  const p = { ...ports([], [lane("lane_headless", "reviewing", { conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId: "flow_headless" })]),
+    flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    rmSync(reviewerPath);
+    expect(await agentActivity(settled.conversation.id)).toEqual([]);
+    for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, stageList: [{ pipelineId: "lane_headless" }] } });
+    }
+    /* Another process under the same pid holds nothing, and neither does an exited one. */
+    round(`${identity.startIdentity}-other`);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+    round(identity.startIdentity);
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally { saveFlows([]); journal.close(); child.kill(); await child.exited; }
+});
+
+test("a transcript no registry row ever hosted releases its stage once it has aged out of the launch grace", async () => {
+  const path = transcript("open");
+  const old = new Date(Date.now() - 24 * 60 * 60_000);
+  writeFileSync(path, [
+    JSON.stringify({ timestamp: old.toISOString(), type: "session_meta", payload: { id: randomUUID(), cwd: directory } }),
+    JSON.stringify({ timestamp: old.toISOString(), type: "event_msg", payload: { type: "task_started" } }),
+  ].join("\n") + "\n");
+  utimesSync(path, old, old);
+  const orphan = { conversationId: `conversation_${randomUUID()}`, artifactPath: path, sessionKey: { engine: "codex", sessionId: "orphan-session" }, host: "hosted", turn: "running" };
+  const journal = journalOf("orphan", [orphan]);
+  const p = { ...ports([], [lane("lane_orphan_transcript", "running", { conversationId: orphan.conversationId, agentPath: path })]), runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    expect(await p.turnLiveness!(orphan, {})).toMatchObject({ record: { reason: "launch_unproven_expired", host: { state: "unknown" } }, registryHost: null });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
+  } finally { journal.close(); }
+});
+
+test("a dead host whose transcript shows no turn state releases its stage", async () => {
+  const dead = ended("open");
+  writeFileSync(dead.artifactPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "session_meta", payload: { id: dead.key.sessionId, cwd: directory } }) + "\n");
+  const p = ports([row(dead, "hosted")], [lane("lane_unknown_turn", "running", { conversationId: dead.conversation.id, agentPath: dead.artifactPath })]);
+  expect(await p.turnLiveness!({ conversationId: dead.conversation.id, artifactPath: dead.artifactPath }, {}))
+    .toMatchObject({ record: { host: { state: "gone" }, turnState: "unknown" }, registryHost: { state: "gone", processAlive: false } });
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
+});
+
+test("a stage whose dead host settled its turn holds for the bound, then stays counted", async () => {
+  const gone = ended("settled");
+  const p = ports([], [lane("lane_settled", "running", { conversationId: gone.conversation.id, agentPath: gone.artifactPath })]);
+  const now = Date.now();
+  expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { stages: 1, settled: 1, unresolved: 0 } });
+  expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES - 1, true)).toMatchObject({ quiet: false, blockers: { stages: 1, settled: 1 } });
+  expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { stages: 0, settled: 1 } });
 });

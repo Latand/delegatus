@@ -379,14 +379,14 @@ function hostEvidence(
 
 function headlessHostEvidence(
   flows: readonly Flow[],
-  transcriptPath: string,
+  transcriptPath: string | null,
   conversationId: string | null,
   probe: LivenessProbe,
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
     const round = flow.rounds.at(-1);
-    if (!round || (!round.reviewerPath || round.reviewerPath !== transcriptPath)
+    if (!round || (!transcriptPath || !round.reviewerPath || round.reviewerPath !== transcriptPath)
       && (!conversationId || round.reviewerConversationId !== conversationId)) continue;
     const pid = round.reviewerPid;
     const identity = round.reviewerIdentity;
@@ -394,6 +394,24 @@ function headlessHostEvidence(
     return { state: "alive", kind: "headless", pid };
   }
   return null;
+}
+
+/**
+ * Whether a headless reviewer that a running flow round records for this
+ * conversation still answers under its exact start identity (#2515).
+ *
+ * A headless launch writes its process only to the flow round; the registry
+ * row keeps no host for it. A liveness record finds that process through the
+ * transcript, so this is the same check for a conversation whose transcript is
+ * missing or moved and therefore has no record to read.
+ */
+export function headlessReviewerAlive(
+  flows: readonly Flow[],
+  conversationId: string,
+  transcriptPath: string | null,
+  probe: LivenessProbe,
+): boolean {
+  return headlessHostEvidence(flows, transcriptPath, conversationId, probe) !== null;
 }
 
 /** Headless reviewer ownership is an actuation-grade claim. Unlike the shared

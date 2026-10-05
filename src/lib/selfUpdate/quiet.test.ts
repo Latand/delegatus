@@ -118,9 +118,17 @@ test("uncertain liveness keeps turns counted, and only severed stages are discou
   p.pipelines = () => ["running", "spawning", "committing"].map((state) => ({ id: state, task: "Finish work\nDetails", state: "running",
     cursor: { stageId: "build", state }, runs: [{ stageId: "build", attempts: [{ conversationId: "conversation_gone" }] }] })) as never;
   expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 2, stageList: [{ cursor: "spawning" }, { cursor: "committing" }] });
-  // A settled turn under a dead host is the engine's to read: the stage has an outcome to collect.
+  // A settled turn under a dead host is the engine's to read: the stage has an outcome to collect,
+  // for the stated bound. An open or unreadable turn with no process left releases it at once.
   p.turnLiveness = async () => GONE_IDLE;
-  expect((await probeQuiet(snapshot, p, NOW)).blockers.stages).toBe(3);
+  expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 3, settled: 1 });
+  expect((await probeQuiet(snapshot, p, NOW + UNRESOLVED_TURN_GRACE_MS)).blockers).toMatchObject({ stages: 2, settled: 1 });
+  p.turnLiveness = async () => ({ ...DEAD_OPEN, record: { ...DEAD_OPEN.record!, turnState: "unknown" } });
+  expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 2, settled: 0 });
+  // A headless reviewer its flow records keeps both, whatever the rest of the evidence says.
+  p.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_gone", turn: "running", host: "hosted" }] }) as never;
+  p.turnLiveness = async () => ({ record: null, registryHost: GONE_HOST, headlessReviewerAlive: true });
+  expect((await probeQuiet(snapshot, p, NOW)).blockers).toMatchObject({ stages: 3, turns: 1 });
 });
 
 test("draining uses a two-minute operator window and names the busy process", async () => {
