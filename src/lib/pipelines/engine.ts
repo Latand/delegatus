@@ -4977,12 +4977,12 @@ async function tickRunStage(
         resolution = ports.resolveProjectSpawn?.(engine, {
           project: pipeline.project,
           model,
-          requestedId: attemptStage(stage, attempt).account ?? providerTargetAccountOn(attempt, engine),
+          requestedId: attemptStage(stage, attempt).account,
           unavailableIds,
         }) ?? accountManager.resolveProjectSpawn(engine, {
           project: pipeline.project,
           model,
-          requestedId: attemptStage(stage, attempt).account ?? providerTargetAccountOn(attempt, engine),
+          requestedId: attemptStage(stage, attempt).account,
           unavailableIds,
         });
       } catch (error) {

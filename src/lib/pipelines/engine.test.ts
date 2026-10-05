@@ -19277,7 +19277,13 @@ test("an exhausted provider limit retries the stage after its native reset acros
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("Автоповтор");
   // Fresh port object and a reloaded durable store have no process-local timer.
-  const restarted = { ...f.h.ports };
+  const restarted: PipelinePorts = { ...f.h.ports,
+    resolveProjectSpawn: (_engine, input) =>
+      input.requestedId === LIMITED_ACCOUNT && !input.unavailableIds?.includes(LIMITED_ACCOUNT)
+        ? { kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed",
+          home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] },
+  };
   f.advance(Date.parse("2026-10-05T19:00:59Z") - f.now());
   await tickPipelines([], restarted);
   expect(f.h.spawnInputs).toHaveLength(1);
@@ -20011,9 +20017,19 @@ test("a pending Codex failover returns to the recovered source when its target i
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
     engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
   await tickPipelines([], f.h.ports);
-  f.h.ports.resolveProjectSpawn = (_engine, input) => input.unavailableIds?.includes(LIMITED_ACCOUNT)
-    ? { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] }
-    : { kind: "available", account: { engine: "codex", accountId: LIMITED_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } };
+  // The automatic target lost its project binding before admission. Use the
+  // production selector: requestedId is fixed, so forwarding B would refuse A.
+  f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+  f.h.ports.resolveProjectSpawn = (engine, input) => {
+    const selection = selectProjectAccount({ engine, project: loadPipelines()[0]!.project,
+      accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })), observations: [], now: f.now(),
+      bindings: [{ project: loadPipelines()[0]!.project, engine: "codex", accountId: LIMITED_ACCOUNT, createdAt: f.h.ports.now() }],
+      requestedId: input.requestedId, unavailableIds: input.unavailableIds });
+    return selection.kind === "available" ? { kind: "available", account: { engine, accountId: selection.accountId!, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+      : selection.kind === "not_allowed" ? selection
+      : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+  };
   await tickPipelines([], f.h.ports);
   expect(f.h.spawnInputs).toHaveLength(1);
   f.advance(180_000);
