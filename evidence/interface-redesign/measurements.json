@@ -1,0 +1,8836 @@
+{
+  "fixture": "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=stages&redesign=<n>",
+  "frames": [
+    {
+      "name": "1440",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "name": "1000",
+      "width": 1000,
+      "height": 800
+    },
+    {
+      "name": "390",
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "counting": "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control.",
+  "states": {
+    "v0-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 83,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-1440-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1440-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 22
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          948,
+          43.5,
+          256,
+          440.4
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1440-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 30,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          633,
+          8,
+          382.8,
+          884
+        ],
+        "mounted": 30,
+        "visible": 30,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 83,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-1440-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1440-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 22
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          948,
+          43.5,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1440-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 30,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          560,
+          8,
+          456.2,
+          884
+        ],
+        "mounted": 30,
+        "visible": 30,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 54,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-1000-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 20
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          353,
+          84,
+          256,
+          440.4
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 28,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          585,
+          8,
+          382.8,
+          784
+        ],
+        "mounted": 30,
+        "visible": 28,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 54,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-1000-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 20
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          353,
+          84,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-1000-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 28,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          512,
+          8,
+          456.2,
+          784
+        ],
+        "mounted": 30,
+        "visible": 28,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-390-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 29,
+        "visible": 16,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-390-en-projects": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:projects",
+        "box": [
+          0,
+          604,
+          390,
+          240
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-390-en-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-390-en-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 16,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-390-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 29,
+        "visible": 16,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v0-390-uk-projects": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:projects",
+        "box": [
+          0,
+          604,
+          390,
+          240
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v0-390-uk-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v0-390-uk-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 16,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 80,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-1440-en-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-en-palette-settings": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 16,
+      "smallest": [
+        61.3,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          494
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          188.1,
+          45.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 80,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-1440-uk-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-uk-palette-settings": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 16,
+      "smallest": [
+        61.3,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          494
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1440-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          203,
+          45.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 47,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-1000-en-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-en-palette-settings": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 16,
+      "smallest": [
+        61.3,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          494
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          184.1,
+          46,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 47,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-1000-uk-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-uk-palette-settings": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 16,
+      "smallest": [
+        61.3,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          494
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-1000-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          199,
+          46,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-390-en-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v1-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v1-390-uk-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 95,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-1440-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          209,
+          450.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1440-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          177,
+          660.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 93,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-1440-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          209,
+          450.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1440-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          177,
+          660.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 62,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-1000-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          209,
+          350.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1000-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          177,
+          560.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 62,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-1000-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          209,
+          350.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-1000-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          177,
+          560.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-390-en-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v2-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v2-390-uk-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 88,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 10,
+      "smallest": [
+        36,
+        36
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1440-en-open": {
+      "overflowX": 0,
+      "visibleControls": 95,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1440-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          51.5,
+          402.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1440-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          51.5,
+          620.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 86,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 10,
+      "smallest": [
+        36,
+        36
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1440-uk-open": {
+      "overflowX": 0,
+      "visibleControls": 93,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 1232,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1440-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          51.5,
+          402.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1440-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 1388,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          51.5,
+          620.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 55,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 10,
+      "smallest": [
+        36,
+        36
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1000-en-open": {
+      "overflowX": 0,
+      "visibleControls": 62,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1000-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          51.5,
+          302.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1000-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          51.5,
+          520.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 55,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 10,
+      "smallest": [
+        36,
+        36
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1000-uk-open": {
+      "overflowX": 0,
+      "visibleControls": 62,
+      "nav": {
+        "kind": "prototype rail (open)",
+        "width": 208,
+        "controls": 17,
+        "projectControls": 12
+      },
+      "mainWidth": 792,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 17,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-1000-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          51.5,
+          302.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-1000-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "prototype rail (closed)",
+        "width": 52,
+        "controls": 10,
+        "projectControls": 6
+      },
+      "mainWidth": 948,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          51.5,
+          520.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-390-en-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v3-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v3-390-uk-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 5,
+      "smallest": [
+        128,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          171
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-board-menu-policies": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 4,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          142
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-rail-menu-setup": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 5,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          174
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        62.6,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          581.5,
+          300,
+          295.5
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-en-card-menu-lane": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 8,
+      "smallest": [
+        286,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          607,
+          300,
+          270
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 5,
+      "smallest": [
+        128,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          171
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-board-menu-policies": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 4,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          142
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-rail-menu-setup": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 5,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          174
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          581.5,
+          300,
+          295.5
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1440-uk-card-menu-lane": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 8,
+      "smallest": [
+        286,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          607,
+          300,
+          270
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 5,
+      "smallest": [
+        128,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          171
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-board-menu-policies": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 4,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          142
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-rail-menu-setup": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 5,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          174
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 11,
+      "smallest": [
+        62.6,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          481,
+          300,
+          295.5
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-en-card-menu-lane": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 8,
+      "smallest": [
+        286,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          481,
+          300,
+          270
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 5,
+      "smallest": [
+        128,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          171
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-board-menu-policies": {
+      "overflowX": 0,
+      "visibleControls": 4,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 4,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          142
+        ],
+        "mounted": 4,
+        "visible": 4,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 7,
+      "smallest": [
+        121,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          231.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-rail-menu-setup": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 5,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-rail",
+        "box": [
+          213,
+          38.5,
+          280,
+          174
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 11,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          481,
+          300,
+          295.5
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-1000-uk-card-menu-lane": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 8,
+      "smallest": [
+        286,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          481,
+          300,
+          270
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 13,
+      "smallest": [
+        48.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          356,
+          390,
+          488
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-en-board-menu-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 15,
+      "smallest": [
+        61.3,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          145,
+          390,
+          699
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-en-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 9,
+      "smallest": [
+        120,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          404,
+          390,
+          440
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-en-conversation-agents": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 1,
+      "smallest": [
+        376,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 39,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v4-390-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 13,
+      "smallest": [
+        55.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          356,
+          390,
+          488
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-uk-board-menu-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 15,
+      "smallest": [
+        61.3,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          145,
+          390,
+          699
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-uk-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 9,
+      "smallest": [
+        120,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          404,
+          390,
+          440
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v4-390-uk-conversation-agents": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 1,
+      "smallest": [
+        376,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 39,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-en-settings-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 13,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 14,
+      "smallest": [
+        42,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          533.5,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-uk-settings-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 13,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1440-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          1024,
+          533.5,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-en-settings-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 13,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 14,
+      "smallest": [
+        42,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          448,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          577,
+          86,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-uk-settings-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 13,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-1000-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          448,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 10,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 10,
+      "smallest": [
+        48.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          433,
+          390,
+          411
+        ],
+        "mounted": 10,
+        "visible": 10,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 9,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-en-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-en-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 14,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          189,
+          390,
+          655
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-en-conversation-agents": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 1,
+      "smallest": [
+        376,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 39,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v5-390-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 10,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 10,
+      "smallest": [
+        55.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          433,
+          390,
+          411
+        ],
+        "mounted": 10,
+        "visible": 10,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 9,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-uk-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-uk-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 14,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          189,
+          390,
+          655
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v5-390-uk-conversation-agents": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 1,
+      "smallest": [
+        376,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 39,
+        "visible": 15,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 83,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1440-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 22
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          948,
+          43.5,
+          256,
+          440.4
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 30,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          633,
+          8,
+          382.8,
+          884
+        ],
+        "mounted": 30,
+        "visible": 30,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 83,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1440-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 22
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          948,
+          43.5,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 30,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          560,
+          8,
+          456.2,
+          884
+        ],
+        "mounted": 30,
+        "visible": 30,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 83,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1440-uk-dark-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 22
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          948,
+          43.5,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1440-uk-dark-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 30,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 1192,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          560,
+          8,
+          456.2,
+          884
+        ],
+        "mounted": 30,
+        "visible": 30,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 54,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1000-en-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 20
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          353,
+          84,
+          256,
+          440.4
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 28,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          585,
+          8,
+          382.8,
+          784
+        ],
+        "mounted": 30,
+        "visible": 28,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 54,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1000-uk-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 20
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          353,
+          84,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 28,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          512,
+          8,
+          456.2,
+          784
+        ],
+        "mounted": 30,
+        "visible": 28,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 54,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-1000-uk-dark-rail-menu": {
+      "overflowX": 0,
+      "visibleControls": 13,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 25,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "rail menu",
+        "box": [
+          7,
+          36.5,
+          232,
+          437
+        ],
+        "mounted": 13,
+        "visible": 13,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 8,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 20
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "board menu",
+        "box": [
+          353,
+          84,
+          256,
+          491.3
+        ],
+        "mounted": 8,
+        "visible": 8,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v6-1000-uk-dark-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 28,
+      "nav": {
+        "kind": "today's rail",
+        "width": 248,
+        "controls": 12,
+        "projectControls": 3
+      },
+      "mainWidth": 752,
+      "header": {
+        "height": 88,
+        "controls": 12
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "card menu",
+        "box": [
+          512,
+          8,
+          456.2,
+          784
+        ],
+        "mounted": 30,
+        "visible": 28,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-390-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 29,
+        "visible": 16,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-390-en-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-390-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 29,
+        "visible": 16,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-390-uk-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-390-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v6-390-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 29,
+        "visible": 16,
+        "scrolls": true,
+        "insideWindow": true
+      }
+    },
+    "v6-390-uk-dark-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1440-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 80,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1440-en-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          188.1,
+          45.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 14,
+      "smallest": [
+        42,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          821.3,
+          493.5,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 80,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1440-uk-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          203,
+          45.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          821.3,
+          493.5,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 80,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1440-uk-dark-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          12,
+          45.5,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-dark-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          203,
+          45.5,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          1152,
+          45.5,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-dark-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          360,
+          90,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1440-uk-dark-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1440,
+      "header": {
+        "height": 48,
+        "controls": 16
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          821.3,
+          493.5,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 47,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1000-en-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-en-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        66.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          184.1,
+          46,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          712,
+          46,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-en-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 14,
+      "smallest": [
+        42,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          448,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 47,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1000-uk-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          199,
+          46,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          712,
+          46,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          448,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 47,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 2,
+      "smallest": [
+        46,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-1000-uk-dark-palette": {
+      "overflowX": 0,
+      "visibleControls": 15,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 15,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          8,
+          46,
+          380,
+          431.5
+        ],
+        "mounted": 15,
+        "visible": 15,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-dark-system": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 7,
+      "smallest": [
+        64.5,
+        24
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "system",
+        "box": [
+          199,
+          46,
+          320,
+          409.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 3,
+      "smallest": [
+        266,
+        32
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-board",
+        "box": [
+          712,
+          46,
+          280,
+          110
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-dark-settings": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 11,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          140,
+          80,
+          720,
+          427
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-1000-uk-dark-card-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": {
+        "kind": "two controls in the board header",
+        "width": 0,
+        "controls": 2,
+        "projectControls": 1
+      },
+      "mainWidth": 1000,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 14,
+      "smallest": [
+        60.7,
+        26
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-card",
+        "box": [
+          692,
+          448,
+          300,
+          343.5
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-en-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-en-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-en-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 10,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 10,
+      "smallest": [
+        48.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          433,
+          390,
+          411
+        ],
+        "mounted": 10,
+        "visible": 10,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-en-settings": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 9,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-en-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-en-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 14,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          189,
+          390,
+          655
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-uk-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 10,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 10,
+      "smallest": [
+        55.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          433,
+          390,
+          411
+        ],
+        "mounted": 10,
+        "visible": 10,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-settings": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 9,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-uk-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 14,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          189,
+          390,
+          655
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-dark-rest": {
+      "overflowX": 0,
+      "visibleControls": 18,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-uk-dark-projects": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "box": [
+          0,
+          191.5,
+          390,
+          652.5
+        ],
+        "mounted": 16,
+        "visible": 16,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-dark-board-menu": {
+      "overflowX": 0,
+      "visibleControls": 10,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 10,
+      "smallest": [
+        55.5,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneBoard",
+        "box": [
+          0,
+          433,
+          390,
+          411
+        ],
+        "mounted": 10,
+        "visible": 10,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-dark-settings": {
+      "overflowX": 0,
+      "visibleControls": 9,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 9,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "box": [
+          0,
+          101.3,
+          390,
+          742.7
+        ],
+        "mounted": 9,
+        "visible": 9,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    },
+    "v7-390-uk-dark-conversation": {
+      "overflowX": 0,
+      "visibleControls": 16,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null
+    },
+    "v7-390-uk-dark-conversation-menu": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 5
+      },
+      "drawn": 14,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneConversation",
+        "box": [
+          0,
+          189,
+          390,
+          655
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      }
+    }
+  },
+  "glass": {
+    "v6-1440-en-rest": {
+      "controlsCompared": 79,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v6-1440-en-rail-menu": {
+      "controlsCompared": 92,
+      "moved": [],
+      "texts": 66,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 68,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v6-1440-en-board-menu": {
+      "controlsCompared": 87,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 65,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v6-1440-en-card-menu": {
+      "controlsCompared": 109,
+      "moved": [],
+      "texts": 69,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 71,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1440-uk-rest": {
+      "controlsCompared": 79,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1440-uk-rail-menu": {
+      "controlsCompared": 92,
+      "moved": [],
+      "texts": 66,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 68,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1440-uk-board-menu": {
+      "controlsCompared": 87,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 65,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1440-uk-card-menu": {
+      "controlsCompared": 109,
+      "moved": [],
+      "texts": 68,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 70,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1440-uk-dark-rest": {
+      "controlsCompared": 79,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "6 працюють",
+        "where": "bar",
+        "ratio": 6.75,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1440-uk-dark-rail-menu": {
+      "controlsCompared": 92,
+      "moved": [],
+      "texts": 66,
+      "lowest": {
+        "text": "6 працюють",
+        "where": "bar",
+        "ratio": 6.75,
+        "floor": 4.5
+      },
+      "todayTexts": 68,
+      "todayLowest": {
+        "text": "UK",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1440-uk-dark-board-menu": {
+      "controlsCompared": 87,
+      "moved": [],
+      "texts": 40,
+      "lowest": {
+        "text": "6 працюють",
+        "where": "bar",
+        "ratio": 6.75,
+        "floor": 4.5
+      },
+      "todayTexts": 65,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1440-uk-dark-card-menu": {
+      "controlsCompared": 109,
+      "moved": [],
+      "texts": 68,
+      "lowest": {
+        "text": "Пріоритет",
+        "where": "menu",
+        "ratio": 6.64,
+        "floor": 4.5
+      },
+      "todayTexts": 70,
+      "todayLowest": {
+        "text": "Перенести до",
+        "where": "menu",
+        "ratio": 4.67,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1000-en-rest": {
+      "controlsCompared": 50,
+      "moved": [],
+      "texts": 28,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-en-rail-menu": {
+      "controlsCompared": 63,
+      "moved": [],
+      "texts": 54,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 54,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-en-board-menu": {
+      "controlsCompared": 58,
+      "moved": [],
+      "texts": 30,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 52,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-en-card-menu": {
+      "controlsCompared": 94,
+      "moved": [],
+      "texts": 61,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 61,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v6-1000-uk-rest": {
+      "controlsCompared": 50,
+      "moved": [],
+      "texts": 28,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-uk-rail-menu": {
+      "controlsCompared": 63,
+      "moved": [],
+      "texts": 54,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 54,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-uk-board-menu": {
+      "controlsCompared": 58,
+      "moved": [],
+      "texts": 30,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 52,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-uk-card-menu": {
+      "controlsCompared": 94,
+      "moved": [],
+      "texts": 59,
+      "lowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 2.95,
+        "floor": 4.5
+      },
+      "todayTexts": 59,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [
+        {
+          "text": "Claude",
+          "where": "flex",
+          "ratio": 2.95,
+          "floor": 4.5
+        }
+      ],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v6-1000-uk-dark-rest": {
+      "controlsCompared": 50,
+      "moved": [],
+      "texts": 28,
+      "lowest": {
+        "text": "Codex",
+        "where": "flex",
+        "ratio": 6.94,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1000-uk-dark-rail-menu": {
+      "controlsCompared": 63,
+      "moved": [],
+      "texts": 54,
+      "lowest": {
+        "text": "Codex",
+        "where": "flex",
+        "ratio": 6.94,
+        "floor": 4.5
+      },
+      "todayTexts": 54,
+      "todayLowest": {
+        "text": "UK",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1000-uk-dark-board-menu": {
+      "controlsCompared": 58,
+      "moved": [],
+      "texts": 30,
+      "lowest": {
+        "text": "Codex",
+        "where": "flex",
+        "ratio": 6.94,
+        "floor": 4.5
+      },
+      "todayTexts": 52,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-1000-uk-dark-card-menu": {
+      "controlsCompared": 94,
+      "moved": [],
+      "texts": 59,
+      "lowest": {
+        "text": "Дії конвеєра",
+        "where": "menu",
+        "ratio": 6.65,
+        "floor": 4.5
+      },
+      "todayTexts": 59,
+      "todayLowest": {
+        "text": "Перенести до",
+        "where": "menu",
+        "ratio": 4.67,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-en-rest": {
+      "controlsCompared": 18,
+      "moved": [],
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-en-board-menu": {
+      "controlsCompared": 34,
+      "moved": [],
+      "texts": 19,
+      "lowest": {
+        "text": "Board",
+        "where": "flex",
+        "ratio": 4.92,
+        "floor": 4.5
+      },
+      "todayTexts": 19,
+      "todayLowest": {
+        "text": "13 open",
+        "where": "flex",
+        "ratio": 5.1,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-en-conversation": {
+      "controlsCompared": 12,
+      "moved": [],
+      "texts": 7,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 7,
+      "todayLowest": {
+        "text": "@",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-rest": {
+      "controlsCompared": 18,
+      "moved": [],
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-board-menu": {
+      "controlsCompared": 34,
+      "moved": [],
+      "texts": 19,
+      "lowest": {
+        "text": "Дошка",
+        "where": "flex",
+        "ratio": 4.92,
+        "floor": 4.5
+      },
+      "todayTexts": 19,
+      "todayLowest": {
+        "text": "13 відкритих",
+        "where": "flex",
+        "ratio": 5.1,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-conversation": {
+      "controlsCompared": 12,
+      "moved": [],
+      "texts": 7,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 7,
+      "todayLowest": {
+        "text": "@",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-dark-rest": {
+      "controlsCompared": 18,
+      "moved": [],
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 7.63,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-dark-board-menu": {
+      "controlsCompared": 34,
+      "moved": [],
+      "texts": 19,
+      "lowest": {
+        "text": "Дошка",
+        "where": "flex",
+        "ratio": 5.6,
+        "floor": 4.5
+      },
+      "todayTexts": 19,
+      "todayLowest": {
+        "text": "13 відкритих",
+        "where": "flex",
+        "ratio": 4.67,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v6-390-uk-dark-conversation": {
+      "controlsCompared": 12,
+      "moved": [],
+      "texts": 7,
+      "lowest": {
+        "text": "Opus 5.5",
+        "where": "flex",
+        "ratio": 7.08,
+        "floor": 4.5
+      },
+      "todayTexts": 7,
+      "todayLowest": {
+        "text": "@",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-en-rest": {
+      "texts": 21,
+      "lowest": {
+        "text": "4 working",
+        "where": "col-head",
+        "ratio": 5.01,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-en-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-en-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "System",
+        "where": "system",
+        "ratio": 7.11,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-en-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Search my messages",
+        "where": "menu-board",
+        "ratio": 16.43,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-en-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.71,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-en-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Inbox",
+        "where": "menu-card",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude",
+        "col-head|8"
+      ]
+    },
+    "v7-1440-uk-rest": {
+      "texts": 21,
+      "lowest": {
+        "text": "4 працює",
+        "where": "col-head",
+        "ratio": 5.01,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "Система",
+        "where": "system",
+        "ratio": 7.11,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Налаштування Delegatus",
+        "where": "menu-board",
+        "ratio": 16.31,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.71,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Вхідні",
+        "where": "menu-card",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1440-uk-dark-rest": {
+      "texts": 21,
+      "lowest": {
+        "text": "6 працюють",
+        "where": "bar",
+        "ratio": 6.49,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-uk-dark-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "Проєкти",
+        "where": "palette",
+        "ratio": 6.66,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-uk-dark-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "Система",
+        "where": "system",
+        "ratio": 6.37,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-uk-dark-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Пошук моїх повідомлень",
+        "where": "menu-board",
+        "ratio": 12.8,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-uk-dark-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.81,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1440-uk-dark-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Статус",
+        "where": "menu-card",
+        "ratio": 6.73,
+        "floor": 4.5
+      },
+      "todayTexts": 42,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-en-rest": {
+      "texts": 17,
+      "lowest": {
+        "text": "4 working",
+        "where": "col-head",
+        "ratio": 4.94,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-en-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-en-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "System",
+        "where": "system",
+        "ratio": 7.31,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-en-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Search my messages",
+        "where": "menu-board",
+        "ratio": 16.56,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-en-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.6,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-en-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Inbox",
+        "where": "menu-card",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-rest": {
+      "texts": 17,
+      "lowest": {
+        "text": "4 працює",
+        "where": "col-head",
+        "ratio": 4.95,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "Система",
+        "where": "system",
+        "ratio": 7.31,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Пошук моїх повідомлень",
+        "where": "menu-board",
+        "ratio": 16.56,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.6,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Вхідні",
+        "where": "menu-card",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Claude",
+        "where": "flex",
+        "ratio": 3.03,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": [
+        "flex|Claude"
+      ]
+    },
+    "v7-1000-uk-dark-rest": {
+      "texts": 17,
+      "lowest": {
+        "text": "6 працюють",
+        "where": "bar",
+        "ratio": 6.52,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-uk-dark-palette": {
+      "texts": 23,
+      "lowest": {
+        "text": "Проєкти",
+        "where": "palette",
+        "ratio": 6.5,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-uk-dark-system": {
+      "texts": 23,
+      "lowest": {
+        "text": "лишилось 65%",
+        "where": "system",
+        "ratio": 6.64,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-uk-dark-board-menu": {
+      "texts": 3,
+      "lowest": {
+        "text": "Пошук моїх повідомлень",
+        "where": "menu-board",
+        "ratio": 12.97,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-uk-dark-settings": {
+      "texts": 16,
+      "lowest": {
+        "text": "Main",
+        "where": "settings",
+        "ratio": 6.71,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-1000-uk-dark-card-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Статус",
+        "where": "menu-card",
+        "ratio": 6.73,
+        "floor": 4.5
+      },
+      "todayTexts": 28,
+      "todayLowest": {
+        "text": "Система",
+        "where": "flex",
+        "ratio": 5.11,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-rest": {
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-projects": {
+      "texts": 25,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-board-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "All conversations",
+        "where": "menu-phoneBoard",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-settings": {
+      "texts": 11,
+      "lowest": {
+        "text": "This project: atlas",
+        "where": "settings",
+        "ratio": 6.6,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-conversation": {
+      "texts": 7,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-en-conversation-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "3",
+        "where": "menu-phoneConversation",
+        "ratio": 6.69,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Tell the orchestrator…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-rest": {
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-projects": {
+      "texts": 25,
+      "lowest": {
+        "text": "3",
+        "where": "palette",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-board-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "Усі розмови",
+        "where": "menu-phoneBoard",
+        "ratio": 6.42,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-settings": {
+      "texts": 11,
+      "lowest": {
+        "text": "Цей проєкт: atlas",
+        "where": "settings",
+        "ratio": 6.6,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-conversation": {
+      "texts": 7,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-conversation-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "3",
+        "where": "menu-phoneConversation",
+        "ratio": 6.69,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 4.76,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-rest": {
+      "texts": 3,
+      "lowest": {
+        "text": "3",
+        "where": "flex",
+        "ratio": 7.63,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-projects": {
+      "texts": 25,
+      "lowest": {
+        "text": "Проєкти",
+        "where": "palette",
+        "ratio": 6.7,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-board-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "13",
+        "where": "menu-phoneBoard",
+        "ratio": 6.81,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-settings": {
+      "texts": 11,
+      "lowest": {
+        "text": "Цей проєкт: atlas",
+        "where": "settings",
+        "ratio": 6.72,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-conversation": {
+      "texts": 7,
+      "lowest": {
+        "text": "Opus 5.5",
+        "where": "flex",
+        "ratio": 7.08,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-conversation-menu": {
+      "texts": 16,
+      "lowest": {
+        "text": "3",
+        "where": "menu-phoneConversation",
+        "ratio": 6.8,
+        "floor": 4.5
+      },
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Скажіть оркестратору…",
+        "where": "shrink-0",
+        "ratio": 5.42,
+        "floor": 4.5
+      },
+      "underAA": [],
+      "underAAToday": []
+    }
+  },
+  "failures": []
+}

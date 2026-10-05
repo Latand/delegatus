@@ -17953,3 +17953,356 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("interface redesign, numbered design variants", () => {
+  /*
+   * A design lane's frames and measurements (docs/design/interface-redesign.md).
+   * Each numbered variant is the real Viewer over this fixture with the
+   * variant's chrome around it (`?redesign=<n>`), framed at 1440, 1000 and 390
+   * in both languages; the host page prints the number above the frame, so the
+   * number covers nothing in the application.
+   *
+   * Earlier designs were rejected for lying on top of the interface and for
+   * adding chrome, so each state is measured: every control a variant draws is
+   * hit-tested at its centre and four corners, intersected with every other
+   * control a pointer can reach, and held inside the window; the resting frame
+   * counts its controls the way the audit counted today's; an open menu reports
+   * its box, its controls and whether it scrolls. The glass variants are
+   * compared with today's frame control by control (nothing may move) and their
+   * text is read against the pixels behind it for WCAG AA, light and dark.
+   *
+   * Frames go to `LLV_INTERFACE_REDESIGN_OUT` (default
+   * `.artifacts/interface-redesign/`, never committed); the measurements to
+   * `evidence/interface-redesign/measurements.json`.
+   * `LLV_INTERFACE_REDESIGN_ONLY=1,7`, `..._FRAMES=390` and `..._LANGS=uk`
+   * narrow a run, and a narrowed run writes no evidence.
+   */
+  const OUT = path.resolve(process.env.LLV_INTERFACE_REDESIGN_OUT ?? ".artifacts/interface-redesign");
+  const EVIDENCE = path.resolve("evidence/interface-redesign");
+  const ONLY = process.env.LLV_INTERFACE_REDESIGN_ONLY?.split(",").map(Number) ?? null;
+  const ONLY_FRAMES = process.env.LLV_INTERFACE_REDESIGN_FRAMES?.split(",") ?? null;
+  const ONLY_LANGS = process.env.LLV_INTERFACE_REDESIGN_LANGS?.split(",") ?? null;
+  const NARROWED = Boolean(ONLY || ONLY_FRAMES || ONLY_LANGS);
+  const STRIP = 36;
+  const FRAMES = [
+    { name: "1440", width: 1440, height: 900, phone: false },
+    { name: "1000", width: 1000, height: 800, phone: false },
+    { name: "390", width: 390, height: 844, phone: true },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  /* The glass variants are drawn beside today's frame and judged in both schemes. */
+  const GLASS = [6, 7];
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface Reading {
+    overflowX: number;
+    /** Interactive elements a pointer can meet in the window, counted as the audit counted today's. */
+    visibleControls: number;
+    nav: { kind: string; width: number; controls: number; projectControls: number } | null;
+    mainWidth: number;
+    header: { height: number; controls: number } | null;
+    /** The controls the variant itself draws. */
+    drawn: number;
+    smallest: [width: number, height: number] | null;
+    missed: string[];
+    intersecting: string[];
+    outside: string[];
+    surface: { name: string; box: Box; mounted: number; visible: number; scrolls: boolean; insideWindow: boolean } | null;
+    boxes: Record<string, Box>;
+  }
+
+  const measure = (frame: import("playwright-core").Frame) => frame.evaluate((): Reading => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const boxOf = (rect: DOMRect): [number, number, number, number] => [round(rect.x), round(rect.y), round(rect.width), round(rect.height)];
+    const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    /* What of an element its scrolling ancestors and the window let through. */
+    const visible = (element: Element): DOMRect => {
+      let rect = element.getBoundingClientRect();
+      let left = Math.max(rect.left, 0), top = Math.max(rect.top, 0), right = Math.min(rect.right, innerWidth), bottom = Math.min(rect.bottom, innerHeight);
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        rect = parent.getBoundingClientRect();
+        left = Math.max(left, rect.left); top = Math.max(top, rect.top); right = Math.min(right, rect.right); bottom = Math.min(bottom, rect.bottom);
+      }
+      return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+    };
+    const shown = (element: Element) => {
+      const style = getComputedStyle(element);
+      const rect = visible(element);
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width >= 4 && rect.height >= 4;
+    };
+    const name = (element: Element) => {
+      const text = element.getAttribute("data-ir-control") ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
+      return `${element.tagName.toLowerCase()}:${text}`;
+    };
+    const INTERACTIVE = 'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="switch"], [tabindex]:not([tabindex="-1"])';
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(INTERACTIVE)).filter(shown);
+    const surface = document.querySelector<HTMLElement>("[data-ir-surface]")
+      ?? document.querySelector<HTMLElement>("[data-rail-menu-panel], [data-bar-more-menu], [data-mobile2-sheet]")
+      ?? Array.from(document.querySelectorAll<HTMLElement>(".kb .menu")).find(shown) ?? null;
+    /* Under an open menu only what is in it can be met. */
+    const reachable = surface ? interactive.filter((element) => surface.contains(element)) : interactive;
+    const drawn = Array.from(document.querySelectorAll<HTMLElement>("[data-ir-control]")).filter(shown).filter((control) => !surface || surface.contains(control));
+    const missed: string[] = [], intersecting: string[] = [], outside: string[] = [];
+    let smallest: [number, number] | null = null;
+    for (const control of drawn) {
+      const rect = visible(control);
+      const own = control.getBoundingClientRect();
+      if (!smallest || own.width * own.height < smallest[0] * smallest[1]) smallest = [round(own.width), round(own.height)];
+      const inset = Math.min(Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1, Math.floor(Math.min(rect.width, rect.height) / 2 - 1));
+      const points = [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+      if (!points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && (control.contains(at) || at.contains(control) && at.tagName === "LABEL"); })) missed.push(name(control));
+      const over = reachable.filter((other) => other !== control && !other.contains(control) && !control.contains(other) && cut(rect, visible(other)) > 1).map(name);
+      if (over.length) intersecting.push(`${name(control)} x ${over.join(", ")}`);
+      if (own.left < -0.5 || own.top < -0.5 || own.right > innerWidth + 0.5 || (rect.height === own.height && own.bottom > innerHeight + 0.5)) outside.push(name(control));
+    }
+    const realRail = document.querySelector<HTMLElement>("[data-ir-stage] > div > aside");
+    const ownRail = document.querySelector<HTMLElement>(".ir-rail");
+    const slots = Array.from(document.querySelectorAll<HTMLElement>('[data-ir-control^="shell:"]')).filter(shown);
+    const inside = (region: Element) => Array.from(region.querySelectorAll<HTMLElement>(INTERACTIVE)).filter(shown);
+    const nav = realRail && shown(realRail)
+      ? { kind: "today's rail", width: round(realRail.getBoundingClientRect().width), controls: inside(realRail).length, projectControls: inside(realRail.querySelector("nav") ?? realRail).length }
+      : ownRail
+        ? { kind: `prototype rail (${ownRail.dataset.irRail})`, width: round(ownRail.getBoundingClientRect().width), controls: inside(ownRail).length,
+          projectControls: inside(ownRail).filter((element) => /:(overview|project|crown|archived)/.test(element.dataset.irControl ?? "")).length }
+        : slots.length ? { kind: "two controls in the board header", width: 0, controls: slots.length, projectControls: 1 } : null;
+    const main = document.querySelector<HTMLElement>("main");
+    const header = document.querySelector<HTMLElement>('[data-bar="project"], [data-mobile2-bar]');
+    const scrollers = surface ? [surface, ...Array.from(surface.querySelectorAll<HTMLElement>("*"))].filter((element) => element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY)) : [];
+    const boxes: Record<string, [number, number, number, number]> = {};
+    const seen = new Map<string, number>();
+    for (const element of interactive) {
+      if (element.closest("[data-log-feed-scroller]")) continue;
+      /* Clocks and counters tick between two frames; the key names the control without them. */
+      const key = name(element).replace(/\d+/g, "#");
+      const count = (seen.get(key) ?? 0) + 1;
+      seen.set(key, count);
+      boxes[count > 1 ? `${key} #${count}` : key] = boxOf(element.getBoundingClientRect());
+    }
+    return {
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      visibleControls: reachable.length,
+      nav,
+      mainWidth: main ? round(main.getBoundingClientRect().width) : 0,
+      header: header ? { height: round(header.getBoundingClientRect().height), controls: inside(header).length } : null,
+      drawn: drawn.length,
+      smallest,
+      missed, intersecting, outside,
+      surface: surface ? {
+        name: surface.dataset.irSurface ?? (surface.hasAttribute("data-mobile2-sheet") ? `sheet:${surface.dataset.mobile2Sheet}` : surface.hasAttribute("data-rail-menu-panel") ? "rail menu" : surface.hasAttribute("data-bar-more-menu") ? "board menu" : "card menu"),
+        box: boxOf(surface.getBoundingClientRect()),
+        mounted: Array.from(surface.querySelectorAll<HTMLElement>(INTERACTIVE)).filter((element) => element.getBoundingClientRect().width > 0).length,
+        visible: inside(surface).length,
+        scrolls: scrollers.length > 0,
+        insideWindow: surface.getBoundingClientRect().left >= -0.5 && surface.getBoundingClientRect().top >= -0.5 && surface.getBoundingClientRect().right <= innerWidth + 0.5 && surface.getBoundingClientRect().bottom <= innerHeight + 0.5,
+      } : null,
+      boxes,
+    };
+  });
+
+  /* Text on the glass layer, read against the pixels actually behind it. */
+  interface TextTarget { text: string; where: string; box: Box; color: [number, number, number, number]; large: boolean }
+  const GLASS_LAYER = "[data-ir-stage] > div > aside, .ir-rail, .kb .bar, .kb .col-head, [data-mobile2-bar], [data-mobile2-dock], .kb .menu, [data-bar-more-menu], [data-rail-menu-panel], .ir-surface, [data-mobile2-sheet]";
+  const textTargets = (frame: import("playwright-core").Frame) => frame.evaluate((layer): TextTarget[] => {
+    const out: TextTarget[] = [];
+    const parse = (value: string): [number, number, number, number] => {
+      const parts = value.match(/[\d.]+(?:e-?\d+)?/g)?.map(Number) ?? [0, 0, 0, 1];
+      /* A mixed colour computes to `color(srgb r g b / a)`, in fractions. */
+      const scale = value.startsWith("color(") ? 255 : 1;
+      return [(parts[0] ?? 0) * scale, (parts[1] ?? 0) * scale, (parts[2] ?? 0) * scale, parts[3] ?? 1];
+    };
+    for (const root of Array.from(document.querySelectorAll<HTMLElement>(layer))) {
+      if (root.getBoundingClientRect().width === 0) continue;
+      const where = root.dataset.irSurface ?? (root.className && typeof root.className === "string" ? root.className.split(" ")[0]! : root.tagName.toLowerCase());
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? "").trim();
+        const element = node.parentElement;
+        if (!text || !element || element.closest("[disabled], [aria-disabled='true'], .card, [data-orchestrator-panel]")) continue;
+        const style = getComputedStyle(element);
+        if (style.visibility === "hidden" || style.display === "none") continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2 || rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
+        const at = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (!at || !(element.contains(at) || at.contains(element))) continue;
+        let alpha = 1;
+        for (let up: HTMLElement | null = element; up; up = up.parentElement) alpha *= parseFloat(getComputedStyle(up).opacity || "1");
+        const color = parse(style.color);
+        const size = parseFloat(style.fontSize);
+        out.push({ text: text.slice(0, 32), where, box: [rect.left, rect.top, rect.width, rect.height], color: [color[0], color[1], color[2], color[3] * alpha], large: size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700) });
+      }
+    }
+    return out;
+  }, GLASS_LAYER);
+  const luminance = (r: number, g: number, b: number) => {
+    const channel = (value: number) => { const s = value / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  /** The lowest contrast any pixel behind a text gives it; the text is hidden while the picture is taken. */
+  async function contrastOf(page: Page, frame: import("playwright-core").Frame, look: number) {
+    const targets = await textTargets(frame);
+    const hide = await frame.addStyleTag({ content: "*, *::placeholder { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }" });
+    await page.waitForTimeout(120);
+    const picture = await page.locator(`[data-ir-frame="${look}"]`).screenshot();
+    await hide.evaluate((node) => (node as HTMLElement).remove());
+    const { data, info } = await sharp(picture).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const readings = targets.map((target) => {
+      const [x, y, width, height] = target.box;
+      let lowest = 21;
+      for (let py = Math.max(0, Math.floor(y)); py < Math.min(info.height, Math.ceil(y + height)); py += 2) for (let px = Math.max(0, Math.floor(x)); px < Math.min(info.width, Math.ceil(x + width)); px += 2) {
+        const at = (py * info.width + px) * 4;
+        const [r, g, b] = [data[at]!, data[at + 1]!, data[at + 2]!];
+        const alpha = target.color[3];
+        const ink = luminance(target.color[0] * alpha + r * (1 - alpha), target.color[1] * alpha + g * (1 - alpha), target.color[2] * alpha + b * (1 - alpha));
+        const ground = luminance(r, g, b);
+        lowest = Math.min(lowest, (Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05));
+      }
+      return { text: target.text, where: target.where, ratio: Math.round(lowest * 100) / 100, floor: target.large ? 3 : 4.5 };
+    });
+    return readings;
+  }
+
+  type Inner = ReturnType<Page["frameLocator"]>;
+  type Act = (inner: Inner, page: Page) => Promise<void>;
+  const press = (control: string): Act => async (inner) => { await inner.locator(`[data-ir-control="${control}"]`).first().click(); };
+  const real = (selector: string): Act => async (inner) => { await inner.locator(selector).first().click(); };
+  const chain = (...acts: Act[]): Act => async (inner, page) => { for (const act of acts) { await act(inner, page); await page.waitForTimeout(250); } };
+  const toConversation: Act = async (inner) => {
+    await inner.locator("[data-mobile2-board-dock]").click();
+    await inner.locator('[data-mobile2-screen]:not([data-mobile2-screen="board"])').first().waitFor();
+  };
+  const RAIL_MENU = real("[data-rail-menu]");
+  const BOARD_MENU = real("[data-bar-more]");
+  const CARD_MENU: Act = async (inner) => {
+    const trigger = inner.locator('.kb .column[data-status="assigned"] .card [data-menu]').first();
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+  };
+  const PHONE_MENU = real('[data-mobile2-open="menu"]');
+  const PHONE_TITLE = real("[data-mobile2-title][data-mobile2-open]");
+  /* What each variant is judged on: the resting frame, then each surface it changes. */
+  const STATES: Record<number, { desktop: Record<string, Act | null>; phone: Record<string, Act | null> }> = {
+    0: {
+      desktop: { rest: null, "rail-menu": RAIL_MENU, "board-menu": BOARD_MENU, "card-menu": CARD_MENU },
+      phone: { rest: null, "board-menu": PHONE_MENU, projects: PHONE_TITLE, conversation: toConversation, "conversation-menu": chain(toConversation, PHONE_MENU) },
+    },
+    1: { desktop: { rest: null, palette: press("shell:project"), "palette-settings": chain(press("shell:project"), press("palette:settings")), system: press("shell:system") }, phone: { rest: null, projects: PHONE_TITLE } },
+    2: { desktop: { rest: null, system: press("rail:system"), settings: press("rail:settings") }, phone: { rest: null, projects: PHONE_TITLE } },
+    3: { desktop: { rest: null, open: press("rail:toggle"), system: press("rail:system"), settings: press("rail:settings") }, phone: { rest: null, projects: PHONE_TITLE } },
+    4: {
+      desktop: { "board-menu": BOARD_MENU, "board-menu-policies": chain(BOARD_MENU, press("board:policies")), "rail-menu": RAIL_MENU, "rail-menu-setup": chain(RAIL_MENU, press("rail:setup")), "card-menu": CARD_MENU, "card-menu-lane": chain(CARD_MENU, press("card:lane-Search fix")) },
+      phone: { "board-menu": PHONE_MENU, "board-menu-delegatus": chain(PHONE_MENU, press("phoneBoard:delegatus")), "conversation-menu": chain(toConversation, PHONE_MENU), "conversation-agents": chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+    },
+    5: {
+      desktop: { "board-menu": BOARD_MENU, settings: chain(BOARD_MENU, press("board:settings-project")), "settings-delegatus": RAIL_MENU, "card-menu": CARD_MENU },
+      phone: { "board-menu": PHONE_MENU, settings: chain(PHONE_MENU, press("phoneBoard:settings")), "settings-section": chain(PHONE_MENU, press("phoneBoard:settings"), press("settings:section:notifications")), "conversation-menu": chain(toConversation, PHONE_MENU), "conversation-agents": chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
+    },
+    6: { desktop: { rest: null, "rail-menu": RAIL_MENU, "board-menu": BOARD_MENU, "card-menu": CARD_MENU }, phone: { rest: null, "board-menu": PHONE_MENU, conversation: toConversation } },
+    7: {
+      desktop: { rest: null, palette: press("shell:project"), system: press("shell:system"), "board-menu": BOARD_MENU, settings: chain(BOARD_MENU, press("board:settings-project")), "card-menu": CARD_MENU },
+      phone: { rest: null, projects: PHONE_TITLE, "board-menu": PHONE_MENU, settings: chain(PHONE_MENU, press("phoneBoard:settings")), conversation: toConversation, "conversation-menu": chain(toConversation, PHONE_MENU) },
+    },
+  };
+
+  browserTest("every variant renders at three widths in both languages; what it draws covers nothing, and glass keeps AA", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const states: Record<string, unknown> = {};
+    const glass: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const variant of [0, 1, 2, 3, 4, 5, 6, 7]) for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of GLASS.includes(variant) ? ["light", "dark"] as const : ["light"] as const) {
+        if (ONLY && !ONLY.includes(variant)) continue;
+        if (ONLY_FRAMES && !ONLY_FRAMES.includes(frame.name)) continue;
+        if (ONLY_LANGS && !ONLY_LANGS.includes(lang)) continue;
+        /* The glass variants in dark are judged in one language: the colours do not depend on it. */
+        if (scheme === "dark" && lang === "en") continue;
+        const beside = GLASS.includes(variant);
+        const url = `${served.base}?scenario=stages&redesign=${variant}&frame=${frame.width}x${frame.height}${beside ? "&beside=0" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: beside ? frame.width * 2 + 12 : frame.width, height: frame.height + STRIP }, scheme, lang, "reduce", frame.phone);
+        try {
+          const inner = page.frameLocator(`[data-ir-frame="${variant}"]`);
+          const today = page.frameLocator('[data-ir-frame="0"]');
+          for (const [state, act] of Object.entries(STATES[variant]![frame.phone ? "phone" : "desktop"])) {
+            const where = `v${variant}-${frame.name}-${lang}${scheme === "dark" ? "-dark" : ""}-${state}`;
+            const fail = (what: string) => failures.push(`${where}: ${what}`);
+            try {
+              await page.goto(url);
+              const ready = frame.phone ? "[data-mobile2-bar]" : '[data-bar="project"]';
+              await inner.locator(`[data-ir-inner="${variant}"]`).waitFor();
+              await inner.locator(ready).waitFor();
+              if (beside) await today.locator(ready).waitFor();
+              await page.waitForTimeout(900);
+              expect(await page.locator("[data-ir-variant-number]").last().textContent()).toBe(String(variant));
+              expect((await page.locator("[data-ir-variant-number]").last().boundingBox())!.height).toBeGreaterThanOrEqual(24);
+              if (act) {
+                await act(inner, page);
+                /* Today's frame beside a glass one is put in the same state, when it has that state. */
+                if (variant === 6) await act(today, page);
+                await page.waitForTimeout(450);
+              }
+              await page.screenshot({ path: path.join(OUT, `${where}.png`) });
+              const handle = await page.locator(`[data-ir-frame="${variant}"]`).elementHandle();
+              const content = (await handle!.contentFrame())!;
+              const reading = await measure(content);
+              const { boxes, ...kept } = reading;
+              states[where] = kept;
+              for (const control of reading.missed) fail(`${control} is not what a pointer meets at its centre and corners`);
+              for (const pair of reading.intersecting) fail(`intersects: ${pair}`);
+              for (const control of reading.outside) fail(`${control} leaves the window`);
+              if (reading.overflowX) fail(`the page scrolls sideways by ${reading.overflowX}`);
+              if (reading.smallest && frame.phone && (reading.smallest[0] < 44 || reading.smallest[1] < 44)) fail(`a drawn control is ${reading.smallest[0]} x ${reading.smallest[1]}, under 44 px`);
+              if (reading.smallest && !frame.phone && (reading.smallest[0] < 24 || reading.smallest[1] < 24)) fail(`a drawn control is ${reading.smallest[0]} x ${reading.smallest[1]}, under 24 px`);
+              if (reading.surface?.name.startsWith("menu-") && reading.surface.scrolls && !state.endsWith("agents")) fail("a regrouped menu scrolls in its first view");
+              if (reading.surface && !reading.surface.insideWindow && variant !== 0) fail("the open surface leaves the window");
+              if (beside) {
+                const todayFrame = (await (await page.locator('[data-ir-frame="0"]').elementHandle())!.contentFrame())!;
+                const record: Record<string, unknown> = (glass[where] = {});
+                if (variant === 6) {
+                  /* Glass alone restyles: every control keeps today's box. */
+                  const base = (await measure(todayFrame)).boxes;
+                  const moved = Object.keys({ ...base, ...boxes }).filter((key) => !base[key] || !boxes[key] || base[key]!.some((value, index) => Math.abs(value - boxes[key]![index]!) > 0.5));
+                  record.controlsCompared = Object.keys(base).length;
+                  record.moved = moved;
+                  if (moved.length) fail(`glass moved ${moved.length} controls: ${moved.slice(0, 4).join(" | ")}`);
+                }
+                const mine = await contrastOf(page, content, variant);
+                const theirs = await contrastOf(page, todayFrame, 0);
+                const under = mine.filter((entry) => entry.ratio < entry.floor);
+                const todayUnder = new Set(theirs.filter((entry) => entry.ratio < entry.floor).map((entry) => `${entry.where}|${entry.text}`));
+                const added = under.filter((entry) => !todayUnder.has(`${entry.where}|${entry.text}`));
+                record.texts = mine.length;
+                record.lowest = mine.reduce((low, entry) => (entry.ratio < low.ratio ? entry : low), { text: "", where: "", ratio: 21, floor: 4.5 });
+                record.todayTexts = theirs.length;
+                record.todayLowest = theirs.reduce((low, entry) => (entry.ratio < low.ratio ? entry : low), { text: "", where: "", ratio: 21, floor: 4.5 });
+                record.underAA = under;
+                record.underAAToday = [...todayUnder];
+                for (const entry of added) fail(`text "${entry.text}" on ${entry.where} reads ${entry.ratio}:1, under ${entry.floor}:1, and today's frame has no such failure`);
+              }
+            } catch (error) { fail((error as Error).message.split("\n")[0]!); }
+          }
+          if (pageErrors.length) failures.push(`v${variant}-${frame.name}-${lang}: ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); served.stop(); }
+    if (!NARROWED) {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "measurements.json"), `${JSON.stringify({
+        fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=stages&redesign=<n>",
+        frames: FRAMES.map(({ name, width, height }) => ({ name, width, height })),
+        counting: "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control.",
+        states, glass, failures,
+      }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 2_400_000);
+});

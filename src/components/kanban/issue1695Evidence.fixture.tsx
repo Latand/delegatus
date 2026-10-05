@@ -18,6 +18,7 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { InterfaceRedesignHost, InterfaceRedesignInner, parseRedesign } from "@/components/kanban/interfaceRedesign.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -3091,8 +3092,13 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+const REDESIGN = parseRedesign(location.search);
 createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
+) : REDESIGN ? (
+  /* docs/design/interface-redesign.md: the host prints the variant number and
+     frames the same fixture; inside a frame the real Viewer is the content. */
+  REDESIGN.inner ? <InterfaceRedesignInner variant={REDESIGN.variant}><Viewer /></InterfaceRedesignInner> : <InterfaceRedesignHost variant={REDESIGN.variant} />
 ) : <Viewer />);
