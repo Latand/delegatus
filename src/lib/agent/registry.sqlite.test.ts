@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1078,12 +1079,22 @@ test("SQLite restart preserves first-owner insertion order for shared paths", ()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-order-"));
   const filename = path.join(directory, "agent-registry.json");
   const sqlite = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
-  const first = sqlite.ensureConversation("codex", "/sessions/first-owner.jsonl", "first");
-  let later = sqlite.ensureConversation("codex", "/sessions/later-owner-0.jsonl", "later");
-  for (let attempt = 1; first.id < later.id && attempt < 100; attempt += 1) {
-    later = sqlite.ensureConversation("codex", `/sessions/later-owner-${attempt}.jsonl`, "later");
+  /* Conversation ids are random, and the later conversation has to sort
+     before the first one. A descending sequence gives that on the first
+     attempt; drawing until it happened failed about once in a hundred runs. */
+  let issued = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => (
+    `${(0xffff_ffff - issued++).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`
+  ));
+  let first: ReturnType<AgentRegistry["ensureConversation"]>;
+  let later: ReturnType<AgentRegistry["ensureConversation"]>;
+  try {
+    first = sqlite.ensureConversation("codex", "/sessions/first-owner.jsonl", "first");
+    later = sqlite.ensureConversation("codex", "/sessions/later-owner.jsonl", "later");
+  } finally {
+    ids.mockRestore();
   }
-  if (first.id < later.id) throw new Error("failed to create reverse-lexical conversation ids");
+  expect(later.id < first.id).toBeTrue();
   const db = new Database(path.join(directory, "agent-registry.sqlite"));
   const stored = db.query<{ value_json: string }, [string, string]>(
     "SELECT value_json FROM registry_rows WHERE collection = ? AND row_key = ?",
@@ -1744,10 +1755,23 @@ test.each(["off", "dual-write", "read", "sqlite"] as const)(
       now: () => clock,
       mirrorCheckpointMs: 60_000,
     });
-    for (let index = 0; index < 650; index += 1) {
-      // Exercise durable writes without growing the registry on each sample.
-      registry.setEngineRouting("codex", "metrics-account");
-      clock += 100;
+    /* The subject is the registry's own accounting, read on the injected
+       clock. Left alone, each transaction asks the device for about six
+       flushes (3 932 fsync calls for these 650 in dual-write), so the test ran
+       for as long as the disk took to flush, a latency it shares with every
+       process syncing beside it: at 8 ms a flush the loop takes 28 s. The
+       transactions still run the whole storage path; what they survive is
+       asserted by the crash and rollback tests above. */
+    const flushes = spyOn(fs, "fsyncSync").mockImplementation(() => {});
+    (registry as unknown as { sqliteStore?: { db: Database } }).sqliteStore?.db.exec("PRAGMA synchronous = OFF");
+    try {
+      for (let index = 0; index < 650; index += 1) {
+        // Exercise real writes without growing the registry on each sample.
+        registry.setEngineRouting("codex", "metrics-account");
+        clock += 100;
+      }
+    } finally {
+      flushes.mockRestore();
     }
 
     expect(registry.storageDiagnostics()).toMatchObject({

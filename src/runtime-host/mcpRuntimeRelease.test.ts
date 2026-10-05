@@ -3,9 +3,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { McpRuntimeReleaseStore } from "./mcpRuntimeRelease";
+import { McpRuntimeReleaseStore, mcpLauncherImports } from "./mcpRuntimeRelease";
 
 const sandboxes: string[] = [];
+const REPO = path.join(import.meta.dir, "..", "..");
+/* Shaped like the real launcher: a side-effect import, a multi-line named
+   import, and a module (the supervisor) that loads one more in turn. */
+const LAUNCHER = [
+  "import \"./envAlias.mjs\";",
+  "import {",
+  "  fixture,",
+  "} from \"./server-runtime.mjs\";",
+  "import { fixture as appDir } from \"./appDir.mjs\";",
+  "import { fixture as supervisor } from \"./self-update-supervisor.mjs\";",
+  "process.stdout.write('launcher\\n');",
+  "",
+].join("\n");
 
 afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
@@ -20,11 +33,13 @@ function preparedPackage(): { root: string; source: string; state: string; stabl
   fs.mkdirSync(path.join(source, "bin"), { recursive: true });
   fs.mkdirSync(path.join(source, "dist"), { recursive: true });
   fs.mkdirSync(path.join(source, "node_modules", "fixture"), { recursive: true });
-  fs.writeFileSync(path.join(source, "bin", "mcp-server.mjs"), "process.stdout.write('launcher\\n');\n");
+  fs.writeFileSync(path.join(source, "bin", "mcp-server.mjs"), LAUNCHER);
   fs.writeFileSync(path.join(source, "bin", "server-runtime.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "bin", "appDir.mjs"), "export const fixture = true;\n");
   fs.writeFileSync(path.join(source, "bin", "envAlias.mjs"), "export const fixture = true;\n");
-  fs.writeFileSync(path.join(source, "bin", "self-update-supervisor.mjs"), "export const fixture = true;\n");
+  fs.writeFileSync(path.join(source, "bin", "self-update-supervisor.mjs"), "import { identity } from \"./process-identity.mjs\";\nexport const fixture = identity;\n");
+  fs.writeFileSync(path.join(source, "bin", "process-identity.mjs"), "export const identity = true;\n");
+  fs.writeFileSync(path.join(source, "bin", "cli.mjs"), "export const unrelated = true;\n");
   fs.writeFileSync(path.join(source, "dist", "mcp-server.mjs"), "process.stdout.write('candidate\\n');\n");
   fs.writeFileSync(path.join(source, "node_modules", "fixture", "index.js"), "export {};\n");
   fs.writeFileSync(path.join(source, "package.json"), "{\"name\":\"fixture\",\"type\":\"module\"}\n");
@@ -120,7 +135,7 @@ test("stable launcher publication preserves the registered path across crash bou
     expect(await child.exited).toBe(86);
     expect(await new Response(child.stderr).text()).toBe("");
     const afterCrash = fs.readFileSync(registeredPath, "utf8");
-    expect(["process.stdout.write('previous\\n');\n", "process.stdout.write('launcher\\n');\n"]).toContain(afterCrash);
+    expect(["process.stdout.write('previous\\n');\n", LAUNCHER]).toContain(afterCrash);
 
     const store = new McpRuntimeReleaseStore({
       stateDir: fixture.state,
@@ -134,9 +149,12 @@ test("stable launcher publication preserves the registered path across crash bou
       publishedAt: "2026-07-23T08:02:00.000Z",
       durable: true,
     });
-    expect(fs.readFileSync(registeredPath, "utf8")).toBe("process.stdout.write('launcher\\n');\n");
-    expect(fs.readFileSync(path.join(fixture.stable, "bin", "self-update-supervisor.mjs"), "utf8"))
-      .toBe("export const fixture = true;\n");
+    expect(fs.readFileSync(registeredPath, "utf8")).toBe(LAUNCHER);
+    /* The supervisor and the module only it loads are both beside the
+       launcher; a module the launcher never reaches is not. */
+    expect(fs.readdirSync(path.join(fixture.stable, "bin")).sort()).toEqual([
+      "appDir.mjs", "envAlias.mjs", "mcp-server.mjs", "process-identity.mjs", "self-update-supervisor.mjs", "server-runtime.mjs",
+    ]);
     expect(fs.readdirSync(path.dirname(registeredPath)).filter((entry) => entry.includes(".tmp"))).toEqual([]);
   }
 });
@@ -253,4 +271,54 @@ test("runtime retention keeps the active rollback pair and retires failed candid
   expect(fs.existsSync(path.join(fixture.state, "mcp-runtime", "releases", failed.releaseId!))).toBe(false);
   expect(fs.readdirSync(path.join(fixture.state, "mcp-runtime", "releases")).sort())
     .toEqual([first.releaseId!, second.releaseId!].sort());
+});
+
+test("the stable launcher is published with every module it loads, and runs from there", () => {
+  const fixture = preparedPackage();
+  const store = new McpRuntimeReleaseStore({ stateDir: fixture.state, stableRuntimeRoot: fixture.stable });
+  const evidence = store.installStableLauncher(fixture.source);
+  const run = Bun.spawnSync([process.execPath, evidence.executablePath], { stdout: "pipe", stderr: "pipe" });
+  expect(run.stderr.toString()).toBe("");
+  expect(run.stdout.toString()).toBe("launcher\n");
+  expect(run.exitCode).toBe(0);
+});
+
+test("a launcher whose import is absent or outside its directory is not published", () => {
+  for (const [name, source, reason] of [
+    ["self-update-supervisor.mjs", "import \"./process-identity.mjs\";\n", "process-identity.mjs is missing"],
+    ["appDir.mjs", "export { shared } from \"../shared.mjs\";\n", "appDir.mjs imports ../shared.mjs from outside its directory"],
+    ["server-runtime.mjs", "export const load = () => import(\"./late.mjs\");\n", "late.mjs is missing"],
+  ] as const) {
+    const fixture = preparedPackage();
+    fs.writeFileSync(path.join(fixture.source, "bin", name), source);
+    if (name === "self-update-supervisor.mjs") fs.rmSync(path.join(fixture.source, "bin", "process-identity.mjs"));
+    const store = new McpRuntimeReleaseStore({ stateDir: fixture.state, stableRuntimeRoot: fixture.stable });
+    expect(() => store.installStableLauncher(fixture.source)).toThrow(`prepared MCP runtime launcher is incomplete: ${reason}`);
+    expect(fs.existsSync(path.join(fixture.stable, "bin", "mcp-server.mjs"))).toBe(false);
+  }
+});
+
+/* The shipped launcher, published the way a managed installation publishes it.
+   Every module it names is then loaded from the published directory by a real
+   interpreter, so an import the publication left behind fails here and not in
+   the first agent that starts after a deployment (#2495 review, P1). */
+test("the shipped MCP launcher loads every module it imports from its published directory", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-shipped-"));
+  sandboxes.push(root);
+  const stable = path.join(root, "llv-mcp-runtime");
+  const store = new McpRuntimeReleaseStore({ stateDir: path.join(root, "state"), stableRuntimeRoot: stable });
+  const evidence = store.installStableLauncher(REPO);
+  const published = fs.readdirSync(path.dirname(evidence.executablePath)).sort();
+  expect(published).toEqual(["mcp-server.mjs", ...mcpLauncherImports(path.join(REPO, "bin"))].sort());
+
+  const launcher = fs.readFileSync(evidence.executablePath, "utf8");
+  const named = [...launcher.matchAll(/from "(\.\/[^"]+)"|^import "(\.\/[^"]+)"/gm)].map((match) => (match[1] ?? match[2])!.slice(2));
+  expect(named).toContain("self-update-supervisor.mjs");
+  for (const name of named) {
+    const load = Bun.spawnSync([process.execPath, "-e", `await import(${JSON.stringify(path.join(stable, "bin", name))});`], {
+      stdout: "pipe", stderr: "pipe",
+      env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, LLV_STATE_DIR: path.join(root, "state") },
+    });
+    expect({ name, stderr: load.stderr.toString(), exitCode: load.exitCode }).toEqual({ name, stderr: "", exitCode: 0 });
+  }
 });

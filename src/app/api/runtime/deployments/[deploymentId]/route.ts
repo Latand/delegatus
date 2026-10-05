@@ -1,3 +1,6 @@
+import { selfUpdateService } from "@/lib/selfUpdate/instance";
+import { checkoutDeployments } from "@/lib/selfUpdate/deployments";
+import { statePath } from "@/lib/configDir";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -10,6 +13,12 @@ export const dynamic = "force-dynamic";
 type DeploymentRouteContext = { params: Promise<{ deploymentId: string }> };
 
 export async function GET(_request: Request, context: DeploymentRouteContext): Promise<NextResponse> {
+  const { deploymentId } = await context.params;
+  if (deploymentId.startsWith("checkout-")) {
+    try { await selfUpdateService().snapshot(); const status = checkoutDeployments(statePath("self-update")).find(row => row.deploymentId === deploymentId);
+      return status ? NextResponse.json(status) : NextResponse.json({ error: "viewer deployment was not found" }, { status: 404 });
+    } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Deployment ledger unavailable" }, { status: 503 }); }
+  }
   if (runtimeEventsRolledBack()) {
     return NextResponse.json(
       { error: "runtime events are disabled", code: RUNTIME_PLANE_ABSENT },
@@ -23,7 +32,6 @@ export async function GET(_request: Request, context: DeploymentRouteContext): P
       { status: 503 },
     );
   }
-  const { deploymentId } = await context.params;
   try {
     const status = await client.readViewerDeployment(deploymentId);
     return status ? NextResponse.json(status) : NextResponse.json({ error: "viewer deployment was not found" }, { status: 404 });
