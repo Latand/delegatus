@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
@@ -2372,6 +2373,82 @@ test("a spawn route that answers its own busy store is replayed under the same a
   expect(recorded.spawns.map((body) => body.clientAttemptId)).toEqual(["req_busy_0003", "req_busy_0003"]);
   expect(orchestratorSeatFor("proj-a").history).toEqual([]);
 });
+
+test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
+  seedLegacyActiveSeat("req_completed_holder");
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0 });
+  const holder = await foreignAccountHolder();
+  try {
+    holder.releaseAfter(8);
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_completed_holder"), deps);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns).toEqual([]);
+    expect(recorded.identityStamps).toHaveLength(1);
+  } finally { await holder.close(); }
+});
+
+test("rotation waits out a 120 ms foreign holder while confirming a provisional incumbent", async () => {
+  const { deps, recorded } = dependencies({ spawn: async () => ({ status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "incumbent-launch" } }) });
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_incumbent"), deps);
+  deps.spawn = async body => { recorded.spawns.push(body); return { status: 200, body: { ok: true, conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "successor-launch" } }; };
+  const holder = await foreignAccountHolder();
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 40);
+  try {
+    holder.releaseAfter(120);
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_holder" }, deps);
+    expect(result.status).toBe(200);
+    expect(timerRan).toBe(true);
+    expect(recorded.spawns).toHaveLength(1);
+    expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  } finally { clearTimeout(timer); await holder.close(); }
+});
+
+test("rotation preserves an accepted successor when activation exhausts its store wait", async () => {
+  const { deps } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_predecessor"), deps);
+  let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  let launches = 0;
+  Object.assign(deps, {
+    seatStoreWaitMs: 80,
+    resolvedConversation: () => null,
+    spawn: async () => {
+      launches += 1;
+      holder = await foreignAccountHolder();
+      holder.releaseAfter(10);
+      return { status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "accepted-successor" } };
+    },
+    launchSettlement: () => ({ kind: "settled", conversationId: OLD_ID, path: null, launchId: "accepted-successor" }),
+    stampRegistryIdentity: () => { throw new AccountMutationBusyError(); },
+  });
+  try {
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_accepted" }, deps);
+    expect(result.status).toBe(503);
+    expect(launches).toBe(1);
+    expect(orchestratorSeatFor("proj-a").active?.intent.clientRequestId).toBe("req_rotation_accepted");
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+    expect(String(result.body.error)).not.toMatch(/pid|Codex|held by|account mutation/i);
+  } finally { await holder?.close(); }
+});
+
+for (const answer of [
+  { code: "account_store_busy", error: "The account store is temporarily busy; try again shortly." },
+  { code: "account_admission_changed", error: "The account changed while preparing the launch; try again shortly." },
+  { error: "spawn account changed during admission" },
+]) {
+  test(`seat replays a pre-reservation refusal ${answer.code ?? "from an older admission"} under the same key`, async () => {
+    const { deps, recorded } = dependencies({ spawn: async body => {
+      recorded.spawns.push(body);
+      return recorded.spawns.length === 1 ? { status: 503, body: answer }
+        : { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "replayed-launch" } };
+    } });
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_admission_replay"), deps);
+    expect(result.status).toBe(202);
+    expect(recorded.spawns.map(body => body.clientAttemptId)).toEqual(["req_admission_replay", "req_admission_replay"]);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  });
+}
 
 test("a store that stays busy answers once, in plain words, and records no holder or pid", async () => {
   const { deps, recorded } = dependencies({

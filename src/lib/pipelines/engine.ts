@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -6433,7 +6433,7 @@ function isStructuredDeliveryControllerFailure(failure: string): boolean {
 }
 
 function isAccountMutationContention(failure: string): boolean {
-  return failure.startsWith("account mutation is busy");
+  return failure === ACCOUNT_STORE_BUSY_MESSAGE || failure.startsWith("account mutation is busy");
 }
 
 /** The pipeline spawn adapter's wording for every socket-level runtime-host

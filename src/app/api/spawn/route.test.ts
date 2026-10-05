@@ -10,6 +10,8 @@ import { agentRegistry, AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSessionRoots, createManagedCodexAccount } from "@/lib/accounts/codex";
 import { NoHealthyClaudeAccountError } from "@/lib/accounts/spawnHealth";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { spawnParentSelector, spawnRequestDigest, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
 import { rotateOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -106,6 +108,87 @@ function structuredRouteDependencies(cwd: string): SpawnRouteTestDependencies {
     }),
   };
 }
+
+test("a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "pinned-contention-"));
+  fs.mkdirSync(path.join(cwd, "account"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const deps = structuredRouteDependencies(cwd);
+  const resolveAccount = deps.resolveSpawnAccount!;
+  Object.assign(deps, {
+    registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolveHealthySpawnAccount: async () => {
+      await withAccountMutationLockAsync(() => undefined, { caller: "pinned preflight", holder: "preflight fixture" });
+      return resolveAccount("codex", "account-b");
+    },
+  });
+  const request = (key: string) => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "codex", accountId: "account-b", cwd, title: "Preflight contention", prompt: "Review", clientAttemptId: key }),
+  });
+  try {
+    const short = await foreignAccountHolder();
+    try {
+      short.releaseAfter(120);
+      const admitted = await POST.withDependencies(request("short-preflight-key"), deps);
+      expect({ status: admitted.status, body: await admitted.json() }).toMatchObject({ status: 202 });
+    } finally { await short.close(); }
+    const held = await foreignAccountHolder();
+    try {
+      held.releaseAfter(2_150);
+      const refused = await POST.withDependencies(request("busy-preflight-key"), deps);
+      expect(refused.status).toBe(503);
+      const body = await refused.json();
+      expect(body).toMatchObject({ code: "account_store_busy", retryable: true, error: "The account store is temporarily busy; try again shortly." });
+      expect(JSON.stringify(body)).not.toMatch(/pid|Codex|Claude|held by|account mutation/i);
+      expect(Object.values(store.readOnlySnapshot().receipts).some(receipt => receipt.clientAttemptId === "busy-preflight-key")).toBe(false);
+    } finally { await held.close(); }
+    const replay = await POST.withDependencies(request("busy-preflight-key"), deps);
+    expect(replay.status).toBe(202);
+    expect(Object.values(store.readOnlySnapshot().receipts).filter(receipt => receipt.clientAttemptId === "busy-preflight-key")).toHaveLength(1);
+  } finally {
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
+    else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+test("a catalog write between spawn snapshot and reservation answers a retryable admission code without burning the key", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "admission-revision-"));
+  fs.mkdirSync(path.join(cwd, "account"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const deps = structuredRouteDependencies(cwd);
+  let raced = false;
+  Object.assign(deps, {
+    registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    autonomousAdmissionHeld: () => {
+      if (!raced) { raced = true; createManagedCodexAccount("Concurrent admission writer"); }
+      return false;
+    },
+  });
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "codex", accountId: "account-b", cwd, title: "Admission revision", prompt: "Review", clientAttemptId: "admission-revision-key" }),
+  });
+  try {
+    const refused = await POST.withDependencies(request(), deps);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+    expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
 
 test("spawn admission rejects malformed MCP allowlists", async () => {
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {

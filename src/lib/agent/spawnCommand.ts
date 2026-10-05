@@ -9,7 +9,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -800,6 +800,7 @@ export async function executeSpawnRequest(
       ...(explicitProject ? { project: explicitProject } : {}),
     });
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
+      if (isAccountAdmissionRetryable(failure)) throw failure;
       const accountId = body.accountId as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
       const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
@@ -843,6 +844,7 @@ export async function executeSpawnRequest(
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
         : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
     } catch (error) {
+      if (isAccountAdmissionRetryable(error)) throw error;
       /* The record needs the operator, and until it gets them this launch
          selects nothing. A conflict, not a server fault: the request is well
          formed and the state it addresses is what is wrong — the same answer
@@ -873,7 +875,8 @@ export async function executeSpawnRequest(
           } else {
             return await terminalizePinnedAccountFailure(error);
           }
-        } catch {
+        } catch (fallbackError) {
+          if (isAccountAdmissionRetryable(fallbackError)) throw fallbackError;
           return await terminalizePinnedAccountFailure(error);
         }
       } else {
@@ -992,7 +995,7 @@ export async function executeSpawnRequest(
           || accountProbeIdentity(current) !== admissionAccount!.identity
           || current.accountId !== account.accountId || current.kind !== account.kind
           || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
-          throw new Error("spawn account changed during admission");
+          throw new AccountAdmissionChangedError();
         }
       }
       return registry.beginSpawnRequest(canonicalSpawnRequest(

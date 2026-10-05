@@ -413,6 +413,20 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
   expect(providerReads).toBe(0);
 });
 
+test("a validity probe whose catalog revision moved returns replayable admission contention", async () => {
+  const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+  const created = createManagedClaudeAccount("Revision fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const selected = listClaudeAccounts().find(candidate => candidate.id === created.id)!;
+  providerReply = () => {
+    createManagedClaudeAccount("Concurrent catalog writer");
+    return new Response(JSON.stringify({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    await expect(selectHealthyClaudeAccount([selected], selected.id)).rejects.toMatchObject({ name: "AccountAdmissionChangedError" });
+  } finally { providerReply = null; }
+});
+
 test("concurrent admissions coalesce refresh validation for one account", async () => {
   const expired = account("concurrent", NOW - 1);
   let refreshCalls = 0;

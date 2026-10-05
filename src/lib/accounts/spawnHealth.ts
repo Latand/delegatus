@@ -9,7 +9,7 @@ import { LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits } from "@/lib/types";
 import { listClaudeAccounts, listSavedClaudeProviderModels, readClaudeProviderToken, UnknownClaudeAccountError, UnsafeClaudeHomeError, type ClaudeAccount } from "./claude";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
 import { claudeOauthMetadata, refreshClaudeOauth } from "./claudeOauth";
-import { accountProbeIdentity, accountProbeSnapshot, claudeProbeCredentialIdentity, AccountMutationBusyError, withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, claudeProbeCredentialIdentity, isAccountAdmissionRetryable, AccountAdmissionChangedError, withAccountMutationLockAsync } from "./accountMutation";
 
 export type ClaudeValidityProbeResult = SpawnAccountAdmission & {
   /** Shared provider read; each waiter applies its own model without another probe. */
@@ -50,7 +50,7 @@ function refreshSingleFlight(
   const pending = Promise.resolve()
     .then(() => refresh(account))
     .catch((error: unknown) => {
-      if (error instanceof AccountMutationBusyError || error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
+      if (isAccountAdmissionRetryable(error) || error instanceof UnknownClaudeAccountError || error instanceof ClaudeCredentialUnavailableError) throw error;
       return classifySpawnAccountAdmission({
         enabled: true,
         authentication: "unknown",
@@ -163,9 +163,11 @@ async function fencedLiveValidityProbe(account: ClaudeAccount): Promise<ClaudeVa
   const snapshot = await accountProbeSnapshot(() => currentClaudeAccount(account), { holder: "Claude validity snapshot", caller: "spawn health" });
   const credentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
   const result = await liveValidityProbe(snapshot.account);
-  if (credentialIdentity === null || credentialIdentity !== claudeProbeCredentialIdentity(snapshot.account.home)) throw new ClaudeCredentialUnavailableError();
+  const currentCredentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
+  if (credentialIdentity === null || currentCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+  if (credentialIdentity !== currentCredentialIdentity) throw new AccountAdmissionChangedError();
   await withAccountMutationLockAsync(() => {
-    if (snapshot.revision !== accountsCollectionRevision() || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new ClaudeCredentialUnavailableError();
+    if (snapshot.revision !== accountsCollectionRevision() || accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();
   }, { holder: "Claude validity recheck" });
   return result;
 }

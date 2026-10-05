@@ -12,7 +12,11 @@ import { accountsCollectionRevision } from "./accountsStore";
 
 export const ACCOUNT_MUTATION_WAIT_MS = 10_000;
 export const ACCOUNT_MUTATION_ADMISSION_WAIT_MS = 2_000;
+/** Maximum synchronous contention wait. A local holder must stay runnable. */
+export const ACCOUNT_MUTATION_SYNC_WAIT_MS = 25;
+export const ACCOUNT_STORE_BUSY_MESSAGE = "The account store is temporarily busy; try again shortly.";
 const LOCK_WAIT_MS = 5;
+const syncSleeper = new Int32Array(new SharedArrayBuffer(4));
 const LOCK_STALE_MS = 30_000;
 /* No waiter legitimately queues for this long (the async path gives up after
    ~ACCOUNT_MUTATION_WAIT_MS), so a ticket this old is leaked no
@@ -49,10 +53,23 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class AccountMutationBusyError extends Error {
-  constructor(message?: string, readonly owner: LockHolder = readLockHolder()) {
-    super(message ?? busyMessage(owner));
+  constructor(_message?: string, readonly owner: LockHolder = readLockHolder()) {
+    // Holder evidence belongs to diagnostics, never a response or a receipt.
+    super(ACCOUNT_STORE_BUSY_MESSAGE);
     this.name = "AccountMutationBusyError";
   }
+}
+
+/** No launch was reserved using the snapshot that lost this revision fence. */
+export class AccountAdmissionChangedError extends Error {
+  constructor() {
+    super("The account changed while preparing the launch; try again shortly.");
+    this.name = "AccountAdmissionChangedError";
+  }
+}
+
+export function isAccountAdmissionRetryable(error: unknown): error is AccountMutationBusyError | AccountAdmissionChangedError {
+  return error instanceof AccountMutationBusyError || error instanceof AccountAdmissionChangedError;
 }
 
 export interface AccountMutationOptions {
@@ -90,10 +107,6 @@ function readLockHolder(): LockHolder {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
-}
-
-function busyMessage(owner: LockHolder): string {
-  return `account mutation is busy; held by ${owner.operation} (pid ${owner.pid ?? "unknown"}, age ${owner.ageMs ?? "unknown"} ms); retry shortly`;
 }
 
 function logRefusal(error: unknown, options: AccountMutationOptions, started: number): void {
@@ -279,16 +292,19 @@ function attachLocalRelease(acquired: AcquiredLock, release: () => void): Acquir
   };
 }
 
-function acquire(holder: string): AcquiredLock {
+function acquire(holder: string, waitMs: number): AcquiredLock {
   const release = acquireLocalSync(holder);
+  const deadline = performance.now() + waitMs;
   let pending: PendingLock | null = null;
   try {
     pending = createPendingLock(holder);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (;;) {
       const acquired = tryAcquireFile(pending);
       if (acquired) return attachLocalRelease(acquired, release);
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new AccountMutationBusyError();
+      Atomics.wait(syncSleeper, 0, 0, Math.min(2, remaining));
     }
-    throw new AccountMutationBusyError();
   } catch (error) {
     if (pending) removeIfOwned(pending.ticket, pending.owner.token);
     release();
@@ -338,7 +354,10 @@ export function withAccountMutationLock<T>(operation: () => T, options: AccountM
   if (inherited?.active) return operation();
   const started = performance.now();
   let transaction: AcquiredLock;
-  try { transaction = acquire(holderName(options)); }
+  const waitMs = options.waitMs === undefined || !Number.isFinite(options.waitMs)
+    ? ACCOUNT_MUTATION_SYNC_WAIT_MS
+    : Math.max(0, Math.min(ACCOUNT_MUTATION_SYNC_WAIT_MS, options.waitMs));
+  try { transaction = acquire(holderName(options), waitMs); }
   catch (error) { logRefusal(error, options, started); throw error; }
   try {
     return transactionContext.run(transaction.context, operation);
@@ -416,5 +435,5 @@ export async function accountProbeSnapshot<T extends { home: string }>(
     }, remaining());
     if (snapshot) return snapshot;
   }
-  throw new Error("account metadata changed repeatedly during probe admission; retry shortly");
+  throw new AccountAdmissionChangedError();
 }
