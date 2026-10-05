@@ -4531,3 +4531,27 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
 });
+
+test.each([
+  { id: "restart-service", button: true, unit: "delegatus.service" },
+  { id: "start-service", button: true, unit: "delegatus.service" },
+  { id: "restart-terminal", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "restart-terminal", button: false, command: "& 'bun' 'bin/cli.mjs' --port 45123 --no-open", terminalEveryUpdate: true },
+  { id: "start-launcher", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "update-first", button: true },
+  { id: "docker-deployments", button: false, command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" },
+  { id: "secure-handoff", button: false },
+] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  try {
+    const bindings = viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+      callerProject: () => "proj-a", viewerProjects: () => ["proj-a"],
+      authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+    } as never);
+    const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
+  } finally { globalThis.fetch = originalFetch; }
+});

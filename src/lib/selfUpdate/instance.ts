@@ -2,12 +2,16 @@
    install (#2007). Everything that resolves the state directory runs on the
    first request, never while a module loads (#1905). */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
+import { agentRegistry } from "@/lib/agent/registry";
 import { agentLivenessSnapshot, conversationRegistryHost, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
+import { flowPipelineController } from "@/lib/pipelines/controller";
+import { seatTickIdle } from "@/lib/monitor/seatTickController";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
@@ -29,6 +33,7 @@ import { SelfUpdateService, type ServiceDeps } from "./service";
 import { currentHostTurnIdle, type QuietPorts } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
+import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
 
 const POLL_MINUTES = 60;
 const SSE_MIN_GAP_MS = 250;
@@ -173,6 +178,13 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     kickDeliveryQueue: kickStructuredDeliveryQueue,
     updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
+      // Admitted work by identity. The journal is left out on purpose: every
+      // event of a turn already running moves it, so it cannot fence new work.
+      dispatchVersion: () => {
+        const records = admittedRecords(agentRegistry().snapshot());
+        if (!records) throw new Error("Runtime admission evidence is unavailable");
+        return createHash("sha256").update(JSON.stringify([records, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
+      },
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");

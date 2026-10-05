@@ -3,12 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
+import { procBackend } from "@/lib/proc";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 
@@ -34,6 +36,8 @@ import {
   executeOrchestratorRotation,
   executeOrchestratorSeatRequest,
   productionSeatCommandDependencies,
+  reconcileOrchestratorSeatLaunch,
+  SEAT_STORE_BUSY_REASON,
   type SeatCommandDependencies,
 } from "./seatCommand";
 import { activeOrchestratorSeats, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
@@ -2294,3 +2298,205 @@ for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
     });
   }
 }
+
+/* ------------------------------------------------------------------------ */
+/* A short account write by another engine never fails a creation.           */
+/* ------------------------------------------------------------------------ */
+
+/** The account store's lock as ANOTHER writer holds it: the lock file the
+    account controller's «Codex login commit» leaves while it writes, owned by
+    a live process so nobody may reap it. Returns the release. */
+function holdAccountStoreAs(holder: string): () => void {
+  const lock = path.join(sandbox, "account-selection.lock");
+  let namespace: string | null = null;
+  try { namespace = fs.readlinkSync("/proc/self/ns/pid"); } catch { namespace = null; }
+  fs.writeFileSync(lock, JSON.stringify({
+    pid: process.pid,
+    startIdentity: procBackend.processIdentity(process.pid),
+    ns: namespace,
+    token: "another-writer",
+    holder,
+    acquiredAt: Date.now(),
+  }), { flag: "wx" });
+  return () => fs.rmSync(lock, { force: true });
+}
+
+test("REGRESSION: a Codex login commit that takes the lock while the launch is being accepted does not fail the creation", async () => {
+  const { deps } = dependencies({
+    /* The incident's order: the launch is accepted, and the account controller
+       takes the lock for a few milliseconds just as the seat is activated. */
+    spawn: async () => {
+      const release = holdAccountStoreAs("Codex login commit");
+      setTimeout(release, 120);
+      return { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_busy_1" } };
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0001"), deps);
+
+  expect(result.status).toBe(202);
+  expect(result.body).toMatchObject({ accepted: true, conversationId: NEW_ID });
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toMatchObject({ conversationId: NEW_ID, state: "active", intent: { clientRequestId: "req_busy_0001", launchId: "launch_busy_1", error: null } });
+  expect(pending).toBeNull();
+  expect(history).toEqual([]);
+});
+
+test("REGRESSION: a lock held when the designation begins is waited out and the request replayed, with one launch", async () => {
+  const release = holdAccountStoreAs("Codex login commit");
+  setTimeout(release, 120);
+  const { deps, recorded } = dependencies();
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0002"), deps);
+
+  expect(result.status).toBe(200);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+});
+
+test("a spawn route that answers its own busy store is replayed under the same attempt id", async () => {
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      calls += 1;
+      return calls === 1
+        ? { status: 500, body: { error: "account mutation is busy; held by Codex login commit (pid 4242, age 2 ms); retry shortly" } }
+        : { status: 200, body: { ok: true, state: "settled", conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "launch_1" } };
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0003"), deps);
+
+  expect(result.status).toBe(200);
+  expect(recorded.spawns.map((body) => body.clientAttemptId)).toEqual(["req_busy_0003", "req_busy_0003"]);
+  expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+});
+
+test("a store that stays busy answers once, in plain words, and records no holder or pid", async () => {
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      throw new AccountMutationBusyError("account mutation is busy; held by Codex login commit (pid 4242, age 2 ms); retry shortly");
+    },
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0004"), deps);
+
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "seat_store_busy", retryable: true, error: SEAT_STORE_BUSY_REASON });
+  expect(String(result.body.error)).not.toMatch(/pid|Codex|held by/);
+  /* The first run and its bounded replays, and no more. */
+  expect(recorded.spawns).toHaveLength(4);
+  const { pending, history } = orchestratorSeatFor("proj-a");
+  expect(pending).toBeNull();
+  expect(history.at(-1)?.seat.intent.error).toBe(SEAT_STORE_BUSY_REASON);
+});
+
+test("a store that stays busy AFTER the launch was accepted leaves the intent for the read to seat", async () => {
+  let release = () => {};
+  const { deps } = dependencies({
+    seatStoreWaitMs: 150,
+    spawn: async () => {
+      release = holdAccountStoreAs("Codex login commit");
+      return { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_busy_5" } };
+    },
+    launchSettlement: () => ({ kind: "settled", conversationId: NEW_ID, path: null, launchId: "launch_busy_5" }),
+    resolvedConversation: () => null,
+  });
+
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_busy_0005"), deps);
+  release();
+
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "seat_store_busy", retryable: true, seat: null });
+  /* An agent is starting under this intent: «failed» would be a lie, so it
+     stays pending and nothing is written to history. */
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_busy_0005", error: null });
+  expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  expect(orchestratorSeatFor("proj-a").active).toMatchObject({ conversationId: NEW_ID, intent: { clientRequestId: "req_busy_0005" } });
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+});
+
+/* ------------------------------------------------------------------------ */
+/* The pane's read brings a designation up to date with its launch.          */
+/* ------------------------------------------------------------------------ */
+
+test("lost response, then the launch settles: the read seats the orchestrator with no further request", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0001", launchId: null, engine: "claude", model: "opus" });
+  const { deps, recorded } = dependencies({
+    launchSettlement: () => ({ kind: "settled", conversationId: NEW_ID, path: null, launchId: "launch_lost_1" }),
+    /* Not readable yet: the seat is provisional, and must stay seated. */
+    resolvedConversation: () => null,
+  });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  const { active, pending } = orchestratorSeatFor("proj-a");
+  expect(pending).toBeNull();
+  expect(active).toMatchObject({ conversationId: NEW_ID, state: "active", intent: { clientRequestId: "req_lost_0001", launchId: "launch_lost_1" } });
+  expect(recorded.spawns).toEqual([]);
+});
+
+test("lost response, then the launch fails: the read records the failure and frees the project", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0002", launchId: null });
+  const { deps } = dependencies({
+    launchSettlement: () => ({ kind: "failed", error: "launch exited before a transcript materialized" }),
+    now: () => "2026-07-29T00:01:18.000Z",
+  });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toBeNull();
+  expect(pending).toBeNull();
+  expect(history.at(-1)).toMatchObject({
+    reason: "terminal_error",
+    seat: { intent: { clientRequestId: "req_lost_0002", error: "launch exited before a transcript materialized" } },
+  });
+});
+
+test("a failed launch under an intent that only just began is left for the request that owns it", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0004", launchId: null });
+  const failed = { kind: "failed", error: "launch exited before a transcript materialized" } as const;
+
+  /* Five seconds after the intent began: a retry may be between its begin and
+     the spawn route's claim of this very launch. */
+  await reconcileOrchestratorSeatLaunch("proj-a", dependencies({ launchSettlement: () => failed, now: () => "2026-07-29T00:00:05.000Z" }).deps);
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0004", error: null });
+
+  await reconcileOrchestratorSeatLaunch("proj-a", dependencies({ launchSettlement: () => failed, now: () => "2026-07-29T00:00:20.000Z" }).deps);
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+  expect(orchestratorSeatFor("proj-a").history.at(-1)?.seat.intent.error).toBe("launch exited before a transcript materialized");
+});
+
+test("launch timeout after activation: the read rolls the stillborn seat back instead of leaving it seated", async () => {
+  const { deps } = dependencies({
+    spawn: async () => ({ status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "launch_timeout_1" } }),
+    resolvedConversation: () => null,
+  });
+  expect((await executeOrchestratorSeatRequest(spawnRequest("req_timeout_001"), deps)).status).toBe(202);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+
+  await reconcileOrchestratorSeatLaunch("proj-a", {
+    ...deps,
+    launchSettlement: () => ({ kind: "failed", error: "structured spawn transport failed: runtime host request timed out" }),
+  });
+
+  const { active, pending, history } = orchestratorSeatFor("proj-a");
+  expect(active).toBeNull();
+  expect(pending).toBeNull();
+  expect(history.at(-1)?.seat.intent.error).toContain("runtime host request timed out");
+});
+
+test("a launch that has not settled is left exactly where it is by the read", async () => {
+  seedPendingLaunchIntent({ clientRequestId: "req_lost_0003", launchId: null });
+  const { deps } = dependencies();
+
+  await reconcileOrchestratorSeatLaunch("proj-a", deps);
+
+  expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0003", error: null });
+});

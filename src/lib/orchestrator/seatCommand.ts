@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
-import { AccountMutationBusyError, withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -138,6 +138,9 @@ export interface SeatCommandDependencies {
       from the launch receipt, for reconciling an accepted launch whose
       accepting request died before activation. */
   launchSettlement(input: { launchId: string | null; clientRequestId: string }): LaunchSettlement;
+  /** How long a designation queues for the account store; `SEAT_STORE_WAIT_MS`
+      when absent. A seam for tests that hold the store past the bound. */
+  seatStoreWaitMs?: number;
   /** Persist the active seat's role, membership, and rotation lineage. */
   stampRegistryIdentity(seat: OrchestratorSeat): void;
   /** Durable runtime identity for legacy seats that predate engine/model. */
@@ -497,7 +500,12 @@ async function activate(
   dependencies: SeatCommandDependencies,
 ): Promise<{ seat: OrchestratorSeat } | null> {
   let projectedSeat: OrchestratorSeat | null = null;
-  const completed = withAccountMutationLock(() => {
+  /* Activation follows an await (the spawn, the delivery), so nothing here
+     depends on staying synchronous, and by now a launch may already be running
+     for this intent. It therefore queues for the lock instead of asking once:
+     a writer that holds it for a few milliseconds must not cost the project
+     the seat its launch was accepted for. */
+  const completed = await withAccountMutationLockAsync(() => {
     const result = completeOrchestratorSeatIntent({
       project: input.project,
       clientRequestId: input.clientRequestId,
@@ -510,7 +518,7 @@ async function activate(
     });
     if (result.kind !== "missing") projectedSeat = reconcileAuthorityProjections(result.seat, dependencies);
     return result;
-  });
+  }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });
   if (completed.kind === "missing") return null;
   const seat: OrchestratorSeat = projectedSeat ?? completed.seat;
   /* Once per new seat epoch — a fresh seat, an adopted conversation, a
@@ -701,6 +709,44 @@ export function reconcileActiveOrchestratorSeat(
 }
 
 /**
+ * Reconcile ONE project's designation against the launch it rests on, for the
+ * read the pane polls.
+ *
+ * A pending intent used to be reconciled only by the next POST to the seat
+ * route. When the request that began it lost its answer, nothing came round on
+ * its own: the launch settled or failed, the task card said so, and the pane
+ * went on reading «creating» from a record nobody was going to touch. The read
+ * the pane already makes is the driver that is always there while somebody is
+ * looking, and it survives a reload because it is the server's record that
+ * moves. A provisional active seat is reconciled by the same call, so a launch
+ * that dies after activation does not wait minutes for the seat tick.
+ *
+ * Starts nothing and waits on no launch. A busy store is the caller's to
+ * swallow: the next poll asks again.
+ *
+ * A FAILED launch is recorded from here only once the intent is
+ * {@link READ_FAILURE_GRACE_MS} old. A retry begins a fresh intent under the
+ * key of a launch that already failed and then asks the spawn route to claim
+ * that launch again; for the moment in between, the receipt still reads failed
+ * under an intent whose request is alive. Recording it then would answer that
+ * request «superseded» while its launch went on to start. Seating a settled
+ * launch needs no such wait: the request and the read write the same row.
+ */
+export async function reconcileOrchestratorSeatLaunch(
+  project: string,
+  dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+): Promise<void> {
+  const canonical = canonicalOrchestratorProject(project);
+  reconcileActiveSeatLaunch(canonical, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(canonical, dependencies, READ_FAILURE_GRACE_MS);
+  if (reconciliation) await reconciliation;
+}
+
+/** How old a pending intent must be before the pane's read records its launch
+    as failed; see {@link reconcileOrchestratorSeatLaunch}. */
+export const READ_FAILURE_GRACE_MS = 15_000;
+
+/**
  * Reconcile a pending spawn intent against the durable settlement of the launch
  * its request attempted, so a 202 Accepted spawn converges to exactly one seat
  * whether or not the accepting request survived. A settled launch activates the
@@ -716,7 +762,7 @@ export function reconcileActiveOrchestratorSeat(
  * progresses synchronously to its durable begin before yielding, which is what
  * keeps two concurrent requests serialized by the pending-intent write.
  */
-function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies): Promise<unknown> | null {
+function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0): Promise<unknown> | null {
   const pending = orchestratorSeatFor(project).pending;
   if (!pending || pending.intent.mode !== "spawn" || pending.intent.error !== null) return null;
   const settlement = dependencies.launchSettlement({
@@ -735,60 +781,116 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
     }, dependencies);
   }
   if (settlement.kind === "failed") {
+    const age = Date.parse(dependencies.now()) - Date.parse(pending.designatedAt);
+    if (failureGraceMs > 0 && Number.isFinite(age) && age < failureGraceMs) return null;
     failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error, dependencies.now());
   }
   return null;
 }
 
+/** How long a designation queues for the account store behind another writer
+    before it gives up, in total across its replays. */
+export const SEAT_STORE_WAIT_MS = ACCOUNT_MUTATION_WAIT_MS;
+/** How many times a designation that met a busy store is replayed. Each replay
+    first queues for the lock, so the number bounds a store that answers busy
+    while reading free; the wait above bounds one that stays held. */
+const SEAT_STORE_BUSY_REPLAYS = 3;
+/** What a designation records and answers when the store stayed busy through
+    every replay. It names no holder: which writer held the lock is nothing the
+    operator chose and nothing they can act on. */
+export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/** Queue behind whoever holds the account store, within what is left of the
+    budget. False when the budget ran out first. */
+async function seatStoreReleased(deadline: number, attempt: number): Promise<boolean> {
+  /* A store that answers busy while its lock reads free must not be replayed
+     in a tight loop. */
+  await delay(Math.min(25 * attempt, Math.max(0, deadline - performance.now())));
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) return false;
+  try {
+    await withAccountMutationLockAsync(() => undefined, { holder: "orchestrator seat retry", waitMs: remaining });
+    return true;
+  } catch (error) {
+    if (error instanceof AccountMutationBusyError) return false;
+    throw error;
+  }
+}
+
 /**
  * EVERY WAY OUT OF A SEAT TRANSITION IS A RECORD (issue #1757).
  *
- * The seat store is guarded by the account mutation lock, and that lock throws
- * `AccountMutationBusyError` rather than waiting forever. Any throw past the
- * durable begin — that one, a registry read that blew up, a bug — used to
- * leave the route answering an unhandled 500 with no body, the burnt epoch
+ * The seat store is guarded by the account mutation lock, and its synchronous
+ * form throws `AccountMutationBusyError` at once rather than waiting. Any throw
+ * past the durable begin — that one, a registry read that blew up, a bug — used
+ * to leave the route answering an unhandled 500 with no body, the burnt epoch
  * sitting in `pending` with `error: null`, and every later designation refused
  * as `seat_intent_in_progress` behind it. The operator's evidence was three
  * epochs missing from the record and a stack trace in a container log.
  *
  * So the two exported entry points are wrapped: the thrown reason is recorded
  * on the intent, which terminalizes it into `intentHistory`, and the caller is
- * answered with that row and a code it can act on. A busy store answers 503,
- * because retrying shortly is the whole remedy.
+ * answered with that row and a code it can act on.
+ *
+ * A BUSY STORE IS WAITED OUT FIRST. That lock is one lock for every account
+ * write on the machine, and the account controller takes it on its own once a
+ * minute for each Codex account with a login on record. A creation that asked
+ * in the same few milliseconds failed with a message about an engine the
+ * operator had not chosen, after its launch had already been accepted. The
+ * request is idempotent by its key (the intent replays, the spawn answers from
+ * its receipt, the mandate is deduplicated), so it queues for the lock and runs
+ * again, up to {@link SEAT_STORE_BUSY_REPLAYS} times inside
+ * {@link SEAT_STORE_WAIT_MS}. Only when that is spent does it answer 503.
+ *
+ * Even then an intent whose launch was ACCEPTED is left pending: an agent is
+ * starting under it, and recording «failed» would tell the pane nothing is
+ * running while the task card shows it working. The pane's read reconciles that
+ * intent onto its launch on the next poll.
  */
 async function guardedSeatTransition(
   rawBody: Record<string, unknown>,
   code: "seat_transition_failed" | "rotation_failed",
   run: () => Promise<SeatCommandResult>,
+  busy: { replay: boolean; waitMs?: number; launchAccepted?: (clientRequestId: string) => boolean } = { replay: false },
 ): Promise<SeatCommandResult> {
-  try {
-    return await run();
-  } catch (thrown) {
-    const busy = thrown instanceof AccountMutationBusyError;
-    const reason = thrown instanceof Error ? thrown.message : String(thrown);
-    const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
-    const clientRequestId = text(rawBody.clientRequestId);
-    let terminalized: OrchestratorSeatTerminalization | null = null;
-    if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
-      const project = canonicalOrchestratorProject(named);
-      try {
-        terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason);
-      } catch {
-        /* The store itself is what failed. Nothing to record, and the answer
-           below still names the reason — silence is the one outcome this
-           wrapper exists to prevent. */
+  const deadline = performance.now() + (busy.waitMs ?? SEAT_STORE_WAIT_MS);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (thrown) {
+      const storeBusy = thrown instanceof AccountMutationBusyError;
+      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
+      const reason = storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
+      const clientRequestId = text(rawBody.clientRequestId);
+      let terminalized: OrchestratorSeatTerminalization | null = null;
+      let launchAccepted = false;
+      if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
+        const project = canonicalOrchestratorProject(named);
+        try {
+          launchAccepted = storeBusy && busy.launchAccepted?.(clientRequestId) === true;
+          if (!launchAccepted) terminalized = failOrchestratorSeatIntent(project, clientRequestId, reason);
+        } catch {
+          /* The store itself is what failed. Nothing to record, and the answer
+             below still names the reason — silence is the one outcome this
+             wrapper exists to prevent. */
+        }
       }
+      console.error(`orchestrator seat transition failed for ${String(rawBody.project)}: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+      return {
+        status: storeBusy ? 503 : 500,
+        body: {
+          error: reason,
+          code: storeBusy ? "seat_store_busy" : code,
+          retryable: storeBusy,
+          seat: terminalized?.seat ?? null,
+        },
+      };
     }
-    console.error(`orchestrator seat transition failed for ${String(rawBody.project)}: ${reason}`);
-    return {
-      status: busy ? 503 : 500,
-      body: {
-        error: reason,
-        code: busy ? "seat_store_busy" : code,
-        retryable: busy,
-        seat: terminalized?.seat ?? null,
-      },
-    };
   }
 }
 
@@ -819,7 +921,11 @@ export function executeOrchestratorSeatRequest(
      attribution that a caller can write is not attribution. */
   triggeredBy: OrchestratorSeatTrigger | null = null,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy));
+  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy), {
+    replay: true,
+    waitMs: dependencies.seatStoreWaitMs,
+    launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+  });
 }
 
 async function runOrchestratorSeatRequest(
@@ -1121,6 +1227,10 @@ async function runOrchestratorSeatRequest(
     && Boolean(launchId);
   const launched = admitted && spawned.body.launched !== false && Boolean(spawnedConversationId);
   if (!launched && !acceptedPending) {
+    /* The spawn route answers its own busy store as a plain failure. It is the
+       same wait as ours: nothing was launched, and the replay asks again under
+       the same attempt id. */
+    if (text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError(text(spawned.body.error));
     const error = text(spawned.body.error)
       || (!admitted
         ? `spawn was rejected with HTTP status ${spawned.status}`

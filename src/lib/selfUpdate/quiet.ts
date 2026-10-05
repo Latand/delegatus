@@ -67,6 +67,8 @@ export interface TurnEvidence {
   currentTurnIdle?: boolean;
 }
 export interface QuietPorts {
+  /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
+  dispatchVersion?(): string;
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
@@ -119,13 +121,16 @@ function stageHostGone(evidence: TurnEvidence): boolean {
    restart on every probe and hold the drain for good. */
 const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
 
-export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers }> {
+export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers; work: string[] }> {
   const busyReason: BusyReason | null = snapshot.busy === "update" ? "update"
     : snapshot.busy === "restart-web" || snapshot.processes.web.state !== "healthy" ? "web"
     : snapshot.busy === "restart-runtime-host" || snapshot.processes.runtimeHost.state !== "healthy" ? "runtime-host" : null;
   const blockers: QuietBlockers = { turns: 0, stages: 0, operatorActiveAt: null, busy: !!busyReason, busyReason,
     turnList: [], stageList: [], discounted: 0, unresolved: 0, unresolvedBlocking: 0, unresolvedGraceMs: UNRESOLVED_TURN_GRACE_MS,
     operatorWindowMs: (draining ? 2 : 10) * 60_000, unreadable: null, memoryMb: null };
+  // Every open turn and stage this probe saw, by identity. The lists in the
+  // blockers are cut for display; an admission compares the whole set.
+  const work: string[] = [];
   const readings = new Map<string, Promise<TurnEvidence | null>>();
   const probe = {};
   const evidence = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">): Promise<TurnEvidence | null> => {
@@ -163,6 +168,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId });
     }
     blockers.stages = stages.length;
+    work.push(...stages.map((stage) => `stage:${stage.pipelineId}:${stage.stageId}:${stage.conversationId ?? ""}`));
     blockers.stageList = stages.slice(0, 20);
     const seats = ports.seats?.() ?? [];
     const runtime = await ports.runtimeSnapshot();
@@ -200,6 +206,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.unresolved = unresolved.size;
     blockers.unresolvedBlocking = turns.filter((turn) => turn.unresolved).length;
     blockers.turns = turns.length;
+    work.push(...turns.map((turn) => `turn:${turn.conversationId}`));
     blockers.turnList = turns.slice(0, 20);
     const controller = ports.controllerBusyReason ? await ports.controllerBusyReason()
       : ports.controllerIdle && !await ports.controllerIdle() ? "pipeline-controller" : null;
@@ -209,5 +216,24 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   } catch (error) {
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
-  return { quiet: !blockers.turns && !blockers.stages && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers };
+  return { quiet: !blockers.turns && !blockers.stages && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
+}
+
+/** What a synchronous fence compares across an awaited read: the stages and
+    flow rounds that are filed, by launch, and the operator's last interaction.
+    A stage's progress notes and a tab's heartbeat are traffic of work already
+    admitted, so neither is part of it. */
+export function quietDispatchVersion(ports: QuietPorts | undefined, now: number): string | null {
+  if (!ports) return null;
+  try {
+    const stages = ports.pipelines().map((pipeline) => {
+      const attempt = pipeline.runs?.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.findLast((attempt) => !attempt.historical);
+      return [pipeline.id, pipeline.state, pipeline.cursor?.stageId, pipeline.cursor?.state, attempt?.conversationId, attempt?.launchId, attempt?.flowId, attempt?.activation?.phase];
+    });
+    const rounds = ports.flows?.().map((flow) => {
+      const round = flow.rounds?.at(-1);
+      return [flow.id, flow.state, flow.rounds?.length, round?.launchId, round?.sessionId, round?.spawnStartedAt, round?.relayStartedAt];
+    });
+    return JSON.stringify([ports.dispatchVersion?.(), stages, rounds, ports.presence(now).map((session) => [session.viewSessionId, session.lastInteractionAt])]);
+  } catch { return null; }
 }
