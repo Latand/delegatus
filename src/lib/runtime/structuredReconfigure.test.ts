@@ -1408,3 +1408,50 @@ test("a conversation's own reconfigure reads no pipeline record and keeps its ti
   })).toBe("applied");
   expect(target.registry.launchProfileForPath(target.transcript)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
 });
+
+/* A profile-only switch keeps its account, so nothing migrates and the host is
+   restarted through recovery, which resumes a recorded account by continuity
+   and asks no project pool. The pipeline is asked there too. */
+for (const engine of ["claude", "codex"] as const) {
+  test(`a ${engine} profile-only pipeline switch starts no host on an account the project dropped during release`, async () => {
+    const target = fixture({}, engine);
+    const generation = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+    let allowed = true;
+    let spawns = 0;
+    const asked: Array<string | null | undefined> = [];
+    const recover: typeof recoverDeadStructuredConversation = (request, dependencies) =>
+      recoverDeadStructuredConversation(request, {
+        ...dependencies,
+        client: {} as never,
+        transport: () => "structured",
+        resolveAccount: () => ({ engine, accountId: "source", kind: "managed", home: path.join(target.cwd, "account"), transcriptRoot: target.cwd, env: { NODE_ENV: "test" } }),
+        spawn: async (input) => {
+          spawns += 1;
+          return { ok: true, target: null, path: target.transcript, launchId: input.receipt.launchId, conversationId: target.conversationId,
+            launched: true, retrySafe: false, initialMessage: "delivered" as const, state: "settled" as const };
+        },
+      });
+    const request = effect({ operationId: "pswitch-profile-only", conversationId: target.conversationId, accountId: "source", model: engine === "claude" ? "sonnet" : "gpt-5.6-sol" });
+    const dependencies = {
+      registry: target.registry,
+      pipelineSwitch: () => ({ authorize: (accountId?: string | null) => {
+        asked.push(accountId);
+        if (!allowed) throw new Error("the conversation's account is no longer allowed on this project; no host starts on it");
+      } }),
+      releaseHost: async () => { allowed = false; return true; },
+      recover,
+    };
+
+    await expect(applyStructuredReconfigure(request, dependencies)).rejects.toThrow("no longer allowed on this project");
+    expect(spawns).toBe(0);
+    /* The preflight asked about the target; both recoveries, the one that applies and the one that restores, asked about the account itself. */
+    expect(asked).toEqual([undefined, "source", "source"]);
+    const refused = target.registry.conversation(target.conversationId)!;
+    expect(refused.reconfigure).toMatchObject({ status: "failed", error: expect.stringContaining("no longer allowed") });
+    expect(refused.generations).toHaveLength(1);
+    expect(target.registry.snapshot().entries[`${engine}:${generation.id}`]?.structuredHost).toBeNull();
+    /* The same effect after a restart is still the failed one and still starts nothing. */
+    await expect(applyStructuredReconfigure(request, dependencies)).rejects.toThrow("no longer allowed");
+    expect(spawns).toBe(0);
+  });
+}

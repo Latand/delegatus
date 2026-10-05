@@ -4977,6 +4977,15 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             delete record.outcome;
             await checkpoint();
           }
+        } else if (record.rollback && record.phase === "continuing") {
+          /* The target launch already failed or was never reserved, so no
+             receipt of it can settle anything. What the restored source owes is
+             witnessed by its own continuation and the generation it runs on. */
+          const delivery = await ports.runtimeSwitchDelivery?.(record.from.conversationId, record.continuationKey ?? switchOperationKey(record, "continue"));
+          if (delivery?.state !== "delivered") continue;
+          const generation = attempt.conversationId === record.from.conversationId ? ports.conversationGeneration?.(record.from.conversationId) : null;
+          if (!generation || !runtimeTargetsEqual(generation, record.from)) continue;
+          switchFailed = true;
         } else {
           const receipt = record.launch?.launchId ? ports.spawnReceipt(record.launch.launchId) : null;
           const failedReceipt = receipt && (receipt.state === "failed" || receipt.state === "conflicted" || stagedLaunchRecovery(receipt)?.stopped);

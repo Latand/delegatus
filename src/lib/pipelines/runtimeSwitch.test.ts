@@ -567,6 +567,91 @@ test("a late failed handoff receipt restores the authorized source conversation"
   expect(h.spawnCount()).toBe(1);
   expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
 });
+test("a parked handoff rollback with no successor launch settles on the source's late delivery and accepts its verdict once", async () => {
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  /* The source accepts the keyed continuation and delivers it only later. */
+  h.ports.resumeSeveredTurn = async (input) => {
+    if (!h.deliveries.has(input.clientMessageId)) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "pending", at: new Date(h.wallClock()).toISOString() });
+    }
+    return true;
+  };
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  let handoffCalls = 0;
+  h.ports.spawnAgent = async () => { handoffCalls++; throw new Error("target unavailable"); };
+  await tickPipelines([], h.ports);
+  const rolling = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(rolling.runtimeSwitches?.[0]).toMatchObject({ phase: "continuing", rollback: true, launch: { launchId: null } });
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  const parkedLane = loadPipelines()[0]!;
+  expect(parkedLane).toMatchObject({ state: "needs_decision" });
+  const { worktreeDir, branch } = parkedLane;
+
+  /* Still pending after a restart: the lane keeps waiting and nothing is sent again. */
+  const early = await import(`./engine?rollback-pending-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await early.tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
+
+  const key = h.continuations[0]!.clientMessageId;
+  h.deliveries.set(key, { state: "delivered", at: new Date(h.wallClock() + 1).toISOString() });
+  h.setSeat({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT });
+  h.setTurn({ turn: "busy", turnStartedAt: h.wallClock() + 2, message: null, lastRecordAt: h.wallClock() + 2 });
+  const restarted = await import(`./engine?rollback-delivered-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane).toMatchObject({ state: "running", worktreeDir, branch });
+  expect(attempt.runtimeSwitches?.[0]).toMatchObject({ phase: "rolled-back", rollback: true, launch: { launchId: null } });
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, launchId: "launch-1", state: "running", effectiveRole: { engine: "claude", model: "fable" } });
+
+  h.setTurn({ turn: "terminal", turnStartedAt: h.wallClock() + 2, message: { text: "Finished on source runtime", ts: h.wallClock() + 3 }, lastRecordAt: h.wallClock() + 3 });
+  const report = await restarted.reportStageCompletion({ verdict: "pass", findings: [], summary: "Finished on source runtime" },
+    { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(report.error).toBeUndefined();
+  await restarted.tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(settled).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, verdict: { status: "pass" } });
+  expect(settled.report?.calls).toBe(1);
+  expect(settled.runtimeSwitches).toHaveLength(1);
+  expect(h.continuations).toHaveLength(1);
+  expect(handoffCalls).toBe(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(requested.pipeline!.runs[0]!.attempts[0]!.n).toBe(1);
+});
+test("a parked handoff rollback stays fenced when the project dropped the source account", async () => {
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
+  h.ports.resumeSeveredTurn = async (input) => {
+    if (!h.deliveries.has(input.clientMessageId)) {
+      h.continuations.push(input);
+      h.deliveries.set(input.clientMessageId, { state: "pending", at: new Date(h.wallClock()).toISOString() });
+    }
+    return true;
+  };
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  h.ports.spawnAgent = async () => { throw new Error("target unavailable"); };
+  await tickPipelines([], h.ports);
+  h.advance(10 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+  h.deliveries.set(h.continuations[0]!.clientMessageId, { state: "delivered", at: new Date(h.wallClock() + 1).toISOString() });
+  h.setSeat({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT });
+  h.setTurn({ turn: "busy", turnStartedAt: h.wallClock() + 2, message: null, lastRecordAt: h.wallClock() + 2 });
+  h.ports.allowedAccountIds = (_project, engine) => engine === "claude" ? ["another"] : ["default"];
+  const restarted = await import(`./engine?rollback-revoked-restart=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
+  expect(h.continuations).toHaveLength(1);
+});
 test("operator kill supersedes the switch without resurrecting the stage", async () => {
   const h = switchHarness(); await requestSwitch(h); h.ports.runtimeSwitchKilled = async () => true;
   await tickPipelines([], h.ports);
@@ -1203,6 +1288,13 @@ test("the executor's fence reads the switch record and the project's allowed acc
   expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
   expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
   expect(() => fence.authorize()).not.toThrow();
+  /* Asked about the account a host would start on, the source included. */
+  expect(() => fence.authorize("default")).not.toThrow();
+  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+  expect(() => fence.authorize("default")).toThrow("account is no longer allowed on this project");
+  expect(() => fence.authorize(null)).toThrow("no longer allowed");
+  expect(() => fence.authorize()).not.toThrow();
+  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
   /* A switch whose record is gone authorizes nothing. */
   expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
   expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);

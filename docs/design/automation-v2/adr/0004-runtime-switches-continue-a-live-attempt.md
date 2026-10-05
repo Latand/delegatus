@@ -29,6 +29,15 @@ the reason when the source is revoked too. The record is durable, so a restart
 reads the same answer. A revocation after the successor was published is the
 case of any running stage whose account was dropped, and parks the lane.
 
+A profile-only move keeps its account, so nothing migrates: the host is released
+and restarted through structured recovery, which resumes a recorded account by
+continuity and asks no project pool. Every recovery the operation requests,
+the restorations after a failure included, therefore carries the same fence and
+asks about the account the host would start on: under the account lease before
+the launch is reserved, again before dispatch, and again before publication. An
+account dropped while the host was being released starts no host; the operation
+settles failed with the reason and the lane waits on the ordinary rollback rule.
+
 The same record names the speed exactly. A reconfigure carries only fast or
 standard, and the profile rule keeps a tier that already agrees with it, so a
 move from another fast tier to Priority would have kept the old tier and been
@@ -65,7 +74,10 @@ persist before dispatch; uncertain launches reconcile their receipt
 and prove termination before any rollback.
 
 A failed or cancelled move reconciles the original continuation, because migration
-cancellation rearms held delivery on the source. A terminally failed send permits
+cancellation rearms held delivery on the source. A handoff that rolled back owes
+nothing to its target launch, which failed or was never reserved: a parked
+rollback settles from the source's own delivered continuation, its generation
+and its account's place in the allowed pool, with or without a launch receipt. A terminally failed send permits
 one replacement key. Atomic cancellation losing to a claim parks the stage until
 its outcome is known. Owned handoff stops have deterministic keys so a crash
 cannot confuse them with an operator kill admitted at or after the request;

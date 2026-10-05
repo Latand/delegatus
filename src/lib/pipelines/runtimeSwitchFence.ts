@@ -21,8 +21,9 @@ export const switchOperationKey = (record: Pick<PipelineRuntimeSwitch, "id">, ac
 export interface PipelineSwitchFence {
   /** The exact service tier the target seat names for a Codex conversation; undefined leaves the tier to the speed. */
   serviceTier?: string | null;
-  /** Throws when the project no longer allows the target account, or its record cannot be read. */
-  authorize(): void;
+  /** Throws when the project no longer allows the target account, or its record cannot be read.
+      Given an account, asks about that one: the account a host is about to start on. */
+  authorize(accountId?: string | null): void;
 }
 
 /** Null for an operation no pipeline switch issued. */
@@ -43,11 +44,17 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
   const tier = found?.to.serviceTier ?? null;
   return {
     ...(found?.to.engine === "codex" ? { serviceTier: tier === "priority" ? "priority" : null } : {}),
-    authorize() {
+    authorize(accountId) {
       // Read again on every call: the registry and the bindings may both have moved since admission.
       const current = find();
       if (!current) throw new Error("target account is no longer allowed: the stage's runtime switch record is gone");
       const pool = allowedAccountIdsForProject(current.project, current.to.engine);
+      if (accountId !== undefined) {
+        if (pool && (!accountId || !pool.includes(accountId))) {
+          throw new Error("the conversation's account is no longer allowed on this project; no host starts on it");
+        }
+        return;
+      }
       if (pool && (!current.to.accountId || !pool.includes(current.to.accountId))) {
         throw new Error("target account is no longer allowed on this project; the stage stays on its runtime");
       }

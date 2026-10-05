@@ -155,6 +155,10 @@ export async function applyStructuredReconfigure(
     revision: effect.eventSeq,
     owns: () => ownsDurableReconfigure(status),
     releaseHost: release,
+    /* The project may drop an account while a host is being released: every
+       recovery this operation asks for, the restorations after a failure
+       included, asks the pipeline again about the account it would start on. */
+    ...(fence ? { authorizeAccount: (accountId: string | null) => fence.authorize(accountId) } : {}),
   });
 
   /* A pipeline's project may have dropped the target account since the switch
