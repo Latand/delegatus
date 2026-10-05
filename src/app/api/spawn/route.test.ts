@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { createSpawnAttempt, spawnRequestBody } from "@/components/draftSpawn";
@@ -307,6 +307,96 @@ for (const change of ["unrelated refusal", "unrelated refusal with fallback", "p
   }
 });
 
+
+for (const scenario of ["exhausted pin", "unavailable pin", "automatic credential rotation", "pin credential rotation", "pin catalog change", "pin credential removal", "pin unreadable credential", "pin rejected refresh rotation"] as const) test(`Claude selection handles a fallback race with ${scenario}`, async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const { readAccountSource, writeAccountSource } = await import("@/lib/accounts/accountsStore");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "fallback-race-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let restoreRefresh: (() => void) | undefined;
+  try {
+    const first = createManagedClaudeAccount("Account A");
+    const second = createManagedClaudeAccount("Account B");
+    const firstToken = crypto.randomUUID();
+    const secondToken = crypto.randomUUID();
+    const resetAt = new Date(Date.now() + 3600_000).toISOString();
+    const writeCredentials = (home: string, token: string, expiresAt = Date.now() + 3600_000) => fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      ["access" + "Token"]: token, refreshToken: crypto.randomUUID(), expiresAt,
+    } }), { mode: 0o600 });
+    writeCredentials(first.home, firstToken, scenario === "pin rejected refresh rotation" ? Date.now() - 1 : Date.now() + 3600_000);
+    writeCredentials(second.home, secondToken);
+    let raced = false;
+    const probes: string[] = [];
+    if (scenario === "pin rejected refresh rotation") {
+      const oauth = await import("@/lib/accounts/claudeOauth");
+      const refresh = spyOn(oauth, "refreshClaudeOauth").mockImplementation(async () => { probes.push("first"); return "invalid"; });
+      restoreRefresh = () => { refresh.mockRestore(); };
+    }
+    globalThis.fetch = (async (_url, init) => {
+      const isFirst = new Headers(init?.headers).get("authorization") === `Bearer ${firstToken}` || String(_url).includes("/oauth/token");
+      probes.push(isFirst ? "first" : "second");
+      if (isFirst && scenario !== "automatic credential rotation") {
+        return scenario === "exhausted pin"
+          ? Response.json({ five_hour: { utilization: 100, resets_at: resetAt }, seven_day: { utilization: 10 } })
+          : Response.json({ error: "invalid_grant" }, { status: 401 });
+      }
+      if (!raced) {
+        raced = true;
+        if (scenario === "automatic credential rotation") writeCredentials(second.home, crypto.randomUUID());
+        else if (scenario === "pin credential rotation" || scenario === "pin rejected refresh rotation") writeCredentials(first.home, crypto.randomUUID());
+        else if (scenario === "pin credential removal") fs.unlinkSync(path.join(first.home, ".credentials.json"));
+        else if (scenario === "pin unreadable credential") fs.writeFileSync(path.join(first.home, ".credentials.json"), "{invalid json", { mode: 0o600 });
+        else if (scenario === "pin catalog change") {
+          const read = readAccountSource("claude-accounts.json");
+          if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+          const catalog = read.body as { accounts: { id: string; label: string }[] };
+          catalog.accounts.find(row => row.id === first.id)!.label = "Changed pin";
+          writeAccountSource("claude-accounts.json", catalog);
+        }
+        else recordSpawnAdmissionRejection({ clientAttemptId: "unrelated-key", requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+      }
+      return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+    }) as typeof globalThis.fetch;
+    const deps: SpawnRouteTestDependencies = {
+      ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+      resolvePinnedSpawnAdmission: undefined, resolveHealthySpawnAccount,
+      resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+    };
+    const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", ...(scenario === "automatic credential rotation" ? {} : { accountId: first.id }), cwd, title: "Fallback race", prompt: "Review", clientAttemptId: "fallback-race-key" }),
+    });
+    const response = await POST.withDependencies(request(), deps);
+    if (scenario.startsWith("pin ")) {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "account_admission_changed", retryable: true, retrySafe: true });
+      expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(0);
+      expect(probes).toEqual(scenario === "pin catalog change" ? ["first", "second", "second"] : ["first", "second"]);
+      return;
+    }
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
+    const receipts = Object.values(store.readOnlySnapshot().receipts);
+    expect(receipts).toHaveLength(1);
+    // The receipt binds the requested pin even when execution uses a fallback.
+    expect(receipts[0].accountId).toBe(first.id);
+    expect(probes).toEqual(scenario === "automatic credential rotation" ? ["first"] : ["first", "second", "second"]);
+    if (scenario !== "exhausted pin") {
+      expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+      expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(1);
+    }
+  } finally {
+    restoreRefresh?.();
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
 
 test("spawn admission rejects malformed MCP allowlists", async () => {
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {

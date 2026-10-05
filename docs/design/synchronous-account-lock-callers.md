@@ -62,7 +62,7 @@ code and cause.
 An explicit Claude pin is validated before fallback candidates, including its
 post-refresh validation when expired. Pinned and automatic validation flights
 keep their admission policies separate; the OAuth refresh fence still coalesces
-the credential replacement. An explicitly pinned Claude candidate repeats its
+the credential replacement. Each candidate in an explicitly pinned selection repeats its
 live health probe at most three times when only the shared collection revision moves. Each probe retains its
 600 ms network timeout and runs outside the lock; async snapshot/recheck admission
 has a 2 s budget. A changed pinned catalog row or credential, including external
@@ -70,7 +70,15 @@ replacement during OAuth refresh or its queued post-refresh recheck,
 becoming unreadable during the live probe,
 or a Keychain change while the final recheck queues,
 refuses admission with `account_admission_changed`, as does continuous revision churn after the
-third probe. Automatic selection retains its existing retryable revision fence.
+third probe when no other candidate is launchable. A changed fallback candidate
+is excluded from that selection, preserving the requested account's completed
+classification. Automatic selection likewise excludes a changed candidate and
+can launch on an unchanged healthy account. If no healthy candidate remains,
+the admission change retains its retryable `account_admission_changed` fence.
+The completed pin's catalog/file identity and request-local credential digest
+are revalidated after fallback probes and refreshes, before any result can
+reserve a fallback or queue the exhausted pin. A rejected pin refresh retains
+the same revalidation evidence. Credential reads remain outside the lease.
 
 Focused regression evidence:
 
@@ -80,6 +88,11 @@ Focused regression evidence:
   head with 400/500 and pass with queued success or the safe retryable 503.
 - A pinned Claude probe with one unrelated refusal write admits 202 with one
   receipt; changed pinned catalog/credentials and continuous churn admit none.
+- An exhausted or unavailable pin survives an unrelated refusal write during
+  its fallback probe (202, one receipt). Automatic selection survives a sibling
+  credential rotation on the unchanged account. Candidate exclusion also covers
+  refresh, while a changed explicit pin or a pool without a healthy alternative
+  retains its retryable admission error.
 - Local queued and locally held scenarios fail on the previous head and pass
   for the spawn refusal fence, Telegram withdrawal, compatibility routing,
   deputy command commits, deputy settlement and deputy note commits.

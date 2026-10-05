@@ -199,6 +199,60 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
   }
 }
 
+for (const phase of ["probe", "refresh"] as const) {
+  for (const policy of ["healthy alternative", "no healthy alternative", "explicit pin"] as const) test(`a changed ${phase} candidate preserves ${policy}`, async () => {
+    const { AccountAdmissionChangedError } = await import("./accountMutation");
+    const first = account("first", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const second = account("second", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const changed = new AccountAdmissionChangedError();
+    const evaluate = async (candidate: ClaudeAccount) => {
+      if (candidate.id === second.id) throw changed;
+      return policy === "no healthy alternative" ? unavailable() : current();
+    };
+    const selection = selectHealthyClaudeAccount([first, second], policy === "explicit pin" ? second.id : first.id, {
+      now: () => NOW, probe: evaluate, refresh: evaluate,
+    }, policy === "explicit pin", first.id);
+    if (policy === "healthy alternative") expect((await selection).account.id).toBe(first.id);
+    else await expect(selection).rejects.toBe(changed);
+  });
+}
+
+test("an expired fallback preserves the pinned selection's bounded revision retry policy", async () => {
+  const pin = account("pin", NOW + 60_000);
+  const fallback = account("fallback", NOW - 1);
+  const refreshes: { id: string; retryUnrelatedRevision: boolean | undefined }[] = [];
+  const selected = await selectHealthyClaudeAccount([pin, fallback], pin.id, {
+    now: () => NOW,
+    probe: async () => unavailable(),
+    refresh: async (candidate, retryUnrelatedRevision) => {
+      refreshes.push({ id: candidate.id, retryUnrelatedRevision });
+      return current();
+    },
+  });
+  expect(selected.account.id).toBe(fallback.id);
+  expect(refreshes).toEqual([{ id: fallback.id, retryUnrelatedRevision: true }]);
+  expect(selected.admission).toEqual(current());
+  expect(selected.requestedAdmission).toEqual(unavailable());
+});
+
+for (const phase of ["probe", "refresh"] as const) test(`the requested pin is revalidated after fallback ${phase}`, async () => {
+  const { AccountAdmissionChangedError } = await import("./accountMutation");
+  const pin = account("pin", NOW + 60_000);
+  const fallback = account("fallback", phase === "probe" ? NOW + 60_000 : NOW - 1);
+  let changed = false;
+  const change = new AccountAdmissionChangedError();
+  const selection = selectHealthyClaudeAccount([pin, fallback], pin.id, {
+    now: () => NOW,
+    probe: async (candidate) => {
+      if (candidate.id === pin.id) return { ...unavailable(), revalidate: async () => { if (changed) throw change; } };
+      changed = true;
+      return current();
+    },
+    refresh: async () => { changed = true; return current(); },
+  });
+  await expect(selection).rejects.toBe(change);
+});
+
 test("spawn selection skips an unrefreshable expired preferred Claude account and probes a healthy fallback", async () => {
   const expired = account("expired", NOW - 1, true, false);
   const healthy = account("healthy", NOW + 60_000);
