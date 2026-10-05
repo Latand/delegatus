@@ -1,6 +1,6 @@
 {
   "base": "4fbb7b56ad04e58c40482b49b6cf6180c0f2e8ee",
-  "head": "6cd5f4549b173b8d88088d36615d1b83a61b2b18",
+  "head": "5e991bc2426459f07375fb83840cd3b15ca8a540",
   "healthyCallsPerSide": 303,
   "scenarios": 23,
   "profiles": {
@@ -13,9 +13,9 @@
           "pipelineId",
           "stageId"
         ],
-        "p50ms": 1.98,
-        "p95ms": 3.98,
-        "maxMs": 7.08,
+        "p50ms": 2.12,
+        "p95ms": 9.09,
+        "maxMs": 11.97,
         "inTokP50": 10.75,
         "outTokP50": 202.75
       },
@@ -27,9 +27,9 @@
           "compact",
           "pipelineId"
         ],
-        "p50ms": 1.84,
-        "p95ms": 3.6,
-        "maxMs": 3.78,
+        "p50ms": 1.82,
+        "p95ms": 3.69,
+        "maxMs": 8.77,
         "inTokP50": 10,
         "outTokP50": 179
       },
@@ -41,9 +41,9 @@
           "full",
           "pipelineId"
         ],
-        "p50ms": 10.2,
-        "p95ms": 17,
-        "maxMs": 17,
+        "p50ms": 10.01,
+        "p95ms": 13.26,
+        "maxMs": 13.26,
         "inTokP50": 9.25,
         "outTokP50": 93689.5
       },
@@ -54,9 +54,9 @@
         "inputKeys": [
           "pipelineId"
         ],
-        "p50ms": 1.68,
-        "p95ms": 3.04,
-        "maxMs": 4.24,
+        "p50ms": 1.77,
+        "p95ms": 2.97,
+        "maxMs": 4.59,
         "inTokP50": 6.25,
         "outTokP50": 179
       },
@@ -68,9 +68,9 @@
           "limit",
           "project"
         ],
-        "p50ms": 30.6,
-        "p95ms": 42.47,
-        "maxMs": 72.71,
+        "p50ms": 34.47,
+        "p95ms": 48.85,
+        "maxMs": 86.67,
         "inTokP50": 9.75,
         "outTokP50": 6031.75
       },
@@ -82,9 +82,9 @@
           "limit",
           "project"
         ],
-        "p50ms": 3.17,
-        "p95ms": 4.86,
-        "maxMs": 6.5,
+        "p50ms": 3.18,
+        "p95ms": 4.38,
+        "maxMs": 5.06,
         "inTokP50": 9.25,
         "outTokP50": 508
       },
@@ -97,9 +97,9 @@
           "project",
           "state"
         ],
-        "p50ms": 14.66,
-        "p95ms": 38.34,
-        "maxMs": 64.94,
+        "p50ms": 16.35,
+        "p95ms": 22.82,
+        "maxMs": 29.02,
         "inTokP50": 13.5,
         "outTokP50": 1444.5
       },
@@ -113,9 +113,9 @@
           "state",
           "statusOnly"
         ],
-        "p50ms": 13.8,
-        "p95ms": 29.01,
-        "maxMs": 79.76,
+        "p50ms": 14.65,
+        "p95ms": 21.51,
+        "maxMs": 34.21,
         "inTokP50": 18,
         "outTokP50": 654.25
       },
@@ -128,9 +128,9 @@
           "project",
           "query"
         ],
-        "p50ms": 10.39,
-        "p95ms": 20.93,
-        "maxMs": 24.86,
+        "p50ms": 10.49,
+        "p95ms": 16.09,
+        "maxMs": 21.22,
         "inTokP50": 13.25,
         "outTokP50": 212.5
       },
@@ -143,9 +143,9 @@
           "maxChars",
           "transcriptPath"
         ],
-        "p50ms": 32.73,
-        "p95ms": 61.52,
-        "maxMs": 71.32,
+        "p50ms": 32.54,
+        "p95ms": 45.9,
+        "maxMs": 50.62,
         "inTokP50": 39.75,
         "outTokP50": 3123.75
       },
@@ -154,9 +154,9 @@
         "n": 20,
         "ok": 20,
         "inputKeys": [],
-        "p50ms": 0.56,
-        "p95ms": 0.89,
-        "maxMs": 0.93,
+        "p50ms": 0.53,
+        "p95ms": 1.44,
+        "maxMs": 11.64,
         "inTokP50": 0.5,
         "outTokP50": 144
       },
@@ -168,9 +168,9 @@
           "clientRequestId",
           "project"
         ],
-        "p50ms": 3.13,
-        "p95ms": 7.75,
-        "maxMs": 10,
+        "p50ms": 3.09,
+        "p95ms": 11.26,
+        "maxMs": 17.39,
         "inTokP50": 14.25,
         "outTokP50": 523.75
       },
@@ -183,9 +183,9 @@
           "status",
           "taskId"
         ],
-        "p50ms": 10.81,
-        "p95ms": 19.5,
-        "maxMs": 43.28,
+        "p50ms": 11.18,
+        "p95ms": 26.71,
+        "maxMs": 38.26,
         "inTokP50": 24,
         "outTokP50": 148.5
       },
@@ -198,9 +198,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 5.06,
-        "p95ms": 12.27,
-        "maxMs": 14.65,
+        "p50ms": 5.31,
+        "p95ms": 18,
+        "maxMs": 30.6,
         "inTokP50": 18,
         "outTokP50": 78.25
       },
@@ -213,9 +213,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 27.67,
-        "p95ms": 75.75,
-        "maxMs": 76.11,
+        "p50ms": 29.63,
+        "p95ms": 42.79,
+        "maxMs": 46.12,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -227,9 +227,9 @@
           "limit",
           "query"
         ],
-        "p50ms": 91.65,
-        "p95ms": 91.65,
-        "maxMs": 91.65,
+        "p50ms": 169.42,
+        "p95ms": 169.42,
+        "maxMs": 169.42,
         "inTokP50": 6.75,
         "outTokP50": 195.75
       },
@@ -242,9 +242,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 28.92,
-        "p95ms": 32.03,
-        "maxMs": 32.03,
+        "p50ms": 35.19,
+        "p95ms": 41.86,
+        "maxMs": 41.86,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -256,9 +256,9 @@
           "pipelineId",
           "stageId"
         ],
-        "p50ms": 34.13,
-        "p95ms": 38.22,
-        "maxMs": 38.22,
+        "p50ms": 35.39,
+        "p95ms": 52.64,
+        "maxMs": 52.64,
         "inTokP50": 10.75,
         "outTokP50": 202.75
       },
@@ -271,9 +271,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 34.8,
-        "p95ms": 38.88,
-        "maxMs": 38.88,
+        "p50ms": 37.46,
+        "p95ms": 53.33,
+        "maxMs": 53.33,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -286,9 +286,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 33.44,
-        "p95ms": 33.44,
-        "maxMs": 33.44,
+        "p50ms": 39.2,
+        "p95ms": 39.2,
+        "maxMs": 39.2,
         "inTokP50": 19.5,
         "outTokP50": 168.75
       },
@@ -301,9 +301,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 3.99,
-        "p95ms": 4.74,
-        "maxMs": 4.74,
+        "p50ms": 6.78,
+        "p95ms": 11.79,
+        "maxMs": 11.79,
         "inTokP50": 19.5,
         "outTokP50": 159
       },
@@ -319,9 +319,9 @@
           "stages",
           "task"
         ],
-        "p50ms": 33.56,
-        "p95ms": 74.2,
-        "maxMs": 74.2,
+        "p50ms": 28.72,
+        "p95ms": 145.28,
+        "maxMs": 145.28,
         "inTokP50": 608.5,
         "outTokP50": 280.75
       },
@@ -334,9 +334,9 @@
           "reason",
           "target"
         ],
-        "p50ms": 1262.9,
-        "p95ms": 1263.21,
-        "maxMs": 1263.21,
+        "p50ms": 1267.98,
+        "p95ms": 1275.9,
+        "maxMs": 1275.9,
         "inTokP50": 30,
         "outTokP50": 326.5
       }
@@ -350,9 +350,9 @@
           "pipelineId",
           "stageId"
         ],
-        "p50ms": 1.66,
-        "p95ms": 2.23,
-        "maxMs": 7.12,
+        "p50ms": 2.14,
+        "p95ms": 8.19,
+        "maxMs": 11.2,
         "inTokP50": 10.75,
         "outTokP50": 202.75
       },
@@ -364,9 +364,9 @@
           "compact",
           "pipelineId"
         ],
-        "p50ms": 1.34,
-        "p95ms": 2.94,
-        "maxMs": 7,
+        "p50ms": 1.89,
+        "p95ms": 4.2,
+        "maxMs": 9.96,
         "inTokP50": 10,
         "outTokP50": 179
       },
@@ -378,9 +378,9 @@
           "full",
           "pipelineId"
         ],
-        "p50ms": 6.78,
-        "p95ms": 7.19,
-        "maxMs": 7.19,
+        "p50ms": 8.58,
+        "p95ms": 10.69,
+        "maxMs": 10.69,
         "inTokP50": 9.25,
         "outTokP50": 93689.5
       },
@@ -391,9 +391,9 @@
         "inputKeys": [
           "pipelineId"
         ],
-        "p50ms": 1.23,
-        "p95ms": 1.82,
-        "maxMs": 1.96,
+        "p50ms": 1.75,
+        "p95ms": 7.86,
+        "maxMs": 11.84,
         "inTokP50": 6.25,
         "outTokP50": 179
       },
@@ -405,9 +405,9 @@
           "limit",
           "project"
         ],
-        "p50ms": 23.79,
-        "p95ms": 31.62,
-        "maxMs": 58.36,
+        "p50ms": 31.56,
+        "p95ms": 49.53,
+        "maxMs": 89.2,
         "inTokP50": 9.75,
         "outTokP50": 6031.75
       },
@@ -419,9 +419,9 @@
           "limit",
           "project"
         ],
-        "p50ms": 2.46,
-        "p95ms": 2.71,
-        "maxMs": 2.91,
+        "p50ms": 3.02,
+        "p95ms": 4.37,
+        "maxMs": 9.84,
         "inTokP50": 9.25,
         "outTokP50": 508
       },
@@ -434,9 +434,9 @@
           "project",
           "state"
         ],
-        "p50ms": 11.73,
-        "p95ms": 17.75,
-        "maxMs": 21.98,
+        "p50ms": 15.78,
+        "p95ms": 32.62,
+        "maxMs": 32.82,
         "inTokP50": 13.5,
         "outTokP50": 1444.5
       },
@@ -450,9 +450,9 @@
           "state",
           "statusOnly"
         ],
-        "p50ms": 11.1,
-        "p95ms": 14.99,
-        "maxMs": 17.68,
+        "p50ms": 14.68,
+        "p95ms": 17.46,
+        "maxMs": 21.15,
         "inTokP50": 18,
         "outTokP50": 654.25
       },
@@ -465,9 +465,9 @@
           "project",
           "query"
         ],
-        "p50ms": 6.66,
-        "p95ms": 11.11,
-        "maxMs": 11.76,
+        "p50ms": 9.68,
+        "p95ms": 16.51,
+        "maxMs": 17.53,
         "inTokP50": 13.25,
         "outTokP50": 212.5
       },
@@ -480,9 +480,9 @@
           "maxChars",
           "transcriptPath"
         ],
-        "p50ms": 24.89,
-        "p95ms": 34.5,
-        "maxMs": 39.49,
+        "p50ms": 30.09,
+        "p95ms": 49.84,
+        "maxMs": 57.1,
         "inTokP50": 39.75,
         "outTokP50": 3123.75
       },
@@ -491,9 +491,9 @@
         "n": 20,
         "ok": 20,
         "inputKeys": [],
-        "p50ms": 0.45,
-        "p95ms": 0.55,
-        "maxMs": 0.92,
+        "p50ms": 0.57,
+        "p95ms": 0.82,
+        "maxMs": 1.33,
         "inTokP50": 0.5,
         "outTokP50": 144
       },
@@ -505,9 +505,9 @@
           "clientRequestId",
           "project"
         ],
-        "p50ms": 1.97,
-        "p95ms": 2.75,
-        "maxMs": 5.57,
+        "p50ms": 2.76,
+        "p95ms": 8.73,
+        "maxMs": 11.01,
         "inTokP50": 14.25,
         "outTokP50": 523.75
       },
@@ -520,9 +520,9 @@
           "status",
           "taskId"
         ],
-        "p50ms": 8.14,
-        "p95ms": 11.06,
-        "maxMs": 27.98,
+        "p50ms": 11.85,
+        "p95ms": 17.75,
+        "maxMs": 46.42,
         "inTokP50": 24,
         "outTokP50": 148.5
       },
@@ -535,9 +535,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 3.54,
-        "p95ms": 5.79,
-        "maxMs": 11.74,
+        "p50ms": 6.1,
+        "p95ms": 19.21,
+        "maxMs": 39.66,
         "inTokP50": 18,
         "outTokP50": 78.25
       },
@@ -550,9 +550,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 21.17,
-        "p95ms": 33.13,
-        "maxMs": 40.48,
+        "p50ms": 28.51,
+        "p95ms": 54.3,
+        "maxMs": 66.32,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -564,9 +564,9 @@
           "limit",
           "query"
         ],
-        "p50ms": 90.13,
-        "p95ms": 90.13,
-        "maxMs": 90.13,
+        "p50ms": 115.27,
+        "p95ms": 115.27,
+        "maxMs": 115.27,
         "inTokP50": 6.75,
         "outTokP50": 195.75
       },
@@ -579,9 +579,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 24.37,
-        "p95ms": 27.58,
-        "maxMs": 27.58,
+        "p50ms": 26.63,
+        "p95ms": 31.28,
+        "maxMs": 31.28,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -593,9 +593,9 @@
           "pipelineId",
           "stageId"
         ],
-        "p50ms": 18.59,
-        "p95ms": 22.55,
-        "maxMs": 22.55,
+        "p50ms": 31.2,
+        "p95ms": 35.68,
+        "maxMs": 35.68,
         "inTokP50": 10.75,
         "outTokP50": 202.75
       },
@@ -608,9 +608,9 @@
           "summary",
           "verdict"
         ],
-        "p50ms": 19.23,
-        "p95ms": 23.04,
-        "maxMs": 23.04,
+        "p50ms": 31.94,
+        "p95ms": 37.04,
+        "maxMs": 37.04,
         "inTokP50": 18.5,
         "outTokP50": 116
       },
@@ -623,9 +623,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 29.49,
-        "p95ms": 29.49,
-        "maxMs": 29.49,
+        "p50ms": 32.25,
+        "p95ms": 32.25,
+        "maxMs": 32.25,
         "inTokP50": 19.5,
         "outTokP50": 168.75
       },
@@ -638,9 +638,9 @@
           "clientRequestId",
           "pipelineId"
         ],
-        "p50ms": 5.72,
-        "p95ms": 6.9,
-        "maxMs": 6.9,
+        "p50ms": 6.81,
+        "p95ms": 7.51,
+        "maxMs": 7.51,
         "inTokP50": 19.5,
         "outTokP50": 159
       },
@@ -656,9 +656,9 @@
           "stages",
           "task"
         ],
-        "p50ms": 12.29,
-        "p95ms": 24.4,
-        "maxMs": 24.4,
+        "p50ms": 28.87,
+        "p95ms": 45.58,
+        "maxMs": 45.58,
         "inTokP50": 608.5,
         "outTokP50": 280.75
       },
@@ -671,9 +671,9 @@
           "reason",
           "target"
         ],
-        "p50ms": 1258.01,
-        "p95ms": 1259.12,
-        "maxMs": 1259.12,
+        "p50ms": 1260.44,
+        "p95ms": 1262.16,
+        "maxMs": 1262.16,
         "inTokP50": 30,
         "outTokP50": 326.5
       }
@@ -683,7 +683,7 @@
     {
       "side": "base",
       "scenario": "memory-search",
-      "ms": 5.14,
+      "ms": 4.98,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -691,7 +691,7 @@
     {
       "side": "base",
       "scenario": "memory-search",
-      "ms": 3.34,
+      "ms": 3.18,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -699,7 +699,7 @@
     {
       "side": "base",
       "scenario": "memory-search",
-      "ms": 3.14,
+      "ms": 2.45,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -707,7 +707,7 @@
     {
       "side": "base",
       "scenario": "memory-open",
-      "ms": 4.09,
+      "ms": 4.71,
       "attempts": 1,
       "ok": false,
       "outputTokens": 53.5
@@ -715,7 +715,7 @@
     {
       "side": "base",
       "scenario": "memory-open",
-      "ms": 2.43,
+      "ms": 2.65,
       "attempts": 1,
       "ok": false,
       "outputTokens": 53.5
@@ -723,7 +723,7 @@
     {
       "side": "base",
       "scenario": "memory-open",
-      "ms": 6.28,
+      "ms": 2.91,
       "attempts": 1,
       "ok": false,
       "outputTokens": 53.5
@@ -731,7 +731,7 @@
     {
       "side": "base",
       "scenario": "transcript-search",
-      "ms": 5.54,
+      "ms": 2.7,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -739,7 +739,7 @@
     {
       "side": "base",
       "scenario": "transcript-search",
-      "ms": 3.71,
+      "ms": 1.34,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -747,7 +747,7 @@
     {
       "side": "base",
       "scenario": "transcript-search",
-      "ms": 2.89,
+      "ms": 3.3,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -755,7 +755,7 @@
     {
       "side": "head",
       "scenario": "memory-search",
-      "ms": 3.07,
+      "ms": 6.58,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -763,7 +763,7 @@
     {
       "side": "head",
       "scenario": "memory-search",
-      "ms": 1.4,
+      "ms": 1.99,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -771,7 +771,7 @@
     {
       "side": "head",
       "scenario": "memory-search",
-      "ms": 1.22,
+      "ms": 1.58,
       "attempts": 1,
       "ok": false,
       "outputTokens": 89
@@ -779,7 +779,15 @@
     {
       "side": "head",
       "scenario": "memory-open",
-      "ms": 3.89,
+      "ms": 3.5,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "head",
+      "scenario": "memory-open",
+      "ms": 1.94,
       "attempts": 1,
       "ok": false,
       "outputTokens": 53.5
@@ -794,16 +802,8 @@
     },
     {
       "side": "head",
-      "scenario": "memory-open",
-      "ms": 1.22,
-      "attempts": 1,
-      "ok": false,
-      "outputTokens": 53.5
-    },
-    {
-      "side": "head",
       "scenario": "transcript-search",
-      "ms": 2.16,
+      "ms": 1.38,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -811,7 +811,7 @@
     {
       "side": "head",
       "scenario": "transcript-search",
-      "ms": 1.22,
+      "ms": 1.25,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -819,7 +819,7 @@
     {
       "side": "head",
       "scenario": "transcript-search",
-      "ms": 1.09,
+      "ms": 1.23,
       "attempts": 1,
       "ok": false,
       "outputTokens": 94.25
@@ -838,26 +838,37 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 3363.71,
-        "maxMs": 4009.48,
-        "outTokP50": 177.75
+        "p50ms": 4302.62,
+        "maxMs": 4401.78,
+        "outTokP50": 177.5
       },
       {
         "key": "agent_activity/no-catalog",
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 2999.61,
-        "maxMs": 3278.38,
-        "outTokP50": 5711.5
+        "p50ms": 3443.84,
+        "maxMs": 4008.54,
+        "outTokP50": 5711.5,
+        "rowsMin": 100
+      },
+      {
+        "key": "agent_activity/no-catalog-slow-hosts",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 4433.65,
+        "maxMs": 4534.46,
+        "outTokP50": 5713.75,
+        "rowsMin": 100
       },
       {
         "key": "get_conversation/claude-long",
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 316.33,
-        "maxMs": 322.26,
+        "p50ms": 332.13,
+        "maxMs": 341.78,
         "outTokP50": 504007
       },
       {
@@ -865,8 +876,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 312.54,
-        "maxMs": 331.83,
+        "p50ms": 338.36,
+        "maxMs": 368.03,
         "outTokP50": 238564
       },
       {
@@ -874,8 +885,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 17.69,
-        "maxMs": 21.18,
+        "p50ms": 20.52,
+        "maxMs": 21.61,
         "outTokP50": 6590.25
       },
       {
@@ -883,8 +894,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 20.12,
-        "maxMs": 24.78,
+        "p50ms": 25.61,
+        "maxMs": 28.41,
         "outTokP50": 49428.25
       },
       {
@@ -892,8 +903,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 317.97,
-        "maxMs": 331.62,
+        "p50ms": 349.17,
+        "maxMs": 374.23,
         "outTokP50": 504007
       },
       {
@@ -901,8 +912,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 93.79,
-        "maxMs": 96.6,
+        "p50ms": 123.67,
+        "maxMs": 196.08,
         "outTokP50": 1525.25
       },
       {
@@ -910,8 +921,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 92.51,
-        "maxMs": 129.66,
+        "p50ms": 121.58,
+        "maxMs": 133.44,
         "outTokP50": 1697.75
       },
       {
@@ -919,8 +930,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 127.18,
-        "maxMs": 163.46,
+        "p50ms": 173.29,
+        "maxMs": 204.88,
         "outTokP50": 3948.25
       }
     ],
@@ -930,28 +941,41 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 270.24,
-        "maxMs": 293.25,
-        "outTokP50": 177.75
+        "p50ms": 351.79,
+        "maxMs": 418.65,
+        "outTokP50": 177.5
       },
       {
         "key": "agent_activity/no-catalog",
         "n": 5,
         "ok": 5,
         "pending": 5,
-        "p50ms": 725.62,
-        "maxMs": 737.99,
+        "p50ms": 681.06,
+        "maxMs": 693.2,
         "outTokP50": 115.25,
-        "worstFollowUpMs": 764.18,
-        "completeAfterP50ms": 3009.16
+        "rowsMin": 0,
+        "worstFollowUpMs": 728.76,
+        "completeAfterP50ms": 3584.15
+      },
+      {
+        "key": "agent_activity/no-catalog-slow-hosts",
+        "n": 5,
+        "ok": 5,
+        "pending": 5,
+        "p50ms": 822.64,
+        "maxMs": 829.52,
+        "outTokP50": 297,
+        "rowsMin": 3,
+        "worstFollowUpMs": 879.77,
+        "completeAfterP50ms": 4192.67
       },
       {
         "key": "get_conversation/claude-long",
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 302.89,
-        "maxMs": 308.06,
+        "p50ms": 312.51,
+        "maxMs": 312.9,
         "outTokP50": 9847.5
       },
       {
@@ -959,8 +983,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 304.2,
-        "maxMs": 311.71,
+        "p50ms": 316.44,
+        "maxMs": 340.31,
         "outTokP50": 14448.5
       },
       {
@@ -968,8 +992,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 18.02,
-        "maxMs": 21.88,
+        "p50ms": 18.8,
+        "maxMs": 20.09,
         "outTokP50": 2817
       },
       {
@@ -977,8 +1001,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 20.58,
-        "maxMs": 25.88,
+        "p50ms": 25.83,
+        "maxMs": 29.31,
         "outTokP50": 11220.5
       },
       {
@@ -986,8 +1010,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 323.27,
-        "maxMs": 324.58,
+        "p50ms": 325.8,
+        "maxMs": 345.98,
         "outTokP50": 504007
       },
       {
@@ -995,8 +1019,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 101.72,
-        "maxMs": 112.03,
+        "p50ms": 104.87,
+        "maxMs": 117.27,
         "outTokP50": 1525.25
       },
       {
@@ -1004,8 +1028,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 99.97,
-        "maxMs": 104.52,
+        "p50ms": 112.15,
+        "maxMs": 124.55,
         "outTokP50": 1697.75
       },
       {
@@ -1013,8 +1037,8 @@
         "n": 5,
         "ok": 5,
         "pending": 0,
-        "p50ms": 156.53,
-        "maxMs": 202.38,
+        "p50ms": 137.85,
+        "maxMs": 178.96,
         "outTokP50": 3948.25
       }
     ]
