@@ -10,7 +10,7 @@ import type { ScriptStep } from "./simulator";
  */
 
 export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt"] as const;
-export const DRIVER_SCENARIOS = ["proposal", "edge"] as const;
+export const DRIVER_SCENARIOS = ["proposal", "edge", "withdraw"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];
 
 export const isScenario = (value: unknown): value is ScenarioName =>
@@ -41,6 +41,8 @@ const TEXT = {
     readback: "I'll ask the atlas orchestrator to review the export plan. Shall I send it?",
     sent: "Sent. I'll tell you when it answers.",
     notSent: "Okay, nothing was sent.",
+    hold: "Wait, don't send it yet.",
+    dropped: "Okay, I dropped it. Nothing was sent.",
     answer: "Export plan reviewed. The three presets hold. One gap: a saved export from last month needs a migration test before the merge.",
     explain: "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge.",
     remind: "Remind me what the export plan was?",
@@ -72,6 +74,8 @@ const TEXT = {
     readback: "Попрошу оркестратора atlas перевірити план експорту. Надсилати?",
     sent: "Надіслав. Скажу, коли він відповість.",
     notSent: "Гаразд, нічого не надіслано.",
+    hold: "Стривай, поки не надсилай.",
+    dropped: "Гаразд, я зняв це прохання. Нічого не надіслано.",
     answer: "План експорту перевірено. Три пресети тримаються. Одна прогалина: збережений минулого місяця експорт потребує тесту міграції перед злиттям.",
     explain: "Оркестратор відповів. План тримається, з однією прогалиною: старі збережені експорти потребують тесту міграції перед злиттям.",
     remind: "Нагадай, який був план експорту?",
@@ -159,6 +163,16 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
       ];
     case "proposal":
       return [pause(300), ...delegationSteps(locale)];
+    case "withdraw":
+      /* The operator speaks over the read-back: the preview leaves, and the confirm step finds nothing to send. */
+      return [
+        pause(300),
+        { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
+        { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
+        companion("readback", t.readback, { bargeIn: { afterMs: 1_400, itemId: "item_op_hold", text: t.hold } }),
+        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
+        companion("dropped", t.dropped),
+      ];
     case "edge":
       return [
         pause(300), companion(1, t.three[0]), companion(2, t.three[1]),

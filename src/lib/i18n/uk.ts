@@ -1811,6 +1811,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.send": "Надіслати",
   "voiceCompanion.cancel": "Скасувати",
   "voiceCompanion.refused": "Нічого не надіслано: я не почув явного прохання до оркестратора.",
+  "voiceCompanion.withdrawn": "Ви заговорили знову, тож я зняв це прохання. Попросіть ще раз, і я покажу його знову.",
   "voiceCompanion.call.running": "триває",
   "voiceCompanion.call.done": "готово",
   "voiceCompanion.call.failed": "помилка",

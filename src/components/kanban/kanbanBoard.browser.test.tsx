@@ -18378,6 +18378,39 @@ describe("floating voice companion", () => {
           readings.collapsedProposal = { flagged: flagged.block, cancel: { dispatches: voice.dispatches }, ended: { block: ended.block, phase: ended.phase } };
         } finally { await context.close(); }
       }
+      /* The operator speaks over the read-back of a proposal: the preview leaves with its buttons, the element
+         says the request was dropped, and nothing is sent. Three variants, en and uk, both themes. */
+      {
+        const withdrawn: Record<string, unknown> = {};
+        for (const [index, variant] of ([1, 2, 3] as const).entries()) {
+          const lang = index === 1 ? "uk" as const : "en" as const;
+          const scheme = index === 2 ? "dark" as const : "light" as const;
+          const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}&script=withdraw`, { viewport: VIEWPORT, scheme, lang, motion: "reduce" });
+          try {
+            await page.locator("[data-companion-talk]").click();
+            await page.waitForSelector("[data-companion-send]", { timeout: 30_000 });
+            await page.waitForSelector('[data-voice-companion][data-delegation-stage="cancelled"]', { timeout: 30_000 });
+            const note = page.locator("[data-companion-withdrawn]");
+            expect(await note.count(), `variant ${variant}: the element says the request was dropped`).toBe(1);
+            expect(await page.locator("[data-companion-send], [data-companion-cancel]").count(), `variant ${variant}: no button is left to tap`).toBe(0);
+            const reading = await readCompanion(page);
+            expectFree(reading, `variant ${variant}, withdrawn`);
+            await page.screenshot({ path: path.join(HANDOFF, `states-withdrawn-v${variant}-${lang}-${scheme}.png`) });
+            await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+            const voice = await voiceOf(page);
+            const seen = voice.events.map((event) => event.type);
+            const offered = seen.indexOf("delegation.confirmation.required");
+            const spoke = voice.events.findIndex((event, at) => at > offered && event.type === "input.speech.started");
+            expect(offered, `variant ${variant}: the preview was offered`).toBeGreaterThan(-1);
+            expect(seen[spoke + 1], `variant ${variant}: it left as the new speech started`).toBe("delegation.tool.result");
+            expect({ dispatches: voice.dispatches, confirmed: seen.filter((type) => type === "delegation.confirmed").length, answers: seen.filter((type) => type === "orchestrator.answer").length }, `variant ${variant}: nothing was sent`).toEqual({ dispatches: 0, confirmed: 0, answers: 0 });
+            expect(await page.locator("[data-voice-relay]").count(), "no delegated row in the conversation").toBe(0);
+            expect(pageErrors).toEqual([]);
+            withdrawn[`v${variant}-${lang}-${scheme}`] = { note: (await note.textContent().catch(() => null)) ?? "left with its element", dispatches: voice.dispatches, block: reading.block };
+          } finally { await context.close(); }
+        }
+        readings.withdrawn = withdrawn;
+      }
       /* No free place holds any lane (small buttons every 100 px): the open companion collapses where its shape is
          free, and asking it to open again changes nothing while there is no room. */
       {

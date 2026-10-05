@@ -546,6 +546,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         </div>
         <span className="vc-call-name">request_orchestrator_delegation</span>
         {delegation.stage === "refused" ? <p className="vc-deleg-note">{t("voiceCompanion.refused")}</p> : null}
+        {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn>{t("voiceCompanion.withdrawn")}</p> : null}
         {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" ? (
           <p className="vc-instruction" tabIndex={0} data-companion-instruction>{delegation.instruction}</p>
         ) : null}

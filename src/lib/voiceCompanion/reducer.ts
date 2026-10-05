@@ -17,7 +17,10 @@ import { admitDelegationProposal, type GateRefusal } from "./gate";
  *  - the mouth stays active until playback stops, whenever generation ended;
  *  - input speech interrupts playback and leaves delivered work alone;
  *  - a confirmation is shown only for an explicit request (the gate of
- *    `gate.ts`), and a tool result, a settlement and an answer count only
+ *    `gate.ts`) and stays only while that request is the operator's last
+ *    word: newer input, finished or not, or a corrected source withdraws it,
+ *    and a later confirmation finds nothing to confirm;
+ *  - a tool result, a settlement and an answer count only
  *    when they bind the whole frozen delivery: proposal, call, message key,
  *    recipient and operation.
  */
@@ -70,8 +73,10 @@ export interface DelegationView {
   instruction: string;
   stage: DelegationStage;
   proposal: Proposal | null;
+  /** The source input as it read when the proposal froze. */
+  sourceText: string | null;
   delivery: Delivery | null;
-  /** Why a proposal was refused before it reached the operator. */
+  /** Why a proposal was refused before it reached the operator, or withdrawn while it waited. */
   refusal: GateRefusal | string | null;
   answer: { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string } | null;
 }
@@ -165,6 +170,24 @@ function settles(current: Delivery | null, incoming: Delivery): boolean {
 const answers = (current: Delivery | null, incoming: Delivery) =>
   !!current && current.operationId !== null && sameBinding(current, incoming) && incoming.operationId === current.operationId;
 
+const operatorInputs = (lines: readonly SpeechLine[]) =>
+  lines.filter((line) => line.speaker === "operator").map((line) => ({ itemId: line.itemId, text: line.text, final: line.final }));
+
+/**
+ * A waiting proposal, read against the operator's lines as they are now. It is
+ * withdrawn once the gate no longer admits it: the operator spoke again, or
+ * the input it was frozen from reads differently.
+ */
+function standing(delegation: DelegationView | null, lines: readonly SpeechLine[]): DelegationView | null {
+  if (!delegation?.proposal || delegation.stage !== "awaiting-confirmation") return delegation;
+  const { proposal } = delegation;
+  const verdict = admitDelegationProposal({
+    sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs: operatorInputs(lines),
+    ...(delegation.sourceText === null ? {} : { frozenSourceText: delegation.sourceText }),
+  });
+  return verdict.admit ? delegation : { ...delegation, stage: "cancelled", refusal: verdict.reason };
+}
+
 /** Marks the companion line that was playing as cut, keeping its generated text. */
 function cut(lines: readonly SpeechLine[], itemId: Id, playedMs: number, revision: number) {
   return upsertLine(lines, "companion", itemId, revision, (line) => (line.playback === "played" ? {} : { playback: "cut", playedMs: ms(playedMs) }));
@@ -205,8 +228,9 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
          generated, marked cut at the audio that had played; delivered work
          is untouched. */
       if (!validId(event.itemId)) return base;
-      const lines = base.playing ? cut(base.lines, base.playing.itemId, base.playedMs, revision) : base.lines;
-      return next({ phase: "listening", playing: null, mouth: 0, lines: upsertLine(lines, "operator", event.itemId, revision, () => ({})) });
+      const cutLines = base.playing ? cut(base.lines, base.playing.itemId, base.playedMs, revision) : base.lines;
+      const lines = upsertLine(cutLines, "operator", event.itemId, revision, () => ({}));
+      return next({ phase: "listening", playing: null, mouth: 0, lines, delegation: standing(base.delegation, lines) });
     }
     case "input.speech.stopped":
       return next({ phase: base.phase === "listening" ? "thinking" : base.phase });
@@ -214,13 +238,15 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
       if (!validId(event.itemId)) return base;
       const existing = base.lines.find((line) => line.key === `${event.speaker}:${event.itemId}`);
       if (existing?.final) return next({});
-      return next({ lines: upsertLine(base.lines, event.speaker, event.itemId, revision, (line) => ({ text: bounded(line.text + event.delta) })) });
+      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, (line) => ({ text: bounded(line.text + event.delta) }));
+      return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
     case "transcript.final": {
       if (!validId(event.itemId)) return base;
       /* The final transcript replaces the provisional text. It says nothing
          about playback, so a cut line stays cut. */
-      return next({ lines: upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: true })) });
+      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: true }));
+      return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
     case "response.started":
       return next({ phase: base.phase === "listening" ? "listening" : base.phase === "speaking" ? "speaking" : "thinking" });
@@ -253,19 +279,18 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
     case "delegation.tool.called": {
       if (!validId(event.callId)) return base;
       /* A tool call is a candidate and nothing more: it opens no delivery. */
-      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, delivery: null, refusal: null, answer: null } });
+      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null } });
     }
     case "delegation.confirmation.required": {
       const { proposal } = event;
       if (base.delegation?.callId !== proposal.callId || base.delegation.stage !== "proposed") return next({});
       /* The same gate the adapter applied, read against the lines this reducer
          holds: a confirmation for anything but an explicit request is refused. */
-      const verdict = admitDelegationProposal({
-        sourceItemId: proposal.sourceItemId, instruction: proposal.instruction,
-        inputs: base.lines.filter((line) => line.speaker === "operator").map((line) => ({ itemId: line.itemId, text: line.text, final: line.final })),
-      });
+      const inputs = operatorInputs(base.lines);
+      const verdict = admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs });
       if (!verdict.admit) return next({ delegation: { ...base.delegation, stage: "refused", refusal: verdict.reason } });
-      return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, instruction: bounded(proposal.instruction) } });
+      const sourceText = inputs.find((input) => input.itemId === proposal.sourceItemId)?.text ?? null;
+      return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, sourceText, instruction: bounded(proposal.instruction) } });
     }
     case "delegation.confirmed": {
       const current = base.delegation;

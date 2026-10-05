@@ -1866,6 +1866,7 @@ export const en = {
   "voiceCompanion.send": "Send",
   "voiceCompanion.cancel": "Cancel",
   "voiceCompanion.refused": "Nothing was sent: I heard no explicit request to the orchestrator.",
+  "voiceCompanion.withdrawn": "You spoke again, so I dropped this request. Ask once more and I will show it again.",
   "voiceCompanion.call.running": "running",
   "voiceCompanion.call.done": "done",
   "voiceCompanion.call.failed": "failed",

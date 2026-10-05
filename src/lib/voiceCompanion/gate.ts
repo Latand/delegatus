@@ -8,10 +8,18 @@ import type { Id } from "./contract";
  * its admission seam, so a prompt that misfires cannot open a send.
  *
  * It reads only completed operator input. The grammar is bounded on purpose:
- * one English or Ukrainian imperative addressed to the orchestrator, at the
- * start of its sentence. Anything it cannot read as that (a greeting, a
+ * one English or Ukrainian imperative at the start of its sentence whose
+ * addressee is the orchestrator ("ask the orchestrator…", "send this to the
+ * orchestrator…", "попроси оркестратора…", "передай оркестратору…"). A
+ * request verb with the orchestrator somewhere later in the sentence ("tell me
+ * how the orchestrator works") is a question for the companion and refuses.
+ * So does anything else it cannot read as that request: a greeting, a
  * negation, a quotation, a condition, a plain question, an older or missing
- * input) refuses, and the companion asks instead.
+ * input. The companion asks instead.
+ *
+ * Admission is checked again whenever the operator speaks and once more
+ * before the send: a proposal lives only while its source is still the
+ * operator's last input and still reads as it did when the proposal froze.
  */
 
 export type GateRefusal =
@@ -24,6 +32,8 @@ export type GateRefusal =
   | "question"
   | "quoted"
   | "not_imperative"
+  | "not_addressed"
+  | "source_changed"
   | "empty_instruction";
 
 export type GateVerdict = { admit: true } | { admit: false; reason: GateRefusal };
@@ -49,6 +59,19 @@ const UK_POLITE = String.raw`(?:будь\s+ласка,?\s+|(?<ask>можеш|м�
 const UK_VERB = String.raw`(?:попроси(?:ти)?|скажи|сказати|передай|передати|надішли|надіслати|відправ|відправити|доручи|доручити|перешли|переслати|напиши|написати|запитай|запитати|спитай|спитати)(?=[\s,]|$)`;
 const OPENING = new RegExp(`^(?:${EN_ADDRESS}${EN_POLITE}${EN_VERB}|${UK_ADDRESS}${UK_POLITE}${UK_VERB})`, "u");
 
+/* The verb's addressee is the orchestrator. English names it as the verb's
+   object ("ask the orchestrator", "let the orchestrator know") or after "to"
+   with at most a pronoun or a bare noun in between ("send this to the
+   orchestrator"). Ukrainian marks it by case: the asking verbs take
+   "оркестратора", the telling and sending verbs take "оркестратору". */
+const EN_TARGET = String.raw`(?:(?:the|our|my|this)\s+)?(?:project(?:'s)?\s+)?orchestrator(?![\w'])`;
+const EN_OBJECT = String.raw`(?:(?:this|that|it|the\s+following|(?:this|that|the|a)\s+(?:message|note|task|request))\s+)?(?:(?:on|over|along)\s+)?`;
+const EN_REQUEST = String.raw`(?:(?:ask|tell|message|have)\s+${EN_TARGET}|get\s+${EN_TARGET}\s+to\b|let\s+${EN_TARGET}\s+know\b|(?:send|forward|pass|delegate|give|hand)\s+${EN_OBJECT}to\s+${EN_TARGET})`;
+const UK_END = String.raw`(?=[\s,.:;!?…]|$)`;
+const UK_OBJECT = String.raw`(?:(?:(?:ось\s+)?це|таке|наступне|(?:це\s+)?(?:повідомлення|завдання|прохання))\s+)?`;
+const UK_REQUEST = String.raw`(?:(?:попроси(?:ти)?|запитай|запитати|спитай|спитати)\s+(?:[ув]\s+)?(?:(?:нашого|мого|цього)\s+)?оркестратора${UK_END}|(?:скажи|сказати|передай|передати|надішли|надіслати|відправ|відправити|доручи|доручити|перешли|переслати|напиши|написати)\s+${UK_OBJECT}(?:(?:нашому|моєму|цьому)\s+)?оркестратору${UK_END})`;
+const ADDRESSED = new RegExp(`^(?:${EN_ADDRESS}${EN_POLITE}${EN_REQUEST}|${UK_ADDRESS}${UK_POLITE}${UK_REQUEST})`, "u");
+
 const normalize = (text: string) => text.normalize("NFC").replace(/[’ʼ`]/gu, "'").replace(/\s+/gu, " ").trim().toLowerCase();
 const sentences = (text: string) => text.split(/(?<=[.!?…])\s+/u).map((part) => part.trim()).filter(Boolean);
 
@@ -63,19 +86,24 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
     const opening = OPENING.exec(sentence);
     if (!opening) return { admit: false, reason: NEGATION.test(sentence.split(" ")[0] ?? "") ? "negated" : "not_imperative" };
     if (CONDITION.test(sentence)) return { admit: false, reason: "conditional" };
-    /* The words from the verb to the orchestrator name who is asked; a negation there withdraws the request. */
-    const directive = sentence.slice(opening[0].length, sentence.search(ORCHESTRATOR));
-    if (NEGATION.test(directive)) return { admit: false, reason: "negated" };
-    if (sentence.includes("?") && !opening.groups?.ask) return { admit: false, reason: "question" };
+    const request = ADDRESSED.exec(sentence);
+    if (!request) {
+      /* The verb is addressed to someone or something else. A negation between it and the orchestrator is the more exact reason. */
+      const directive = sentence.slice(opening[0].length, sentence.search(ORCHESTRATOR));
+      return { admit: false, reason: NEGATION.test(directive) ? "negated" : "not_addressed" };
+    }
+    if (sentence.includes("?") && !request.groups?.ask) return { admit: false, reason: "question" };
   }
   return { admit: true };
 }
 
 /**
- * Whether a proposal may be offered: its source is the operator's last input
- * in this generation, it is complete, and it is an explicit request.
+ * Whether a proposal may be offered, kept on screen or sent: its source is the
+ * operator's last input in this generation, it is complete, and it is an
+ * explicit request. `frozenSourceText` is the source as it read when the
+ * proposal froze; a source that reads differently now no longer backs it.
  */
-export function admitDelegationProposal(input: { sourceItemId: Id; instruction: string; inputs: readonly OperatorInput[] }): GateVerdict {
+export function admitDelegationProposal(input: { sourceItemId: Id; instruction: string; inputs: readonly OperatorInput[]; frozenSourceText?: string }): GateVerdict {
   const instruction = input.instruction.trim();
   if (!instruction || instruction.length > INSTRUCTION_LIMIT) return { admit: false, reason: "empty_instruction" };
   const source = input.inputs.find((candidate) => candidate.itemId === input.sourceItemId);
@@ -83,5 +111,6 @@ export function admitDelegationProposal(input: { sourceItemId: Id; instruction: 
   if (!source.final) return { admit: false, reason: "not_final" };
   /* Anything the operator said after it, finished or not, may change or withdraw it. */
   if (input.inputs.at(-1)?.itemId !== source.itemId) return { admit: false, reason: "stale_input" };
+  if (input.frozenSourceText !== undefined && input.frozenSourceText !== source.text) return { admit: false, reason: "source_changed" };
   return explicitDelegationRequest(source.text);
 }

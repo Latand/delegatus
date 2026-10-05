@@ -110,6 +110,8 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
   let interrupted: Id | null = null;
   let playing: Id | null = null;
   let pendingProposal: Proposal | null = null;
+  /* The source input as it read when the pending proposal froze. */
+  let pendingSource = "";
   let decide: ((command: Confirmation | null) => void) | null = null;
   let decided: Confirmation | null = null;
   let finish: () => void = () => undefined;
@@ -124,10 +126,21 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
 
   /* What the gate reads: the operator's inputs of this generation, as heard. */
   let inputs: OperatorInput[] = [];
+  const standing = (proposal: Proposal) =>
+    admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs, frozenSourceText: pendingSource });
   const heard = (itemId: Id, change: Partial<OperatorInput>) => {
     const index = inputs.findIndex((input) => input.itemId === itemId);
     if (index === -1) inputs.push({ itemId, text: "", final: false, ...change });
     else inputs[index] = { ...inputs[index]!, ...change };
+    /* Anything the operator says after the preview, finished or not, withdraws
+       it: the proposal leaves and an earlier or later Send finds nothing. */
+    const proposal = pendingProposal;
+    if (!proposal) return;
+    const verdict = standing(proposal);
+    if (verdict.admit) return;
+    pendingProposal = null;
+    decided = null;
+    emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: verdict.reason } });
   };
 
   async function speakOperator(itemId: Id, text: string, mine: number, started = false) {
@@ -187,7 +200,11 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       }
       const playedMs = clock.now() - playbackAt;
       const bargedIn = !!bargeIn && playedMs >= bargeIn.afterMs;
-      if (bargedIn) emit({ type: "input.speech.started", itemId: bargeIn.itemId });
+      if (bargedIn) {
+        emit({ type: "input.speech.started", itemId: bargeIn.itemId });
+        /* Heard at once: speech that has only started already withdraws a waiting proposal. */
+        heard(bargeIn.itemId, {});
+      }
       if (bargedIn || interrupted === responseId || muted) {
         /* The player stops; what was generated stays generated. */
         if (!generated) emit({ type: "response.generated", responseId, status: "cancelled" });
@@ -243,6 +260,7 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
           continue;
         }
         pendingProposal = { proposalId: step.proposalId, callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction, recipient: options.recipient };
+        pendingSource = inputs.find((input) => input.itemId === step.sourceItemId)?.text ?? "";
         emit({ type: "delegation.confirmation.required", proposal: pendingProposal });
       } else if (step.kind === "confirm") {
         const proposal = pendingProposal;
@@ -257,9 +275,15 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
           return;
         }
         emit({ type: "delegation.confirmed", proposalId: proposal.proposalId, via: command.via, ...(command.confirmationItemId ? { confirmationItemId: command.confirmationItemId } : {}) });
-        delivery = { proposalId: proposal.proposalId, callId: proposal.callId, clientMessageId: step.clientMessageId, operationId: step.operationId, recipient: proposal.recipient };
         await clock.sleep(900);
         if (gone(mine)) return;
+        /* Admission, read again at the send: the frozen proposal must still be what the operator last asked for. */
+        const admission = standing(proposal);
+        if (!admission.admit) {
+          emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: admission.reason } });
+          continue;
+        }
+        delivery = { proposalId: proposal.proposalId, callId: proposal.callId, clientMessageId: step.clientMessageId, operationId: step.operationId, recipient: proposal.recipient };
         /* The single send, after the confirmation and nowhere else. */
         options.dispatch?.(delivery, proposal.instruction);
         emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "queued", delivery } });

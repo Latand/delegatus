@@ -104,6 +104,38 @@
       "phase": "offline"
     }
   },
+  "withdrawn": {
+    "v1-en-light": {
+      "note": "You spoke again, so I dropped this request. Ask once more and I will show it again.",
+      "dispatches": 0,
+      "block": {
+        "x": 904,
+        "y": 384,
+        "width": 132,
+        "height": 148
+      }
+    },
+    "v2-uk-light": {
+      "note": "Ви заговорили знову, тож я зняв це прохання. Попросіть ще раз, і я покажу його знову.",
+      "dispatches": 0,
+      "block": {
+        "x": 904,
+        "y": 392,
+        "width": 132,
+        "height": 134
+      }
+    },
+    "v3-en-dark": {
+      "note": "You spoke again, so I dropped this request. Ask once more and I will show it again.",
+      "dispatches": 0,
+      "block": {
+        "x": 904,
+        "y": 376,
+        "width": 132,
+        "height": 150
+      }
+    }
+  },
   "noRoom": {
     "surface": "buttons 20x20 every 100 px",
     "layout": "collapsed",
