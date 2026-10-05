@@ -8,7 +8,8 @@ import { createInterface } from "node:readline";
 import { CODEX_SINGLE_AGENT_FEATURES, codexSubagentArgs, codexSubagentConfig, parseCodexFeatures, readCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import { reviewerCommand, prepareHeadlessPublication } from "./headless";
 import { buildEphemeralCommand } from "./ephemeral";
-import { prepareAgentPublicationSpec, resumeSpecForSession, shellQuote } from "./cli";
+import { prepareAgentPublicationSpec, resumeSpecForSession, freshSpecFor, withSpawnCapability, shellQuote } from "./cli";
+import { sendShellCommandToPane } from "@/lib/tmux";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 
@@ -255,7 +256,8 @@ test("host-namespace discovery keeps shim HOME and isolates config on the shared
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied", "resume-allowed"] as const)("installed v2 router checks %s with product launch arguments", async (policy) => {
+for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "terminal-denied", "terminal-allowed", "resume-denied", "resume-allowed"] as const) {
+  test.skipIf((policy.startsWith("terminal-") || policy.startsWith("resume-")) && spawnSync("tmux", ["-V"]).status !== 0)(`installed v2 router checks ${policy} with product launch arguments`, async () => {
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
   const prompt = "Return fixture complete.";
   // A synthetic model selects v2 just as the affected model catalog does.
@@ -326,6 +328,7 @@ test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied",
     // keep every permission/publication argument from the product unchanged.
     let childEnv = env;
     let stdin: string | null = null;
+    let terminalCommand: string | null = null;
     const previous = { ...process.env };
     try {
       Object.assign(process.env, env, { LLV_CODEX_BINARY: binary, LLV_CODEX_HOME: codexHome });
@@ -368,13 +371,53 @@ test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied",
           { allowSubagents: policy === "resume-allowed", model: model.slug, effort: "high", permissionMode: "never", readOnly: true });
         expect(spec).not.toBeNull();
         const prepared = await prepareAgentPublicationSpec(spec!);
-        command = "script";
-        argv = ["-q", "-e", "-c", `stty rows 40 cols 120; bash -c ${shellQuote(prepared.command.replace(/ \)$/, ` ${shellQuote("Return fixture complete.")} )`))}`, "/dev/null"];
-        childEnv = { ...env, TERM: "xterm-256color" };
+        terminalCommand = withSpawnCapability({ ...prepared, command: prepared.command.replace(/ \)$/, ` ${shellQuote(prompt)} )`) }, "c".repeat(43), env).command;
+      } else if (policy.startsWith("terminal-")) {
+        const spec = freshSpecFor("codex", root, { allowSubagents: policy === "terminal-allowed",
+          model: model.slug, effort: "high", codexHome });
+        const prepared = await prepareAgentPublicationSpec(spec);
+        terminalCommand = withSpawnCapability({ ...prepared, command: prepared.command.replace(/ \)$/, ` ${shellQuote(prompt)} )`) }, "c".repeat(43), env).command;
       }
     } finally {
       for (const name of Object.keys(process.env)) if (!(name in previous)) delete process.env[name];
       Object.assign(process.env, previous);
+    }
+    if (terminalCommand !== null) {
+      const socket = path.join(root, "tmux-socket");
+      const ready = path.join(root, "shell-ready");
+      const rc = path.join(root, "bashrc");
+      fs.writeFileSync(rc, `HISTFILE=/dev/null\nPS1='fixture> '\nPROMPT_COMMAND='sleep 0.05; touch ${shellQuote(ready)}'\n`);
+      const run = async (args: string[]) => {
+        const result = spawnSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], { env, encoding: "utf8" });
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      };
+      const waitFor = async (predicate: () => boolean) => {
+        for (let i = 0; i < 500; i++) { if (predicate()) return; await Bun.sleep(20); }
+        throw new Error(`installed CLI did not reach the stub provider through the tmux pane: ${(await run(["capture-pane", "-p", "-t", "fixture:0.0"])).stdout.slice(-1500).replaceAll(root, "<sandbox>")}`);
+      };
+      let serverPid: number | undefined;
+      try {
+        expect((await run(["new-session", "-d", "-x", "120", "-y", "40", "-s", "fixture",
+          `bash --noprofile --rcfile ${shellQuote(rc)} -i`])).code).toBe(0);
+        serverPid = Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim());
+        await waitFor(() => fs.existsSync(ready));
+        await Bun.sleep(30);
+        await sendShellCommandToPane("fixture:0.0", root, terminalCommand, run);
+        await waitFor(() => requests > 0);
+        const allowed = policy.endsWith("allowed");
+        for (const name of collaboration) expect(tools.has(name)).toBe(allowed);
+        expect(tools.has("exec_command")).toBe(true);
+      } finally {
+        // Reap the pane's CLI before stopping this one recorded tmux server.
+        if (serverPid) {
+          await run(["send-keys", "-t", "fixture:0.0", "C-c"]);
+          await Bun.sleep(100);
+          await run(["send-keys", "-t", "fixture:0.0", "C-d"]);
+          await Bun.sleep(100);
+          try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ }
+        }
+      }
+      return;
     }
     const child = spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let terminalOutput = "";
@@ -382,17 +425,7 @@ test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied",
       terminalOutput = (terminalOutput + bytes.toString()).slice(-4000);
       if (bytes.toString().includes("\x1b[6n")) child.stdin.write("\x1b[1;1R");
     });
-    if (stdin !== null) child.stdin.end(stdin);
-    else if (!policy.startsWith("resume-")) child.stdin.end();
-    else {
-      // Answer the TUI's terminal query, then exit after the fixture response.
-      // A terminal session stays open after its turn. Stop only this owned
-      // fixture group once its provider request has proved the tool inventory.
-      const exitAfterResponse = setInterval(() => {
-        if (requests && child.pid) { clearInterval(exitAfterResponse); try { process.kill(-child.pid, "SIGTERM"); } catch { /* exited */ } }
-      }, 500);
-      child.once("close", () => { clearInterval(exitAfterResponse); });
-    }
+    child.stdin.end(stdin ?? undefined);
     let diagnostic = "";
     child.stderr.on("data", (bytes: Buffer) => { diagnostic = (diagnostic + bytes.toString()).slice(-2000); });
     const pid = child.pid;
@@ -404,11 +437,11 @@ test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied",
     const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(-pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
     try {
       const code = await completed;
-      if (code !== 0 && !policy.startsWith("resume-")) throw new Error(`Codex ${policy} policy fixture exited ${code}: ${(diagnostic + terminalOutput).replaceAll(root, "<sandbox>")}`);
-      if (!policy.startsWith("resume-")) expect(code).toBe(0);
+      if (code !== 0) throw new Error(`Codex ${policy} policy fixture exited ${code}: ${(diagnostic + terminalOutput).replaceAll(root, "<sandbox>")}`);
+      expect(code).toBe(0);
       expect(requests).toBeGreaterThan(0);
-      if (!policy.startsWith("resume-")) expect(requests).toBe(1);
-      const allowed = ["old", "allowed", "resume-allowed"].includes(policy);
+      expect(requests).toBe(1);
+      const allowed = ["old", "allowed"].includes(policy);
       for (const name of collaboration) expect(tools.has(name)).toBe(allowed);
       if (policy !== "ephemeral") expect(tools.has("exec_command")).toBe(true);
     } finally {
@@ -420,3 +453,4 @@ test.each(["old", "denied", "allowed", "headless", "ephemeral", "resume-denied",
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+}

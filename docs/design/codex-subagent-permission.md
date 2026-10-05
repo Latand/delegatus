@@ -338,3 +338,31 @@ boundary survives restart and a missed post-boundary call still alerts with its
 original time. TypeScript and changed-file ESLint passed; lint retains existing
 warnings. Hosted CI was not awaited. No installed CLI update or deployment was
 performed.
+
+### Terminal delivery and hermetic control regressions
+
+The terminal sender now carries commands above 2,048 bytes in a private shell
+file, sourced by a short tty line. The file has mode 0600, unlinks itself before
+CLI startup, and is removed if any fenced tmux operation refuses delivery.
+Container launches place it on the shared home mount. Fresh, resume and pane
+recovery call the same sender; command windows reuse it as well.
+
+The real private-tmux regression in `src/lib/tmux.test.ts` reproduced the old
+truncation in both bash and zsh with a 50 ms prompt hook. After the correction,
+all denied/granted fresh/resume commands deliver the complete product argv,
+including 112 disable pairs for the synthetic future-feature inventory and the
+resume identity. The installed-CLI regression now exercises terminal fresh and
+resume through that sender, with publication and capability wrappers intact:
+denied exposes zero collaboration tools, granted exposes all six. It uses a
+credential-free provider and creates no native children. Real tmux cases are
+explicitly skipped when the required terminal programs are unavailable.
+
+Fake command and app-server tests install an explicit feature reader, including
+in the separate seat-successor host process. The six formerly CLI-dependent
+suites pass with no `codex` in PATH: attach (23), delivery (54), compact (16),
+inject (23), ephemeral (11), and host (195), totaling 322 tests. Bun remains
+available for their existing executable fixtures. The dedicated policy suite
+continues to read the installed CLI and passed all 17 tests; the tmux suite
+passed all 37. TypeScript passed; changed-file ESLint had zero errors and one
+existing unused-parameter warning in the injection fixture. These checks use
+isolated state, home and temporary directories and a closed Viewer control URL.

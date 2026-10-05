@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { freshSpecFor } from "@/lib/agent/cli";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { freshSpecFor, resumeSpecForSession, prepareAgentPublicationSpec, withSpawnCapability } from "@/lib/agent/cli";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { agentRegistry } from "@/lib/agent/registry";
 import {
   cdCommandForCwd,
+  sendShellCommandToPane,
   classifyTmuxAttachSnapshot,
   cleanupTmuxHostIfMatches,
   createSpawnWindow,
@@ -635,4 +639,100 @@ describe("structured transport prohibits legacy tmux Claude launches", () => {
     expect(legacyClaudeTmuxSpawnRefusal({ ...interactive, engine: "codex" as const }, "structured")).toBeNull();
     expect(legacyClaudeTmuxSpawnRefusal({ engine: "claude" as const, printMode: true }, "structured")).toBeNull();
   });
+});
+
+// A real private tmux endpoint drives the same sender as fresh, resume and
+// recovery. The fake CLI captures argv; it never uses an account or a model.
+for (const shell of ["bash", "zsh"]) {
+  test.skipIf(spawnSync("tmux", ["-V"]).status !== 0 || spawnSync(shell, ["--version"]).status !== 0)(`${shell} slow prompts receive complete denied and granted Codex argv`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-command-"));
+  const socket = path.join(root, "socket");
+  const output = path.join(root, "argv.json");
+  const ready = path.join(root, "ready");
+  const threadId = ["0".repeat(8), "0000", "4000", "8000", "0".repeat(12)].join("-");
+  const binary = path.join(root, "codex");
+  const saved = { ...process.env };
+  const restoreShell = setCodexShellPolicyReaderForTest(() => ({}));
+  const restore = setCodexFeatureReaderForTest(() => parseCodexFeatures([
+    "multi_agent stable true", "multi_agent_v2 stable true",
+    ...Array.from({ length: 110 }, (_, i) => `future_worker_${i} stable true`),
+  ].join("\n")));
+  const run = async (args: string[]) => {
+    const result = spawnSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], { encoding: "utf8" });
+    return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+  const waitFor = async (predicate: () => boolean) => {
+    for (let i = 0; i < 150; i++) { if (predicate()) return; await Bun.sleep(20); }
+    throw new Error("private tmux shell did not deliver fixture argv");
+  };
+  let serverPid: number | undefined;
+  try {
+    fs.writeFileSync(binary, `#!/bin/sh\nif [ "$3" = mcp ]; then printf "[]"; exit; fi\nfor arg do [ "$arg" = app-server ] && exit 1; done\nexec '${process.execPath}' -e 'require("fs").writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(1)))' -- "$@"\n`, { mode: 0o700 });
+    const rc = shell === "bash" ? path.join(root, "bashrc") : path.join(root, ".zshrc");
+    fs.writeFileSync(rc, shell === "bash"
+      ? `HISTFILE=/dev/null\nPS1='fixture> '\nPROMPT_COMMAND='sleep 0.05; touch ${ready}'\n`
+      : `HISTFILE=/dev/null\nPS1='fixture> '\nprecmd() { sleep 0.05; touch ${ready}; }\n`);
+    Object.assign(process.env, { PATH: `${root}${path.delimiter}${process.env.PATH}`, LLV_CODEX_BINARY: binary, LLV_CODEX_HOME: root, ZDOTDIR: root });
+    for (const allowSubagents of [false, true]) for (const resume of [false, true]) {
+      fs.rmSync(output, { force: true }); fs.rmSync(ready, { force: true });
+      const shellCommand = shell === "bash" ? `bash --noprofile --rcfile '${rc}' -i` : "zsh -i";
+      const created = await run(["new-session", "-d", "-s", "fixture", shellCommand]);
+      expect(created.code).toBe(0);
+      serverPid = Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim());
+      await waitFor(() => fs.existsSync(ready));
+      await Bun.sleep(30);
+      const spec = resume
+        ? resumeSpecForSession("codex", threadId, root, root, { allowSubagents })!
+        : freshSpecFor("codex", root, { allowSubagents, codexHome: root });
+      const prepared = withSpawnCapability(await prepareAgentPublicationSpec(spec), "c".repeat(43));
+      if (!allowSubagents) expect(Buffer.byteLength(prepared.command)).toBeGreaterThan(4096);
+      const expected = spawnSync("bash", ["-c", prepared.command], { cwd: root, encoding: "utf8" });
+      if (expected.status !== 0) throw new Error(expected.stderr);
+      expect(expected.status).toBe(0);
+      const expectedArgv = JSON.parse(fs.readFileSync(output, "utf8"));
+      fs.rmSync(output);
+      await sendShellCommandToPane("fixture:0.0", root, prepared.command, run);
+      await waitFor(() => fs.existsSync(output));
+      expect(JSON.parse(fs.readFileSync(output, "utf8"))).toEqual(expectedArgv);
+      expect(expectedArgv).toContain(`agents.enabled=${allowSubagents}`);
+      if (!allowSubagents) expect(expectedArgv.filter((arg: string) => arg === "--disable")).toHaveLength(112);
+      if (resume) expect(expectedArgv.slice(-2)).toEqual(["resume", threadId]);
+      expect(await run(["kill-session", "-t", "fixture"])).toMatchObject({ code: 0 });
+      serverPid = undefined;
+    }
+  } finally {
+    if (serverPid) { try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ } }
+    restore(); restoreShell();
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+}
+
+test("a refused tmux command delivery removes its private host-visible file", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-file-"));
+  const previousHome = process.env.HOME;
+  const previousShim = process.env.LLV_DOCKER_NSENTER_SHIMS;
+  Object.assign(process.env, { HOME: root, LLV_DOCKER_NSENTER_SHIMS: "1" });
+  const directory = path.join(root, ".cache", "delegatus", "tmux-commands");
+  const command = `printf '%s' '${"x".repeat(5000)}'`;
+  try {
+    for (const failAt of [1, 2, 3, 4]) {
+      let call = 0;
+      await expect(sendShellCommandToPane("%1", root, command, async () => {
+        const files = fs.readdirSync(directory);
+        expect(files).toHaveLength(1);
+        const filename = path.join(directory, files[0]);
+        expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+        expect(fs.readFileSync(filename, "utf8")).toContain(command);
+        return { code: ++call === failAt ? 1 : 0, stdout: "", stderr: "pane changed" };
+      })).rejects.toThrow("pane changed");
+      expect(fs.readdirSync(directory)).toEqual([]);
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousShim === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previousShim;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
