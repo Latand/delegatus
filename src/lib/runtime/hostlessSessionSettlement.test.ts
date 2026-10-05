@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
+import { RuntimeJournal } from "../../runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import type { RuntimeSession } from "./contracts";
 import { bindStructuredDeliveryQueue, settleHostlessSessionProjections } from "./structuredDeliveryController";
@@ -101,9 +102,9 @@ test("the controller's own timer closes the open turn of a host that died with t
   expect(appended).toContainEqual(closed(dead.id));
   expect(appended).toContainEqual(closed(recovering.id));
   expect(sessions.get(dead.id)).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
-  /* One keyed read for each ended row, no snapshot, and no second read on later sweeps. */
+  /* Keyed reads of the two ended rows only, no snapshot, and nothing published twice. */
   await Bun.sleep(60);
-  expect(keyedReads.sort()).toEqual([dead.id, recovering.id].sort());
+  expect([...new Set(keyedReads)].sort()).toEqual([dead.id, recovering.id].sort());
   expect(snapshots).toBe(0);
   expect(appended).toHaveLength(2);
 });
@@ -120,9 +121,9 @@ test("a host that ends while the Viewer keeps running has its turn closed by the
   keyedReads.length = 0;
   expect(await settleHostlessSessionProjections()).toBe(1);
   expect(appended).toEqual([closed(fixture.id)]);
-  /* Settled once: the row is read again only when its registry row changes. */
+  /* Settled once: a later sweep reads the closed row again and publishes nothing. */
   expect(await settleHostlessSessionProjections()).toBe(0);
-  expect(keyedReads).toEqual([fixture.id]);
+  expect(keyedReads).toEqual([fixture.id, fixture.id]);
   expect(appended).toEqual([closed(fixture.id)]);
 });
 
@@ -152,10 +153,18 @@ test("a backlog of ended rows is worked through in bounded sweeps, newest first"
   await bindStructuredDeliveryQueue([], { registry, client, hostlessSettleIntervalMs: 0 });
   expect(await settleHostlessSessionProjections()).toBe(64);
   expect(keyedReads).toHaveLength(64);
+  /* The six left over go first; the rest of the batch reads again the rows read longest ago. */
   expect(await settleHostlessSessionProjections()).toBe(6);
-  expect(await settleHostlessSessionProjections()).toBe(0);
-  expect(keyedReads).toHaveLength(70);
+  expect(keyedReads).toHaveLength(128);
+  expect(new Set(keyedReads)).toEqual(new Set(backlog.map((fixture) => fixture.id)));
   expect(new Set(appended.map((event) => event.conversationId))).toEqual(new Set(backlog.map((fixture) => fixture.id)));
+  /* Every later sweep stays inside the batch and takes the rows in turn. */
+  keyedReads.length = 0;
+  expect(await settleHostlessSessionProjections()).toBe(0);
+  expect(await settleHostlessSessionProjections()).toBe(0);
+  expect(keyedReads).toHaveLength(128);
+  expect(new Set(keyedReads.slice(0, 70)).size).toBe(70);
+  expect(appended).toHaveLength(70);
   expect(snapshots).toBe(0);
 });
 
@@ -183,9 +192,14 @@ test("a client with no keyed read answers from one snapshot", async () => {
   expect(await settleHostlessSessionProjections()).toBe(1);
   expect(appended).toEqual([closed(fixture.id)]);
   expect(snapshots).toBe(1);
-  /* Nothing left to ask about, so nothing is read. */
+  /* A later sweep asks again with one more snapshot and publishes nothing. */
   expect(await settleHostlessSessionProjections()).toBe(0);
-  expect(snapshots).toBe(1);
+  expect(snapshots).toBe(2);
+  expect(appended).toEqual([closed(fixture.id)]);
+  /* With no ended row left there is nothing to ask about, so nothing is read. */
+  registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!, status: "live", claimOwner: "fixture" } as never);
+  expect(await settleHostlessSessionProjections()).toBe(0);
+  expect(snapshots).toBe(2);
 });
 
 test("a process that publishes no delivery controller settles nothing", async () => {
@@ -194,4 +208,37 @@ test("a process that publishes no delivery controller settles nothing", async ()
   expect(await settleHostlessSessionProjections()).toBe(0);
   expect(appended).toEqual([]);
   expect(keyedReads).toEqual([]);
+});
+
+test("a session row published open after the first reading is closed by the next sweep", async () => {
+  /* The real journal, so a late write lands exactly as a host's own would. */
+  const journal = new RuntimeJournal(join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const real = { snapshot: async () => journal.snapshot(), readSession: async (identity: { conversationId: string }) => journal.readSession(identity),
+    append: async (event: never) => journal.append(event), effectBatch: async () => [], operationStatus: async () => null } as unknown as RuntimeHostClient;
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  /* A host the registry never ended, published open at the same moment. */
+  const live = hosted(captureProcessIdentity(process.pid)!);
+  const publish = (id: string, eventKey: string) => journal.append({ scope: { type: "session", id }, kind: "session-status",
+    producer: { kind: "codex-app-server", eventKey }, payload: sessions.get(id)! } as never);
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client: real, hostlessSettleIntervalMs: 0 });
+    /* The first reading finds no session row at all. */
+    expect(journal.readSession({ conversationId: fixture.id })).toBeNull();
+    expect(await settleHostlessSessionProjections()).toBe(0);
+    publish(fixture.id, "late-status");
+    publish(live.id, "live-status");
+    expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ turn: "running", activeTurnId: "turn-1" });
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
+    /* Closed again after a second late write, and quiet once nothing is open. */
+    publish(fixture.id, "later-status");
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(await settleHostlessSessionProjections()).toBe(0);
+    expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "dead", activeTurnId: null });
+    expect(journal.readSession({ conversationId: live.id })).toMatchObject({ host: "hosted", turn: "running", activeTurnId: "turn-1" });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
 });

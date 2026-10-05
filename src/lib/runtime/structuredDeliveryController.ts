@@ -549,7 +549,8 @@ function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "turn" | "
 export const HOSTLESS_SETTLE_INTERVAL_MS = 60_000;
 /** Keyed session reads one sweep may make. A row ended since the last sweep is
     one read; the rows that were already stale when a Viewer starts are worked
-    through newest first, this many a minute. */
+    through newest first, this many a minute. What a sweep has left over goes
+    to rows already read, longest ago first. */
 const HOSTLESS_SETTLE_BATCH = 64;
 
 /**
@@ -1280,19 +1281,34 @@ export async function bindStructuredDeliveryQueue(
 
      It runs on this controller's own timer, in the one process that publishes
      projections, and stays out of startup: each ended row costs one keyed
-     session read, once, and startup's budget has no room for a thousand of
-     them. A row already read is skipped until its registry row changes. */
-  const settledRows = new Map<string, string>();
+     session read, and startup's budget has no room for a thousand of them.
+
+     One reading never settles a row for good. The journal takes a session row
+     from its own writers, on no schedule the registry knows of, so a row that
+     was absent or closed when it was read can be published open afterwards
+     with the registry row untouched. Rows not read yet go first, newest
+     first; the rest of each sweep's batch reads again the rows read longest
+     ago, so every ended row is asked about in turn and a sweep never makes
+     more than its batch of reads. */
+  const settledRows = new Map<string, { endedAt: string; sweep: number }>();
+  let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
     if (superseded()) return 0;
     const registrySnapshot = registry.readOnlySnapshot();
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
-    const pending = [...hostless]
-      .filter(([id, row]) => settledRows.get(id) !== row.endedAt && !registrations.has(row.key))
+    const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
+    const unread = candidates
+      .filter(([id, row]) => settledRows.get(id)?.endedAt !== row.endedAt)
       .sort((left, right) => right[1].endedAt.localeCompare(left[1].endedAt))
       .slice(0, HOSTLESS_SETTLE_BATCH);
+    const again = candidates
+      .filter(([id, row]) => settledRows.get(id)?.endedAt === row.endedAt)
+      .sort((left, right) => settledRows.get(left[0])!.sweep - settledRows.get(right[0])!.sweep)
+      .slice(0, HOSTLESS_SETTLE_BATCH - unread.length);
+    const pending = [...unread, ...again];
     if (pending.length === 0) return 0;
+    settleSweep += 1;
     /* A client with no keyed read answers from one snapshot. Only the axes
        are read, so the voice bodies stay in the journal. */
     let listed: Map<string, RuntimeSession> | null = null;
@@ -1315,7 +1331,7 @@ export async function bindStructuredDeliveryQueue(
         await publishCurrentFallback(conversationId, session);
         settled += 1;
       }
-      settledRows.set(conversationId, row.endedAt);
+      settledRows.set(conversationId, { endedAt: row.endedAt, sweep: settleSweep });
     }
     return settled;
   };

@@ -22,13 +22,14 @@ export interface QuietBlockers {
   stageList?: BlockingStage[];
   /** Journal rows that claim an open turn whose host is proven gone. */
   discounted?: number;
-  /** Journal rows that claim an open turn and have neither a liveness record
-      nor a registry row, so nothing says whether a process owns them. */
+  /** Conversations a journal row or a running stage names that have neither a
+      liveness record nor a registry row, so nothing says whether a process
+      owns them. */
   unresolved?: number;
   /** The part of `unresolved` still inside `unresolvedGraceMs`; these are also
-      counted in `turns`. */
+      counted in `turns`, or in `stages` when only a stage names them. */
   unresolvedBlocking?: number;
-  /** How long an unresolved row blocks, counted from the first probe that saw it. */
+  /** How long an unresolved id blocks, counted from the first probe that saw it. */
   unresolvedGraceMs?: number;
   operatorWindowMs?: number;
   turns: number;
@@ -109,13 +110,44 @@ function judgeTurn(evidence: TurnEvidence): TurnVerdict {
   return livenessRecordIsLive(record) ? "blocks" : "discounted";
 }
 
-/** An open turn whose host is proven gone: nothing is left to finish the stage. */
-function stageHostGone(evidence: TurnEvidence): boolean {
-  return evidence.currentTurnIdle !== false && !evidence.registryHost?.processAlive
-    && evidence.record?.host.state === "gone" && evidence.record.turnState === "busy";
+/**
+ * What one conversation says about the stage it runs. `released` is an open
+ * turn whose host is proven gone, so nothing is left to finish the stage. A
+ * settled turn keeps the stage: the controller still has its verdict to read.
+ */
+function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "unresolved" {
+  if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive) return "blocks";
+  const { record, registryHost } = evidence;
+  if (record) return record.host.state === "gone" && record.turnState === "busy" ? "released" : "blocks";
+  // No transcript to read. A host in this Viewer still answers for the
+  // conversation; otherwise the registry row is the evidence, as it is for a turn.
+  if (evidence.currentTurnIdle !== undefined) return "blocks";
+  if (!registryHost) return "unresolved";
+  return registryHost.state === "gone" ? "released" : "blocks";
 }
 
-/* When each unresolved row was first seen, per set of ports: one for the life
+/**
+ * The reviewer a review stage's flow is running now, when the attempt may not
+ * name it yet. A flow and the attempt that started it are stored apart, and the
+ * attempt takes the new round's binding only on the pipeline's next pass, so
+ * until then it still names the previous round's reviewer.
+ *
+ * `dispatching` is a round whose launch has started and has no conversation to
+ * ask about yet: nothing can prove it dead, so it holds the stage.
+ */
+function currentReviewRound(flow: Flow | undefined, attemptConversationId: string): { conversationId: string; artifactPath: string | null } | "dispatching" | null {
+  if (!flow || (flow.state !== "spawning" && flow.state !== "reviewing")) return null;
+  const round = flow.rounds.at(-1);
+  if (!round || round.verdict) return null;
+  if (round.reviewerConversationId) {
+    return round.reviewerConversationId === attemptConversationId ? null
+      : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
+  }
+  return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
+    ? "dispatching" : null;
+}
+
+/* When each unresolved id was first seen, per set of ports: one for the life
    of the Viewer in production, a fresh one for each test. Kept beside the
    ports so no caller can forget to carry it, which would make the bound
    restart on every probe and hold the drain for good. */
@@ -148,8 +180,21 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   try {
     blockers.registryIssues = (ports.registryHealth ?? pipelineRegistryHealth)();
     const pipelines = ports.pipelines();
-    const flows = draining ? ports.flows?.() ?? [] : [];
+    const flows = ports.flows?.() ?? [];
     const stages: BlockingStage[] = [];
+    const unresolved = new Set<string>();
+    const held = new Set<string>();
+    const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
+    firstUnresolved.set(ports, memory);
+    /* One bound for an id, whether a journal row or a stage names it. */
+    const pastBound = (id: string): boolean => {
+      unresolved.add(id);
+      const since = memory.get(id) ?? now;
+      memory.set(id, since);
+      if (now - since >= UNRESOLVED_TURN_GRACE_MS) return true;
+      held.add(id);
+      return false;
+    };
     for (const pipeline of pipelines) {
       const cursor = pipeline.cursor;
       if (pipeline.state !== "running" || !cursor || !["spawning", "running", "reviewing", "committing"].includes(cursor.state)) continue;
@@ -162,8 +207,18 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
       if (["running", "reviewing"].includes(cursor.state) && conversationId) {
-        const reading = await evidence({ conversationId, artifactPath: attempt?.agentPath ?? null });
-        if (reading && stageHostGone(reading)) continue;
+        const owners = [{ conversationId, artifactPath: attempt?.agentPath ?? null }];
+        const round = cursor.state === "reviewing" && attempt?.flowId
+          ? currentReviewRound(flows.find((flow) => flow.id === attempt.flowId), conversationId) : null;
+        if (round && round !== "dispatching") owners.push(round);
+        // Every owner is asked, so each unresolved one starts its bound now.
+        let released = round !== "dispatching";
+        for (const owner of owners) {
+          const reading = await evidence(owner);
+          const verdict = reading ? judgeStageOwner(reading) : "blocks";
+          if (verdict === "blocks" || (verdict === "unresolved" && !pastBound(owner.conversationId))) released = false;
+        }
+        if (released) continue;
       }
       stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId });
     }
@@ -174,9 +229,6 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const runtime = await ports.runtimeSnapshot();
     const turns: BlockingTurn[] = [];
     const seen = new Set<string>();
-    const unresolved = new Set<string>();
-    const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
-    firstUnresolved.set(ports, memory);
     for (const session of runtime.sessions) {
       if (!["running", "interrupt_requested"].includes(session.turn) && !["registering", "recovering"].includes(session.host)) continue;
       // The journal's own words cannot settle this either way: a fallback can
@@ -187,12 +239,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (verdict === "discounted") { blockers.discounted!++; continue; }
       if (seen.has(session.conversationId)) continue;
       seen.add(session.conversationId);
-      if (verdict === "unresolved") {
-        unresolved.add(session.conversationId);
-        const since = memory.get(session.conversationId) ?? now;
-        memory.set(session.conversationId, since);
-        if (now - since >= UNRESOLVED_TURN_GRACE_MS) continue;
-      }
+      if (verdict === "unresolved" && pastBound(session.conversationId)) continue;
       const stage = stages.find((stage) => stage.conversationId === session.conversationId);
       turns.push({ conversationId: session.conversationId, engine: session.sessionKey?.engine ?? "unknown",
         project: session.cwd ? projectInfoFromCwd(session.cwd)?.project ?? null : null,
@@ -200,11 +247,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         seat: seats.some((seat) => seat.conversationId === session.conversationId),
         ...(verdict === "unresolved" ? { unresolved: true as const } : {}) });
     }
-    // A row that resolved, or left the journal, starts a new bound if it is
-    // ever unresolved again.
+    // An id that resolved, or that nothing names any more, starts a new bound
+    // if it is ever unresolved again.
     for (const id of memory.keys()) if (!unresolved.has(id)) memory.delete(id);
     blockers.unresolved = unresolved.size;
-    blockers.unresolvedBlocking = turns.filter((turn) => turn.unresolved).length;
+    blockers.unresolvedBlocking = held.size;
     blockers.turns = turns.length;
     work.push(...turns.map((turn) => `turn:${turn.conversationId}`));
     blockers.turnList = turns.slice(0, 20);

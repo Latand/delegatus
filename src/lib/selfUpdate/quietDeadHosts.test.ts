@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
+import { loadFlows, saveFlows } from "@/lib/flows/store";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
@@ -152,4 +153,76 @@ test("a turn that is really running and a stage that is really running still blo
       turnList: [{ conversationId: live.conversation.id, stage: { pipelineId: "lane_live", stageId: "build" } }],
       stageList: [{ pipelineId: "lane_live", conversationId: live.conversation.id }] });
   }
+});
+
+const lane = (id: string, cursor: "running" | "reviewing", attempt: Record<string, unknown>) => ({ id, task: "Finish the work", state: "running",
+  cursor: { stageId: "stage", state: cursor }, runs: [{ stageId: "stage", attempts: [attempt] }] });
+
+test("a stage whose conversation nothing resolves stops blocking after five minutes and stays counted", async () => {
+  const orphan = { conversationId: `conversation_${randomUUID()}`, sessionKey: { engine: "codex" }, cwd: null, artifactPath: null, host: "hosted", turn: "running", activeTurnId: "turn" };
+  const now = Date.now();
+  /* With its journal row, and with the row gone: the stage alone names the id. */
+  for (const sessions of [[orphan], []]) {
+    const p = ports(sessions, [lane("lane_orphan", "running", { conversationId: orphan.conversationId })]);
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: sessions.length, stages: 1, unresolved: 1, unresolvedBlocking: 1 } });
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES - 1, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolvedBlocking: 1 } });
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, unresolved: 1, unresolvedBlocking: 0 } });
+  }
+});
+
+test("a dead host whose transcript was deleted releases its running stage", async () => {
+  const dead = ended("open");
+  rmSync(dead.artifactPath);
+  expect(await agentActivity(dead.conversation.id)).toEqual([]);
+  const p = ports([row(dead, "hosted")], [lane("lane_deleted", "running", { conversationId: dead.conversation.id, agentPath: dead.artifactPath })]);
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1, unresolved: 0 } });
+});
+
+test("a process the row still records keeps its turn and stage under a dead status and no transcript", async () => {
+  const live = hosted("open", captureProcessIdentity(process.pid)!);
+  registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${live.key.sessionId}`]!, status: "dead" });
+  rmSync(live.artifactPath);
+  const p = ports([row(live, "unhosted")], [lane("lane_lagging", "running", { conversationId: live.conversation.id, agentPath: live.artifactPath })]);
+  expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+});
+
+/** A stored review flow whose newest round is `round`, read back through the flow store. */
+function reviewFlow(id: string, implementerPath: string, state: string, round: Record<string, unknown>): void {
+  const at = new Date().toISOString();
+  saveFlows([{ id, template: "implement-review-loop", project: "fixture", cwd: directory, implementerPath,
+    roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } },
+    baseRef: "a".repeat(40), baseMode: "head", mode: "auto", reviewerMode: "headless", roundLimit: 3, state, stateDetail: null, createdAt: at, closedAt: null,
+    rounds: [{ n: 2, reviewerPath: null, findingsPath: null, triggeredBy: "button", readyNote: null, verdict: null, findingsCount: null,
+      startedAt: at, error: null, ...round }] }] as never);
+}
+
+test("a review stage still bound to the ended previous reviewer is held by its flow's new round", async () => {
+  const previous = ended("open");
+  const self = captureProcessIdentity(process.pid)!;
+  const reviewer = hosted("open", self);
+  const at = new Date().toISOString();
+  const stage = lane("lane_review", "reviewing", { conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId: "flow_rebound", launchId: "previous-launch" });
+  const p = { ...ports([row(previous, "hosted")], [stage]), flows: loadFlows };
+  try {
+    /* The new round names its reviewer and that reviewer's process answers. */
+    reviewFlow("flow_rebound", previous.artifactPath, "reviewing", { reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+      reviewerPid: self.pid, reviewerIdentity: self.startIdentity, sessionId: reviewer.key.sessionId, launchId: "new-launch", spawnStartedAt: at });
+    expect(await agentActivity(reviewer.conversation.id)).toMatchObject([{ host: { state: "alive" }, turnState: "busy" }]);
+    for (const draining of [true, false]) {
+      expect(await probeQuiet(snapshot, p, Date.now(), draining)).toMatchObject({ quiet: false,
+        blockers: { turns: 0, stages: 1, discounted: 1, stageList: [{ pipelineId: "lane_review", conversationId: previous.conversation.id }] } });
+    }
+    /* A launch that has started and names no conversation yet cannot be proven dead. */
+    reviewFlow("flow_rebound", previous.artifactPath, "spawning", { launchId: "new-launch", spawnStartedAt: at });
+    expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    /* The new round's reviewer died too: nothing is left to finish the stage. */
+    const second = ended("open");
+    reviewFlow("flow_rebound", previous.artifactPath, "reviewing", { reviewerPath: second.artifactPath, reviewerConversationId: second.conversation.id, launchId: "new-launch", spawnStartedAt: at });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+    /* No round is running: the dead previous reviewer alone decides. */
+    reviewFlow("flow_rebound", previous.artifactPath, "reviewing", { reviewerPath: previous.artifactPath, reviewerConversationId: previous.conversation.id, launchId: "previous-launch", spawnStartedAt: at });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0, discounted: 1 } });
+    reviewFlow("flow_rebound", previous.artifactPath, "needs_decision", { launchId: "new-launch", spawnStartedAt: at });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally { saveFlows([]); }
 });
