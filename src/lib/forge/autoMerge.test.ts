@@ -17,6 +17,7 @@ process.env.LLV_STATE_DIR = sandbox;
 const {
   MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
+const { ForgeAppWriteRefused } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
 
 afterAll(() => {
@@ -145,9 +146,16 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     throw new Error(`unexpected gh ${args.join(" ")}`);
   };
 
+  const writes: Array<{ args: string[]; repository: string }> = [];
+  let writeRefusal: string | null = null;
   const ports = {
     now: () => clock,
     run,
+    write: async (args: string[], repository: string) => {
+      writes.push({ args, repository });
+      if (writeRefusal) throw new ForgeAppWriteRefused(writeRefusal);
+      return run(args);
+    },
     loadPipelines: () => [...pipelines.values()].map((pipeline) => structuredClone(pipeline)),
     mutate: async (id: string, change: (pipeline: Pipeline) => boolean) => {
       const pipeline = pipelines.get(id);
@@ -178,6 +186,9 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
     onUpdate: (handler: (pr: PullRequest) => void) => { onUpdate = handler; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
+    /** Every call that went through the App write seam, and how to refuse them. */
+    writes,
+    refuseAppWrites: (message: string | null) => { writeRefusal = message; },
     merges: () => calls.filter((args) => args[0] === "pr" && args[1] === "merge"),
     updates: () => calls.filter((args) => args[0] === "api" && args[2] === "PUT"),
     sweep: async () => sweepAutoMerge(ports),
@@ -655,6 +666,40 @@ describe("eligibility (#2187 §4.2)", () => {
     expect(mergeEligible(spent)).toBe(true);
     expect(mergeEligible(lane("skipped", { reviews: [{ n: 1, state: "skipped" }] }))).toBe(true);
     expect(mergeEligible(lane("accepted", { reviews: [{ n: 1, state: "failed", budgetSpent: true }], acceptances: [{ stageId: "review", attempt: 1 }] }))).toBe(true);
+  });
+});
+
+describe("writes go out as the App", () => {
+  test("the merge and the branch update use the write seam with their repository, and reads never do", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
+    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" }));
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3, () => h.merges().length > 0);
+    expect(h.writes).toEqual([
+      { args: ["api", "-X", "PUT", `repos/${REPO}/pulls/11/update-branch`, "-f", `expected_head_sha=${HEAD_A}`], repository: REPO },
+      { args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_B], repository: REPO },
+    ]);
+    expect(h.merge("L1")?.state).toBe("merged");
+  });
+
+  test("negative control: with no App credential the merge blocks with the refusal and gh is given no write", async () => {
+    const refusal = `Delegatus refused this GitHub write to ${REPO}: no GitHub App credential is available for it.`;
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    h.refuseAppWrites(refusal);
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merge("L1")?.state === "blocked");
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: refusal });
+    /* `calls` is everything the fake gh was asked to do: views and reads only. */
+    expect(h.merges()).toEqual([]);
+    expect(h.prs.get(11)!.state).toBe("OPEN");
+  });
+
+  test("negative control: with no App credential the branch update blocks the same way", async () => {
+    const refusal = `Delegatus refused this GitHub write to ${REPO}: the GitHub App has no verified installation.`;
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
+    h.refuseAppWrites(refusal);
+    await h.sweep();
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: refusal });
+    expect(h.updates()).toEqual([]);
   });
 });
 

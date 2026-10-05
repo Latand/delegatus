@@ -12,7 +12,7 @@ test.each([
   const original = JSON.stringify(policy);
   const override = agentCodexPublicationPolicy(policy, source);
   expect(override.set).toEqual(agentPublicationIdentityEnv(source));
-  if ("include_only" in policy) expect(override.include_only).toEqual([...policy.include_only!, ...Object.keys(agentPublicationIdentityEnv(source))]);
+  if ("include_only" in policy) expect(override.include_only).toEqual([...new Set([...policy.include_only!, ...Object.keys(agentPublicationIdentityEnv(source))])]);
   if ("filters" in policy && Object.values(policy.filters!).includes("include")) {
     expect(override.filters).toEqual(Object.fromEntries(Object.keys(agentPublicationIdentityEnv(source)).map((key) => [key, "include"])));
   } else expect(override.filters).toBeUndefined();

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -213,12 +214,16 @@ function extractPrUrl(text: string): string | null {
 
 /** Push the wf/ branch and open the PR against the captured base branch (W7). */
 export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Promise<FinishResult> {
-  const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir));
+  /* In a declared App repository both writes go out as the Delegatus GitHub
+     App or are refused; anywhere else this adds nothing. */
+  const forge = engineForgeWriteEnv();
+  const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir, forge));
   if (push.code !== 0) return failure("git push", push);
   const create = (await exec(
     "gh",
     ["pr", "create", "--title", prTitle(wf), "--body", body, "--base", wf.baseBranch, "--head", wf.branch],
     wf.worktreeDir,
+    forge,
   ));
   if (create.code === 0) return { ok: true, prUrl: extractPrUrl(create.stdout) };
   /* A retry after a half-finished round lands here: the PR already exists, so

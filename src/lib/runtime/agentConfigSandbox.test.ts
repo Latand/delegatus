@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,18 +12,21 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
    command carries this; these cases pin what "isolated" means. */
 
 test("a spawned agent's environment carries its own config and state root", () => {
+  /* The launch writes its Git hooks under the home's cache, so the home is a
+     real directory here. */
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "operator-home-"));
   const pluginKey = ["EXAMPLE", "PLUGIN", "API", "KEY"].join("_");
   const source: NodeJS.ProcessEnv = {
     NODE_ENV: "production",
-    HOME: "/opt/operator-home",
-    XDG_CONFIG_HOME: "/opt/operator-home/.config",
-    LLV_STATE_DIR: "/opt/operator-home/.config/agent-log-viewer/state",
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    LLV_STATE_DIR: path.join(home, ".config", "agent-log-viewer", "state"),
     TMPDIR: "/scratch/tmp",
     [STATE_OWNER_ENV]: "viewer",
     [QUIET_DIAGNOSTICS_ENV]: "1",
     [pluginKey]: "private-fixture",
   };
-  const env = withAgentConfigSandbox({ ...source }, source, "/opt/operator-home/.config/agent-log-viewer/accounts/claude/lane");
+  const env = withAgentConfigSandbox({ ...source }, source, path.join(home, ".config", "agent-log-viewer", "accounts", "claude", "lane"));
 
   const sandbox = path.join("/scratch/tmp", "llv-spawn-sandbox", "lane", "config");
   expect(env.XDG_CONFIG_HOME).toBe(sandbox);
@@ -33,7 +37,8 @@ test("a spawned agent's environment carries its own config and state root", () =
   expect(env[QUIET_DIAGNOSTICS_ENV]).toBeUndefined();
   expect(env[pluginKey]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
-  expect(env.GH_CONFIG_DIR).toBe("/opt/operator-home/.config/gh");
+  expect(env.GH_CONFIG_DIR).toBe(path.join(home, ".config", "gh"));
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test("the sandbox is derived from the temp root, never from the operator's installation", () => {
