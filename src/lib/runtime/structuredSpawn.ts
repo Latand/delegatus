@@ -1034,6 +1034,11 @@ export interface StructuredSpawnInput {
   imageRefs?: StructuredImageRef[];
   registry: AgentRegistry;
   client: RuntimeHostClient;
+  /** Throws when the caller's owner no longer allows this launch's account.
+      Asked again after each async boundary that precedes a side effect: once
+      runtime admission returns, before the host starts, and once the host is
+      set up, before it is published, by this call or by its staged probe. */
+  authorize?: () => void | Promise<void>;
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
@@ -2165,6 +2170,7 @@ export async function spawnStructuredConversation(
     }), admissionRetry);
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
+    await input.authorize?.();
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
       viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
@@ -2239,6 +2245,9 @@ export async function spawnStructuredConversation(
     binding.stopPersistence = await withinDurableSetup(
       bindHost(input.registry, key, host, claimed.claimOwner, claimed.claimEpoch),
     );
+    /* Still unpublished: a refusal here enters the failure path below, which
+       retires the host this launch started and fails its receipt. */
+    await input.authorize?.();
     const ownsLaunch = async () => {
       if (durableSetupTimedOut || launchReleased) return false;
       const snapshot = input.registry.readOnlySnapshot();
@@ -2255,7 +2264,11 @@ export async function spawnStructuredConversation(
     const continuation: StagedContinuation = {
       host,
       owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
-      publish: async () => { binding.unregister = await publishHost(key!, host!, ownsLaunch); forgetUnpublishedHost(); },
+      publish: async () => {
+        await input.authorize?.();
+        binding.unregister = await publishHost(key!, host!, ownsLaunch);
+        forgetUnpublishedHost();
+      },
       deliver: () => deliverFirst(input, identity.path),
     };
     stagedContinuations.set(operationId, continuation);

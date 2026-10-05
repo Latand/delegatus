@@ -139,6 +139,7 @@ async function awaitResumePublication(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   dependencies: StructuredRecoveryDependencies,
+  authorize: () => Promise<void>,
 ): Promise<string | null> {
   const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -146,6 +147,16 @@ async function awaitResumePublication(
   const staged = registry.readOnlySnapshot().receipts[launchId];
   const deadline = (stagedLaunchRecovery(staged)?.startedAt ?? now()) + RESUME_PUBLICATION_BOUND_MS;
   for (;;) {
+    /* The probe may publish a host that no continuation of this process holds,
+       so the owner is asked before each one. A refused resume ends here: its
+       receipt fails and the host it started is retired. */
+    try {
+      await authorize();
+    } catch (error) {
+      await (dependencies.failStagedLaunch ?? failStagedResume)(launchId, registry, client,
+        error instanceof Error ? error.message : "structured recovery account is no longer allowed");
+      throw error;
+    }
     const receipt = await probe(launchId, registry, client, { now, eligible: () => true });
     if (receipt.state === "completed") return receipt.artifactPath;
     if (receipt.state === "failed" || receipt.state === "conflicted") {
@@ -456,12 +467,13 @@ async function recoverCandidate(
       "prompt": "",
       registry,
       client,
+      authorize: assertAccountAuthorized,
     });
     let publishedPath = response.ok ? response.path : null;
     /* A staged resume with no path has not published its host yet. One that
        names its path has, and only its transcript is pending. */
     if (response.ok && !publishedPath && response.state === "path-pending") {
-      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies)
+      publishedPath = await awaitResumePublication(response.launchId ?? begun.receipt.launchId, registry, client, dependencies, assertAccountAuthorized)
         ?? current.path;
     }
     if (!response.ok || !publishedPath) throw new Error("structured recovery host did not publish its transcript");
