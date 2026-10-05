@@ -1876,3 +1876,336 @@ describe("delivery outcome settlement", () => {
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
 });
+
+describe("own-message steps, second-round design variants", () => {
+  /*
+   * A design lane's frames and its overlap proof (docs/design/own-message-steps.md):
+   * four placements of "step to my previous and next own message", each
+   * mounted into the production pane by the fixture's `own-message-steps`
+   * case. The first round was rejected because every control lay on top of
+   * something, so this block proves it by measurement: per variant, width,
+   * language and moment, every control is hit-tested at its centre and four
+   * corners, intersected with every other interactive element and with the
+   * feed's viewport, and the rest of the pane is compared with the same pane
+   * mounted with no controls (`variant=0`).
+   *
+   * Frames go to `.artifacts/own-message-steps/` (not committed); the
+   * measurements to `evidence/own-message-steps/overlap.json`.
+   */
+  const OUT = path.resolve(".artifacts/own-message-steps");
+  const EVIDENCE = path.resolve("evidence/own-message-steps");
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, phone: false, pane: 0 },
+    { name: "desktop-1000", width: 1000, height: 800, phone: false, pane: 0 },
+    /* A board-node-sized pane: the narrowest header the desktop draws. */
+    { name: "desktop-1000-pane-440", width: 1000, height: 800, phone: false, pane: 440 },
+    { name: "phone-390", width: 390, height: 844, phone: true, pane: 0 },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  /** The on-screen keyboard's height on a 390 x 844 phone. */
+  const KEYBOARD_PX = 336;
+  const LOADED_OWN = 7;
+  const ALL_OWN = 9;
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface ControlReading {
+    name: string;
+    box: Box;
+    /** Centre and four corners all answer with the control itself. */
+    hit: boolean;
+    /** Other interactive elements whose box intersects this one. */
+    overlaps: string[];
+    /** Any part of it lies inside the feed's viewport. */
+    overFeed: boolean;
+    insideWindow: boolean;
+  }
+  interface Reading {
+    controls: ControlReading[];
+    probes: Record<string, Box>;
+    overflowX: number;
+    position: number;
+    total: number;
+    /** Where the own message being read sits under the feed's top edge. */
+    landedAt: number | null;
+    atFeedEnd: boolean;
+    /** The agent's answer to that message has started inside the feed's viewport. */
+    replyOnScreen: boolean;
+    own: number;
+    machine: number;
+  }
+  interface Moved { probe: string; delta: Box }
+
+  /* What each variant says it changes about the pane it sits in. Anything
+     else that moved or resized against `variant=0` fails the case. */
+  const DECLARED: Record<number, { desktop: RegExp; phone: RegExp }> = {
+    /* The header's flexible title gives up the controls' width. */
+    1: { desktop: /^title$/, phone: /^title$/ },
+    /* The feed gives up one row; what sits between it and the row rides up. */
+    2: { desktop: /^(feed|jump-strip|jump-pill|turn-status|control:.*)$/, phone: /^(feed|jump-strip|jump-pill|control:.*)$/ },
+    /* The desktop's options row has free room. On the phone the tools row
+       gives up one cell, which comes out of its flexible runtime chip. */
+    3: { desktop: /^$/, phone: /^tools:.*$/ },
+    /* The desktop header's title gives up the indicator's width; the phone's
+       indicator shares the title's own second line. */
+    4: { desktop: /^title$/, phone: /^$/ },
+  };
+
+  const measure = (page: import("playwright-core").Page) => page.evaluate((): Reading => {
+    const box = (element: Element): [number, number, number, number] => {
+      const rect = element.getBoundingClientRect();
+      return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10) as [number, number, number, number];
+    };
+    const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    const shown = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none"
+        && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
+    };
+    const name = (element: Element) => {
+      const text = element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("data-testid")
+        ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
+      return `${element.tagName.toLowerCase()}:${text}`;
+    };
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const feed = scroller.getBoundingClientRect();
+    const controls = Array.from(document.querySelectorAll<HTMLElement>("[data-own-step-control]")).filter(shown);
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"], [tabindex]:not([tabindex="-1"])',
+    )).filter(shown);
+    const readings = controls.map((control) => {
+      const rect = control.getBoundingClientRect();
+      /* A rounded corner is not part of the control, so the corner points sit
+         just inside the rounding. */
+      const inset = Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1;
+      const points = [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+      return {
+        name: control.dataset.ownStepControl!,
+        box: box(control),
+        hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
+        /* A row scrolled out of the feed is clipped by it, so what counts
+           of a control inside the feed is the part the feed shows. */
+        overlaps: interactive
+          .filter((other) => other !== control && !other.contains(control) && !control.contains(other))
+          .filter((other) => {
+            const at = other.getBoundingClientRect();
+            if (!scroller.contains(other)) return cut(rect, at) > 1;
+            const top = Math.max(at.top, feed.top);
+            const bottom = Math.min(at.bottom, feed.bottom);
+            return bottom > top && cut(rect, new DOMRect(at.left, top, at.width, bottom - top)) > 1;
+          })
+          .map(name),
+        overFeed: cut(rect, feed) > 1,
+        insideWindow: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      };
+    });
+
+    /* The rest of the pane, by name: its structure, then every interactive
+       element outside the feed (rows inside it move with the scroll) and
+       outside the prototype's own controls. */
+    const probes: Record<string, [number, number, number, number]> = {};
+    const put = (key: string, element: Element | null | undefined) => { if (element && shown(element)) probes[key] = box(element); };
+    const header = document.querySelector("[data-mobile2-bar]") ?? document.querySelector("[data-link-path] > header");
+    put("header", header);
+    put("title", document.querySelector("[data-mobile2-title]") ?? header?.querySelector(".truncate"));
+    put("feed", scroller);
+    put("jump-strip", document.querySelector("[data-feed-jump-strip]"));
+    put("jump-pill", document.querySelector("[data-feed-jump-pill]"));
+    const last = scroller.parentElement?.parentElement?.lastElementChild;
+    put("turn-status", last === scroller.parentElement || last?.matches("[data-feed-jump-strip]") ? null : last);
+    put("composer", document.querySelector('[data-testid="composer-input-unit"]'));
+    put("field", document.querySelector("textarea"));
+    const seen = new Map<string, number>();
+    for (const element of interactive) {
+      if (scroller.contains(element) || element.closest("[data-own-steps], [data-own-step-control]") || element.tagName === "TEXTAREA") continue;
+      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-input-unit"]') ? "composer"
+        : element.closest("[data-mobile2-bar], [data-link-path] > header") ? "header" : element.closest('[role="dialog"]') ? "sheet" : "control";
+      const key = `${group}:${name(element)}`;
+      const count = (seen.get(key) ?? 0) + 1;
+      seen.set(key, count);
+      probes[count > 1 ? `${key} #${count}` : key] = box(element);
+    }
+
+    const rows = Array.from(scroller.querySelectorAll<HTMLElement>('[data-feed-kind="user"]'));
+    const state = (window as unknown as { ownSteps: { state: () => { position: number; total: number } } }).ownSteps.state();
+    const current = rows[state.position - 1];
+    let reply: Element | null = current?.nextElementSibling ?? null;
+    while (reply && reply.getAttribute("data-feed-kind") !== "prose") reply = reply.nextElementSibling;
+    const replyTop = reply?.getBoundingClientRect().top ?? Infinity;
+    return {
+      controls: readings,
+      probes,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      position: state.position,
+      total: state.total,
+      landedAt: current ? Math.round(current.getBoundingClientRect().top - feed.top) : null,
+      atFeedEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1,
+      replyOnScreen: replyTop >= feed.top && replyTop < feed.bottom,
+      own: rows.length,
+      machine: scroller.querySelectorAll('[data-feed-kind="tmsg"]').length,
+    };
+  });
+
+  const moved = (baseline: Reading, reading: Reading): Moved[] => {
+    const out: Moved[] = [];
+    for (const probe of new Set([...Object.keys(baseline.probes), ...Object.keys(reading.probes)])) {
+      const was = baseline.probes[probe];
+      const now = reading.probes[probe];
+      if (!was || !now) { out.push({ probe: `${probe} ${was ? "gone" : "new"}`, delta: [0, 0, 0, 0] }); continue; }
+      const delta = now.map((value, index) => Math.round((value - was[index]!) * 10) / 10) as Box;
+      if (delta.some((value) => Math.abs(value) > 0.5)) out.push({ probe, delta });
+    }
+    return out;
+  };
+
+  browserTest("no control of any variant covers anything, at any width, in either language", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const baselines = new Map<string, Reading>();
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) for (const variant of [0, 1, 2, 3, 4] as const) {
+        const where = `variant-${variant}-${viewport.name}-${lang}`;
+        const url = `${served.base}?case=own-message-steps&variant=${variant}&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.phone);
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const menuStep = variant === 4 && viewport.phone;
+        const settled = () => page.waitForTimeout(650);
+        const press = async (direction: -1 | 1) => {
+          const control = `[data-own-step-control="${direction < 0 ? "previous" : "next"}"]`;
+          if (variant === 0) await page.evaluate((to) => (window as unknown as { ownSteps: { step: (direction: number) => void } }).ownSteps.step(to), direction);
+          else if (variant === 4 && !viewport.phone) await page.keyboard.press(direction < 0 ? "Alt+ArrowUp" : "Alt+ArrowDown");
+          else if (menuStep) {
+            await page.locator('[data-mobile2-open="menu"]').click();
+            await page.locator(control).waitFor();
+            await page.locator(control).click();
+            await page.locator(control).waitFor({ state: "detached" });
+          } else await page.locator(control).click();
+          await settled();
+        };
+        const record = async (moment: string, shot: boolean): Promise<Reading> => {
+          const reading = await measure(page);
+          const key = `${viewport.name}-${lang}-${moment}`;
+          if (variant === 0) baselines.set(key, reading);
+          else {
+            const baseline = baselines.get(key)!;
+            const changes = moved(baseline, reading);
+            const declared = DECLARED[variant]![viewport.phone ? "phone" : "desktop"];
+            for (const change of changes) if (!declared.test(change.probe)) fail(moment, `undeclared change to "${change.probe}" by ${JSON.stringify(change.delta)}`);
+            for (const control of reading.controls) {
+              if (!control.hit) fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+              if (control.overlaps.length) fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`);
+              if (control.overFeed) fail(moment, `${control.name} lies over the feed`);
+              if (!control.insideWindow) fail(moment, `${control.name} leaves the window`);
+              if (viewport.phone && control.name !== "count" && (control.box[2] < 44 || control.box[3] < 44)) fail(moment, `${control.name} is ${control.box[2]} x ${control.box[3]}, under 44 px`);
+            }
+            if (!reading.controls.length && !menuStep) fail(moment, "no control is on screen");
+            if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+            (evidence[where] ??= {})[moment] = { controls: reading.controls, changedAgainstNoControls: changes };
+          }
+          if (shot) await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+          return reading;
+        };
+        try {
+          await page.locator(`[data-own-proto="${variant}"]`).waitFor();
+          await page.locator('[data-feed-kind="user"]').first().waitFor();
+          await settled();
+          expect(await page.locator("[data-own-variant-number]").textContent()).toBe(String(variant));
+          expect((await page.locator("[data-own-variant-number]").boundingBox())!.height).toBeGreaterThanOrEqual(28);
+
+          /* At rest: the tail, nothing typed. Only what the operator typed is
+             counted; wakes, notices and pipeline messages are relay cards. */
+          const rest = await record("rest", true);
+          expect(rest.own).toBe(LOADED_OWN);
+          expect(rest.machine).toBeGreaterThanOrEqual(20);
+          expect(rest.total).toBe(LOADED_OWN);
+          expect(rest.position).toBe(LOADED_OWN);
+
+          /* Three steps back: the way-back row is on screen now, the message
+             stepped to is at the top of the feed and its answer is under it. */
+          await press(-1); await press(-1); await press(-1);
+          const stepped = await record("stepped", true);
+          expect(await page.locator("[data-feed-jump-strip]").count()).toBe(1);
+          if (stepped.position >= LOADED_OWN) fail("stepped", `position stayed at ${stepped.position}`);
+          if (!(stepped.atFeedEnd || (stepped.landedAt !== null && Math.abs(stepped.landedAt - (viewport.phone ? 0 : 8)) <= 2))) fail("stepped", `the message landed ${stepped.landedAt}px under the feed's top`);
+          if (!stepped.replyOnScreen) fail("stepped", "the reply to the message is not on screen");
+
+          /* The same place with the open sheet, where the controls are rows. */
+          if (menuStep) {
+            await page.locator('[data-mobile2-open="menu"]').click();
+            await page.locator('[data-own-step-control="previous"]').waitFor();
+            await page.waitForTimeout(350);
+            const open = await measure(page);
+            for (const control of open.controls.filter((item) => item.name !== "count")) {
+              if (!control.hit) fail("menu", `${control.name} is not what a pointer meets`);
+              if (control.overlaps.length) fail("menu", `${control.name} intersects ${control.overlaps.join(", ")}`);
+              if (control.box[3] < 44) fail("menu", `${control.name} is ${control.box[3]} px tall`);
+            }
+            (evidence[where] ??= {}).menu = { controls: open.controls.filter((item) => item.name !== "count") };
+            await page.screenshot({ path: path.join(OUT, `${where}-menu.png`) });
+            await page.keyboard.press("Escape");
+            await page.locator('[data-own-step-control="previous"]').waitFor({ state: "detached" });
+          }
+
+          /* A draft of several lines; on the phone, the keyboard up as well. */
+          await page.locator("textarea").first().fill("one\ntwo\nthree\nfour\nfive\nsix");
+          await page.waitForTimeout(250);
+          await record("composer-grown", false);
+          if (viewport.phone) {
+            await page.evaluate((px) => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(px), KEYBOARD_PX);
+            await page.waitForTimeout(250);
+            await record("keyboard", true);
+            await page.evaluate(() => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(0));
+          }
+          await page.locator("textarea").first().fill("");
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          await page.waitForTimeout(250);
+
+          /* A step forward comes back to where the count says. */
+          await press(1);
+          const forward = await measure(page);
+          if (forward.position !== stepped.position + 1) fail("forward", `position ${forward.position} after ${stepped.position}`);
+
+          /* All the way back. The feed brings the page before the loaded
+             window on the reader's way up, so the walk ends on the oldest
+             message of the conversation, the ninth counted from the tail, and
+             nothing left to step back to. */
+          for (let presses = 0; presses < ALL_OWN + 4; presses += 1) {
+            const now = await measure(page);
+            if (now.position <= 1 && now.total === ALL_OWN) break;
+            await press(-1);
+          }
+          const oldest = await record("oldest-loaded", true);
+          expect(oldest.position).toBe(1);
+          expect(oldest.total).toBe(ALL_OWN);
+          if (!oldest.replyOnScreen) fail("oldest-loaded", "the reply to the message is not on screen");
+          if (oldest.landedAt === null || Math.abs(oldest.landedAt - (viewport.phone ? 0 : 8)) > 2) fail("oldest-loaded", `the message landed ${oldest.landedAt}px under the feed's top`);
+          if (!menuStep && variant !== 0 && !(variant === 4 && !viewport.phone)) {
+            expect(await page.locator('[data-own-step-control="previous"]').isDisabled()).toBe(true);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(
+        path.join(EVIDENCE, "overlap.json"),
+        `{\n${Object.entries(evidence).map(([where, moments]) => `  ${JSON.stringify(where)}: {\n${
+          Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
+        }\n  }`).join(",\n")}\n}\n`,
+      );
+      expect(failures).toEqual([]);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 1_800_000);
+});

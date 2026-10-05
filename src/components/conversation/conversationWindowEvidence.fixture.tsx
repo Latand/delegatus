@@ -36,6 +36,7 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
 import { LiveTurnRows } from "./LiveTurnRows";
+import { OwnMessageStepsPrototype, ownStepsTranscript, type StepVariant } from "./ownMessageSteps.prototype";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
   enqueueOutbox,
@@ -89,7 +90,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
-  | "agent-images";
+  | "agent-images"
+  | "own-message-steps";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -930,6 +932,15 @@ function mountLifecycle(root: HTMLElement): void {
       loadOlder: async () => 0, prependGen: 0,
     }),
   });
+  installFakeComposerHost();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(<LifecycleFixture />);
+}
+
+/** The composer's side of the fake host: a hosted structured session, its
+    receipts and the transport behind Send. */
+function installFakeComposerHost(): void {
   setTmuxComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
@@ -955,9 +966,6 @@ function mountLifecycle(root: HTMLElement): void {
      forgetting them — the language seeded into localStorage stays. */
   try { sessionStorage.clear(); } catch { /* opaque origin */ }
   resetOutboxForTests();
-  fakeHost.lines = [LIFE_OPENING];
-  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
 }
 
 /* #2075: one conversation per engine, each viewing pictures the way that
@@ -1182,6 +1190,54 @@ function mountLongHistory(root: HTMLElement): void {
   );
 }
 
+/* Design prototype, second round (docs/design/own-message-steps.md): the
+   production pane over an orchestrator's day, with the step controls of
+   `?variant=` (0 is the pane as it is today). The loaded window starts two own
+   messages in; the feed's own older-history load brings the rest. */
+function mountOwnMessageSteps(root: HTMLElement): void {
+  const lang = params.get("lang") === "uk" ? "uk" : "en";
+  const { lines: all, loadedFrom } = ownStepsTranscript(lang);
+  let start = loadedFrom;
+  let prependGen = 0;
+  let loadingOlder = false;
+  const listeners = new Set<() => void>();
+  let snapshot: LogTailState | null = null;
+  const announce = () => { snapshot = null; for (const listener of listeners) listener(); };
+  const loadOlder = async (): Promise<number> => {
+    if (loadingOlder || start <= 0) return 0;
+    loadingOlder = true;
+    announce();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const take = start;
+    start = 0;
+    prependGen += 1;
+    loadingOlder = false;
+    announce();
+    return take;
+  };
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: start > 0, loadingOlder, loadOlder, prependGen,
+  };
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    read,
+    read,
+  ) });
+  installFakeComposerHost();
+  const file = {
+    ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
+    title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
+    model: "gpt-6.1-sol",
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 120,
+  } as unknown as FileEntry;
+  const variant = Math.max(0, Math.min(4, Number(params.get("variant") ?? 0))) as StepVariant;
+  const pane = Number(params.get("pane") ?? 0);
+  createRoot(root).render(<OwnMessageStepsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} />);
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1190,4 +1246,5 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
+else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) createRoot(root).render(<Fixture id={requested} />);
