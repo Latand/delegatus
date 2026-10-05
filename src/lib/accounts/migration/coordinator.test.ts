@@ -4688,7 +4688,12 @@ test("a target the caller no longer authorizes is neither created nor published"
 
     expect(calls).toEqual(refuseAt === "create" ? [] : ["create", "verify"]);
     expect(cleaned).toEqual(refuseAt === "create" ? [] : ["successor-b"]);
-    expect(settled.migration).toMatchObject({ phase: "failed-recoverable", targetId: "b" });
+    expect(settled.migration).toMatchObject({
+      phase: "failed-recoverable",
+      targetId: "b",
+      errorCode: "target-account-unavailable",
+      error: "target account is no longer allowed on this project; the conversation stays on its account",
+    });
     expect(settled.generations).toHaveLength(1);
     expect(settled.generations.at(-1)?.accountId).toBe("a");
   }

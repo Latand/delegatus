@@ -6,7 +6,9 @@ import { spawn } from "node:child_process";
 
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
+import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
+import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
@@ -6718,5 +6720,157 @@ for (const engine of ["claude", "codex"] as const) {
     expect(hasStructuredDeliveryHost(run.key)).toBe(true);
     expect(run.host.releaseCount).toBe(0);
     expect(run.receipt()).toMatchObject({ state: "completed" });
+  });
+}
+
+/* An account switch publishes its successor through the provider, which hands
+   the migration's ownership question to the delivery controller. The account
+   may be withdrawn while that registration awaits the journal, or right after
+   it returns: either way nothing stays registered, the successor is released
+   once and the switch fails with its cause, on the source account. */
+async function fencedMigrationPublication(
+  engine: "codex" | "claude",
+  revokeAt: "never" | "registration" | "after-registration",
+) {
+  const sourceId = crypto.randomUUID();
+  const successorId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `fenced-migration-${engine}-${revokeAt}-${sourceId}`);
+  const sourcePath = path.join(cwd, `${sourceId}.jsonl`);
+  const successorPath = path.join(cwd, `${successorId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(successorPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  registry.reconcileConversations([{
+    engine,
+    path: sourcePath,
+    accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd }),
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-10-05T12:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  registry.requestConversationReseat(conversation.id, "account-b");
+  let allowed = true;
+  let registering = false;
+  let cursorReads = 0;
+  const inner = runtimeClient(journal);
+  const client = {
+    ...inner,
+    producerCursor: async (producerKind, eventKeyPrefix) => {
+      const cursor = await inner.producerCursor(producerKind, eventKeyPrefix);
+      if (registering) {
+        cursorReads += 1;
+        if (revokeAt === "registration") allowed = false;
+      }
+      return cursor;
+    },
+  } as RuntimeHostClient;
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const key = { engine, sessionId: successorId } as const;
+  const host = new RoundTripHost(engine, successorPath, successorId);
+  const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
+  const account = (accountId: string): AccountContext => ({ engine, accountId, kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } });
+  /* The native adoption is the only part replaced: the fixture host is bound
+     and registered through the real controller with the ownership it is given. */
+  const publish = async (input: { receipt: ProviderReceipt; ownsOperation?: () => Promise<boolean> }) => {
+    registry.upsert({
+      key, artifactPath: input.receipt.path, cwd, accountId: "account-b",
+      launchProfile: emptyLaunchProfile({ cwd }), status: "unhosted", host: null, structuredHost: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+    });
+    registry.setStructuredHost(key, {
+      kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:pending", process: null,
+      eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    }, "unhosted");
+    const claimed = registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+    if (!claimed?.claimOwner) throw new Error("fixture successor claim is unavailable");
+    const state = await host.health();
+    registry.setStructuredHostClaimed(key, {
+      kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: state.endpoint, process: owner,
+      eventCursor: state.eventCursor, protocolVersion: state.protocolVersion, writerClaimEpoch: claimed.claimEpoch,
+      activeTurnRef: state.activeTurnRef, pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+    }, "idle", claimed.claimOwner, claimed.claimEpoch);
+    registering = true;
+    let unregister: () => Promise<void>;
+    try {
+      unregister = await publishStructuredDeliveryHost({ key, host }, input.ownsOperation);
+    } finally {
+      registering = false;
+    }
+    if (revokeAt === "after-registration") allowed = false;
+    return async () => { await unregister(); await host.release(); };
+  };
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: (_engine: string, accountId: string) => account(accountId), resolveTranscriptOwner: () => account("account-a") },
+    startCodex: async () => { throw new Error("unexpected Codex start"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    registry,
+    publishCodexHost: publish,
+    publishClaudeHost: publish,
+    now: () => "2026-10-05T12:00:00.000Z",
+  } as never);
+  const successorProvider: SuccessorProviderPort = {
+    virtualSource: true,
+    async create(input) {
+      input.recordContinuityPath(successorPath);
+      return {
+        operationId: input.operationId,
+        nativeId: successorId,
+        path: successorPath,
+        continuityPaths: [],
+        historyHash: successorId,
+        host: engine === "codex"
+          ? { kind: "codex-app-server", identity: successorId, epoch: 1, verifiedAt: "2026-10-05T12:00:00.000Z" }
+          : { kind: "claude-fork", identity: successorId, epoch: 1, verifiedAt: "2026-10-05T12:00:00.000Z" },
+      } as ProviderReceipt;
+    },
+    async verify() {},
+    publishHost: (receipt, input) => provider.publishHost(receipt, input),
+    cleanup: (receipt) => provider.cleanup(receipt),
+  };
+  const settled = await advanceConversationMigration(conversation.id, registry, successorProvider, {
+    authorizeTarget: () => {
+      if (!allowed) throw new Error("target account is no longer allowed on this project; the stage stays on its runtime");
+    },
+  });
+  return { settled, host, key, cursorReads, registry, journal };
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const revokeAt of ["registration", "after-registration"] as const) {
+    test(`a ${engine} account switch registers no successor when its target account is withdrawn ${revokeAt === "registration" ? "inside the host registration" : "after the registration returned"}`, async () => {
+      const run = await fencedMigrationPublication(engine, revokeAt);
+      try {
+        expect(run.cursorReads).toBe(1);
+        expect(hasStructuredDeliveryHost(run.key)).toBe(false);
+        expect(run.host.releaseCount).toBe(1);
+        expect(run.settled.migration).toMatchObject({
+          phase: "failed-recoverable",
+          targetId: "account-b",
+          errorCode: "target-account-unavailable",
+          error: expect.stringContaining("no longer allowed"),
+        });
+        expect(run.settled.generations).toHaveLength(1);
+        expect(run.settled.generations.at(-1)?.accountId).toBe("account-a");
+      } finally {
+        await releaseStructuredDeliveryHost(run.key);
+        run.journal.close();
+      }
+    });
+  }
+
+  test(`a ${engine} account switch whose target stays allowed registers and commits one successor`, async () => {
+    const run = await fencedMigrationPublication(engine, "never");
+    try {
+      expect(run.cursorReads).toBe(1);
+      expect(hasStructuredDeliveryHost(run.key)).toBe(true);
+      expect(run.host.releaseCount).toBe(0);
+      expect(run.settled.migration).toMatchObject({ phase: "committed", targetId: "account-b" });
+      expect(run.settled.generations.at(-1)).toMatchObject({ id: run.key.sessionId, accountId: "account-b" });
+    } finally {
+      await releaseStructuredDeliveryHost(run.key);
+      run.journal.close();
+    }
   });
 }
