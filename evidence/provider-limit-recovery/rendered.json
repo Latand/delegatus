@@ -1,0 +1,45 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1440,
+      "text": "This stage will retry automatically at 2026-10-05T19:01:00.000Z.",
+      "geometry": {
+        "height": 29,
+        "fullHeight": 29
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "text": "This stage will retry automatically at 2026-10-05T19:01:00.000Z.",
+      "geometry": {
+        "height": 15,
+        "fullHeight": 15
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "text": "Етап автоматично почне нову спробу о 2026-10-05T19:01:00.000Z.",
+      "geometry": {
+        "height": 29,
+        "fullHeight": 29
+      },
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "text": "Етап автоматично почне нову спробу о 2026-10-05T19:01:00.000Z.",
+      "geometry": {
+        "height": 30,
+        "fullHeight": 30
+      },
+      "pageErrors": []
+    }
+  ]
+}

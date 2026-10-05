@@ -15,6 +15,7 @@ for (const [engine, code, text, kind] of [
   ["codex", "usage_limit_exceeded", "limit", "usage_limit"],
   ["codex", "unauthorized", "expired", "auth_required"],
   ["codex", "stream_disconnected", "stream ended", "transient"],
+  ["codex", "other", "Selected model is at capacity. Please try a different model.", "transient"],
   ["codex", "turn_aborted", "interrupted", "turn_cut"],
   ["claude", "interrupted", "interrupted", "turn_cut"],
   ["claude", "invalid_request", "bad request", "other"],

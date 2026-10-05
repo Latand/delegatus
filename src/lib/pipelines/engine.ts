@@ -66,7 +66,8 @@ import { killTmuxHostIfMatches, paneInfo } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
-import { clearEngineParkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
+import { clearEngineParkedTaskNote, parkedTaskNote, writeParkedTaskNote, type ParkedTaskReason } from "./taskStatusNote";
+import { operatorLocale } from "@/lib/operator/settings";
 import { requestPipelineTick } from "./controllerSignal";
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
@@ -1895,6 +1896,30 @@ function knownReset(...candidates: Array<number | null | undefined>): number | n
   return resets.length ? Math.min(...resets) : null;
 }
 
+/** A quota budget limits continuations of this attempt. Its next reset still
+    owes a fresh stage retry, durably fenced against operator control changes. */
+function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string): void {
+  const wait = attempt.providerWait!;
+  const now = unixMs(ports.now());
+  const reset = wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000 : 0;
+  wait.resumeAt = retryAt ?? new Date(reset > now ? reset : now + 30 * 60_000).toISOString();
+  const reason: ParkedTaskReason = { kind: "provider-retry", resumeAt: wait.resumeAt };
+  const message = `${parkedTaskNote(detail, operatorLocale() ?? "en", false, reason)}\n${detail}`;
+  wait.stageRetry = { controlGeneration: pipeline.controlGeneration ?? null, detail: message };
+  attempt.completedAt = ports.now();
+  park(pipeline, message, attempt, reason);
+  ports.scheduleTick?.(Math.max(0, Math.min(15 * 60_000, unixMs(wait.resumeAt) - now)));
+}
+
+/** Shared with manual retry-stage: retain the checkout and cursor relay, and
+    let activation allocate a new attempt with a new recovery budget. */
+function resetStageForRetry(pipeline: Pipeline, stage: PipelineStage | null): void {
+  pipeline.state = pipeline.lastPassedCommit && pipeline.runs.some(run => run.attempts.length > 0) ? "running" : "provisioning";
+  if (stage) setCursorState(pipeline, stage.id, awaitingPassedPublication(pipeline) ? "committing" : "pending");
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+}
+
 /** Usage-limit history for `engine`. Both engines name their main account
     `default`, so a limit hit on one engine never affects an account of the
     other; an entry from before engines were recorded belongs to the engine
@@ -2047,9 +2072,13 @@ async function recoverProviderCut(
   const parkCut = (reason: string) => {
     recordProviderRecovery(attempt, "park", condition, reason, now);
     attempt.completedAt = now;
-    park(pipeline, reason, attempt);
+    if (condition.kind === "usage_limit") parkProviderUsageLimit(pipeline, attempt, reason, ports);
+    else park(pipeline, reason, attempt);
   };
-  if (bounded || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
+  // A spare account is new capacity even when this conversation has spent
+  // its continuation budget. Try that allowed target before parking.
+  if (bounded && !(condition.kind === "usage_limit" && target)
+    || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
     parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
     return true;
   }
@@ -4878,7 +4907,7 @@ async function tickRunStage(
           || !resetsAt && unixMs(activationNow) - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
           attempt.completedAt = activationNow;
           recordProviderRecovery(attempt, "park", condition, "account capacity recovery exhausted", activationNow);
-          park(pipeline, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, attempt);
+          parkProviderUsageLimit(pipeline, attempt, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, ports);
           return;
         }
         const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
@@ -6315,6 +6344,68 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
   return true;
 }
 
+/** A persisted quota park remains a scheduled engine obligation after restart. */
+async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): Promise<boolean> {
+  if (pipeline.state !== "needs_decision" || pipeline.closedAt || pipeline.hiddenAt || pipeline.remoteAction?.state === "pending") return false;
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  const wait = attempt?.providerWait;
+  const lastRecovery = attempt?.providerRecoveries?.at(-1);
+  // Upgrade only the engine's unchanged quota park. Pauses, answers and other
+  // park causes have no authority to create an automatic retry obligation.
+  if (stage?.kind === "run" && attempt && wait?.condition.kind === "usage_limit" && !wait.stageRetry
+    && attempt.state === "needs_decision" && !attempt.report && !attempt.verdict && attempt.completedAt
+    && lastRecovery?.action === "park" && (lastRecovery.summary === attempt.error
+      || lastRecovery.summary === "account capacity recovery exhausted"
+        && attempt.error === `stage cut by ${wait.condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`)
+    && pipeline.stateDetail === attempt.error && attempt.error?.startsWith(`stage cut by ${wait.condition.label}`)
+    && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) < unixMs(attempt.completedAt)) {
+    const retryAt = new Date(wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000
+      : unixMs(attempt.completedAt) + 30 * 60_000).toISOString();
+    parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt);
+    persist();
+  }
+  const retry = wait?.stageRetry;
+  if (!stage || stage.kind !== "run" || !attempt || !wait || !retry
+    || attempt.state !== "needs_decision" || attempt.historical || attempt.verdict || attempt.report || attempt.activation
+    || wait.condition.kind !== "usage_limit" || retry.controlGeneration !== (pipeline.controlGeneration ?? null)
+    || pipeline.stateDetail !== retry.detail || attempt.error !== retry.detail) return false;
+  const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
+  if (remaining > 0) { ports.scheduleTick?.(Math.min(15 * 60_000, remaining)); return false; }
+  const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
+  if (elsewhere) return false;
+  const newerActivity = async () => {
+    const durable = attempt.agentPath
+      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt) : null;
+    return Boolean(attempt.report || attempt.verdict || durable?.message && durable.message.ts > wait.turnTs
+      || durable?.terminalProviderMessage && durable.terminalProviderMessage.ts > wait.turnTs
+      || durable && (durable.turn === "busy" || durable.turn === "terminal" && !durable.terminalProviderMessage)
+        && (durable.lastRecordAt ?? 0) > wait.turnTs);
+  };
+  // A reply or a newer active turn withdraws the old cut's retry authority.
+  const cancelRetry = () => {
+    delete wait.stageRetry;
+    park(pipeline, "automatic provider retry cancelled after newer stage activity", attempt);
+    return true;
+  };
+  if (await newerActivity()) return cancelRetry();
+  const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, { onlyIfIdle: true });
+  if (!["stopped", "not-running"].includes(stopped.outcome)
+    || attempt.paneId && await ports.paneAgentAlive(attempt.paneId)) {
+    ports.scheduleTick?.(30_000);
+    return false;
+  }
+  // Termination yields to the native host; a reply can become durable there.
+  if (await newerActivity()) return cancelRetry();
+  delete wait.stageRetry;
+  resetStageForRetry(pipeline, stage);
+  clearEngineTaskNote(pipeline);
+  persist();
+  ports.scheduleTick?.(0);
+  return true;
+}
+
 /** Reopen a legacy capacity park on either engine. An unlaunched failover
     remains pending so account admission can run once capacity returns. */
 function reconcileParkedUsageLimit(pipeline: Pipeline): boolean {
@@ -7391,6 +7482,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           }
           pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, controllerPorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
+          pipelineChanged = await reconcileParkedProviderRetry(pipeline, controllerPorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, controllerPorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, controllerPorts) || pipelineChanged;
           pipelineChanged = reconcileParkedStructuredSpawn(pipeline, controllerPorts) || pipelineChanged;
@@ -10103,20 +10195,7 @@ export async function patchPipeline(
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
       }
-      if (pipeline.runs.every((run) => run.attempts.length === 0)) {
-        pipeline.state = "provisioning";
-      } else if (pipeline.lastPassedCommit) {
-        // Retry is a continuation of this checkout. Committed and dirty work
-        // belong to the next attempt until an explicit rollback is chosen.
-        pipeline.state = "running";
-      } else {
-        pipeline.state = "provisioning";
-      }
-      /* Re-activate the cursor stage preserving its persisted relay record, so
-         the retried attempt receives the identical {{prev.output}} (#353). */
-      if (stage) setCursorState(pipeline, stage.id, awaitingPassedPublication(pipeline) ? "committing" : "pending");
-      pipeline.pausedState = null;
-      pipeline.stateDetail = null;
+      resetStageForRetry(pipeline, stage);
     } else if (req.action === "skip-stage") {
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
       if (budgetRefusal) return budgetRefusal;

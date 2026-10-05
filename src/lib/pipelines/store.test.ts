@@ -1041,7 +1041,9 @@ function providerStoreFixture(): Pipeline {
 
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
-    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 }]) {
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: {} },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: { controlGeneration: 1, detail: "retry" } }]) {
     const lane = providerStoreFixture();
     lane.runs[0]!.attempts[0]!.providerWait = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
@@ -1077,15 +1079,18 @@ test("loaded provider recovery state does not alias the cached persisted record"
   const lane = providerStoreFixture();
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z" };
   lane.runs[0]!.attempts[0]!.providerWait!.capacityProbes = 1;
+  lane.runs[0]!.attempts[0]!.providerWait!.stageRetry = { controlGeneration: null, detail: "automatic retry" };
   savePipelines([lane]);
   const first = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   first.providerWait!.condition.label = "mutated";
   first.providerWait!.failedAccounts!.push("account-other");
   first.providerRecoveryBudget!.tries = 3;
   first.providerWait!.capacityProbes = 2;
+  first.providerWait!.stageRetry!.detail = "mutated";
   first.providerRecoveries![0]!.condition.label = "mutated";
   const second = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   expect(second.providerWait!.condition.label).toBe("auth refresh race");
+  expect(second.providerWait!.stageRetry!.detail).toBe("automatic retry");
   expect(second.providerWait!.failedAccounts).toEqual([]);
   expect(second.providerRecoveryBudget!.tries).toBe(2);
   expect(second.providerWait!.capacityProbes).toBe(1);

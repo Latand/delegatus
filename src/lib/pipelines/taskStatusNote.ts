@@ -3,11 +3,15 @@ import { patchTask } from "@/lib/tasks/commands";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
-export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" };
+export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
+  | { kind: "provider-retry"; resumeAt: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
 export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
   const uk = locale === "uk";
+  if (reason?.kind === "provider-retry") return uk
+    ? `Етап автоматично почне нову спробу о ${reason.resumeAt}.`
+    : `This stage will retry automatically at ${reason.resumeAt}.`;
   if (reason?.kind === "signed-out") {
     const engine = reason.engine === "codex" ? "Codex" : "Claude";
     return uk

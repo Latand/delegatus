@@ -395,6 +395,9 @@ export type PipelineStageAttempt = {
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;
+    /** A parked quota cut owes a fresh retry-stage after resumeAt. An operator
+        control change or a different park cancels this obligation. */
+    stageRetry?: { controlGeneration: string | null; detail: string };
   };
   providerRecoveries?: Array<{
     at: string;

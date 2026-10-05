@@ -175,6 +175,11 @@ function isProviderWait(value: unknown): boolean {
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
     && (wait.actionAt === undefined || dated(wait.actionAt))
     && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.stageRetry === undefined || (
+      wait.stageRetry !== null && typeof wait.stageRetry === "object" && !Array.isArray(wait.stageRetry)
+      && isNullableString((wait.stageRetry as Record<string, unknown>).controlGeneration)
+      && typeof (wait.stageRetry as Record<string, unknown>).detail === "string"
+    ))
     && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
     && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
 }
@@ -1105,6 +1110,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
               : {}),
             providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
             providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
+              ...(attempt.providerWait.stageRetry ? { stageRetry: { ...attempt.providerWait.stageRetry } } : {}),
               ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,
             providerRecoveries: attempt.providerRecoveries?.map((recovery) => ({ ...recovery, condition: { ...recovery.condition } })),
             flowId: attempt.flowId ?? null,

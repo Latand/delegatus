@@ -10,6 +10,7 @@ import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { DEFAULT_ROLE_FRAME, ROLE_FRAME_VARIANTS } from "@/lib/roleFrames";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { parkedTaskNote } from "@/lib/pipelines/taskStatusNote";
 
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
@@ -17537,6 +17538,41 @@ describe("task chip native queue presentation", () => {
 });
 
 describe("passive task status note", () => {
+  browserTest("provider reset retry time is readable on existing cards in both languages", async () => {
+    const out = path.resolve(".artifacts/provider-limit-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: unknown[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const text = parkedTaskNote("", locale, false, { kind: "provider-retry", resumeAt: "2026-10-05T19:01:00.000Z" });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.evaluate(text => {
+            const evidence = (window as unknown as { evidence: { storedTask(id: string): { note: { text: string } } } }).evidence;
+            evidence.storedTask("t-note").note.text = text;
+            window.dispatchEvent(new Event("llv:tasks-changed"));
+          }, text);
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const surface = page.locator(width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note"));
+          const note = surface.locator('[data-task-note="compact"] [data-task-note-text]');
+          await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent === text,
+            { selector: `${width === 390 ? '[data-phone-card="task:t-note"]' : card("t-note")} [data-task-note="compact"] [data-task-note-text]`, text });
+          await surface.scrollIntoViewIfNeeded();
+          const geometry = await note.evaluate(element => ({ height: element.clientHeight, fullHeight: element.scrollHeight }));
+          expect(geometry.fullHeight).toBeLessThanOrEqual(geometry.height + 1);
+          expect(await surface.locator('[data-task-note="compact"] button,input,textarea').count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
+          cases.push({ locale, width, text, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/provider-limit-recovery", { recursive: true });
+      fs.writeFileSync("evidence/provider-limit-recovery/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
   browserTest("notes stay within two lines on desktop and phone, with full text in the task", async () => {
     const out = path.resolve(".artifacts/card-status-note");
     fs.mkdirSync(out, { recursive: true });
