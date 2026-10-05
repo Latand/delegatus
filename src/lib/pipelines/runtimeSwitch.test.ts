@@ -1120,3 +1120,91 @@ test("restart settles a delivered continuation whose start is beyond the capped 
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
   expect(h.continuations).toHaveLength(0);
 });
+
+/* Review round of 2026-10-05: the request the runtime pill sends. */
+test("a choice made on an earlier attempt or conversation is refused before anything changes", async () => {
+  const h = switchHarness(); const pipeline = await runningStage(h);
+  const send = (body: Record<string, unknown>) => patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "claude", model: "opus", effort: "high", applyNow: true, ...body } as never, h.ports, { kind: "operator" });
+  const before = JSON.stringify(loadPipelines()[0]);
+  for (const stale of [{ expectedAttempt: 2 }, { expectedAttempt: 0 }, { expectedAttempt: 1, expectedConversationId: "conversation_before_retry" }, { expectedConversationId: "conversation_before_retry" }]) {
+    expect(await send(stale)).toMatchObject({ status: 409, code: "STAGE_CHANGED" });
+  }
+  expect(JSON.stringify(loadPipelines()[0])).toBe(before);
+  expect(h.operations.size).toBe(0);
+  expect(await send({ expectedConversationId: "" })).toMatchObject({ status: 400, field: "expectedConversationId" });
+  expect(await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", expectedConversationId: STAGE_CONVERSATION } as never, h.ports, { kind: "operator" }))
+    .toMatchObject({ status: 400, field: "expectedConversationId" });
+  expect(await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", expectedAttempt: 1 } as never, h.ports, { kind: "operator" }))
+    .toMatchObject({ status: 400, field: "expectedAttempt" });
+
+  const current = { expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION };
+  const accepted = await send(current);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.runtimeSwitch).toMatchObject({ phase: "requested", from: { conversationId: STAGE_CONVERSATION } });
+  expect(await send(current)).toMatchObject({ replayed: true, runtimeSwitch: { id: accepted.runtimeSwitch!.id } });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toHaveLength(1);
+});
+
+test("the pill's own engine moves the running attempt after the next attempt was set to another engine", async () => {
+  const h = switchHarness(); const pipeline = await runningStage(h);
+  const future = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high" }, h.ports, { kind: "operator" });
+  expect(future.error).toBeUndefined();
+  expect(loadPipelines()[0]!.stages[0]!.effectiveRole.engine).toBe("codex");
+  /* The next attempt also carries a Codex speed, which Claude has no place for. */
+  const stored = loadPipelines();
+  Object.assign(stored[0]!.stages[0]!, { serviceTier: "priority" });
+  Object.assign(stored[0]!.stages[0]!.effectiveRole, { serviceTier: "priority", serviceTierSource: "explicit" });
+  savePipelines(stored);
+  /* Without its engine the choice would be read against the future definition. */
+  expect(await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", effort: "high", applyNow: true }, h.ports, { kind: "operator" }))
+    .toMatchObject({ status: 400 });
+  const moved = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "claude", model: "opus", effort: "high", serviceTier: null, applyNow: true, expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION }, h.ports, { kind: "operator" });
+  expect(moved.error).toBeUndefined();
+  expect(moved.runtimeSwitch?.to.serviceTier).toBeNull();
+  expect(moved.runtimeSwitch).toMatchObject({ mode: "fork", from: { engine: "claude", model: "fable" }, to: { engine: "claude", model: "opus", effort: "high" } });
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.at(-1)?.phase).toBe("committed");
+  expect(attempt).toMatchObject({ n: 1, conversationId: STAGE_CONVERSATION, effectiveRole: { engine: "claude", model: "opus" } });
+});
+
+test("a continuation on a runtime other than the selected one is never committed as the selection", async () => {
+  const h = switchHarness();
+  /* The executor reports the operation applied while the conversation keeps its runtime. */
+  h.ports.runtimeSwitchControl = async (_id, _path, action, key) => { h.operations.set(key, action); };
+  await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.[0]).toMatchObject({ phase: "superseded", outcome: "continued on a runtime that differs from the selection" });
+  expect(attempt.effectiveRole.model).toBe("fable");
+  expect(h.continuations).toHaveLength(1);
+});
+
+test("the executor's fence reads the switch record and the project's allowed accounts at the time it runs", async () => {
+  const { pipelineSwitchFence, switchOperationKey } = await import("./runtimeSwitchFence");
+  const { bindAccountToProject, unbindAccountFromProject } = await import("@/lib/accounts/projectBindings");
+  const h = switchHarness();
+  h.ports.resolveProjectSpawn = undefined;
+  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
+  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+  const requested = await requestSwitch(h, { account: "target" });
+  expect(requested.error).toBeUndefined();
+  const record = requested.runtimeSwitch!;
+  expect(record.to.accountId).toBe("target");
+  const operationId = switchOperationKey(record, "reconfigure");
+
+  expect(pipelineSwitchFence("switch-of-a-conversation")).toBeNull();
+  const fence = pipelineSwitchFence(operationId)!;
+  expect(fence.serviceTier).toBeUndefined();
+  expect(() => fence.authorize()).not.toThrow();
+  /* Revoked after admission: the fence taken earlier answers for now, and so does one read after a restart. */
+  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+  expect(() => fence.authorize()).toThrow("target account is no longer allowed on this project");
+  expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
+  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+  expect(() => fence.authorize()).not.toThrow();
+  /* A switch whose record is gone authorizes nothing. */
+  expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
+  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+});

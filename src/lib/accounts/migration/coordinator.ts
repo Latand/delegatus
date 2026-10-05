@@ -701,6 +701,11 @@ export interface MigrationCoordinatorOptions {
   /** The inventory worker reads the result without changing it. */
   readOnlySnapshot?: boolean;
   ownsOperation?: () => Promise<boolean>;
+  /** Asked right before the successor is created and again before it is
+      published; a throw fails the switch like any provider failure, and a
+      successor already created is discarded. A pipeline's runtime switch
+      passes its project's allowed accounts through here. */
+  authorizeTarget?: () => void | Promise<void>;
 }
 
 interface BoardRepairPlan {
@@ -954,6 +959,7 @@ export async function advanceConversationMigration(
         ...source,
         launchProfile: migration.successorLaunchProfile!,
       };
+      await options.authorizeTarget?.();
       receipt = await successorProvider.create({
         engine,
         operationId: creationOwner.operationId,
@@ -1006,6 +1012,7 @@ export async function advanceConversationMigration(
       }
       return registry.conversation(publicationConversationId) ?? publishOwner ?? conversation;
     }
+    await options.authorizeTarget?.();
     await successorProvider.publishHost?.(publicationReceipt, {
       engine,
       conversationId: publicationConversationId,

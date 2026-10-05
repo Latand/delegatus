@@ -696,6 +696,7 @@ export function RuntimePill({
         runsOn: runsOnAccount,
         next: nextAccount,
         applying: switchApplying,
+        immediate: Boolean(stageRoute),
         pick: (accountId) => {
           void pickAccount(accountId);
           if (!isMobile) closePopover();
@@ -775,7 +776,7 @@ export function RuntimePill({
         aria-label={limitedAccount
           ? `${t("composer.runtimePill")} — ${chipText}`
           : accountChoice && moving
-            ? `${faceLabel} · ${t("mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(nextAccount) })}`
+            ? `${faceLabel} · ${t(stageRoute ? "mobile2.composer.accountRunsOnMoving" : "mobile2.composer.accountRunsOnNext", { account: nameOf(runsOnAccount), next: nameOf(nextAccount) })}`
             : faceLabel}
         data-runtime-pill
         title={shownError ?? undefined}
@@ -976,13 +977,15 @@ interface AccountChoice {
   next: string;
   /** A message engaged the pick and the conversation is moving now: it can no longer be taken back. */
   applying: boolean;
+  /** The conversation of a running stage: a pick moves the attempt at once, with no message to wait for. */
+  immediate?: boolean;
   pick: (accountId: string) => void;
 }
 
 /** «runs on A», or «runs on A · next on B» while a pick waits for the next message (#1846), by the names the rows use. */
 function accountLine(t: TFunction, account: string, choice: AccountChoice | null | undefined, nameOf: (id: string) => string): string {
   return choice && choice.next !== account
-    ? t("mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(choice.next) })
+    ? t(choice.immediate ? "mobile2.composer.accountRunsOnMoving" : "mobile2.composer.accountRunsOnNext", { account: nameOf(account), next: nameOf(choice.next) })
     : t("mobile2.composer.accountRunsOn", { account: nameOf(account) });
 }
 
@@ -1363,6 +1366,7 @@ function RuntimeSheet({
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & { limit?: RateLimitState | null; owner: Document }) {
   const sheetRef = useRef<HTMLDivElement>(null);
+  const immediate = Boolean(accountChoice?.immediate);
 
   useEffect(() => {
     sheetRef.current?.focus();
@@ -1408,11 +1412,14 @@ function RuntimeSheet({
             <div className="min-w-0 flex-1">
               {/* The sheet names itself (§4.4) — it is not «settings», it is
                   what the NEXT message will be sent with. */}
-              <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t("mobile2.composer.sheetTitle")}</h2>
+              <h2 className="px-1 text-title font-semibold leading-tight text-primary">{t(immediate ? "mobile2.composer.stageSheetTitle" : "mobile2.composer.sheetTitle")}</h2>
               {/* What the sheet is FOR, in one line (§4.4): every row below
                   changes the next message, never the turn already running. */}
               <p className="px-1 text-label leading-snug text-secondary" data-mobile2-next-message>
-                {t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
+                {/* A running stage has no next message to wait for: the tap stops its turn. */}
+                {immediate
+                  ? t("mobile2.composer.stageNow")
+                  : t("mobile2.composer.nextMessage", { model: modelShortLabel(engine, face.model), effort: tierWord(t, face.effort, true) })}
               </p>
             </div>
             {/* A phone has no Escape and the backdrop is a guess, so the way out
@@ -1582,12 +1589,12 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, error }: {
               : !authenticated
                 ? t("mobile2.composer.accountSignInAria", { account: option.label })
                 : next
-                  ? t("mobile2.composer.accountNextAria", { account: option.label })
+                  ? t(choice?.immediate ? "mobile2.composer.accountStageAria" : "mobile2.composer.accountNextAria", { account: option.label })
                   : switching
                     ? t("mobile2.composer.accountSwitchingAria", { account: option.label })
                     : cancels
                     ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
-                    : t("mobile2.composer.accountReadyAria", { account: option.label })}
+                    : t(choice?.immediate ? "mobile2.composer.accountStageReadyAria" : "mobile2.composer.accountReadyAria", { account: option.label })}
             onClick={() => {
               if (inert) return;
               /* An account that is not signed in goes to the device sign-in and
@@ -1620,7 +1627,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, error }: {
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountNeedsSignIn")}</span>
             ) : next ? (
               <>
-                <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>
+                <span className="shrink-0 text-label font-semibold text-accent">{t(choice?.immediate ? "mobile2.composer.accountStage" : "mobile2.composer.accountNext")}</span>
                 <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
               </>
             ) : switching ? (

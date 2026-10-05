@@ -48,15 +48,24 @@ export function stageRunOf(file: FileEntry, pipeline: Pipeline | null): StageRun
   return { pipeline, stage, attempt, live };
 }
 
-/** The whole runtime the pill shows, sent explicitly: the attempt continues on exactly this. */
+/**
+ * The whole runtime the pill shows, sent explicitly: the attempt continues on
+ * exactly this. The engine is the conversation's, whatever the stage's next
+ * attempt was set to, and the attempt and conversation the pill was opened on
+ * ride along, so a choice that arrives after a retry is refused.
+ */
 export function stageSwitchRequest(run: StageRun, engine: string, draft: RuntimeDraft, accountId?: string): PatchPipelineRequest {
   return {
     action: "override-stage",
     stageId: run.stage.id,
     applyNow: true,
+    expectedAttempt: run.attempt.n,
+    ...(run.attempt.conversationId ? { expectedConversationId: run.attempt.conversationId } : {}),
+    ...(engine === "claude" || engine === "codex" ? { engine } : {}),
     model: draft.model,
     effort: draft.effort,
-    ...(engine === "codex" ? { serviceTier: draft.fast ? "priority" : "standard" } : {}),
+    // Claude has no speed: a tier the next attempt was given for Codex is cleared with the engine.
+    ...(engine === "codex" ? { serviceTier: draft.fast ? "priority" : "standard" } : engine === "claude" ? { serviceTier: null } : {}),
     ...(accountId ? { account: accountId } : {}),
   };
 }
@@ -75,9 +84,12 @@ function seatName(seat: PipelineRuntimeSeat, other: PipelineRuntimeSeat, names: 
   return parts.join(" · ");
 }
 
+const KILLED = /^stage stopped by kill during runtime switch/;
+
 const REASONS: ReadonlyArray<[RegExp, MessageKey]> = [
-  [/^stage stopped by kill during runtime switch/, "stageRuntime.reason.kill"],
-  [/^(?:target account is no longer allowed|runtime switch rollback refused|actual account is no longer allowed|runtime switch continuation fenced)/, "stageRuntime.reason.accountDisallowed"],
+  [KILLED, "stageRuntime.reason.kill"],
+  [/^runtime switch (?:rollback refused|source account is no longer allowed)/, "stageRuntime.reason.sourceDisallowed"],
+  [/^(?:(?:runtime switch )?target account is no longer allowed|actual account is no longer allowed|runtime switch continuation (?:is )?fenced)/, "stageRuntime.reason.accountDisallowed"],
   [/^target engine is unavailable/, "stageRuntime.reason.engineUnavailable"],
   [/^runtime switch did not settle/, "stageRuntime.reason.didNotSettle"],
   [/^runtime switch failed/, "stageRuntime.reason.switchFailed"],
@@ -91,18 +103,24 @@ const REASONS: ReadonlyArray<[RegExp, MessageKey]> = [
 
 /**
  * What a switch that did not take says, in the operator's language and by
- * display names. Null while it is under way and once it has taken.
+ * display names. Null while it is under way and once it has taken. The words
+ * follow what happened to the agent: a refusal that came before the turn was
+ * cut leaves it working, a rollback continues it, and only a kill stopped it.
  */
 export function switchFailureText(t: TFunction, run: StageRun, names: SeatNames): string | null {
   const record = run.attempt.runtimeSwitches?.at(-1);
   if (!record) return null;
+  const outcome = record.outcome;
   const key: MessageKey | null = switchOpen(record)
     ? run.attempt.state === "needs_decision" ? "stageRuntime.waiting" : null
     : record.phase === "rolled-back" ? "stageRuntime.rolledBack"
-      : record.phase === "failed" ? "stageRuntime.failed" : null;
+      : record.phase !== "failed" ? null
+        : outcome && KILLED.test(outcome) ? "stageRuntime.failed" : "stageRuntime.notSwitched";
   if (!key) return null;
-  const outcome = record.outcome;
-  const reasonKey = outcome ? REASONS.find(([pattern]) => pattern.test(outcome))?.[1] ?? "stageRuntime.reason.generic" : null;
+  // Only a switch still waiting is waiting for confirmation; a settled one without known words adds none.
+  const reasonKey = outcome
+    ? REASONS.find(([pattern]) => pattern.test(outcome))?.[1] ?? (key === "stageRuntime.waiting" ? "stageRuntime.reason.generic" : null)
+    : null;
   return t(key, {
     target: seatName(record.to, record.from, names),
     current: seatName(record.from, record.to, names),

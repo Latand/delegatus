@@ -1,5 +1,6 @@
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement } from "./runtimeSwitch";
 import type { PipelineRuntimeSwitch } from "./types";
+import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1579,7 +1580,7 @@ export function defaultPipelinePorts(
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);
       return conversation && generation ? { engine: conversation.engine as "claude" | "codex", model: generation.launchProfile.model ?? null,
-        effort: generation.launchProfile.effort ?? null, serviceTier: generation.launchProfile.serviceTier ?? null,
+        effort: generation.launchProfile.effort ?? null, serviceTier: launchServiceTier(generation.launchProfile) ?? null,
         accountId: generation.accountId ?? null, sessionId: generation.id, agentPath: generation.path } : null;
     },
     requestConversationReseat: async (conversationId, targetAccountId) => {
@@ -8224,7 +8225,9 @@ function replaceStartedStages(
  * never believes a write was guarded when it was not.
  */
 function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | null {
-  const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt") => Object.hasOwn(req, field) && req[field] !== undefined;
+  const stated = (field: "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId") => Object.hasOwn(req, field) && req[field] !== undefined;
+  /* A runtime choice for a running attempt names the attempt and the conversation it was made on. */
+  const runningAttemptBound = req.action === "override-stage" && req.applyNow === true;
   if (req.expectedRevision !== undefined && req.action !== "resolve-decision" && req.action !== "continue-review" && req.action !== "accept-head") {
     return { error: "expectedRevision applies only to resolve-decision, continue-review and accept-head", status: 400, field: "expectedRevision" };
   }
@@ -8241,11 +8244,15 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
     if (typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()) return { error: "expectedStageId must be a non-empty stage id", status: 400, field: "expectedStageId" };
   }
   if (stated("expectedAttempt")) {
-    /* It only ever rides with expectedStageId, which is refused on any other action. */
+    /* It rides with expectedStageId, which is refused on any other action, or with an apply-now override. */
     if (typeof req.expectedAttempt !== "number" || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt < 0) {
       return { error: "expectedAttempt must be an attempt number, or 0 for a stage with no attempt of its own yet", status: 400, field: "expectedAttempt" };
     }
-    if (!stated("expectedStageId")) return { error: "expectedAttempt requires expectedStageId", status: 400, field: "expectedAttempt" };
+    if (!stated("expectedStageId") && !runningAttemptBound) return { error: "expectedAttempt requires expectedStageId, or override-stage with applyNow", status: 400, field: "expectedAttempt" };
+  }
+  if (stated("expectedConversationId")) {
+    if (!runningAttemptBound) return { error: "expectedConversationId applies only to override-stage with applyNow", status: 400, field: "expectedConversationId" };
+    if (typeof req.expectedConversationId !== "string" || !req.expectedConversationId.trim()) return { error: "expectedConversationId must be a non-empty conversation id", status: 400, field: "expectedConversationId" };
   }
   return null;
 }
@@ -10434,6 +10441,15 @@ export async function patchPipeline(
       if (req.applyNow !== undefined && typeof req.applyNow !== "boolean") return { error: "applyNow must be boolean", status: 400 };
       if (req.applyNow) {
         if (!mayAnswerPipelineDecision(pipeline, actor)) return { error: "only the operator or project seat may move a running stage", status: 403 };
+        /* The choice was made on one attempt and one conversation. A retry
+           since then runs another agent, which this request must never cut;
+           a switch still open keeps answering the conversation it started on. */
+        const seenAttempt = req.expectedAttempt === undefined || live?.n === req.expectedAttempt;
+        const seenConversation = req.expectedConversationId === undefined || (!!live
+          && (live.conversationId === req.expectedConversationId || openRuntimeSwitch(live)?.from.conversationId === req.expectedConversationId));
+        if (!seenAttempt || !seenConversation) {
+          return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
+        }
         if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
         if (pipeline.state !== "running" || target.kind !== "run" || !live || live.state !== "running" || live.paneId || live.historical || !live.conversationId || !live.agentPath || !live.sessionId) return { error: "apply now requires a running structured run stage", status: 409, code: live?.state === "spawning" ? "ATTEMPT_STARTING" : "RUNTIME_SWITCH_UNAVAILABLE" };
         if (live.report) return { error: "stage already reported", status: 409, code: "STAGE_ALREADY_REPORTED" };

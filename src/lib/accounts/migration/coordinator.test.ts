@@ -4650,3 +4650,46 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     }
   });
 });
+
+test("a target the caller no longer authorizes is neither created nor published", async () => {
+  for (const refuseAt of ["create", "publish"] as const) {
+    const store = registry();
+    const source = `/source-authorize-${refuseAt}.jsonl`;
+    store.reconcileConversations([observation(source, "a", "idle")]);
+    const conversation = store.conversationForPath(source)!;
+    store.requestConversationReseat(conversation.id, "b");
+    const calls: string[] = [];
+    const cleaned: string[] = [];
+    let asked = 0;
+    const successorProvider: SuccessorProviderPort = {
+      virtualSource: true,
+      async create(input) {
+        calls.push("create");
+        return {
+          operationId: input.operationId,
+          nativeId: "successor-b",
+          path: "/successor-b.jsonl",
+          continuityPaths: [],
+          historyHash: "successor-b",
+          host: { kind: "codex-app-server", identity: "successor-b", epoch: 1, verifiedAt: "2026-07-19T12:00:00.000Z" },
+        };
+      },
+      async verify() { calls.push("verify"); },
+      async publishHost() { calls.push("publish"); },
+      async cleanup(receipt) { cleaned.push(receipt.nativeId); },
+    };
+
+    const settled = await advanceConversationMigration(conversation.id, store, successorProvider, {
+      authorizeTarget: () => {
+        asked += 1;
+        if (refuseAt === "create" || asked === 2) throw new Error("target account is no longer allowed on this project");
+      },
+    });
+
+    expect(calls).toEqual(refuseAt === "create" ? [] : ["create", "verify"]);
+    expect(cleaned).toEqual(refuseAt === "create" ? [] : ["successor-b"]);
+    expect(settled.migration).toMatchObject({ phase: "failed-recoverable", targetId: "b" });
+    expect(settled.generations).toHaveLength(1);
+    expect(settled.generations.at(-1)?.accountId).toBe("a");
+  }
+});

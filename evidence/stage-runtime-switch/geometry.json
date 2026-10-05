@@ -6,8 +6,12 @@
       "action": "override-stage",
       "stageId": "verify",
       "applyNow": true,
+      "expectedAttempt": 2,
+      "expectedConversationId": "conversation_search-ver-2",
+      "engine": "claude",
       "model": "fable",
-      "effort": "low"
+      "effort": "low",
+      "serviceTier": null
     },
     "before": {
       "face": "Opus 5.5 · Light",
@@ -24,6 +28,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -42,6 +47,7 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -64,6 +70,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -82,6 +89,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -100,11 +108,50 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
         "clipped": false,
         "right": 1028
       },
+      "pageOverflow": false
+    },
+    "notSwitched": {
+      "face": "Opus 5.5 · High",
+      "busy": false,
+      "error": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "title": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "pill": {
+        "x": 795,
+        "right": 922,
+        "width": 127,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "waiting": {
+      "face": "Opus 5.5 · High",
+      "busy": false,
+      "error": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "title": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "pill": {
+        "x": 795,
+        "right": 922,
+        "width": 127,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
       "pageOverflow": false
     },
     "failed": {
@@ -122,6 +169,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -140,6 +188,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -158,6 +207,7 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -173,8 +223,12 @@
       "action": "override-stage",
       "stageId": "verify",
       "applyNow": true,
+      "expectedAttempt": 2,
+      "expectedConversationId": "conversation_search-ver-2",
+      "engine": "claude",
       "model": "fable",
-      "effort": "low"
+      "effort": "low",
+      "serviceTier": null
     },
     "before": {
       "face": "Opus 5.5 · low",
@@ -191,6 +245,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -209,6 +264,7 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
@@ -231,6 +287,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -249,6 +306,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -267,11 +325,50 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
       "accountLine": {
         "text": "Switch to Fable did not complete. The stage continues on Opus 5.5. The new runtime could not continue the attempt.",
         "clipped": false,
         "right": 374
       },
+      "pageOverflow": false
+    },
+    "notSwitched": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "title": "Did not switch to Fable. The stage stays on Opus 5.5. The selected engine is unavailable.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "waiting": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "title": "Switch to Fable is waiting for your decision. The agent has not been confirmed stopped yet.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
       "pageOverflow": false
     },
     "failed": {
@@ -289,6 +386,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -307,6 +405,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -325,12 +424,17 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Running stageApplies now: the turn stops and the attempt continues on your choice.",
       "accountLine": {
         "text": "runs on Account A",
         "clipped": false,
         "right": 157
       },
       "pageOverflow": false
+    },
+    "ordinarySheet": {
+      "header": "Next messageApplies to your next message: Opus 5.5 · low",
+      "controls": 15
     }
   },
   {
@@ -340,8 +444,12 @@
       "action": "override-stage",
       "stageId": "verify",
       "applyNow": true,
+      "expectedAttempt": 2,
+      "expectedConversationId": "conversation_search-ver-2",
+      "engine": "claude",
       "model": "fable",
-      "effort": "low"
+      "effort": "low",
+      "serviceTier": null
     },
     "before": {
       "face": "Opus 5.5 · Легкі",
@@ -358,6 +466,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -376,6 +485,7 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -398,6 +508,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -416,6 +527,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -434,11 +546,50 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
         "clipped": false,
         "right": 1028
       },
+      "pageOverflow": false
+    },
+    "notSwitched": {
+      "face": "Opus 5.5 · Високі",
+      "busy": false,
+      "error": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "title": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "pill": {
+        "x": 795,
+        "right": 933,
+        "width": 138,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "waiting": {
+      "face": "Opus 5.5 · Високі",
+      "busy": false,
+      "error": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "title": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "pill": {
+        "x": 795,
+        "right": 933,
+        "width": 138,
+        "height": 28
+      },
+      "composerControls": 6,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
       "pageOverflow": false
     },
     "failed": {
@@ -456,6 +607,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -474,6 +626,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -492,6 +645,7 @@
       "overlapped": 0,
       "selectorControls": 7,
       "selectorOverflow": false,
+      "sheetHeader": null,
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -507,8 +661,12 @@
       "action": "override-stage",
       "stageId": "verify",
       "applyNow": true,
+      "expectedAttempt": 2,
+      "expectedConversationId": "conversation_search-ver-2",
+      "engine": "claude",
       "model": "fable",
-      "effort": "low"
+      "effort": "low",
+      "serviceTier": null
     },
     "before": {
       "face": "Opus 5.5 · low",
@@ -525,6 +683,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -543,6 +702,7 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
@@ -565,6 +725,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -583,6 +744,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -601,11 +763,50 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
       "accountLine": {
         "text": "Перехід на Fable не завершився. Етап продовжує на Opus 5.5. Новий рушій не зміг продовжити спробу.",
         "clipped": false,
         "right": 374
       },
+      "pageOverflow": false
+    },
+    "notSwitched": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "title": "Перехід на Fable не відбувся. Етап лишається на Opus 5.5. Обраний рушій недоступний.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
+      "pageOverflow": false
+    },
+    "waiting": {
+      "face": "Opus 5.5 · high",
+      "busy": false,
+      "error": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "title": "Перехід на Fable чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.",
+      "pill": {
+        "x": 20,
+        "right": 139,
+        "width": 119,
+        "height": 44
+      },
+      "composerControls": 5,
+      "overlapped": 0,
+      "selectorControls": null,
+      "selectorOverflow": null,
+      "sheetHeader": null,
+      "accountLine": null,
       "pageOverflow": false
     },
     "failed": {
@@ -623,6 +824,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -641,6 +843,7 @@
       "overlapped": 0,
       "selectorControls": null,
       "selectorOverflow": null,
+      "sheetHeader": null,
       "accountLine": null,
       "pageOverflow": false
     },
@@ -659,12 +862,17 @@
       "overlapped": 0,
       "selectorControls": 15,
       "selectorOverflow": false,
+      "sheetHeader": "Етап у роботіДіє одразу: хід зупиняється, спроба продовжується на обраному.",
       "accountLine": {
         "text": "працює на Account A",
         "clipped": false,
         "right": 168
       },
       "pageOverflow": false
+    },
+    "ordinarySheet": {
+      "header": "Наступне повідомленняСтосується наступного повідомлення: Opus 5.5 · low",
+      "controls": 15
     }
   }
 ]

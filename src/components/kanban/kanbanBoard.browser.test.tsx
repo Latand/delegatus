@@ -17960,8 +17960,9 @@ describe("running stage runtime switch", () => {
    * The runtime pill in the conversation of a running stage attempt (`&stage-switch` gives the running verify
    * conversation its stage membership). A model chosen there is sent to the pipeline as `override-stage` with
    * `applyNow`, the pill spins while the switch is under way, and a switch that does not take is the pill's
-   * error, worded by display names. The conversation's controls are counted before and after: the selector
-   * gains none.
+   * error, worded by what happened to the agent and by display names. The conversation's controls are counted
+   * before and after: the selector gains none. On the phone the sheet says the change applies now, and the same
+   * conversation without its stage membership keeps the next-message words.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "running stage runtime switch"
    *
@@ -18011,6 +18012,7 @@ describe("running stage runtime switch", () => {
               overlapped,
               selectorControls: selector ? selector.querySelectorAll("button, input, select").length : null,
               selectorOverflow: selector ? selector.scrollWidth > selector.clientWidth + 1 : null,
+              sheetHeader: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
               accountLine: line ? { text: line.textContent?.replace(/\s+/g, " ").trim() ?? "", clipped: line.scrollWidth > line.clientWidth + 1, right: Math.round(line.getBoundingClientRect().right) } : null,
               pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
             };
@@ -18031,6 +18033,12 @@ describe("running stage runtime switch", () => {
           await openSelector();
           const beforeOpen = await measure();
           await frame("before-selector");
+          if (phone) {
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageSheetTitle"));
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(beforeOpen.sheetHeader).not.toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(await page.locator("[data-runtime-sheet]").innerText()).not.toContain(translate(lang, "mobile2.composer.accountNext"));
+          }
           /* The gesture the selector already has: a model row, applied by the tap. */
           if (phone) await page.locator("[data-runtime-sheet-row]", { hasText: /^Fable$/ }).click();
           else {
@@ -18039,7 +18047,11 @@ describe("running stage runtime switch", () => {
           }
           await page.waitForFunction(() => [...document.querySelectorAll("[data-runtime-pill]")].some((element) => element.getAttribute("aria-busy") === "true"), undefined, { timeout: 5_000 });
           const patch = await page.evaluate(() => (window as unknown as Evidence).evidence.pipelinePatches.at(-1)!.body);
-          expect(patch).toEqual({ action: "override-stage", stageId: "verify", applyNow: true, model: "fable", effort: patch.effort });
+          /* The attempt and conversation the pill was opened on, and the conversation's own engine, ride along. */
+          expect(patch).toEqual({ action: "override-stage", stageId: "verify", applyNow: true, expectedAttempt: patch.expectedAttempt, expectedConversationId: patch.expectedConversationId,
+            engine: "claude", model: "fable", effort: patch.effort, serviceTier: null });
+          expect(Number.isSafeInteger(patch.expectedAttempt)).toBe(true);
+          expect(typeof patch.expectedConversationId).toBe("string");
           await closeSelector();
           /* The pipeline answered: the attempt carries the switch, and the pill spins on that record. */
           await page.waitForFunction(() => {
@@ -18068,6 +18080,20 @@ describe("running stage runtime switch", () => {
           expect(rolledBackOpen.accountLine!.right).toBeLessThanOrEqual(width);
           await closeSelector();
 
+          /* Refused before the turn was cut: the agent never stopped, and the words do not say it did. */
+          await setPhase("failed", "target engine is unavailable; stage stays on its runtime");
+          const notSwitchedWords = translate(lang, "stageRuntime.notSwitched", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.engineUnavailable") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, notSwitchedWords, { timeout: 5_000 });
+          const notSwitched = await measure();
+          await frame("not-switched");
+
+          /* The stop is not confirmed yet: the lane waits for the operator. */
+          await setPhase("switching", "runtime switch stop remains unconfirmed: host busy");
+          const waitingWords = translate(lang, "stageRuntime.waiting", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.stopUnconfirmed") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, waitingWords, { timeout: 5_000 });
+          const waiting = await measure();
+          await frame("waiting");
+
           await setPhase("failed", "stage stopped by kill during runtime switch");
           const failedWords = translate(lang, "stageRuntime.failed", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.kill") });
           await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, failedWords, { timeout: 5_000 });
@@ -18087,7 +18113,7 @@ describe("running stage runtime switch", () => {
           await frame("committed-selector");
           await closeSelector();
 
-          for (const reading of [before, switching, rolledBack, failed, committed]) {
+          for (const reading of [before, switching, rolledBack, notSwitched, waiting, failed, committed]) {
             expect(reading.composerControls).toBe(before.composerControls);
             expect(reading.overlapped).toBe(0);
             expect(reading.pageOverflow).toBe(false);
@@ -18100,11 +18126,34 @@ describe("running stage runtime switch", () => {
           }
           expect(await page.locator("[data-stage-runtime-control], [data-stage-runtime-open], [data-stage-runtime-action], [data-stage-runtime-status]").count()).toBe(0);
           expect(pageErrors).toEqual([]);
-          readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, failed, committed, committedOpen });
+          readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, notSwitched, waiting, failed, committed, committedOpen });
         } finally { await context.close(); }
+        if (!phone) continue;
+        /* The same conversation without a stage membership: an ordinary one, whose sheet still speaks of the next message. */
+        const ordinary = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, { width, height: 900 }, "light", lang, "reduce", true);
+        try {
+          await ordinary.page.locator('[data-phone-card-pipeline="p-search"]').click();
+          await ordinary.page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+          await ordinary.page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          const pill = ordinary.page.locator("[data-runtime-pill]:visible").first();
+          await pill.waitFor({ timeout: 15_000 });
+          await ordinary.page.waitForTimeout(500);
+          await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+          await ordinary.page.waitForSelector("[data-runtime-sheet]", { timeout: 5_000 });
+          const sheet = await ordinary.page.evaluate(() => ({
+            header: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+            controls: document.querySelector("[data-runtime-sheet]")!.querySelectorAll("button, input, select").length,
+          }));
+          await ordinary.page.screenshot({ path: path.join(out, `${width}-${lang}-ordinary-selector.png`) });
+          expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
+          expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
+          expect(sheet.controls).toBe((readings.at(-1) as { beforeOpen: { selectorControls: number } }).beforeOpen.selectorControls);
+          expect(ordinary.pageErrors).toEqual([]);
+          (readings.at(-1) as Record<string, unknown>).ordinarySheet = sheet;
+        } finally { await ordinary.context.close(); }
       }
       fs.mkdirSync("evidence/stage-runtime-switch", { recursive: true });
       fs.writeFileSync("evidence/stage-runtime-switch/geometry.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 240_000);
+  }, 360_000);
 });

@@ -8,7 +8,7 @@ export type PipelineSandbox = "full" | "restricted";
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
 export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedRevision" | "addRounds";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
@@ -1203,8 +1203,13 @@ export type PatchPipelineRequest = {
   /** with `expectedStageId`: the `n` of that stage's latest own (non-historical)
       attempt the caller saw, or `0` when it saw none yet (a provisioning park).
       A different latest attempt answers 409 `STAGE_CHANGED`; `null` and other
-      non-integers are malformed. */
+      non-integers are malformed. On override-stage with `applyNow` it stands
+      alone and names the running attempt the caller saw. */
   expectedAttempt?: number;
+  /** for override-stage with `applyNow`: the conversation the caller saw
+      running the attempt. An attempt another conversation runs by then answers
+      409 `STAGE_CHANGED` before any runtime or definition is changed. */
+  expectedConversationId?: string;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

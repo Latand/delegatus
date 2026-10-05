@@ -5,6 +5,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
 import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelinePorts } from "./engine";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -44,7 +45,7 @@ export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAt
   const switched = attempt.runtimeSwitches?.findLast(item => item.phase === "committed");
   return switched ? switched.to.accountPinned ? switched.to.accountId : null : attempt.definition ? attempt.definition.account : stage.account ?? null;
 }
-export const switchOperationKey = (record: PipelineRuntimeSwitch, action: string) => `pswitch-${crypto.createHash("sha256").update(record.id).digest("hex").slice(0,40)}-${action}`;
+export { switchOperationKey };
 
 export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = []): Promise<boolean> {
   let cursor = 0;
@@ -321,7 +322,10 @@ export async function driveRuntimeSwitch(
         const floor = await continuationFloor(generation.engine, generation.agentPath, delivered.at);
         if (!floor) return;
         record.continuedAt = floor;
-        if (record.reconfigureNoop && !runtimeTargetsEqual(generation, record.to)) record.outcome = "superseded by another runtime selection";
+        // Only the runtime the conversation actually continues on is committed as the selection.
+        if (!record.rollback && !record.outcome && !runtimeTargetsEqual(generation, record.to)) {
+          record.outcome = record.reconfigureNoop ? "superseded by another runtime selection" : "continued on a runtime that differs from the selection";
+        }
         if (!record.rollback) { delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource; }
         Object.assign(attempt.effectiveRole, { engine: generation.engine, model: generation.model, effort: generation.effort, serviceTier: generation.serviceTier ?? undefined });
         Object.assign(attempt, { accountId: generation.accountId, agentPath: generation.agentPath, sessionId: generation.sessionId });

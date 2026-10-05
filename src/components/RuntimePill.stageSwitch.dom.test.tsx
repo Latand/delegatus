@@ -7,11 +7,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { resetEngineAccountsStoresForTests } from "@/hooks/useEngineAccounts";
 import { applyPipelineSnapshot, resetFilesClientCacheForTests } from "@/hooks/useFiles";
 import { resetPickedAccountsForTests } from "@/lib/accounts/intendedAccount";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import type { Pipeline, PipelineRuntimeSwitch } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { RuntimePill } from "./RuntimePill";
+import { stageRunOf, switchFailureText } from "./stageRuntimeSwitch";
 import { TaskToastHost } from "./tasks/taskToast";
 
 /*
@@ -160,7 +161,7 @@ test("a model chosen on a running stage continues the attempt on it through the 
   const { host, root } = await openSheet();
   await choose("Opus 5.5");
 
-  expect(writes()).toEqual([{ url: "/api/pipelines/p-stage", method: "PATCH", body: { action: "override-stage", stageId: "build", applyNow: true, model: "opus", effort: "high" } }]);
+  expect(writes()).toEqual([{ url: "/api/pipelines/p-stage", method: "PATCH", body: { action: "override-stage", stageId: "build", applyNow: true, expectedAttempt: 1, expectedConversationId: "conversation_stage", engine: "claude", model: "opus", effort: "high", serviceTier: null } }]);
   expect(calls.some((call) => call.url === "/api/tmux")).toBe(false);
   expect(pill(host).textContent).toContain("Opus 5.5");
   expect(pill(host).getAttribute("aria-busy")).toBe("true");
@@ -203,14 +204,72 @@ test("an account picked on a running stage moves the attempt now, and a rollback
   await act(async () => { (document.querySelector('[data-runtime-sheet-account="acct-b"]') as HTMLButtonElement).click(); });
   await settle();
 
-  expect(writes().map((call) => call.body)).toEqual([{ action: "override-stage", stageId: "build", applyNow: true, model: "fable", effort: "high", account: "acct-b" }]);
+  expect(writes().map((call) => call.body)).toEqual([{ action: "override-stage", stageId: "build", applyNow: true, expectedAttempt: 1, expectedConversationId: "conversation_stage", engine: "claude", model: "fable", effort: "high", serviceTier: null, account: "acct-b" }]);
   expect(calls.some((call) => call.url === "/api/tmux")).toBe(false);
-  expect(accountLine()).toBe("runs on Account A · next on Account B");
+  expect(accountLine()).toBe("runs on Account A · moving to Account B");
 
   await publish(pipeline({ record: { ...toB, phase: "rolled-back", outcome: "target account is no longer allowed" } }));
   expect(accountLine()).toBe("Switch to Fable · Account B did not complete. The stage continues on Fable · Account A. The selected account is no longer allowed for this project.");
   expect(document.querySelector('[data-runtime-sheet-account="acct-b"]')?.getAttribute("data-runtime-account-next")).toBeNull();
   await act(async () => root.unmount());
+});
+
+test("a switch refused before the turn was cut says the stage stays, and only a kill says the agent stopped", async () => {
+  await publish(pipeline());
+  answerPatch = () => json({ ok: true, pipeline: pipeline({ record: {} }) });
+  const { host, root } = await openSheet();
+  await choose("Opus 5.5");
+  const shown = () => host.querySelector("[data-runtime-pill-error]")?.textContent;
+
+  await publish(pipeline({ record: { phase: "failed", outcome: "target engine is unavailable; stage stays on its runtime" } }));
+  expect(shown()).toBe("Did not switch to Opus 5.5. The stage stays on Fable. The selected engine is unavailable.");
+  expect(shown()).not.toContain("stopped");
+  await act(async () => root.unmount());
+
+  /* The same words for every outcome, read off the record alone. */
+  const words = (locale: "en" | "uk", change: Parameters<typeof pipeline>[0]) => {
+    const record = pipeline(change);
+    return switchFailureText((key, params) => translate(locale, key, params), stageRunOf(file, record)!, { account: (id) => id, effort: (tier) => tier });
+  };
+  expect(words("uk", { record: { phase: "failed", outcome: "runtime switch was not started: another delivery is pending" } }))
+    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable. Попередній хід ще завершується.");
+  expect(words("uk", { record: { phase: "failed", outcome: "target account is no longer allowed; stage stays on its runtime" } }))
+    .toBe("Перехід на Opus 5.5 не відбувся. Етап лишається на Fable. Цей акаунт більше не дозволений для проєкту.");
+  expect(words("en", { record: { phase: "failed", outcome: "could not stop the running agent: host busy" } }))
+    .toBe("Did not switch to Opus 5.5. The stage stays on Fable. The running agent could not be stopped.");
+  expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "cutting", outcome: "runtime switch stop remains unconfirmed: host busy" } }))
+    .toBe("Switch to Opus 5.5 is waiting for your decision. The agent has not been confirmed stopped yet.");
+  expect(words("uk", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "cutting", outcome: "runtime switch stop remains unconfirmed: host busy" } }))
+    .toBe("Перехід на Opus 5.5 чекає на ваше рішення. Ще немає підтвердження, що агента зупинено.");
+  expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "switching", outcome: "runtime switch rollback refused: source account is no longer allowed" } }))
+    .toBe("Switch to Opus 5.5 is waiting for your decision. The previous account is no longer allowed for this project.");
+  expect(words("en", { state: "needs_decision", attemptState: "needs_decision", record: { phase: "failed", outcome: "stage stopped by kill during runtime switch" } }))
+    .toBe("Switch to Opus 5.5 failed. The agent stopped on Fable. The stage was stopped during the switch.");
+  expect(words("en", { record: { phase: "rolled-back", outcome: "provider said something of its own" } }))
+    .toBe("Switch to Opus 5.5 did not complete. The stage continues on Fable.");
+  expect(words("uk", { record: { phase: "rolled-back", outcome: "target account is no longer allowed on this project; the stage stays on its runtime" } }))
+    .toBe("Перехід на Opus 5.5 не завершився. Етап продовжує на Fable. Цей акаунт більше не дозволений для проєкту.");
+});
+
+test("the sheet of a running stage says the change applies now, in both languages", async () => {
+  await publish(pipeline());
+  const { root } = await openSheet();
+  const header = () => document.querySelector("[data-runtime-sheet-header]")!.textContent;
+  expect(header()).toContain("Running stage");
+  expect(header()).toContain("Applies now: the turn stops and the attempt continues on your choice.");
+  expect(header()).not.toContain("ext message");
+  expect(document.querySelector('[data-runtime-sheet-account="acct-a"]')?.textContent).toContain("this attempt");
+  expect(document.querySelector('[data-runtime-sheet-account="acct-b"]')?.getAttribute("aria-label")).toBe("Continue this attempt on Account B now");
+  expect(document.querySelector("[data-runtime-sheet]")!.textContent).not.toContain("next message");
+  await act(async () => root.unmount());
+
+  setLocale("uk");
+  const second = await openSheet();
+  expect(header()).toContain("Етап у роботі");
+  expect(header()).toContain("Діє одразу: хід зупиняється, спроба продовжується на обраному.");
+  expect(document.querySelector("[data-runtime-sheet]")!.textContent).not.toContain("аступне повідомлення");
+  expect(document.querySelector('[data-runtime-sheet-account="acct-a"]')?.textContent).toContain("ця спроба");
+  await act(async () => second.root.unmount());
 });
 
 test("a refusal from the pipeline is the pill's error in words, and the face stays on what runs", async () => {
@@ -236,6 +295,8 @@ test("a switch that was over before the page opened is shown without being annou
 test("a conversation that is no longer the stage's agent keeps its own reconfigure", async () => {
   await publish(pipeline({ conversationId: "conversation_successor" }));
   const { root } = await openSheet();
+  expect(document.querySelector("[data-runtime-sheet-header]")!.textContent).toContain("Applies to your next message");
+  expect(document.querySelector('[data-runtime-sheet-account="acct-a"]')?.textContent).toContain("next message");
   await choose("Opus 5.5");
 
   expect(writes()).toEqual([]);

@@ -1327,3 +1327,84 @@ for (const engine of ["claude", "codex"] as const) for (const sandbox of ["full"
     expect(replay).toBe("applied"); expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(2);
   });
 }
+
+/* A pipeline's runtime switch reaches this executor as an ordinary reconfigure.
+   The switch record it came from is what fences it: the project's allowed
+   accounts are asked again here, long after admission. */
+test("a pipeline switch whose project dropped the target account launches nothing and fails in words", async () => {
+  const target = fixture();
+  const sourceGeneration = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+  let allowed = true;
+  let releases = 0;
+  let migrations = 0;
+  const forwarded: Array<(() => void | Promise<void>) | undefined> = [];
+  const dependencies = {
+    registry: target.registry,
+    pipelineSwitch: () => ({ serviceTier: "priority", authorize: () => { if (!allowed) throw new Error("target account is no longer allowed on this project; the stage stays on its runtime"); } }),
+    validateAccount: async () => {},
+    resolveAccount: () => ({}) as never,
+    releaseHost: async () => { releases += 1; return true; },
+    migrate: async (conversationId: ViewerConversationId, _accountId: string, registry: AgentRegistry, _owns: () => Promise<boolean>, _operationId?: string, authorizeTarget?: () => void | Promise<void>) => {
+      migrations += 1;
+      forwarded.push(authorizeTarget);
+      return registry.conversation(conversationId)!;
+    },
+  };
+
+  allowed = false;
+  await expect(applyStructuredReconfigure(effect({ operationId: "pswitch-revoked", conversationId: target.conversationId, accountId: "target" }), dependencies))
+    .rejects.toThrow("target account is no longer allowed on this project");
+  expect(migrations).toBe(0);
+  expect(releases).toBe(0);
+  const refused = target.registry.conversation(target.conversationId)!;
+  expect(refused.reconfigure).toMatchObject({ status: "failed", error: expect.stringContaining("no longer allowed") });
+  expect(refused.migration ?? null).toBeNull();
+  expect(refused.generations).toHaveLength(1);
+  expect(refused.generations.at(-1)).toMatchObject({ id: sourceGeneration.id, accountId: "source" });
+  /* The same effect after a restart is still the failed one. */
+  await expect(applyStructuredReconfigure(effect({ operationId: "pswitch-revoked", conversationId: target.conversationId, accountId: "target" }), dependencies))
+    .rejects.toThrow("no longer allowed");
+  expect(migrations).toBe(0);
+
+  /* Allowed at the preflight: the migration is handed the same question for creation and publication. */
+  allowed = true;
+  await applyStructuredReconfigure(effect({ operationId: "pswitch-allowed", conversationId: target.conversationId, accountId: "target", eventSeq: 2 }), dependencies);
+  expect(migrations).toBe(1);
+  allowed = false;
+  expect(() => forwarded[0]!()).toThrow("no longer allowed");
+});
+
+for (const [name, before, tier, fast, after] of [
+  ["Standard to Priority", { fast: false, serviceTier: null }, "priority", true, { fast: true, serviceTier: "priority" }],
+  ["Ultrafast to Priority", { fast: true, serviceTier: "ultrafast" }, "priority", true, { fast: true, serviceTier: "priority" }],
+  ["Ultrafast to Standard", { fast: true, serviceTier: "ultrafast" }, null, false, { fast: false, serviceTier: null }],
+] as const) {
+  test(`a pipeline switch writes the exact speed it names: ${name}`, async () => {
+    const target = fixture({ ...before });
+    const request = effect({ operationId: "pswitch-tier", conversationId: target.conversationId, fast });
+    const dependencies = {
+      registry: target.registry,
+      pipelineSwitch: () => ({ serviceTier: tier, authorize: () => {} }),
+      releaseHost: async () => true,
+      recover: async () => ({ target: null, path: target.transcript, conversationId: target.conversationId, spawned: true }),
+    };
+    /* A profile keeps no tier key for the standard speed. */
+    const speed = () => { const profile = target.registry.launchProfileForPath(target.transcript)!; return { fast: profile.fast, serviceTier: profile.serviceTier ?? null }; };
+    expect(await applyStructuredReconfigure(request, dependencies)).toBe("applied");
+    expect(speed()).toEqual(after);
+    /* A replay of the settled operation changes nothing and starts nothing. */
+    expect(await applyStructuredReconfigure(request, { ...dependencies, releaseHost: async () => { throw new Error("a replay releases nothing"); } })).toBe("applied");
+    expect(speed()).toEqual(after);
+    expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(1);
+  });
+}
+
+test("a conversation's own reconfigure reads no pipeline record and keeps its tier rule", async () => {
+  const target = fixture({ fast: true, serviceTier: "ultrafast" });
+  expect(await applyStructuredReconfigure(effect({ conversationId: target.conversationId, fast: true }), {
+    registry: target.registry,
+    releaseHost: async () => true,
+    recover: async () => ({ target: null, path: target.transcript, conversationId: target.conversationId, spawned: true }),
+  })).toBe("applied");
+  expect(target.registry.launchProfileForPath(target.transcript)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+});
