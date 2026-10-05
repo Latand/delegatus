@@ -1,5 +1,5 @@
 {
-  "commit": "595b6f2aafe09d5de295f9953bd2158ea6e744da",
+  "commit": "04ce6d8453c547bcffaf5411c397b9fdbb3b3764",
   "frames": {
     "1440-en-accept-unverified": {
       "overflow": 0,
@@ -73,7 +73,7 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nThe public name arrived in X-Forwarded-Host alone. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nHost carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
         }
       }
     },
@@ -92,7 +92,26 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nupstream.internal.example.test:8898\nX-Forwarded-Proto\nhttp\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "1440-en-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nnone\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
         }
       }
     },
@@ -282,7 +301,7 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nПублічне ім'я дійшло лише в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nУ Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
         }
       }
     },
@@ -301,7 +320,26 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nupstream.internal.example.test:8898\nX-Forwarded-Proto\nhttp\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "1440-uk-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nнемає\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
         }
       }
     },
@@ -491,7 +529,7 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nThe public name arrived in X-Forwarded-Host alone. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nnone\n\nHost carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
         }
       }
     },
@@ -510,7 +548,26 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nupstream.internal.example.test:8898\nX-Forwarded-Proto\nhttp\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
+        }
+      }
+    },
+    "390-en-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Blocks linking\n\nYour proxy replaces the address it was called at. Keep the original Host header.\n\nExpected Host: delegatus.example.com. This server received:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\ncannot tell: this server writes this header itself when the proxy sends none\nX-Forwarded-Proto\ncannot tell: this server writes this header itself when the proxy sends none\nForwarded\nnone\n\nSend the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again."
         }
       }
     },
@@ -700,7 +757,7 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nПублічне ім'я дійшло лише в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\n127.0.0.1:8898\nX-Forwarded-Host\ndelegatus.example.com\nX-Forwarded-Proto\nhttps\nForwarded\nнемає\n\nУ Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
         }
       }
     },
@@ -719,7 +776,26 @@
           "rows": 4,
           "outside": 0,
           "controls": 0,
-          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nupstream.internal.example.test:8898\nX-Forwarded-Proto\nhttp\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\nupstream.internal.example.test:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nfor=203.0.113.7;host=delegatus.example.com;proto=https, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=198.51.100.17;by=203.0.113.43, for=\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
+        }
+      }
+    },
+    "390-uk-accept-host-rewritten-port": {
+      "overflow": 0,
+      "shortButtons": [],
+      "copyOutside": 0,
+      "radiosInViewport": true,
+      "hasBlocking": true,
+      "after": {
+        "clipped": 0,
+        "buttonsOutside": 0,
+        "shortButtons": [],
+        "overflow": 0,
+        "hostSeen": {
+          "rows": 4,
+          "outside": 0,
+          "controls": 0,
+          "text": "Блокує підключення\n\nПроксі змінює адресу запиту. Збережіть початковий заголовок Host.\n\nОчікуваний Host: delegatus.example.com. Сервер отримав:\n\nHost\ndelegatus.example.com:8898\nX-Forwarded-Host\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nX-Forwarded-Proto\nневідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає\nForwarded\nнемає\n\nНадсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз."
         }
       }
     },
