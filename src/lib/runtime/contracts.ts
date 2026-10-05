@@ -144,6 +144,17 @@ export interface RuntimeEventInput {
   occurredAt?: string;
   causationId?: string | null;
   correlationId?: string | null;
+  /** Binds a session-scope event to the session row its writer read (#2515):
+      the journal records it only while that row still has this revision. A
+      writer that decides from a reading, with no host of its own behind the
+      event, names the reading here so a row a new owner has published since
+      is left as that owner wrote it. */
+  expectedSessionRevision?: number;
+}
+
+/** A fenced event met a session row that moved on after its writer read it. */
+export class RuntimeSessionFenceError extends Error {
+  readonly code = "session-fence";
 }
 
 export interface NormalizedRuntimeEventInput extends Omit<RuntimeEventInput, "scope" | "kind" | "producer"> {

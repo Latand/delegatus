@@ -6,7 +6,7 @@ import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import type { RegistryRecordIssue } from "@/lib/state/registryRecords";
-import type { Flow } from "@/lib/flows/types";
+import type { Flow, Round } from "@/lib/flows/types";
 import { flowAwaitingAdmission } from "./drain";
 import type { StoredViewSession } from "@/lib/view/types";
 import type { Snapshot } from "./types";
@@ -89,6 +89,9 @@ export interface QuietPorts {
   /** `probe` is one object for every row a single probe asks about, so a
       reader can share what it loads across them and no further. */
   turnLiveness?(session: Pick<RuntimeSession, "conversationId" | "artifactPath">, probe: object): Promise<TurnEvidence>;
+  /** The process a headless review round records, for a round that names no
+      conversation: `gone` only on proof, as `headlessRoundProcess` gives it. */
+  reviewerProcess?(round: Pick<Round, "reviewerPid" | "reviewerIdentity">): "alive" | "gone" | "unproven";
   seats?(): readonly { conversationId: string; project: string }[];
 }
 export function currentHostTurnIdle(current: Pick<HostState, "status" | "activeTurnRef"> | undefined): boolean | undefined {
@@ -146,9 +149,11 @@ function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settl
  * until then it still names the previous round's reviewer.
  *
  * `dispatching` is a round whose launch has started and has no conversation to
- * ask about yet: nothing can prove it dead, so it holds the stage.
+ * ask about yet, so it holds the stage. The one thing that ends that hold is
+ * the process the round itself records: once that process is proven gone the
+ * round has no owner, and the launch markers left beside it say nothing more.
  */
-function currentReviewRound(flow: Flow | undefined, attemptConversationId: string): { conversationId: string; artifactPath: string | null } | "dispatching" | null {
+function currentReviewRound(flow: Flow | undefined, attemptConversationId: string, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null } | "dispatching" | null {
   if (!flow || (flow.state !== "spawning" && flow.state !== "reviewing")) return null;
   const round = flow.rounds.at(-1);
   if (!round || round.verdict) return null;
@@ -156,6 +161,7 @@ function currentReviewRound(flow: Flow | undefined, attemptConversationId: strin
     return round.reviewerConversationId === attemptConversationId ? null
       : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
   }
+  if (reviewerProcess?.(round) === "gone") return null;
   return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
     ? "dispatching" : null;
 }
@@ -226,7 +232,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (["running", "reviewing"].includes(cursor.state) && conversationId) {
         const owners = [{ conversationId, artifactPath: attempt?.agentPath ?? null }];
         const round = cursor.state === "reviewing" && attempt?.flowId
-          ? currentReviewRound(flows.find((flow) => flow.id === attempt.flowId), conversationId) : null;
+          ? currentReviewRound(flows.find((flow) => flow.id === attempt.flowId), conversationId, ports.reviewerProcess) : null;
         if (round && round !== "dispatching") owners.push(round);
         // Every owner is asked, so each unresolved one starts its bound now.
         let released = round !== "dispatching";

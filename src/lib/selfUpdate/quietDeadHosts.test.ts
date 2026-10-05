@@ -315,3 +315,36 @@ test("a stage whose dead host settled its turn holds for the bound, then stays c
   expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES - 1, true)).toMatchObject({ quiet: false, blockers: { stages: 1, settled: 1 } });
   expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { stages: 0, settled: 1 } });
 });
+
+test("a review round that names no conversation is held by the process it records, and released once that process is proven gone", async () => {
+  const previous = ended("open");
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  /* A stored headless round with no binding yet, its launch marker twelve hours old. */
+  const round = (reviewerPid: number | null, reviewerIdentity: string | null) => reviewFlow("flow_unbound", previous.artifactPath, "reviewing", {
+    reviewerConversationId: null, reviewerPath: null, reviewerPid, reviewerIdentity, launchId: "unbound-launch",
+    spawnStartedAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString() });
+  const journal = journalOf("unbound", [{ ...row(previous, "hosted"), sessionKey: previous.key }]);
+  const p = { ...ports([], [lane("lane_unbound", "reviewing", { conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId: "flow_unbound" })]),
+    flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  const held = { quiet: false, blockers: { stages: 1, stageList: [{ pipelineId: "lane_unbound" }] } };
+  const released = { quiet: true, blockers: { turns: 0, stages: 0, unresolved: 0 } };
+  try {
+    round(identity.pid, identity.startIdentity);
+    for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) expect(await probeQuiet(snapshot, p, at, true)).toMatchObject(held);
+    /* A launch that records no process yet, and a pid whose start identity was never saved, prove nothing. */
+    round(null, null);
+    expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject(held);
+    round(identity.pid, null);
+    expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject(held);
+    /* Another process under the same pid owns nothing here. */
+    round(identity.pid, `${identity.startIdentity}-other`);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject(released);
+    round(identity.pid, identity.startIdentity);
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject(released);
+    round(deadProcess.pid, deadProcess.startIdentity);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject(released);
+  } finally { saveFlows([]); journal.close(); child.kill(); await child.exited; }
+});

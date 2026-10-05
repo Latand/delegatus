@@ -8,10 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
 import { RuntimeJournal } from "../../runtime-host/journal";
+import { productionDeps } from "../selfUpdate/instance";
+import { probeQuiet, type QuietPorts } from "../selfUpdate/quiet";
+import type { Snapshot } from "../selfUpdate/types";
 import type { RuntimeHostClient } from "./client";
 import type { RuntimeSession } from "./contracts";
 import { bindStructuredDeliveryQueue, settleHostlessSessionProjections } from "./structuredDeliveryController";
@@ -242,3 +245,64 @@ test("a session row published open after the first reading is closed by the next
     journal.close();
   }
 });
+
+/* The sweep's verdict against a launch that takes the conversation while one
+   of its two awaited steps is in flight: the real journal, the registry's own
+   writer for the new owner, and the drain's production liveness wiring. */
+for (const held of ["read", "write"] as const) {
+  test(`a new owner that takes the conversation during the sweep's ${held} keeps its running turn`, async () => {
+    const fixture = hosted(deadProcess);
+    end(fixture);
+    const journal = new RuntimeJournal(join(directory, `race-${held}.sqlite`), { structuredHosts: true });
+    const publish = (eventKey: string, payload: Partial<RuntimeSession>) => journal.append({ scope: { type: "session", id: fixture.id }, kind: "session-status",
+      producer: { kind: "codex-app-server", eventKey }, payload: { ...sessions.get(fixture.id)!, ...payload } } as never);
+    publish("old-running", {});
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const real = { snapshot: async () => journal.snapshot(), effectBatch: async () => [], operationStatus: async () => null,
+      readSession: async (identity: { conversationId: string }) => {
+        const session = journal.readSession(identity);
+        if (held === "read") { entered(); await gate; }
+        return session;
+      },
+      append: async (event: never) => {
+        if (held === "write") { entered(); await gate; }
+        return journal.append(event);
+      } } as unknown as RuntimeHostClient;
+    const successor = Bun.spawn(["sleep", "60"]);
+    setAgentRegistryForTests(registry);
+    await bindStructuredDeliveryQueue([], { registry, client: real, hostlessSettleIntervalMs: 0 });
+    try {
+      const sweep = settleHostlessSessionProjections();
+      await reached;
+      registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!, status: "live", claimEpoch: 2, pendingAction: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:successor", process: captureProcessIdentity(successor.pid)!,
+          eventCursor: 10, protocolVersion: null, writerClaimEpoch: 2, activeTurnRef: "new-turn", pendingAttention: [], activeFlags: [] } });
+      publish("new-running", { host: "hosted", turn: "running", activeTurnId: "new-turn", writerClaim: "new-writer:2" });
+      const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
+      const ports = { ...productionDeps({ ...process.env }).quiet!, runtimeSnapshot: async () => journal.snapshot(), pipelines: () => [], flows: () => [],
+        seats: () => [], presence: () => [], registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 } as QuietPorts;
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      release();
+      expect(await sweep).toBe(0);
+      expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "hosted", turn: "running", activeTurnId: "new-turn" });
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      /* The new owner dies in turn: its row is ended and the next sweep closes it. */
+      successor.kill();
+      await successor.exited;
+      end(fixture);
+      expect(await settleHostlessSessionProjections()).toBe(1);
+      expect(journal.readSession({ conversationId: fixture.id })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
+      expect(await probeQuiet(snapshot, ports, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    } finally {
+      release();
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      setAgentRegistryForTests(null);
+      successor.kill();
+      await successor.exited;
+      journal.close();
+    }
+  });
+}

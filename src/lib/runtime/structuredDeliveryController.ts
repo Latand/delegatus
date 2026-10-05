@@ -1234,6 +1234,7 @@ export async function bindStructuredDeliveryQueue(
   const publishCurrentFallback = async (
     conversationId: string,
     current?: RuntimeSession,
+    expectedSessionRevision?: number,
   ): Promise<void> => {
     const projection = registrySessionProjection(registry, conversationId);
     if (!projection) return;
@@ -1259,6 +1260,7 @@ export async function bindStructuredDeliveryQueue(
         eventKey: `projection:${projectionEpoch}:${projectionRevision}`,
       },
       payload,
+      ...(expectedSessionRevision === undefined ? {} : { expectedSessionRevision }),
     });
   };
   const refreshCurrentProjection = async (conversationId: string | null): Promise<void> => {
@@ -1289,7 +1291,15 @@ export async function bindStructuredDeliveryQueue(
      with the registry row untouched. Rows not read yet go first, newest
      first; the rest of each sweep's batch reads again the rows read longest
      ago, so every ended row is asked about in turn and a sweep never makes
-     more than its batch of reads. */
+     more than its batch of reads.
+
+     The verdict is old by the time it is written: reading the session row is
+     awaited, and so is the write. A launch can take the conversation in
+     either gap, and its host then publishes its own turn. So the registry row
+     is read again after the session row, and the write names the revision of
+     the session row it read, which the journal compares in the transaction
+     that records it. A row that gained an owner, or a session row that moved,
+     is left to the next sweep. */
   const settledRows = new Map<string, { endedAt: string; sweep: number }>();
   let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
@@ -1327,8 +1337,13 @@ export async function bindStructuredDeliveryQueue(
          next sweep, and the rest of this one is left for then too. */
       try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
       catch { break; }
-      if (session && sessionClaimsOpenTurn(session) && !registrations.has(row.key)) {
-        await publishCurrentFallback(conversationId, session);
+      const current = hostlessConversations(registry.readOnlySnapshot()).get(conversationId);
+      if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
+      if (session && sessionClaimsOpenTurn(session)) {
+        /* A write the journal refused or never received settles nothing, as
+           a failed read does. */
+        try { await publishCurrentFallback(conversationId, session, session.revision); }
+        catch { break; }
         settled += 1;
       }
       settledRows.set(conversationId, { endedAt: row.endedAt, sweep: settleSweep });

@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerAlive, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerAlive, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -194,6 +195,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       pipelines: loadPipelinesForList,
       flows: () => loadFlows(),
       turnLiveness: turnEvidenceReader(),
+      reviewerProcess: (round) => headlessRoundProcess(round, livenessProbe()),
       seats: () => activeOrchestratorSeats().filter((seat): seat is typeof seat & { conversationId: string } => !!seat.conversationId),
       controllerBusyReason: async () => {
         if (!(await import("@/lib/pipelines/controller")).flowPipelineController().idle()) return "pipeline-controller";

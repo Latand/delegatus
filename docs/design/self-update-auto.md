@@ -318,7 +318,14 @@ Two consequences shape the rule:
    of startup: each ended row costs one keyed session read. A sweep makes at
    most 64 reads. Rows not read yet go first, and what is left of the batch
    reads again the rows read longest ago, so a session row that a late write
-   reopens after its first reading is closed on a later sweep.
+   reopens after its first reading is closed on a later sweep. A launch can
+   take the conversation while the sweep waits on its read or on its write,
+   so the sweep reads the registry row again after the session row, and its
+   write names the revision of the session row it read
+   (`expectedSessionRevision`). The journal compares that revision inside the
+   transaction that records the event and refuses a row that moved, so the
+   new owner's `hosted`/`running` row and its active turn stay as written and
+   keep blocking the restart.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -344,7 +351,14 @@ Two consequences shape the rule:
    (`blockers.unresolved`). A `reviewing` stage also asks about the reviewer
    of its flow's newest round, because the attempt takes that round's binding
    only on the pipeline's next pass: a live reviewer there, or a launch that
-   has started and names no conversation yet, keeps the stage counted.
+   has started and names no conversation yet, keeps the stage counted. A
+   stored round may record its headless process before it names a
+   conversation. That process then answers for the round
+   (`headlessRoundProcess`): while it answers under the saved start identity
+   the stage counts for as long as it runs, and once the pid is gone or
+   answers under another start identity the round has no owner, whatever
+   launch marker is left beside it. A pid with no saved identity proves
+   nothing and keeps the stage counted.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.

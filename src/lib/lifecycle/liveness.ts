@@ -421,9 +421,28 @@ function exactHeadlessIdentityAlive(
   savedIdentity: string | null | undefined,
   probe: LivenessProbe,
 ): pid is number {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
+  return headlessRoundProcess({ reviewerPid: pid, reviewerIdentity: savedIdentity }, probe) === "alive";
+}
+
+/**
+ * What the process a headless round records says about itself (#2515), for a
+ * round that names no conversation to ask.
+ *
+ * `alive` is the recorded pid answering under its exact start identity. `gone`
+ * is a pid that no longer answers, or one that answers under another start
+ * identity. Anything short of either is `unproven`: no pid recorded, or an
+ * identity that was not saved or cannot be read now.
+ */
+export function headlessRoundProcess(
+  round: { reviewerPid?: number | null; reviewerIdentity?: string | null },
+  probe: LivenessProbe,
+): "alive" | "gone" | "unproven" {
+  const pid = round.reviewerPid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return "unproven";
+  if (!probe.pidAlive(pid)) return "gone";
   const currentIdentity = probe.processIdentity(pid);
-  return Boolean(currentIdentity) && currentIdentity === savedIdentity;
+  if (!round.reviewerIdentity || !currentIdentity) return "unproven";
+  return currentIdentity === round.reviewerIdentity ? "alive" : "gone";
 }
 
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
