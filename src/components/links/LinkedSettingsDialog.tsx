@@ -296,7 +296,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
                     <p>{t("links.hostSeen.expected", { expected: arrived.expected })}</p>
                     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
                       {([["Host", arrived.seen.host], ["X-Forwarded-Host", arrived.seen.forwardedHost], ["X-Forwarded-Proto", arrived.seen.forwardedProto], ["Forwarded", arrived.seen.forwarded]] as const).map(([name, header]) =>
-                        <div key={name} className="contents"><dt>{name}</dt><dd className="min-w-0 break-all font-mono">{header ?? t("links.hostSeen.absent")}</dd></div>)}
+                        <div key={name} className="contents"><dt>{name}</dt><dd className={`min-w-0 break-all ${header === null ? "" : "font-mono"}`}>{header ?? t("links.hostSeen.absent")}</dd></div>)}
                     </dl>
                     <p>{t(forwardedNamesAddress(arrived.expected, arrived.seen.forwardedHost) ? "links.hostSeen.actionForwarded" : "links.hostSeen.action")}</p>
                   </div> : null}
