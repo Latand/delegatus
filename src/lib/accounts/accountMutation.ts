@@ -9,12 +9,13 @@ import { procBackend } from "@/lib/proc";
 import { readClaudeCredentials } from "./claudeCredentials";
 
 import { accountsCollectionRevision } from "./accountsStore";
+import { ACCOUNT_STORE_BUSY_MESSAGE } from "./contentionMessage";
+export { ACCOUNT_STORE_BUSY_MESSAGE } from "./contentionMessage";
 
 export const ACCOUNT_MUTATION_WAIT_MS = 10_000;
 export const ACCOUNT_MUTATION_ADMISSION_WAIT_MS = 2_000;
 /** Maximum synchronous contention wait. A local holder must stay runnable. */
 export const ACCOUNT_MUTATION_SYNC_WAIT_MS = 25;
-export const ACCOUNT_STORE_BUSY_MESSAGE = "The account store is temporarily busy; try again shortly.";
 const LOCK_WAIT_MS = 5;
 const syncSleeper = new Int32Array(new SharedArrayBuffer(4));
 const LOCK_STALE_MS = 30_000;

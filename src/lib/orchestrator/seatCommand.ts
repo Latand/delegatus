@@ -866,7 +866,8 @@ async function guardedSeatTransition(
     } catch (thrown) {
       const storeBusy = isAccountAdmissionRetryable(thrown);
       if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
-      const reason = storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const admissionChanged = thrown instanceof AccountAdmissionChangedError;
+      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
       const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       const clientRequestId = text(rawBody.clientRequestId);
       let terminalized: OrchestratorSeatTerminalization | null = null;
@@ -887,7 +888,7 @@ async function guardedSeatTransition(
         status: storeBusy ? 503 : 500,
         body: {
           error: reason,
-          code: storeBusy ? "seat_store_busy" : code,
+          code: admissionChanged ? "account_admission_changed" : storeBusy ? "seat_store_busy" : code,
           retryable: storeBusy,
           seat: terminalized?.seat ?? null,
         },

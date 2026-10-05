@@ -1,10 +1,11 @@
+import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
-import { ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -6430,10 +6431,6 @@ function isStructuredSpawnPark(pipeline: Pipeline, attempt: PipelineStageAttempt
 
 function isStructuredDeliveryControllerFailure(failure: string): boolean {
   return failure.includes("structured delivery controller is unavailable");
-}
-
-function isAccountMutationContention(failure: string): boolean {
-  return failure === ACCOUNT_STORE_BUSY_MESSAGE || failure.startsWith("account mutation is busy");
 }
 
 /** The pipeline spawn adapter's wording for every socket-level runtime-host

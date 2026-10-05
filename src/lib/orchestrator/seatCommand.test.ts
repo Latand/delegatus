@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountAdmissionChangedError, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -2376,11 +2376,29 @@ test("a spawn route that answers its own busy store is replayed under the same a
 
 test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
   seedLegacyActiveSeat("req_completed_holder");
-  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0 });
+  const seatsFile = path.join(sandbox, "orchestrator-seats.json");
+  const file = JSON.parse(fs.readFileSync(seatsFile, "utf8"));
+  file.seats["proj-a"].path = null;
+  fs.writeFileSync(seatsFile, JSON.stringify(file));
   const holder = await foreignAccountHolder();
+  let armed = false;
+  const { deps, recorded } = dependencies({
+    seatStoreWaitMs: 0,
+    resolvedConversation: () => null,
+    // Active-launch reconciliation calls this immediately before pending and
+    // completed replay reconciliation. Preparation cannot consume the hold.
+    launchSettlement: () => {
+      if (!armed) {
+        expect(fs.existsSync(path.join(sandbox, "account-selection.lock"))).toBe(true);
+        holder.releaseAfter(18);
+        armed = true;
+      }
+      return { kind: "unknown" };
+    },
+  });
   try {
-    holder.releaseAfter(8);
     const result = await executeOrchestratorSeatRequest(spawnRequest("req_completed_holder"), deps);
+    expect(armed).toBe(true);
     expect(result.status).toBe(200);
     expect(recorded.spawns).toEqual([]);
     expect(recorded.identityStamps).toHaveLength(1);
@@ -2576,4 +2594,15 @@ test("a launch that has not settled is left exactly where it is by the read", as
   await reconcileOrchestratorSeatLaunch("proj-a", deps);
 
   expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0003", error: null });
+});
+
+test("an exhausted admission revision replay keeps its own safe cause", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0, spawn: async body => {
+    recorded.spawns.push(body);
+    throw new AccountAdmissionChangedError();
+  } });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_changed_exhausted"), deps);
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
+  expect(recorded.spawns).toHaveLength(1);
 });

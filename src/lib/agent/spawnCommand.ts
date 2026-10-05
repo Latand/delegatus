@@ -176,21 +176,22 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
     the authoritative downstream evidence; if it cannot be written, recovery
     must retain unknown rather than trusting the HTTP error. */
-export function fenceSpawnAdmissionRejection(
+export async function fenceSpawnAdmissionRejection(
   body: Record<string, unknown>,
   status: number,
   error: string,
   dependencies: Pick<SpawnCommandDependencies, "registry">,
-): SpawnAdmissionFenceResult | null {
+): Promise<SpawnAdmissionFenceResult | null> {
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   if (!clientAttemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(clientAttemptId)) return null;
   try {
-    return recordSpawnAdmissionRejection({
+    const requestDigest = spawnAdmissionBodyDigest(body);
+    return await withAccountMutationLockAsync(() => recordSpawnAdmissionRejection({
       clientAttemptId,
-      requestDigest: spawnAdmissionBodyDigest(body),
+      requestDigest,
       status,
       error,
-    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId));
+    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId)), { caller: "spawn refusal" });
   } catch {
     return null;
   }
@@ -340,9 +341,9 @@ export async function executeSpawnRequest(
   /* Every pre-reservation refusal below records the request-bound fence, so a
      caller whose dispatch was interrupted can recover this exact key to a
      terminal NOT_EXECUTED instead of an indefinite unknown (#1641). */
-  const refuse = (error: string): NextResponse<ApiError> => {
+  const refuse = async (error: string): Promise<NextResponse<ApiError>> => {
     if (!authenticatedCallerError) {
-      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
+      await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
     }
     return NextResponse.json({ error }, { status: 400 });
   };
@@ -389,7 +390,7 @@ export async function executeSpawnRequest(
   if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
     const refusal = { role: role.value.role, engine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
-    if (!authenticatedCallerError) fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
+    if (!authenticatedCallerError) await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
     return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });
   }
   if (body.accountId !== undefined && typeof body.accountId !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });

@@ -77,7 +77,7 @@ const cases: Array<{ name: string; setup: string; run: string; check: string }> 
       const accounts = await import("./codex"); const account = accounts.createManagedCodexAccount("Account B");
       registry.setEngineRouting("codex", account.id);
       const { syncCompatibilityRouting } = await import("./migration/controller");`,
-    run: `syncCompatibilityRouting(registry);`,
+    run: `await syncCompatibilityRouting(registry);`,
     check: `assert.equal(accounts.activeCodexAccountId(), account.id);` },
   { name: "beginOrchestratorSeatIntent", setup: seatSetup,
     run: `const result = seats.beginOrchestratorSeatIntent(intent);`,
@@ -115,13 +115,17 @@ const cases: Array<{ name: string; setup: string; run: string; check: string }> 
       assert.equal(registry.readOnlySnapshot().heldDeliveries[delivery.id].state, "held");`,
     run: `const result = await productionReportReplyPorts.withdraw(delivery.command.operationId, delivery.id);`,
     check: `assert.equal(result, "withdrawn"); assert.equal(registry.readOnlySnapshot().heldDeliveries[delivery.id].state, "failed");` },
+  { name: "spawnCommand.fenceSpawnAdmissionRejection", setup: registrySetup + `const { fenceSpawnAdmissionRejection } = await import("@/lib/agent/spawnCommand");`,
+    run: `const result = await fenceSpawnAdmissionRejection({ clientAttemptId: "fixture-fence-local" }, 400, "Launch refused", { registry: () => registry });`,
+    check: `assert.equal(result?.kind, "fenced"); const { readSpawnAdmissionFence } = await import("@/lib/agent/spawnAdmission"); assert.equal(readSpawnAdmissionFence("fixture-fence-local")?.error, "Launch refused");` },
 ];
 
 for (const [index, fixture] of cases.entries()) {
-  test(`${fixture.name} waits out a short foreign holder`, async () => {
-    const state = path.join(root, String(index), "state");
-    const home = path.join(root, String(index), "home");
-    const tmp = path.join(root, String(index), "tmp");
+  const scenarios = ["foreign", ...(["syncCompatibilityRouting", "reportReplies.withdraw", "spawnCommand.fenceSpawnAdmissionRejection"].includes(fixture.name) ? ["local-queued", "local-held"] : [])];
+  for (const scenario of scenarios) test(`${fixture.name} waits out a short ${scenario} holder`, async () => {
+    const state = path.join(root, `${index}-${scenario}`, "state");
+    const home = path.join(root, `${index}-${scenario}`, "home");
+    const tmp = path.join(root, `${index}-${scenario}`, "tmp");
     for (const dir of [state, home, tmp]) fs.mkdirSync(dir, { recursive: true });
     const child = Bun.spawn({
       cmd: [process.execPath, "-e", `
@@ -130,9 +134,17 @@ for (const [index, fixture] of cases.entries()) {
         const state = process.env.LLV_STATE_DIR;
         const { foreignAccountHolder } = await import("./accountMutation.fixture");
         ${fixture.setup}
-        const holder = await foreignAccountHolder();
-        try { holder.releaseAfter(8); ${fixture.run} ${fixture.check} }
-        finally { await holder.close(); }
+        const { withAccountMutationLockAsync } = await import("./accountMutation");
+        const holder = ${JSON.stringify(scenario)} === "local-held" ? null : await foreignAccountHolder();
+        let entered;
+        const ready = new Promise(resolve => { entered = resolve; });
+        const neighbor = ${JSON.stringify(scenario)} === "foreign" ? null : withAccountMutationLockAsync(async () => {
+          entered();
+          if (${JSON.stringify(scenario)} === "local-held") await Bun.sleep(8);
+        }, { caller: "fixture-neighbor" });
+        if (${JSON.stringify(scenario)} === "local-held") await ready;
+        try { holder?.releaseAfter(8); ${fixture.run} ${fixture.check} }
+        finally { await neighbor; await holder?.close(); }
       `],
       cwd: import.meta.dir,
       env: { ...process.env, LLV_STATE_DIR: state, HOME: home, TMPDIR: tmp, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_SOCKET: path.join(tmp, "closed.sock") },
