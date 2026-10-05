@@ -106,9 +106,15 @@ configuration directory on the shared mount.
 
 | Launch path | Process policy | Thread policy and permission-enabled behavior |
 |---|---|---|
-| Terminal CLI, fresh and resume | `-c agents.enabled=false`, `-c approvals_reviewer="user"`, `--disable` for every reported unapproved feature, and `--no-daemon` where supported | A grant sets `agents.enabled=true`, keeps configured native features/reviewer, and uses its own daemon |
-| Headless `exec` reviewer | Same discovered denial before `exec --ignore-user-config` | This reviewer surface always denies native delegation |
+| Terminal CLI, fresh and resume | `-c agents.enabled=false`, `-c approvals_reviewer="user"`, `--disable` for every reported unapproved feature, and `--no-daemon` where supported; all global options including publication overrides precede `resume` | A grant sets `agents.enabled=true`, keeps configured native features/reviewer, and uses its own daemon |
+| Headless `exec` reviewer | Same discovered denial after `exec`, alongside all publication, auth, effort and tier overrides | This reviewer surface always denies native delegation |
 | App-server host, fresh and adopted | `-c agents.enabled=false`, `-c approvals_reviewer="user"`, and `-c features.<name>=false` for every unapproved feature before `app-server` starts | Both `thread/start` and `thread/resume` receive the denied settings, the complete discovered false feature map, and explicit `approvalsReviewer: "user"`; a grant sets `agents.enabled=true` and `multi_agent=true`, preserving configured v2/reviewer |
+
+Codex's clap global `-c` and `--disable` options are collected separately at
+subcommand levels: an occurrence after a subcommand replaces occurrences of
+that same option before it. Headless and ephemeral builders therefore put all
+config and feature flags after `exec`. Terminal publication inserts its config
+flags before the saved `resume <id>` suffix, keeping every global option together.
 
 The per-thread feature table can replace the process table. Applying the entire
 denial at both levels prevents that replacement from reopening a background
@@ -138,7 +144,11 @@ contents. Native `guardian_assessment` transcript events also feed detection.
 Journal contention retries the same item. Scanner controller ticks also inspect
 authoritative native child headers, covering terminal CLI, headless exec, and
 missed live parent events. A fork-only header provides no child evidence.
-Historical child creation before denied launch admission is excluded.
+Activity before the detector's first process start is excluded. That boundary
+is stored durably in `codex-subagent-observation.json` and reused after restarts,
+so activity missed during a later outage remains eligible. Historical child
+creation before denied launch admission is also excluded. Untimestamped scanner
+history supplies no activity-time evidence and creates no event.
 Typed native calls in each denied parent's bounded transcript tail also alert
 when no child materializes. Unchanged tails are cached; one tick reads at most
 8 MiB across parents, continuing other candidates on subsequent ticks. Child
@@ -163,15 +173,18 @@ sessions with a default false profile produce no false alert. The most recent
 receipt with a bound native key or verified host at the activity's timestamp
 must deny delegation. Reserved and failed intents without launch evidence do
 not change that interval. Child history from a permission-enabled interval stays
-clear, and a later grant preserves earlier denied history. Live native app-server items persist
+clear, and a later grant preserves an earlier recorded violation. Live native app-server items persist
 their original observation time, including while startup buffers notifications.
 Adopted history and older ledger items with no time join their native item id to
 the bounded authoritative transcript tail. History with no timestamp evidence
 is left to the scanner's transcript and child checks, preserving the permission
 interval instead of assigning old activity to the adoption time. A violation appends
 `subagent_policy_violation` to the existing durable lifecycle journal, visible
-through `lifecycle_events` query and its immediate high-signal digest. Stable
-native-item/child keys deduplicate replay and survive restarts. Summaries contain
+through `lifecycle_events` query and its immediate high-signal digest. A single stable
+conversation key deduplicates child headers, calls and ledger items, across
+replay and restarts. Each conversation gets at most one policy alert, with the
+original activity timestamp; first-deployment history produces no new lifecycle
+debt for an existing seat cursor. Summaries contain
 only a fixed method label; native prompts and child results are discarded.
 Detection adds no controls and does not alter the agent's execution state.
 
@@ -215,11 +228,22 @@ Primary implementation evidence:
 
 ## Verification
 
-The committed native router regression uses the real interpreter and a local
-credential-free Responses fixture whose synthetic model selects v2. It returns
-one final message and executes no tools. In both 0.159.3 and 0.160.0, the old
-policy exposed all six collaboration tools, the denied policy exposed zero,
-and the grant exposed all six. Ordinary `exec_command` remained available.
+The committed native router regression uses the real installed interpreter and
+a local credential-free Responses fixture whose synthetic model selects v2.
+The original minimal-policy controls expose six tools before denial, zero with
+denial, and six with a grant. Product regressions exercise
+`prepareHeadlessPublication(reviewerCommand(...))`, `buildEphemeralCommand(...)`
+and `prepareAgentPublicationSpec(resumeSpecForSession(...))`. Headless and
+ephemeral receive fixture-only provider settings alongside their existing config
+flags; no permission or publication argument is removed or relocated by the
+harness. Ephemeral's fixture catalog keeps v2 to prove its stripped production
+catalog cannot hide ineffective argv. Terminal runs the prepared shell command
+in a PTY, with an initial prompt, against a genuine rollout that recorded v2;
+denied resume exposes zero collaboration tools and granted resume exposes all
+six. The fixture returns final messages and executes no tools. These three
+builder regressions fail on reviewed commit `ad5776278` and pass after the
+argument-placement correction. Ordinary `exec_command` remains available in
+reviewer and terminal sessions; the ephemeral answer profile disables it.
 There were **zero real sub-agent probes on operator accounts**.
 The native configuration regression calls only `initialize` and `config/read`
 under an isolated home. With Guardian feature flags false and an explicit
@@ -277,7 +301,7 @@ The classifier check also rejects method/namespace mismatches and MCP names.
 An adoption regression uses the real app-server host and file event ledger with
 synthetic protocol replies. Pre-admission history, allowed-interval history,
 timestamped allowed ledger items and history without timing evidence stay clear;
-denied historical and live items alert. Replaying the live item remains
+post-boundary denied historical and live items alert. Replaying the live item remains
 deduplicated. The preceding implementation recorded five historical violations
 where one was expected; the corrected regression passes.
 
@@ -300,3 +324,17 @@ The unchanged 25 MiB replay fixture exceeded its original 30-second test limit
 in a combined pinned-runtime run. Exact-case isolation passed on both base
 (22.2 seconds) and head (25.3 seconds). Its test-only deadline is now 60 seconds
 to accommodate concurrent gates; the replay assertions remain unchanged.
+
+The historical-burst regression reproduces four fresh events on `ad5776278` from
+three old child headers and one old parent call. After correction it produces
+zero history events, and the real seat decision has no wake from that inventory.
+A later live call keeps its activity time and records exactly one alert across
+scanner replay, a fresh registry and the app-server observer. Missing activity
+timestamps also stay clear. The installed CLI was unchanged during this fix.
+
+The fix-stage rerun passed all 13 exact-path suites above: 400 tests, zero
+failures. The detector suite also starts a new process to prove its persisted
+boundary survives restart and a missed post-boundary call still alerts with its
+original time. TypeScript and changed-file ESLint passed; lint retains existing
+warnings. Hosted CI was not awaited. No installed CLI update or deployment was
+performed.

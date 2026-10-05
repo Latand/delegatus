@@ -26,7 +26,7 @@ afterAll(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
 });
 
-test("headless exec denies model-selected v2 delegation and unknown features", () => {
+test("headless exec argv carries delegation denial and disables unknown features", () => {
   const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
   expect(built.args).toContain("agents.enabled=false");
   expect(built.args).toContain('approvals_reviewer="user"');

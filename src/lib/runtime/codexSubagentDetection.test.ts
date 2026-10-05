@@ -1,8 +1,9 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lifecycleJournalPath, queryLifecycleEvents } from "@/lib/lifecycle/journal";
@@ -11,6 +12,9 @@ import { pollLifecycleDigest } from "@/lib/lifecycle/digest";
 import type { FileEntry } from "@/lib/types";
 import { nativeCodexFunctionCallMethod, observeCodexSubagentEvent, observeCodexSubagentTranscripts, recordCodexSubagentViolation } from "./codexSubagentDetection";
 import { bindStructuredDeliveryQueue, type StructuredDeliveryHost } from "./structuredDeliveryController";
+import { seatTickDecision, DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { emptySeatTickState } from "@/lib/monitor/types";
+import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { RuntimeHostClient } from "./client";
 
 let root: string;
@@ -21,6 +25,7 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(root, "state");
 });
 afterEach(() => {
+  setSystemTime();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   fs.rmSync(root, { recursive: true, force: true });
@@ -64,16 +69,16 @@ test("denied native items persist once and appear immediately in the existing li
 
 test("v2 and Guardian activity are detected while permission-enabled and unrelated items stay clear", () => {
   for (const allowSubagents of [false, true]) {
-    const { registry, parentPath, conversation } = launched(allowSubagents);
     for (const [seq, item] of [{ type: "subAgentActivity", id: "v2-fixture", content: "PRIVATE CHILD RESULT" },
       { type: "autoApprovalReview", id: "guardian-fixture", action: "PRIVATE GUARDIAN ACTION" },
       { type: "agentMessage", id: "message-fixture" }].entries()) {
+      const { registry, parentPath, conversation } = launched(allowSubagents);
       observeCodexSubagentEvent(registry, parentPath, { kind: "item", item, turnId: null, phase: "completed", seq });
+      const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+      expect(events).toHaveLength(allowSubagents || item.type === "agentMessage" ? 0 : 1);
+      expect(JSON.stringify(events)).not.toContain("PRIVATE CHILD RESULT");
+      expect(JSON.stringify(events)).not.toContain("PRIVATE GUARDIAN ACTION");
     }
-    const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-    expect(events).toHaveLength(allowSubagents ? 0 : 2);
-    expect(JSON.stringify(events)).not.toContain("PRIVATE CHILD RESULT");
-    expect(JSON.stringify(events)).not.toContain("PRIVATE GUARDIAN ACTION");
   }
 });
 
@@ -107,13 +112,14 @@ test("an imported transcript with no Delegatus launch receipt produces no violat
 test("child history uses the permission at activity time across denied and granted resumes", () => {
   const { registry, parentPath } = launched();
   const original = Object.values(registry.readOnlySnapshot().receipts)[0]!;
+  const time = (offset: number) => new Date(Date.now() + offset).toISOString();
   const receipts = [
-    { ...original, createdAt: "2000-01-01T00:00:00.000Z" },
-    { ...original, createdAt: "2001-01-01T00:00:00.000Z", launchProfile: { ...original.launchProfile, allowSubagents: true } },
-    { ...original, createdAt: "2002-01-01T00:00:00.000Z" },
+    { ...original, createdAt: time(0) },
+    { ...original, createdAt: time(1000), launchProfile: { ...original.launchProfile, allowSubagents: true } },
+    { ...original, createdAt: time(2000) },
   ];
-  expect(recordCodexSubagentViolation(registry, parentPath, "permitted-child", "thread_spawn", undefined, undefined, receipts, "2001-06-01T00:00:00.000Z")).toBe(false);
-  expect(recordCodexSubagentViolation(registry, parentPath, "denied-child", "thread_spawn", undefined, undefined, receipts, "2002-06-01T00:00:00.000Z")).toBe(true);
+  expect(recordCodexSubagentViolation(registry, parentPath, "permitted-child", "thread_spawn", undefined, undefined, receipts, time(1500))).toBe(false);
+  expect(recordCodexSubagentViolation(registry, parentPath, "denied-child", "thread_spawn", undefined, undefined, receipts, time(2500))).toBe(true);
 });
 
 test("a same-path grant retains denied history for scanner discovery and durable replay", async () => {
@@ -143,7 +149,7 @@ test("a same-path grant retains denied history for scanner discovery and durable
       item: { type: "collabAgentToolCall", tool: "spawnAgent", id }, activityAt });
   }
   observeCodexSubagentTranscripts(registry, [entry]);
-  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
 });
 
 test.each([[false, "starting"], [false, "failed"], [true, "starting"], [true, "failed"]] as const)(
@@ -231,9 +237,8 @@ test("native transcript calls alert without a child while prose, MCP calls and p
   observeCodexSubagentTranscripts(registry, [entry]);
   observeCodexSubagentTranscripts(registry, [entry]);
   const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-  expect(events).toHaveLength(3);
+  expect(events).toHaveLength(1);
   expect(events.some((event) => event.summary.includes("spawn_agent"))).toBe(true);
-  expect(events.some((event) => event.summary.includes("autoApprovalReview"))).toBe(true);
   expect(JSON.stringify(events)).not.toContain("PRIVATE");
 });
 
@@ -274,16 +279,16 @@ test("failed transcript writes retry children and tails, and settled children ne
   const { registry, parentPath, sessionId, conversation } = launched();
   const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
   fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
-  fs.appendFileSync(parentPath, JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "retry-tail" } }) + "\n");
+  fs.appendFileSync(parentPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "retry-tail" } }) + "\n");
   const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
-    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000 } as FileEntry));
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000, sessionStartedAt: new Date().toISOString() } as FileEntry));
   const journal = lifecycleJournalPath();
   fs.mkdirSync(path.dirname(journal), { recursive: true });
   fs.writeFileSync(journal, "{");
   expect(() => observeCodexSubagentTranscripts(registry, entries)).not.toThrow();
   fs.unlinkSync(journal);
   observeCodexSubagentTranscripts(registry, entries);
-  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
   const persisted = fs.readFileSync(journal, "utf8");
   // A held transaction lock would block a replay, even when it is deduplicated.
   // A directory at the journal path makes any attempted transaction fail.
@@ -295,7 +300,7 @@ test("failed transcript writes retry children and tails, and settled children ne
     expect(append).not.toHaveBeenCalled();
   } finally { append.mockRestore(); fs.rmdirSync(journal); fs.writeFileSync(journal, persisted); }
   observeCodexSubagentTranscripts(registry, entries);
-  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(2);
+  expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
 });
 
 test("function-call classification distinguishes native v1, v2, Code Mode and MCP namespaces", () => {
@@ -328,7 +333,7 @@ test("a corrupt detection journal leaves the scanner pipeline tick running and r
   const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
   fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
   const entries = [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
-    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000 } as FileEntry));
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000, sessionStartedAt: new Date().toISOString() } as FileEntry));
   const [registryModule, links, flows, pipelines, workflows, inbox, membership] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/scanner/links"), import("@/lib/flows/engine"),
     import("@/lib/pipelines/engine"), import("@/lib/workflows/engine"),
@@ -367,7 +372,7 @@ test("a configured v2 namespace is recognized from the account or project while 
     fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled=true\ntool_namespace="fixture_team"\n');
     const namespaces = new Set(["collaboration", "fixture_team"]);
     expect(nativeCodexFunctionCallMethod({ name: "spawn_agent", namespace: "fixture_team" }, namespaces)).toBe("spawn_agent");
-    fs.appendFileSync(parentPath, JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "spawn_agent", namespace: "fixture_team", call_id: "custom-native" } }) + "\n");
+    fs.appendFileSync(parentPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "response_item", payload: { type: "function_call", name: "spawn_agent", namespace: "fixture_team", call_id: "custom-native" } }) + "\n");
     const entry = { engine: "codex", path: parentPath, cwd: root, size: fs.statSync(parentPath).size,
       mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
     observeCodexSubagentTranscripts(registry, [entry]);
@@ -411,4 +416,88 @@ test("the real controller pump retries a failed policy write before acknowledgin
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
   }
+});
+
+test("first deployment ignores old children and calls, while one live violation keeps its activity time", () => {
+  const now = new Date();
+  const old = new Date(now.getTime() - 3 * 86400000);
+  setSystemTime(old);
+  const { registry, parentPath, sessionId, conversation } = launched();
+  const paths = [parentPath];
+  for (let index = 0; index < 3; index++) {
+    const child = path.join(root, `rollout-${randomUUID()}.jsonl`);
+    fs.writeFileSync(child, JSON.stringify({ type: "session_meta", payload: {
+      source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
+    paths.push(child);
+  }
+  fs.appendFileSync(parentPath, JSON.stringify({ timestamp: old.toISOString(), type: "response_item", payload: {
+    type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "old-spawn" } }) + "\n");
+  const inventory = () => paths.map((pathname) => ({ engine: "codex", path: pathname,
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000,
+    sessionStartedAt: old.toISOString() } as FileEntry));
+  setSystemTime(now);
+  observeCodexSubagentTranscripts(registry, inventory());
+  // A seat already watching seq 0 must receive no new high-signal debt.
+  const backlog = queryLifecycleEvents({ afterSeq: 0 });
+  expect(backlog.events).toHaveLength(0);
+  const decision = seatTickDecision({ project: "fixture", now: now.getTime(),
+    seat: { conversationId: conversation.id, seatEpoch: 1, path: null, designatedAt: null, turn: "idle", activity: null },
+    pipelines: [], tasks: [], pullRequests: [], pullRequestsUnavailable: null, ownLanes: [], signals: [], children: [],
+    childrenUnavailable: null, changeFingerprint: "fixture", state: { ...emptySeatTickState(), eventsThrough: 0 },
+    policy: DEFAULT_SEAT_TICK_POLICY, settings: effectiveSeatTickSettings(defaultSeatTickSettings("fixture"), now.getTime(), SEAT_TICK_WAKE_INTERVAL_MS),
+    events: backlog.events.map((event) => ({ ...event, pipelineTerminal: false })),
+  });
+  expect(decision.verdict.kind).not.toBe("wake");
+  const activityAt = new Date(now.getTime() + 1000).toISOString();
+  setSystemTime(new Date(now.getTime() + 2000));
+  fs.appendFileSync(parentPath, JSON.stringify({ timestamp: activityAt, type: "response_item", payload: {
+    type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "live-spawn" } }) + "\n");
+  observeCodexSubagentTranscripts(registry, inventory());
+  const restarted = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  observeCodexSubagentTranscripts(restarted, inventory());
+  observeCodexSubagentEvent(restarted, parentPath, { kind: "item", phase: "completed", seq: 1, turnId: null,
+    activityAt, item: { type: "subAgentActivity", id: "live-child" } });
+  const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+  expect(events).toHaveLength(1);
+  expect(events[0]?.at).toBe(activityAt);
+});
+
+test("history without authoritative activity time never becomes fresh debt", () => {
+  const { registry, parentPath, sessionId } = launched();
+  const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
+  fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: {
+    source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
+  fs.appendFileSync(parentPath, JSON.stringify({ type: "response_item", payload: {
+    type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "undated-spawn" } }) + "\n");
+  observeCodexSubagentTranscripts(registry, [parentPath, childPath].map((pathname) => ({ engine: "codex", path: pathname,
+    size: fs.statSync(pathname).size, mtime: fs.statSync(pathname).mtimeMs / 1000 } as FileEntry)));
+  expect(queryLifecycleEvents({}).events).toHaveLength(0);
+});
+
+
+test("a new detector process retains its durable boundary and observes activity missed during downtime", () => {
+  const now = Date.now();
+  const boundary = new Date(now - 3 * 86400000).toISOString();
+  const filename = path.join(process.env.LLV_STATE_DIR!, "codex-subagent-observation.json");
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify({ startedAt: boundary }));
+  const result = spawnSync(process.execPath, ["--eval", `
+    import { AgentRegistry } from "./src/lib/agent/registry";
+    import { observeCodexSubagentTranscripts } from "./src/lib/runtime/codexSubagentDetection";
+    observeCodexSubagentTranscripts(new AgentRegistry(${JSON.stringify(path.join(root, "empty-registry.json"))},
+      undefined, undefined, { sqliteMode: "off" }), []);
+  `], { env: process.env, cwd: process.cwd(), encoding: "utf8", timeout: 10000 });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(fs.readFileSync(filename, "utf8")).startedAt).toBe(boundary);
+  setSystemTime(new Date(now - 2000));
+  const { registry, parentPath, conversation } = launched();
+  const activityAt = new Date(now - 1000).toISOString();
+  fs.appendFileSync(parentPath, JSON.stringify({ timestamp: activityAt, type: "response_item", payload: {
+    type: "function_call", name: "spawn_agent", namespace: "collaboration", call_id: "downtime-spawn" } }) + "\n");
+  setSystemTime(new Date(now));
+  observeCodexSubagentTranscripts(registry, [{ engine: "codex", path: parentPath,
+    size: fs.statSync(parentPath).size, mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry]);
+  const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+  expect(events).toHaveLength(1);
+  expect(events[0]?.at).toBe(activityAt);
 });

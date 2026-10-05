@@ -199,6 +199,7 @@ export function buildEphemeralCommand(
   const output = path.join(request.runDir, "answer.json");
   const binary = resolveBinary("codex");
   const args = [
+    "exec",
     ...codexSubagentArgs(binary, false, request.account.env),
     "--disable",
     "shell_tool",
@@ -222,7 +223,6 @@ export function buildEphemeralCommand(
     "sleep_tool",
     "--disable",
     "view_image",
-    "exec",
     "-",
     "--ephemeral",
     "--ignore-user-config",

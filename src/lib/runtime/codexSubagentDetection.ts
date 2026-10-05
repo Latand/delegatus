@@ -6,7 +6,36 @@ import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import type { FileEntry } from "@/lib/types";
 import { codexThreadIdFromPath, nativeCodexParentThreadId } from "@/lib/scanner/codexNative";
 import { tailRecordsResult } from "@/lib/scanner/activity";
+import { statePath } from "@/lib/configDir";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import type { RuntimeEvent } from "./engineHost";
+
+// The first detector process defines the deployment boundary. Persist it so
+// restarting the Viewer cannot reclassify missed live activity as old history.
+const processObservationStart = new Date().toISOString();
+const observationStarts = new Map<string, string>();
+function observationStart(): string {
+  const filename = statePath("codex-subagent-observation.json");
+  const cached = observationStarts.get(filename);
+  if (cached) return cached;
+  const startedAt = withFileTransactionSync(filename, "Codex sub-agent observation boundary is busy", () => {
+    try {
+      const value = JSON.parse(fs.readFileSync(filename, "utf8")) as { startedAt?: unknown };
+      if (typeof value.startedAt !== "string" || !Number.isFinite(Date.parse(value.startedAt))) {
+        throw new Error("Codex sub-agent observation boundary is invalid");
+      }
+      return value.startedAt;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      writeJsonDurably(filename, { startedAt: processObservationStart });
+      return processObservationStart;
+    }
+  });
+  if (observationStarts.size >= 32) observationStarts.delete(observationStarts.keys().next().value!);
+  observationStarts.set(filename, startedAt);
+  return startedAt;
+}
 
 const nativeMethods = new Set(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent",
   "spawn_agent", "resume_agent", "send_input", "close_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]);
@@ -93,13 +122,14 @@ function transcriptActivityTime(row: Record<string, unknown>, payload: Record<st
 export function recordCodexSubagentViolation(
   registry: AgentRegistry,
   parentPath: string,
-  evidenceKey: string,
+  _evidenceKey: string,
   method: string,
   at = new Date().toISOString(),
   append = appendLifecycleEvents,
   receipts?: readonly SpawnReceipt[],
   activityAt = at,
 ): boolean {
+  if (!Number.isFinite(Date.parse(activityAt)) || Date.parse(activityAt) < Date.parse(observationStart())) return false;
   const conversation = registry.conversationForPath(parentPath);
   if (!conversation || conversation.engine !== "codex") return false;
   const generation = conversation.generations.find((candidate) => candidate.path === parentPath);
@@ -112,8 +142,9 @@ export function recordCodexSubagentViolation(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
   if (launched?.launchProfile.allowSubagents !== false) return false;
   const event: LifecycleEventInput = {
-    key: `codex-subagent-policy:${conversation.id}:${evidenceKey}`,
-    type: "subagent_policy_violation", at,
+    // One durable alert per conversation, shared by child headers and items.
+    key: `codex-subagent-policy:${conversation.id}`,
+    type: "subagent_policy_violation", at: activityAt,
     conversationId: conversation.id,
     project: conversationProjectKey(conversation.projectOwnership, generation.launchProfile),
     role: conversation.agentRole ?? null,
@@ -169,6 +200,7 @@ export function observeCodexSubagentTranscripts(registry: AgentRegistry, entries
 }
 
 function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: readonly FileEntry[]): void {
+  observationStart();
   const parents = new Map<string, string>();
   const children = childObservations.get(registry) ?? new Set<string>();
   childObservations.set(registry, children);
@@ -187,12 +219,12 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
     const parent = nativeCodexParentThreadId(entry.path, entry.size, entry.mtime * 1000);
     const parentPath = parent ? parents.get(parent) : null;
     const child = codexThreadIdFromPath(entry.path);
-    if (parentPath && child) {
+    if (parentPath && child && entry.sessionStartedAt) {
       const key = `${parentPath}:${child}`;
       if (children.has(key)) continue;
       receipts ??= Object.values(registry.readOnlySnapshot().receipts);
       if (recordCodexSubagentViolation(registry, parentPath, `child:${child}`, "thread_spawn", at,
-        collect, receipts, entry.sessionStartedAt ?? at)) completedChildren.push(key);
+        collect, receipts, entry.sessionStartedAt)) completedChildren.push(key);
     }
   }
   // Calls whose child never materializes are still native activity. Reuse the
@@ -231,8 +263,8 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
       }
       if (!method) continue;
       if (typeof id !== "string") continue;
-      recordCodexSubagentViolation(registry, entry.path, `item:${id}`, method, at, collect, receipts,
-        transcriptActivityTime(row, payload) ?? at);
+      const activityAt = transcriptActivityTime(row, payload);
+      if (activityAt) recordCodexSubagentViolation(registry, entry.path, `item:${id}`, method, at, collect, receipts, activityAt);
     }
     completed.push([entry.path, signature]);
   }

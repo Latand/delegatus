@@ -144,7 +144,7 @@ export interface ResumeSpec {
   printMode?: true;
   launchProfile?: LaunchProfile;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
-  codexPublication?: { home: string; command: string; mcpServers: string[] };
+  codexPublication?: { home: string; command: string; mcpServers: string[]; subcommand?: string };
   claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
@@ -154,7 +154,7 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
   const source = { ...process.env, CODEX_HOME: input.home };
   const policy = await readCodexShellPolicy(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
-  return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}`, input.mcpServers) };
+  return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
 }
 
 export function withSpawnCapability(spec: ResumeSpec, capability: string, source: NodeJS.ProcessEnv = process.env): ResumeSpec {
@@ -604,10 +604,11 @@ export function resumeSpecForSession(
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
   command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
-  command += ` resume ${sessionId}`;
+  // Publication must stay with the other global options before resume.
+  const subcommand = ` resume ${sessionId}`;
   return {
-    command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
-    codexPublication: { home, command, mcpServers },
+    command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}${subcommand}`, mcpServers),
+    codexPublication: { home, command, mcpServers, subcommand },
     cwd,
     windowName: "codex-resume",
     engine: "codex",

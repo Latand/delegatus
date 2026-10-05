@@ -237,7 +237,7 @@ test("adopted native history respects pre-admission and allowed times while deni
     }
     const replayed = queryLifecycleEvents({ conversationId: conversation.id }).events;
     expect(replayed).toHaveLength(1);
-    expect(replayed[0]?.id).toBe(lifecycleEventId(`codex-subagent-policy:${conversation.id}:item:denied-history`));
+    expect(replayed[0]?.id).toBe(lifecycleEventId(`codex-subagent-policy:${conversation.id}`));
     server.notify("item/completed", { threadId, turnId: "current-turn", item: native("current-denied") });
     const current = await reader.next();
     expect(current.done).toBeFalse();
@@ -247,7 +247,8 @@ test("adopted native history respects pre-admission and allowed times while deni
       expect(current.value).toMatchObject({ kind: "item", activityAt: expect.any(String), item: { id: "current-denied", type: "collabAgentToolCall" } });
     }
     const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.at).toBe(deniedAt);
     expect(JSON.stringify(events)).not.toContain("PRIVATE");
   } finally { await reader.return?.(); await host.release(); }
 });

@@ -346,12 +346,14 @@ export function reviewerCommand(
      the session/thread id — a structured contract instead of parsing the
      human banner. The verdict itself still arrives via --output-last-message. */
   const binary = resolveBinary("codex");
-  const args = [...codexSubagentArgs(binary), "exec", "--ignore-user-config", "-", "--json", "--output-last-message", outputPath,
+  // Keep every clap global option at the exec level. An occurrence after
+  // the subcommand replaces occurrences of the same option before it.
+  const args = ["exec", ...codexSubagentArgs(binary), "--ignore-user-config", "-", "--json", "--output-last-message", outputPath,
     ...(options.sandbox === "read-only" ? ["-s", "read-only", "--skip-git-repo-check"] : ["--dangerously-bypass-approvals-and-sandbox"])];
   const baseEnv = codexAccount?.home
     ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home } : process.env;
   args.push(...agentCodexPublicationArgs({}, baseEnv));
-  if (codexAccount?.managed) args.unshift("-c", "cli_auth_credentials_store=file");
+  if (codexAccount?.managed) args.push("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
