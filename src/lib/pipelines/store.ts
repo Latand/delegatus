@@ -175,10 +175,12 @@ function isProviderWait(value: unknown): boolean {
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
     && (wait.actionAt === undefined || dated(wait.actionAt))
     && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
+    && (wait.retryCancelled === undefined || typeof wait.retryCancelled === "boolean")
     && (wait.stageRetry === undefined || (
       wait.stageRetry !== null && typeof wait.stageRetry === "object" && !Array.isArray(wait.stageRetry)
       && isNullableString((wait.stageRetry as Record<string, unknown>).controlGeneration)
       && typeof (wait.stageRetry as Record<string, unknown>).detail === "string"
+      && ((wait.stageRetry as Record<string, unknown>).fallback === undefined || typeof (wait.stageRetry as Record<string, unknown>).fallback === "boolean")
     ))
     && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
     && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
@@ -226,11 +228,16 @@ function isAttempt(value: unknown, index: number): boolean {
       ))
       && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
     )) &&
-    (attempt.providerRecoveryBudget === undefined || (
+    (attempt.providerFallbackRetries === undefined || Number.isSafeInteger(attempt.providerFallbackRetries) && Number(attempt.providerFallbackRetries) >= 0)
+    && (attempt.providerRecoveryBudget === undefined || (
       attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
       && !Array.isArray(attempt.providerRecoveryBudget)
       && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
       && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
+      && ((attempt.providerRecoveryBudget as Record<string, unknown>).engine === undefined
+        || ["claude", "codex", "copilot"].includes(String((attempt.providerRecoveryBudget as Record<string, unknown>).engine)))
+      && ((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts === undefined
+        || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts))
       && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
       && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
     )) &&
@@ -1108,7 +1115,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
-            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget } : undefined,
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget, ...(attempt.providerRecoveryBudget.triedAccounts ? { triedAccounts: [...attempt.providerRecoveryBudget.triedAccounts] } : {}) } : undefined,
             providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
               ...(attempt.providerWait.stageRetry ? { stageRetry: { ...attempt.providerWait.stageRetry } } : {}),
               ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,

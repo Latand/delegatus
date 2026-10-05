@@ -22,3 +22,8 @@ for (const [engine, code, text, kind] of [
 ] as const) {
   test(`classifies ${engine} ${code}`, () => expect(classifyProviderCondition(engine, code, text).kind).toBe(kind));
 }
+
+
+test("native Codex overload code retains capacity backoff even without English wording", () => {
+  expect(classifyProviderCondition("codex", "server_overloaded", "Capacity is temporarily unavailable")).toMatchObject({ kind: "transient", label: "model at capacity" });
+});

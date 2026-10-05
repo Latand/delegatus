@@ -17546,7 +17546,7 @@ describe("passive task status note", () => {
     const cases: unknown[] = [];
     try {
       for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
-        const text = parkedTaskNote("", locale, false, { kind: "provider-retry", resumeAt: "2026-10-05T19:01:00.000Z" });
+        const text = parkedTaskNote("", locale, false, { kind: "provider-retry", resumeAt: "2026-10-05T19:01:00.000Z", timeZone: "Europe/Kyiv" });
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=status-note`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           await page.evaluate(text => {

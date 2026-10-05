@@ -4,17 +4,17 @@
     {
       "locale": "en",
       "width": 1440,
-      "text": "This stage will retry automatically at 2026-10-05T19:01:00.000Z.",
+      "text": "Automatic retry 05/10 22:01 (Kyiv).",
       "geometry": {
-        "height": 29,
-        "fullHeight": 29
+        "height": 15,
+        "fullHeight": 15
       },
       "pageErrors": []
     },
     {
       "locale": "en",
       "width": 390,
-      "text": "This stage will retry automatically at 2026-10-05T19:01:00.000Z.",
+      "text": "Automatic retry 05/10 22:01 (Kyiv).",
       "geometry": {
         "height": 15,
         "fullHeight": 15
@@ -24,20 +24,20 @@
     {
       "locale": "uk",
       "width": 1440,
-      "text": "Етап автоматично почне нову спробу о 2026-10-05T19:01:00.000Z.",
+      "text": "Автоповтор 05.10 22:01 (Kyiv).",
       "geometry": {
-        "height": 29,
-        "fullHeight": 29
+        "height": 15,
+        "fullHeight": 15
       },
       "pageErrors": []
     },
     {
       "locale": "uk",
       "width": 390,
-      "text": "Етап автоматично почне нову спробу о 2026-10-05T19:01:00.000Z.",
+      "text": "Автоповтор 05.10 22:01 (Kyiv).",
       "geometry": {
-        "height": 30,
-        "fullHeight": 30
+        "height": 15,
+        "fullHeight": 15
       },
       "pageErrors": []
     }

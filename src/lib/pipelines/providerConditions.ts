@@ -25,7 +25,7 @@ export function classifyProviderCondition(engine: RuntimeEngine, errorClass: str
     return { kind: "auth_required", scope: null, resetLabel: null, label: "authentication required" };
   }
   const race = /Failed to refresh OAuth token|retry in a minute/i.test(text);
-  if (engine === "codex" && /Selected model is at capacity\b/i.test(text)) {
+  if (engine === "codex" && (code === "server_overloaded" || /Selected model is at capacity\b/i.test(text))) {
     return { kind: "transient", scope: null, resetLabel: null, label: "model at capacity" };
   }
   if ((code === "server_error" && race) || ["overloaded", "rate_limit", "stream_disconnected", "stream_disconnect", "stream_connection_failed", "http_connection_failed"].includes(code)) {

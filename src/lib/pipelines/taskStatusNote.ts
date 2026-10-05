@@ -1,17 +1,22 @@
-import { operatorLocale } from "@/lib/operator/settings";
+import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { patchTask } from "@/lib/tasks/commands";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
-  | { kind: "provider-retry"; resumeAt: string };
+  | { kind: "provider-retry"; resumeAt: string; timeZone?: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
 export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
   const uk = locale === "uk";
-  if (reason?.kind === "provider-retry") return uk
-    ? `Етап автоматично почне нову спробу о ${reason.resumeAt}.`
-    : `This stage will retry automatically at ${reason.resumeAt}.`;
+  if (reason?.kind === "provider-retry") {
+    const zone = reason.timeZone ?? operatorTimeZone() ?? "UTC";
+    const time = new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", {
+      timeZone: zone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).format(new Date(reason.resumeAt)).replace(",", "");
+    const label = zone.split("/").at(-1)!.replaceAll("_", " ");
+    return uk ? `Автоповтор ${time} (${label}).` : `Automatic retry ${time} (${label}).`;
+  }
   if (reason?.kind === "signed-out") {
     const engine = reason.engine === "codex" ? "Codex" : "Claude";
     return uk
