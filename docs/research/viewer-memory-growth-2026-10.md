@@ -19,14 +19,17 @@ counts. Failed resource collections repeatedly allocate file projections;
 their post-GC heap can stabilize while RSS remains elevated. The sampled live
 Viewer had successful resource collection, so the earlier issue comment's
 collector-failure explanation does not describe this sample. The reported
-12 GB magnitude and approximately 20-second cycle remain unconfirmed.
+12 GB magnitude and approximately 20-second cycle remain **unattributed**.
+They were reported from another installation, which cannot be inspected here.
 
 The smallest supported product change is pruning externally deleted registry
 rows from the reader cache during a complete collection reload. No product
 change was made. Connecting this defect to the reported magnitude needs an
-affected-process sample or additional authorized instrumentation. The decision
-is whether to obtain that evidence or accept this bounded investigation with
-the attribution gap recorded.
+affected-process sample. The controller accepted this bounded investigation
+with the attribution gap recorded; affected-process identity and polling
+history will not be supplied to this stage. No live instrumentation is
+authorized. The reader defect is a supported retention cause, with its impact
+on the reported installation still unmeasured.
 
 **Live observation and its limits.** This was one existing Viewer PID, with
 its kernel start-time identity checked before every sample. Its executable was
@@ -511,6 +514,178 @@ native-owner diagnostic was found in those surfaces. The missing affected-PID
 identity and same-window route evidence still prevent attribution of the 12 GB
 footprint or oscillator. The synthetic post-GC results distinguish fixed-corpus
 warm-up from the demonstrated historical-key leak; they cannot classify the
-live floor's native component. Obtain those missing measurements or explicitly
-accept this bounded result with the attribution gap. Obtaining the measurements
-is the recommended next step. Production remained unchanged.
+live floor's native component. The controller has accepted this bounded result
+with that attribution gap. Production remained unchanged.
+
+**Accepted completion summary.**
+
+Accepted bounded investigation for #2512.
+
+**Confirmed retention:** the isolated repeat at 16:51:09.530–16:51:10.104 UTC on 2026-10-05 (`bun scripts/profileBrowser.ts --registry-churn`) retained 1,600 externally deleted rows and 6,050,320 serialized bytes while the reader's current snapshot was empty. The complete collection reload (`src/lib/agent/sqliteRegistryStore.ts:1259`) adds current rows to the strong parsed-row Map (`:1536`) without pruning absent keys. Writer-local deletion (`:1590`) clears only the writer's cache. This is a supported retention cause; its contribution to the reported installation is unmeasured.
+
+**SQLite and bounded workloads:** 91 read-only `/proc` samples of one fixed web PID/start identity at 16:51:08.282–16:54:13.658 UTC measured RSS 2,089.90–2,909.24 MiB, zero swap and stable DB/WAL/SHM descriptors at 32/29/1. That observed installation used Bun 1.4.0, Next 16.3.6 and release `6af2bab08a52`. Isolated HTTP replay at 16:51:13.054–16:57:21.566 UTC covered idle, board closed/open routes, resource polling, transcript history and cooldown. The 2,048-file corpus ended at 39.78 MiB post-GC heap / 271.96 MiB RSS; descriptor counts warmed to 17/15/1 and held. Fixed-corpus warm-up, historical-key retention and transient allocation have separate evidence. The live native floor remains unclassified.
+
+**Attribution gap accepted:** the reported 12 GB and approximately 20-second cycle remain **unattributed**. The report came from another installation that cannot be inspected here; its affected-process identity and polling history will not be supplied to this stage. The controller accepted this gap. No live instrumentation is authorized. Successful resource collection in the observed windows prevents assigning the failed-collector allocation path to that report.
+
+**Operator evidence needed:** collect 15 minutes of two-second RSS/PSS/anonymous/swap, CPU/I/O and DB/WAL/SHM descriptor counters from the affected web PID, with fixed start identity, release, executable/runtime and installed Next version. Align these with existing same-window request start/end times, route templates, statuses, bytes and overlap across all clients. Existing heap/object, JSC capacity/extra-memory, registry cache and SQLite-native counters would distinguish reachable retention from native/allocator capacity. The note supplies read-only commands and explains which evidence remains unavailable when existing diagnostics/access logs are absent.
+
+**Smallest proposed fix:** prune absent keys only after a successful complete registry collection reload. A private reader/independent-writer regression should fail on the investigated base and pass after the future fix; assert no stale keys/serialized bytes, and cover separate processes, unchanged-row reuse, grants, lazy/keyed reads, revision jumps and database replacement. No product fix was implemented.
+
+Related history (#907, #1814, #1816, #1805 and #568) was checked against current main and deployed ancestry. The note documents store/bundle/worker ownership, close/statement/error paths, ruled-out hypotheses and remaining limits. Private aggregates were rechecked; all 12 recorded HTTP fixture processes exited. Local publication checks passed; hosted CI was not awaited. Production remained unchanged.
+
+**Operator evidence recipe.** The unobserved change from 31 to 32 state DB
+descriptors between live windows remains unexplained. No exact owner mapping
+or hours-long plateau is claimed.
+
+An operator investigating that installation can collect the following evidence
+without changing its running processes. Choose the existing **web-server PID**
+from the installation's process metadata, then check it against its parent,
+start time, executable, release and installed Next version. A service MainPID
+can belong to the runtime host; the process label alone does not establish
+which process was measured. Record other worker PIDs separately, and state
+whether the original 12 GB meant RSS, PSS, anonymous memory, virtual size or a
+process-tree sum.
+
+The Linux command below samples only the chosen PID for **15 minutes at
+two-second intervals** (about 45 reported cycles). It prints numeric counters
+and version/commit metadata, without command-line arguments, environment
+contents, transcript paths or database contents. It reads `stat` before and
+after each sample and stops if the PID/start identity changes. Runtime version
+is queried by launching the resolved executable in a private environment; the
+running process receives no signal or diagnostic request. Keep output private
+until its metadata has been reviewed for publication.
+
+```sh
+read -r -p 'Existing web-server PID: ' VIEWER_PID
+export VIEWER_PID
+python3 - <<'PY'
+import datetime as dt, json, os, pathlib, re, subprocess, tempfile, time
+pid = int(os.environ['VIEWER_PID'])
+proc = pathlib.Path(f'/proc/{pid}')
+def stat():
+    return (proc / 'stat').read_text().rsplit(') ', 1)[1].split()
+def utc():
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+def counters(name, keys):
+    result = {}
+    for line in (proc / name).read_text().splitlines():
+        key, _, value = line.partition(':')
+        if key in keys:
+            result[key] = int(value.split()[0])
+    return result
+initial = stat()
+start = initial[19]
+release_root = (proc / 'cwd').resolve()
+executable = (proc / 'exe').resolve().name
+with tempfile.TemporaryDirectory(prefix='delegatus-readonly-') as scratch:
+    private = pathlib.Path(scratch)
+    for name in ('home', 'tmp', 'state'):
+        (private / name).mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(('LLV_', 'GIT_', 'NEXT_', 'XDG_'))}
+    env.update(HOME=str(private / 'home'), TMPDIR=str(private / 'tmp'),
+               XDG_CONFIG_HOME=str(private / 'home/.config'),
+               LLV_STATE_DIR=str(private / 'state'),
+               LLV_VIEWER_CONTROL_URL='http://127.0.0.1:1',
+               NEXT_TELEMETRY_DISABLED='1', DELEGATUS_TELEMETRY='0')
+    version = None
+    if executable in ('bun', 'bun-container', 'node', 'nodejs'):
+        version = subprocess.check_output([f'/proc/{pid}/exe', '--version'],
+            env=env, cwd=scratch, timeout=10, stderr=subprocess.DEVNULL).decode().strip()
+    commit = subprocess.run(['git', '-C', str(release_root), 'rev-parse', 'HEAD'],
+        env=env, capture_output=True, text=True, timeout=10).stdout.strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        commit = None
+    try:
+        next_version = json.loads((release_root / 'node_modules/next/package.json').read_text())['version']
+    except (OSError, KeyError, ValueError):
+        next_version = None
+    print(json.dumps(dict(utc=utc(), pid=pid, ppid=int(initial[1]),
+        start_ticks=int(start), clock_ticks_per_second=os.sysconf('SC_CLK_TCK'),
+        executable_name=executable, runtime_version=version,
+        release_commit=commit, next_version=next_version)), flush=True)
+    begun = time.monotonic()
+    for sample in range(451):
+        before = stat()
+        if before[19] != start:
+            raise SystemExit('PID/start identity changed; stop this series')
+        status = counters('status', {'VmRSS', 'RssAnon', 'RssFile', 'RssShmem', 'VmSwap', 'VmSize', 'Threads'})
+        rollup = counters('smaps_rollup', {'Rss', 'Pss', 'Pss_Anon', 'Pss_File', 'Pss_Shmem', 'Anonymous', 'Swap', 'SwapPss'})
+        fd_counts = {'total': 0, 'db': 0, 'wal': 0, 'shm': 0}
+        for descriptor in (proc / 'fd').iterdir():
+            try:
+                name = pathlib.Path(os.readlink(descriptor).removesuffix(' (deleted)')).name
+            except FileNotFoundError:
+                continue
+            fd_counts['total'] += 1
+            key = {'state.sqlite': 'db', 'state.sqlite-wal': 'wal', 'state.sqlite-shm': 'shm'}.get(name)
+            if key:
+                fd_counts[key] += 1
+        try:
+            io = counters('io', {'rchar', 'wchar', 'syscr', 'syscw', 'read_bytes', 'write_bytes'})
+        except PermissionError:
+            io = None
+        after = stat()
+        if after[19] != start:
+            raise SystemExit('PID/start identity changed; discard this sample')
+        print(json.dumps(dict(utc=utc(), sample=sample, pid=pid,
+            start_ticks=int(start), uptime_seconds=float((pathlib.Path('/proc/uptime')).read_text().split()[0]) - int(start) / os.sysconf('SC_CLK_TCK'),
+            status=status, smaps_rollup_kib=rollup, descriptors=fd_counts,
+            io=io, cpu_user_ticks=int(after[11]), cpu_system_ticks=int(after[12]))), flush=True)
+        if sample < 450:
+            time.sleep(max(0, begun + (sample + 1) * 2 - time.monotonic()))
+PY
+```
+
+`status` memory fields and all `smaps_rollup_kib` fields are KiB; `Threads`
+is a count. CPU values are cumulative clock ticks, I/O values are cumulative
+bytes or syscall counts. They help correlate work and supply no allocation
+ownership. Descriptor enumeration is a sequential observation, with the same
+FD-to-connection limitations described above. If release/version fields are
+null, read the installation's existing build/image metadata and package
+manifest locally; do not substitute a checkout's version for the running
+release. Record OS/architecture with `uname -srmo` and OS release metadata.
+
+Use the **same UTC bounds and PID/start identity** for existing request
+telemetry. Required fields are request start/end times (or start plus duration),
+method, route template with query values removed, status, response bytes and
+overlapping request count. Include all clients/tabs and background/MCP traffic.
+Compare each RSS/PSS/anonymous spike and lower-water mark with request counts,
+durations and bytes for `/api/files`, `/api/board`, `/api/tasks`,
+`/api/pipelines`, `/api/flows`, `/api/resources`, `/api/log` and
+`/api/telegram/reports`; include other observed route templates too. Existing
+collector generation/status/completion times and its cache hits/failures help
+distinguish an actual collection from a cached resource response.
+
+For an installation already using the named user service, an existing journal
+can be read for that interval without requesting anything from the Viewer:
+
+```sh
+journalctl --user -u delegatus.service --utc --no-pager -o json \
+  --since "$RESEARCH_SINCE_UTC" --until "$RESEARCH_UNTIL_UTC" _PID="$VIEWER_PID"
+```
+
+Set the two bounds from the counter series. Unit-forwarded messages may carry
+another producer PID; read that known unit's same-window journal locally as
+well if applicable. A journal is request telemetry only when its existing
+entries actually record those request fields. Existing reverse-proxy access
+logs need a verified upstream mapping to this web PID; already captured browser
+Network/HAR records need every active client's matching window. Preserve raw
+logs/HAR privately because they can contain paths, cookies and tokens. Publish
+only route-template counts, timing/byte aggregates and numeric memory counters.
+If those logs do not exist, the cycle remains unattributed: this decision does
+not authorize adding access logging, tracing or a debugger to the live server.
+
+If an **existing** diagnostic surface already exposes them, collect reachable
+heap/object count, JSC heap capacity and extra memory, external/ArrayBuffer
+bytes, registry cache cardinality/serialized bytes, and SQLite native/cache
+bytes at the same cadence from this **web PID**. Respect overlapping counter
+semantics. `/proc` cannot supply these owners. A rising post-cycle reachable
+heap/cache count supports retention; a stable reachable graph with excess
+capacity suggests a different floor component. Without those counters, the
+native/allocator component remains unclassified. Heap snapshots, forced GC,
+signals, debugger attach and new live instrumentation stay outside this scope.
+
+At 20:21 UTC, `git fetch origin main` again resolved main to `ff4af9a3877edfcdbf8c906412f24a28a1ef1b45`;
+the relevant-source diff from the earlier checked main was empty. This final
+continuation changes the evidence explanation and acceptance status only.
