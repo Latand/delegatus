@@ -7,7 +7,7 @@
  */
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useEffect, useRef, useState } from "react";
+import { act, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -41,6 +41,7 @@ const feedRenders: Record<string, number> = {};
     happy-dom's boxes, all zeros. */
 const geometry: Record<string, { gap: number; viewport: number }> = {};
 const LANDING_GAP = 8;
+let frameAtCommit: (() => void) | null = null;
 
 function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderUnloaded = false, operatorWrote = false, atTail = false }: Pane) {
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -51,6 +52,7 @@ function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderU
     markReaderScroll: (direction) => { (reader[id] ??= []).push(direction); },
     revealOlder: () => { reveals[id] = (reveals[id] ?? 0) + 1; },
   });
+  useLayoutEffect(() => { frameAtCommit?.(); });
   /* Every commit of the component that holds the hook, as the feed does. */
   useEffect(() => { feedRenders[id] = (feedRenders[id] ?? 0) + 1; });
   const { release } = steps;
@@ -332,4 +334,34 @@ test("a step from an empty tail waits through the older page's unread senders", 
     expect(scroller.scrollTop).toBe(2000);
     expect(count("a")).toBe("3 / 3");
   } finally { clock.mockRestore(); }
+});
+
+
+test("a queued scroll frame uses the committed pending verdict before passive effects", async () => {
+  await render({ id: "a", own: 3 });
+  const originalFrame = globalThis.requestAnimationFrame;
+  const queued = new Map<ReturnType<typeof setTimeout>, FrameRequestCallback>();
+  globalThis.requestAnimationFrame = (callback) => {
+    const id = setTimeout(() => { queued.delete(id); callback(performance.now()); }, 10_000);
+    queued.set(id, callback);
+    return id as unknown as number;
+  };
+  frameAtCommit = () => {
+    for (const [id, callback] of [...queued]) {
+      clearTimeout(id); queued.delete(id); callback(performance.now());
+    }
+  };
+  try {
+    /* A scroll queued a reading, then a commit reclassified one bubble while
+       its sender is pending. The reading precedes passive effects. */
+    feedOf("a").dispatchEvent(new dom.Event("scroll") as unknown as Event);
+    await render({ id: "a", own: 2, pending: true });
+    expect(total("a")).toBe("3");
+    await render({ id: "a", own: 4 });
+    expect(total("a")).toBe("4");
+  } finally {
+    frameAtCommit = null;
+    globalThis.requestAnimationFrame = originalFrame;
+    for (const id of queued.keys()) clearTimeout(id);
+  }
 });

@@ -11,7 +11,7 @@
  */
 
 import { ChevronDown, ChevronUp } from "@/components/icons";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 
 import { ownMessageRows } from "@/components/feed/scrollMemory";
 import { useLocale } from "@/lib/i18n";
@@ -128,7 +128,9 @@ function registerKeyTarget(target: KeyTarget): () => void {
 
 export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   const live = useRef(feed);
-  useEffect(() => { live.current = feed; });
+  /* A scroll frame after this commit must use its sender verdict, even when
+     React defers passive effects until after the browser has painted. */
+  useLayoutEffect(() => { live.current = feed; });
   const enabled = feed.mount !== null;
   /* The count and the buttons change with every scroll, so they live outside
      React state and the row subscribes. Whether the row exists changes a few
