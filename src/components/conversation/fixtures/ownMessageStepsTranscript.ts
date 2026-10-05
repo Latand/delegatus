@@ -114,12 +114,14 @@ export const OWN_STEPS_TOTAL = 9;
  * notices, a pipeline message), each answered. Every record carries the
  * structured-user marker a real delivery writes, which is what the feed
  * parser reads the sender from. `loadedFrom` is the line where the loaded
- * window starts. All text is invented.
+ * window starts. `round` tells one copy of the day from the next, for a
+ * conversation many days long. All text is invented.
  */
-export function ownStepsTranscript(lang: "en" | "uk", total: number = OWN_STEPS_TOTAL): { lines: string[]; loadedFrom: number } {
+export function ownStepsTranscript(lang: "en" | "uk", total: number = OWN_STEPS_TOTAL, round = 0): { lines: string[]; loadedFrom: number } {
   const text = TEXT[lang];
   const lines: string[] = [];
-  let clock = Date.parse("2026-09-28T06:00:00.000Z");
+  const day = round ? `_day${round}` : "";
+  let clock = Date.parse("2026-09-28T06:00:00.000Z") + round * 86_400_000;
   const at = (minutes: number) => new Date(clock += minutes * 60_000).toISOString();
   const user = (marker: string, body: string, minutes: number) => lines.push(JSON.stringify({
     timestamp: at(minutes), type: "response_item",
@@ -136,7 +138,7 @@ export function ownStepsTranscript(lang: "en" | "uk", total: number = OWN_STEPS_
   for (let own = 0; own < Math.min(total, OWN_STEPS_TOTAL); own += 1) {
     if (own === OWN_STEPS_UNLOADED) loadedFrom = lines.length;
     user("<!-- llv:structured-user origin=operator -->", text.own[own]!, 7);
-    tool(`call_own_${own}`);
+    tool(`call_own_${own}${day}`);
     agent([text.replies[own]!, text.detail[own % 4]!, text.detail[(own + 1) % 4]!, text.detail[(own + 2) % 4]!].join("\n\n"));
     for (let turn = 0; turn < MACHINE_AFTER[own]!; turn += 1) {
       const kind = (own + turn) % 5;
@@ -148,10 +150,42 @@ export function ownStepsTranscript(lang: "en" | "uk", total: number = OWN_STEPS_
         agent(text.pipelineReply);
       } else {
         user(machine("seat-tick"), text.wake[kind]!, 15);
-        tool(`call_wake_${own}_${turn}`);
+        tool(`call_wake_${own}_${turn}${day}`);
         agent(kind === 1 ? `${text.wakeReply[kind]!}\n\n${text.detail[turn % 4]!}` : text.wakeReply[kind]!);
       }
     }
   }
   return { lines, loadedFrom };
+}
+
+/**
+ * What arrives at the end of that conversation while it is being read, one
+ * call's worth; `seq` keeps the calls apart. `work` is a long turn of the
+ * agent's (a tool call, its output and a line about it, `count` times),
+ * `replies` is `count` short answers and `turn` is one more message of the
+ * operator's with its answer.
+ */
+export type OwnStepsArrival = "work" | "replies" | "turn";
+export function ownStepsArrival(lang: "en" | "uk", kind: OwnStepsArrival, count: number, seq: number): string[] {
+  const text = TEXT[lang];
+  const lines: string[] = [];
+  let clock = Date.parse("2026-11-01T06:00:00.000Z") + seq * 3_600_000;
+  const at = () => new Date(clock += 1_000).toISOString();
+  const agent = (body: string) => lines.push(JSON.stringify({ timestamp: at(), type: "event_msg", payload: { type: "agent_message", message: body } }));
+  if (kind === "turn") {
+    lines.push(JSON.stringify({
+      timestamp: at(), type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: `<!-- llv:structured-user origin=operator -->\n${text.own[seq % text.own.length]!}` }] },
+    }));
+    agent(text.pipelineReply);
+    return lines;
+  }
+  for (let index = 0; index < count; index += 1) {
+    if (kind === "replies") { agent(`${text.wakeReply[index % 3]!} (${seq}.${index})`); continue; }
+    const id = `call_arrival_${seq}_${index}`;
+    lines.push(JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: ["bash", "-lc", `git log -1 --format=%h -- file${index}`] }), call_id: id } }));
+    lines.push(JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "function_call_output", call_id: id, output: "clean" } }));
+    agent(`${text.wakeReply[index % 3]!} (${seq}.${index})`);
+  }
+  return lines;
 }

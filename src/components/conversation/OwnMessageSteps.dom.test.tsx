@@ -7,7 +7,7 @@
  */
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useRef, useState } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -27,20 +27,55 @@ Object.assign(globalThis, {
 
 const { OwnMessageStepRow, useOwnMessageSteps } = await import("./OwnMessageSteps");
 
-interface Pane { id: string; own: number; pending?: boolean; identity?: string }
+interface Pane {
+  id: string; own: number; pending?: boolean; identity?: string;
+  /** Own messages in loaded history above the page, and whether more is unloaded. */
+  olderOwn?: number; olderUnloaded?: boolean; operatorWrote?: boolean; atTail?: boolean;
+}
 const reader: Record<string, number[]> = {};
+const reveals: Record<string, number> = {};
+const releases: Record<string, () => void> = {};
+const feedRenders: Record<string, number> = {};
+/** A pane's layout: its own messages `gap` px apart, the first one a landing's
+    gap under the top, in a feed `viewport` px tall. Without one a pane has
+    happy-dom's boxes, all zeros. */
+const geometry: Record<string, { gap: number; viewport: number }> = {};
+const LANDING_GAP = 8;
 
-function Harness({ id, own, pending = false, identity = id }: Pane) {
+function Harness({ id, own, pending = false, identity = id, olderOwn = 0, olderUnloaded = false, operatorWrote = false, atTail = false }: Pane) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const [mount, setMount] = useState<HTMLDivElement | null>(null);
   const steps = useOwnMessageSteps({
-    scroller, mount, identity, phone: false, olderUnloaded: false, sendersPending: pending, revision: `${own}:${pending}`,
+    scroller, mount, identity, phone: false, atTail, olderOwn, olderUnloaded, operatorWrote, sendersPending: pending,
+    revision: `${own}:${pending}:${olderOwn}`,
     markReaderScroll: (direction) => { (reader[id] ??= []).push(direction); },
-    revealOlder: () => undefined,
+    revealOlder: () => { reveals[id] = (reveals[id] ?? 0) + 1; },
   });
+  /* Every commit of the component that holds the hook, as the feed does. */
+  useEffect(() => { feedRenders[id] = (feedRenders[id] ?? 0) + 1; });
+  const { release } = steps;
+  useEffect(() => { releases[id] = release; }, [id, release]);
   return (
     <section data-pane={id}>
-      <div ref={scroller}>{Array.from({ length: own }, (_, index) => <div key={index} data-own-message="" />)}</div>
+      <div ref={scroller}>
+        {Array.from({ length: own }, (_, index) => (
+          <div
+            key={index}
+            data-own-message=""
+            ref={(row) => {
+              const shape = geometry[id];
+              if (!row || !shape) return;
+              const feed = row.parentElement!;
+              Object.defineProperty(feed, "clientHeight", { configurable: true, value: shape.viewport });
+              Object.defineProperty(feed, "scrollHeight", { configurable: true, get: () => LANDING_GAP + feed.children.length * shape.gap });
+              row.getBoundingClientRect = () => {
+                const top = LANDING_GAP + index * shape.gap - feed.scrollTop;
+                return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40, x: 0, y: top, toJSON: () => ({}) };
+              };
+            }}
+          />
+        ))}
+      </div>
       <div ref={setMount} />
       {steps.shown && mount ? createPortal(<OwnMessageStepRow steps={steps} phone={false} />, mount) : null}
       <textarea />
@@ -67,8 +102,22 @@ afterEach(async () => {
   await act(async () => { root?.unmount(); });
   root = null;
   document.body.innerHTML = "";
-  for (const key of Object.keys(reader)) delete reader[key];
+  for (const record of [reader, reveals, releases, feedRenders, geometry]) for (const key of Object.keys(record)) delete record[key];
 });
+
+const feedOf = (id: string) => host().querySelector(`[data-pane="${id}"] > div`) as HTMLElement;
+const previousOf = (id: string) => host().querySelector(`[data-pane="${id}"] [data-own-step-control="previous"]`) as HTMLButtonElement;
+async function scrollTo(id: string, top: number): Promise<void> {
+  const scroller = feedOf(id);
+  scroller.scrollTop = top;
+  await act(async () => { scroller.dispatchEvent(new dom.Event("scroll") as unknown as Event); });
+  await frames();
+}
+const pressKey = async (key: "ArrowUp" | "ArrowDown", target?: HTMLElement) => {
+  const event = new dom.KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true });
+  await act(async () => { if (target) target.dispatchEvent(event as unknown as Event); else dom.dispatchEvent(event); });
+  return event;
+};
 
 test("the row exists from the second own message on", async () => {
   await render({ id: "a", own: 0 });
@@ -78,6 +127,108 @@ test("the row exists from the second own message on", async () => {
   await render({ id: "a", own: 2 });
   expect(total("a")).toBe("2");
   expect(host().querySelectorAll('[data-pane="a"] [data-own-step-control]').length).toBe(3);
+});
+
+test("the row does not depend on how much history is on the page", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  /* One own message on the page and older history unloaded: the count is
+     open, the row is there and a step back asks for that history. */
+  await render({ id: "a", own: 1, olderUnloaded: true });
+  expect(count("a")).toBe("1 / 1+");
+  expect(previousOf("a").disabled).toBe(false);
+  await act(async () => { previousOf("a").click(); });
+  expect(reveals.a).toBe(1);
+  /* The page slid past every own message during a long turn: they are in
+     loaded history above it, the count does not shrink and the keys work. */
+  await render({ id: "a", own: 0, olderOwn: 9, atTail: true });
+  expect(count("a")).toBe("9 / 9");
+  for (const element of host().querySelectorAll("section")) (element as HTMLElement).getClientRects = () => [{}] as unknown as DOMRectList;
+  (document.activeElement as unknown as HTMLElement | null)?.blur?.();
+  const asked = reveals.a!;
+  await pressKey("ArrowUp");
+  expect(reveals.a).toBe(asked + 1);
+  /* None loaded, history unloaded: only where the operator is known to have written. */
+  await render({ id: "a", own: 0, olderUnloaded: true, operatorWrote: true });
+  expect(count("a")).toBe("0 / 0+");
+  await render({ id: "a", own: 0, olderUnloaded: true });
+  expect(count("a")).toBeNull();
+  /* Walked to its start with fewer than two: nothing to step between. */
+  await render({ id: "a", own: 1, operatorWrote: true });
+  expect(count("a")).toBeNull();
+});
+
+test("a step waiting for older history ends when something else moves the feed", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 2, olderUnloaded: true });
+  const scroller = feedOf("a");
+  /* Waiting: when the page arrives the step finishes on the message it
+     brings. The feed keeps the reader's place across a prepend, so the
+     message being read is 1000 px further down the page. */
+  await act(async () => { previousOf("a").click(); });
+  expect(reveals.a).toBe(1);
+  scroller.scrollTop = 1000;
+  await render({ id: "a", own: 3, olderUnloaded: true });
+  expect(reader.a).toEqual([-1]);
+  expect(scroller.scrollTop).toBe(0);
+  /* The same wait, and the way back to the tail before the page arrives:
+     the page changes nothing about where the reader is. */
+  await act(async () => { previousOf("a").click(); });
+  expect(reveals.a).toBe(2);
+  await act(async () => { releases.a!(); });
+  scroller.scrollTop = 3000;
+  await render({ id: "a", own: 4, olderUnloaded: true });
+  expect(reader.a).toEqual([-1]);
+  expect(scroller.scrollTop).toBe(3000);
+  /* A reader's own input on the feed ends it as well, trusted or not. */
+  await scrollTo("a", 0);
+  await act(async () => { previousOf("a").click(); });
+  expect(reveals.a).toBe(3);
+  await act(async () => { scroller.dispatchEvent(new dom.Event("wheel") as unknown as Event); });
+  scroller.scrollTop = 2500;
+  await render({ id: "a", own: 5, olderUnloaded: true });
+  expect(reader.a).toEqual([-1]);
+  expect(scroller.scrollTop).toBe(2500);
+});
+
+test("the way back to the tail lets go of a landing that is still being held", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 4 });
+  const scroller = feedOf("a");
+  await scrollTo("a", 3000);
+  await act(async () => { previousOf("a").click(); });
+  expect(scroller.scrollTop).toBe(2000);
+  /* Inside the half second the landing is held for. */
+  await act(async () => { releases.a!(); });
+  scroller.scrollTop = 3500;
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+  expect(scroller.scrollTop).toBe(3500);
+});
+
+test("a scroll redraws the row and never the feed that holds it", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 4 });
+  await scrollTo("a", 3000);
+  expect(count("a")).toBe("4 / 4");
+  const before = feedRenders.a;
+  await scrollTo("a", 1000);
+  expect(count("a")).toBe("2 / 4");
+  await scrollTo("a", 0);
+  expect(count("a")).toBe("1 / 4");
+  expect(feedRenders.a).toBe(before);
+});
+
+test("while a sender is still being read the reader's place stays live", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 4 });
+  await scrollTo("a", 3000);
+  expect(count("a")).toBe("4 / 4");
+  await render({ id: "a", own: 4, pending: true });
+  await scrollTo("a", 1000);
+  expect(count("a")).toBe("2 / 4");
+  await scrollTo("a", 0);
+  expect(count("a")).toBe("1 / 4");
+  await render({ id: "a", own: 4 });
+  expect(count("a")).toBe("1 / 4");
 });
 
 test("while a sender is still being read the count keeps the last settled number", async () => {
@@ -104,9 +255,7 @@ test("a conversation whose senders have never been read shows no row until they 
 });
 
 test("Alt+arrow steps the conversation that holds the focus, or the only one", async () => {
-  const press = async (key: "ArrowUp" | "ArrowDown") => {
-    await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true })); });
-  };
+  const press = (key: "ArrowUp" | "ArrowDown") => pressKey(key);
   const scrolled = (id: string) => {
     const scroller = host().querySelector(`[data-pane="${id}"] > div`) as HTMLElement;
     scroller.scrollTop = 100;
@@ -134,4 +283,30 @@ test("Alt+arrow steps the conversation that holds the focus, or the only one", a
   (document.activeElement as unknown as HTMLElement | null)?.blur?.();
   await press("ArrowUp");
   expect(reader.a).toEqual([-1]);
+});
+
+test("a field, a list or a dialog outside the pane keeps Alt+arrow for itself", async () => {
+  geometry.a = { gap: 1000, viewport: 500 };
+  await render({ id: "a", own: 3 });
+  for (const element of host().querySelectorAll("section")) (element as HTMLElement).getClientRects = () => [{}] as unknown as DOMRectList;
+  feedOf("a").scrollTop = 1500;
+  const dialog = document.createElement("div");
+  dialog.setAttribute("role", "dialog");
+  dialog.innerHTML = "<select><option>one</option><option>two</option></select><input /><textarea></textarea>";
+  document.body.appendChild(dialog);
+  for (const field of dialog.children) {
+    (field as unknown as HTMLElement).focus();
+    expect(document.activeElement).toBe(field);
+    for (const key of ["ArrowDown", "ArrowUp"] as const) {
+      const event = await pressKey(key, field as unknown as HTMLElement);
+      expect(event.defaultPrevented).toBe(false);
+    }
+  }
+  expect(reader.a).toBeUndefined();
+  /* The pane's own composer, and no focus anywhere, step as before. */
+  (host().querySelector('[data-pane="a"] textarea') as HTMLElement).focus();
+  expect((await pressKey("ArrowUp")).defaultPrevented).toBe(true);
+  expect(reader.a).toEqual([-1]);
+  (document.activeElement as unknown as HTMLElement | null)?.blur?.();
+  expect((await pressKey("ArrowUp")).defaultPrevented).toBe(true);
 });

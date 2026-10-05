@@ -39,7 +39,8 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
-import { OWN_STEPS_TOTAL, ownStepsTranscript } from "./fixtures/ownMessageStepsTranscript";
+import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
+import { readStepState } from "./OwnMessageSteps";
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -1199,7 +1200,18 @@ function mountLongHistory(root: HTMLElement): void {
    without the row, the baseline every measurement compares against;
    `surface=orchestrator` is the dock's conversation; `pane` is a board-node
    width. The loaded window starts two own messages in, and the feed's own
-   older-history load brings the rest. */
+   older-history load brings the rest, after `older` ms. `days` repeats the
+   day into one long conversation, loaded whole. `window.ownSteps` lets a
+   driver raise the phone's keyboard, make rows arrive at the tail and time
+   the reading a scroll frame takes. */
+interface OwnStepsControls {
+  keyboard: (px: number) => void;
+  arrive: (kind: OwnStepsArrival, count: number) => void;
+  /** Median and mean ms of one reading across `runs` places in the feed, and
+      how many selector passes over the feed those readings made. */
+  readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+}
+
 const noop = () => undefined;
 
 function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator"; paneWidth: number }) {
@@ -1207,7 +1219,7 @@ function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; su
   const [keyboard, setKeyboard] = useState(0);
   useEffect(() => {
     /* The on-screen keyboard's overlap, as the phone shell pads it away. */
-    (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps = { keyboard: setKeyboard };
+    (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.keyboard = setKeyboard;
   }, []);
   if (phone) {
     return (
@@ -1245,8 +1257,13 @@ function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; su
 
 function mountOwnMessageSteps(root: HTMLElement): void {
   const lang = params.get("lang") === "uk" ? "uk" : "en";
-  const { lines: all, loadedFrom } = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
-  let start = loadedFrom;
+  const days = Math.max(1, Number(params.get("days") ?? 1));
+  const first = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
+  const all = [...first.lines];
+  for (let day = 1; day < days; day += 1) all.push(...ownStepsTranscript(lang, OWN_STEPS_TOTAL, day).lines);
+  const olderLatency = Number(params.get("older") ?? 40);
+  let start = days > 1 ? 0 : first.loadedFrom;
+  let arrivals = 0;
   let prependGen = 0;
   let loadingOlder = false;
   const listeners = new Set<() => void>();
@@ -1256,13 +1273,43 @@ function mountOwnMessageSteps(root: HTMLElement): void {
     if (loadingOlder || start <= 0) return 0;
     loadingOlder = true;
     announce();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, olderLatency));
     const take = start;
     start = 0;
     prependGen += 1;
     loadingOlder = false;
     announce();
     return take;
+  };
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps = {
+    arrive: (kind, count) => {
+      all.push(...ownStepsArrival(lang, kind, count, arrivals += 1));
+      announce();
+    },
+    readCost: (runs) => {
+      const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+      const select = scroller.querySelectorAll;
+      let selectorPasses = 0;
+      scroller.querySelectorAll = ((selector: string) => { selectorPasses += 1; return select.call(scroller, selector); }) as typeof scroller.querySelectorAll;
+      const was = scroller.scrollTop;
+      const span = scroller.scrollHeight - scroller.clientHeight;
+      const times: number[] = [];
+      /* Warm: the first reading after a change of rows is the one that scans. */
+      readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+      selectorPasses = 0;
+      for (let run = 0; run < runs; run += 1) {
+        scroller.scrollTop = Math.round(span * (run / runs));
+        void scroller.getBoundingClientRect();
+        const from = performance.now();
+        readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+        times.push(performance.now() - from);
+      }
+      delete (scroller as unknown as { querySelectorAll?: unknown }).querySelectorAll;
+      scroller.scrollTop = was;
+      times.sort((a, b) => a - b);
+      const mean = times.reduce((sum, ms) => sum + ms, 0) / Math.max(1, times.length);
+      return { medianMs: times[times.length >> 1] ?? 0, meanMs: Math.round(mean * 1000) / 1000, selectorPasses };
+    },
   };
   const read = (): LogTailState => snapshot ??= {
     lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,

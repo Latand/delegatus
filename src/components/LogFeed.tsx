@@ -583,13 +583,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const filePathRef = useRef(tailPath);
   const controlledFollowRef = useRef(follow);
+  /* Ends an own-message step that is still in flight; the step hook, mounted
+     further down, fills it in. */
+  const releaseOwnStep = useRef<() => void>(() => undefined);
 
   const setMagnet = (value: boolean, withPulse = false) => {
     pendingRestoreRef.current = null;
     magnetRef.current = value;
     setMagnetState(value);
     setFollow(value);
-    if (value) setNewCount(0);
+    if (value) {
+      setNewCount(0);
+      /* The feed is going back to its tail: a step between own messages
+         that is still landing, or waiting for older history, is over. */
+      releaseOwnStep.current();
+    }
     if (memoryKey) {
       const remembered = scrollMemory.get(memoryKey);
       rememberScroll(memoryKey, {
@@ -778,6 +786,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       setMagnetState(follow);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (follow) setNewCount(0);
+      if (follow) releaseOwnStep.current();
     }
   }, [follow]);
   useEffect(
@@ -1772,17 +1781,37 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     && Boolean(item.deliveredMessage?.engineMessageId)
     && !provenanceLookup.forItem(item)
     && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [visibleItems, provenanceLookup]);
+  const stepsHost = file && logFeedDependencies().ownMessageSteps ? stepsMount : null;
+  /* The page shows the last rows of what is loaded, and that window slides
+     on while the agent works. The own messages above it are counted from
+     their records, by the verdict that marks a row on the page, so neither
+     the count nor the row depends on how much history is on the page. */
+  const mandateRecord = holdsMandate && heldMandate ? firstMandateRecord : null;
+  const ownBeforePage = useMemo(() => {
+    if (!stepsHost || !hiddenLocal) return 0;
+    let own = 0;
+    for (let index = 0; index < hiddenLocal; index += 1) {
+      const item = feed.items[index]!.item;
+      if (item !== mandateRecord && resolveDeliveredItem(item, provenanceLookup).kind === "user") own += 1;
+    }
+    return own;
+  }, [stepsHost, hiddenLocal, feed.items, mandateRecord, provenanceLookup]);
   const ownSteps = useOwnMessageSteps({
     scroller,
-    mount: file && logFeedDependencies().ownMessageSteps ? stepsMount : null,
+    mount: stepsHost,
     identity: memoryKey && tailPath ? `${memoryKey}\0${tailPath}` : null,
     phone,
-    olderUnloaded: canRevealOlder,
+    atTail: magnet,
+    olderOwn: ownBeforePage,
+    olderUnloaded: tail.hasMore,
+    operatorWrote: file?.userAuthored === true,
     sendersPending,
     revision: conversationRows,
     markReaderScroll: markUserScroll,
     revealOlder: () => revealOlder("explicit"),
   });
+  const releaseStep = ownSteps.release;
+  useEffect(() => { releaseOwnStep.current = releaseStep; }, [releaseStep]);
   const awayFromTail = Boolean(file && feed.items.length && !magnet);
   /* On the phone the way back shares the step row while both are needed, so
      only one row is spent under the feed. */
@@ -1796,9 +1825,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     >
       <span
         data-feed-jump-pill
-        className={`inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 justify-center px-2" : "px-3"}`}
+        className={`inline-flex h-8 items-center whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 flex-col justify-center px-1" : "gap-1 px-3"}`}
       >
-        <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {shared ? newCount || null : newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
+        <ArrowDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {/* The shared cell is 44 px wide, so the arrow keeps its size and the
+            count of new rows goes under it, short. */}
+        {shared
+          ? newCount ? <span data-feed-jump-count className="font-mono text-[10px] leading-none tabular-nums">{newCount > 99 ? "99+" : newCount}</span> : null
+          : <>{" "}{newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}</>}
       </span>
     </button>
   );

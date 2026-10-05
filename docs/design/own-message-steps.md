@@ -24,12 +24,21 @@ way-back row, the status line and the control strip.
   back ("to latest"). The pill moves into the step row's right-hand cell, so
   the feed gives up 45 px where the way-back row alone took 44. The cell is
   kept at the tail too, and an empty one balances it on the left, so the step
-  buttons never move under the thumb.
-- **Absent** when the conversation has fewer than two own messages.
+  buttons never move under the thumb. The cell is 44 px wide, so the pill in
+  it is the arrow at its full size with the count of new rows under it, cut
+  at `99+`.
+- **Absent** when the conversation has fewer than two own messages. That is a
+  fact about the conversation, so it does not depend on how much history is
+  on the page: while older history is unloaded the row stays as long as the
+  conversation holds a message of the operator's at all (one already counted,
+  or the conversation's own authorship record), and it goes when the history
+  has been walked to its start with fewer than two. A conversation the
+  operator never wrote in, such as a pipeline stage's, has no row.
 - **`Alt+↑` / `Alt+↓`** step as well. The composer keeps the bare arrows for
   its own history, and nothing else takes Alt with an arrow. Several
   conversations can be on screen, so the keys go to the pane that holds the
-  focus, or to the only one there is.
+  focus, or to the only one there is while the focus is nowhere. A field, a
+  list or a dialog outside the pane keeps its keys.
 
 ## What a step is
 
@@ -49,8 +58,10 @@ orchestrator relays, harness rows and attachment rows are never steps.
   and moves itself after a reader's scroll, so a landing on that boundary
   leaves it nothing to correct.
 - Rows off screen are laid out at an estimated height, so a landing is held
-  for half a second while the rows around it take their real one, and let go
-  the moment the reader scrolls.
+  for half a second while the rows around it take their real one. It is let
+  go the moment anything else moves the feed: the reader's own input, the way
+  back to the tail, the feed taking its tail again, another conversation in
+  the pane.
 - A step is the reader's scroll. It tells the feed so the way a wheel does,
   which releases the tail and keeps the feed's reading anchor on the landed
   message.
@@ -58,10 +69,29 @@ orchestrator relays, harness rows and attachment rows are never steps.
 ## The count
 
 `5 / 7`: which own message is being read, of how many. `5 / 7+` while older
-history is unloaded or not yet revealed. A step back from the oldest message on
-the page asks the feed for the history before it and finishes on the message it
-brings; a page with no own message in it is skipped. The walk ends on the
-conversation's first own message with the step back disabled.
+history is unloaded.
+
+The page shows the last rows of what is loaded, and that window slides on while
+the agent works. Own messages in loaded history above the page are counted
+from their records, by the same verdict that marks a row, so a long turn does
+not shrink the total and cannot take the row away.
+
+A step back from the oldest message on the page asks the feed for the history
+before it and finishes on the message it brings; a page with no own message in
+it is skipped. The walk ends on the conversation's first own message with the
+step back disabled. A step that is waiting for that history ends, like a
+landing, the moment anything else moves the feed, so a late page never pulls
+the reader away from where they went meanwhile.
+
+At the tail the last messages cannot reach the reading line, so the one being
+read is the last that has started on screen and there is no next. "At the
+tail" is the feed's own state: a phone feed that follows the tail rests up to
+a row short of the very end (#1978).
+
+The row reads the feed on every scroll frame. The own rows come from a cached
+index that is rebuilt when the feed's markup changes (the one `readingRows`
+uses), each answer is a bisection over them, and the count lives outside the
+feed's state, so a scroll redraws the row and never the feed.
 
 ## Known limits
 
@@ -73,9 +103,10 @@ conversation's first own message with the step back disabled.
   person's".
 - **The late sender on a Claude conversation.** A delivered Claude record is a
   system row until the ledger names its sender. While any such row is
-  unanswered the count is not final, so the row keeps showing the last count
-  that was, and a conversation with none yet shows no row until the answer
-  arrives. The ledger's reads are bounded, so the wait ends.
+  unanswered the total is not final, so the row keeps the last total that was
+  (and whether it is there at all), and a conversation with none yet shows no
+  row until the answer arrives. Where the reader is stays live meanwhile. The
+  ledger's reads are bounded, so the wait ends.
 
 ## Where it lives
 
@@ -94,8 +125,15 @@ fixture's `own-message-steps` case: the production pane at 1440, 1000, a
 440 px board pane, the orchestrator's conversation at 440 px and the phone at
 390, in English and Ukrainian, at rest, after steps back, with a six-line
 draft, with the phone's keyboard inset and on the oldest own message. Each
-moment is measured beside the same pane without the row. The readings are in
-`evidence/own-message-steps/row.json`.
+moment is measured beside the same pane without the row.
+
+A second case in the same block drives the moments a still fixture does not
+have: a long turn that slides every own message off the page, the way back
+pressed while a step is landing and while it waits for a slow older page, the
+phone's resting tail at every height from 780 to 900 px, and new rows arriving
+while the reader is away from the tail. The readings of both are in
+`evidence/own-message-steps/row.json`. The long-history block measures the
+cost of the reading on a twenty-five-day conversation.
 
 ```
 LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=<chrome> \

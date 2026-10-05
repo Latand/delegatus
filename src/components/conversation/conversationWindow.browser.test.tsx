@@ -1827,6 +1827,90 @@ describe("older history of a long conversation keeps its rows, its frames and it
       served.stop();
     }
   }, 300_000);
+
+  /*
+   * The own-message step row reads the feed on every scroll frame
+   * (docs/design/own-message-steps.md). Over twenty-five days of an
+   * orchestrator's conversation, all of it on the page (225 messages of the
+   * operator's), one reading takes no selector pass over the feed and a wheel
+   * through the history costs what it costs without the row. The numbers go
+   * to the same directory, as `own-message-steps.json`.
+   */
+  const DAYS = 25;
+  const median = (values: number[]) => [...values].sort((a, b) => a - b)[values.length >> 1] ?? 0;
+
+  browserTest("one reading per frame is a few bisections, and frame times stay inside the pane's own spread", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      const run = async (row: boolean) => {
+        const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?case=own-message-steps&days=${DAYS}&row=${row ? 1 : 0}`, { width: 1280, height: 800 }, "dark", "en", "reduce");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          /* Bring the whole history onto the page, as a reader at the top does. */
+          await page.evaluate(async (own) => {
+            const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            for (const deadline = performance.now() + 60_000; scroller.querySelectorAll("[data-own-message]").length < own && performance.now() < deadline;) {
+              scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+              if (scroller.scrollTop === 0) scroller.dispatchEvent(new Event("scroll")); else scroller.scrollTop = 0;
+              await new Promise((resolve) => setTimeout(resolve, 60));
+            }
+          }, DAYS * 9);
+          expect(await page.locator("[data-own-message]").count()).toBe(DAYS * 9);
+          const rows = await page.locator("[data-feed-key]").count();
+          const reading = row ? await page.evaluate(() => (window as unknown as { ownSteps: { readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number } } }).ownSteps.readCost(200)) : null;
+          /* A wheel from the start of the history to its end. */
+          await page.evaluate(() => {
+            const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+            scroller.scrollTop = 0;
+          });
+          await page.waitForTimeout(500);
+          await page.locator("[data-log-feed-scroller]").hover();
+          await page.evaluate(() => {
+            const state = { frames: [] as number[] };
+            (window as unknown as { __frames: typeof state }).__frames = state;
+            let last = performance.now();
+            const tick = (now: number) => { state.frames.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          for (let step = 0; step < 300; step += 1) {
+            await page.mouse.wheel(0, 900);
+            await page.waitForTimeout(16);
+          }
+          const frames = await page.evaluate(() => (window as unknown as { __frames: { frames: number[] } }).__frames.frames.slice(1));
+          expect(pageErrors).toEqual([]);
+          return { row, rows, reading, frames: frames.length, medianFrameMs: Math.round(median(frames) * 10) / 10, over50: frames.filter((ms) => ms > 50).length };
+        } finally {
+          await context.close();
+        }
+      };
+      const runs: Awaited<ReturnType<typeof run>>[] = [];
+      for (let pair = 0; pair < 3; pair += 1) { runs.push(await run(true)); runs.push(await run(false)); }
+      fs.writeFileSync(path.join(OUT, "own-message-steps.json"), JSON.stringify(runs, null, 2));
+      const withRow = runs.filter((entry) => entry.row);
+      const without = runs.filter((entry) => !entry.row);
+      for (const entry of withRow) {
+        expect(entry.reading!.selectorPasses).toBe(0);
+        expect(entry.reading!.medianMs).toBeLessThanOrEqual(0.5);
+        expect(entry.reading!.meanMs).toBeLessThanOrEqual(0.5);
+      }
+      /* The pane without the row is the yardstick: its own three runs differ
+         from each other, and the row's runs stay inside that spread. */
+      const spread = (pick: (entry: typeof runs[number]) => number) => {
+        const values = without.map(pick);
+        const high = Math.max(...values);
+        return high + Math.max(high - Math.min(...values), high * 0.1);
+      };
+      expect(median(withRow.map((entry) => entry.medianFrameMs))).toBeLessThanOrEqual(spread((entry) => entry.medianFrameMs));
+      expect(median(withRow.map((entry) => entry.over50 / entry.frames))).toBeLessThanOrEqual(spread((entry) => entry.over50 / entry.frames) + 0.02);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 900_000);
 });
 
 describe("delivery outcome settlement", () => {
@@ -2086,6 +2170,17 @@ describe("own-message step row", () => {
     }
     return out;
   };
+  /* The record is one file and each case owns its sections of it, so a case
+     run alone leaves the other's readings as they were. */
+  const writeEvidence = (sections: Record<string, Record<string, unknown>>) => {
+    const file = path.join(EVIDENCE, "row.json");
+    const kept = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, Record<string, unknown>> : {};
+    const all = { ...kept, ...sections };
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(file, `{\n${Object.entries(all).map(([section, moments]) => `  ${JSON.stringify(section)}: {\n${
+      Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
+    }\n  }`).join(",\n")}\n}\n`);
+  };
   const position = (reading: Reading) => Number(reading.count?.split(" / ")[0] ?? NaN);
   const total = (reading: Reading) => Number.parseInt(reading.count?.split(" / ")[1] ?? "", 10);
 
@@ -2270,17 +2365,261 @@ describe("own-message step row", () => {
         }
       }
 
-      fs.writeFileSync(
-        path.join(EVIDENCE, "row.json"),
-        `{\n  "totals": {\n${Object.entries(totals).map(([name, sum]) => `    ${JSON.stringify(name)}: ${JSON.stringify(sum)}`).join(",\n")}\n  },\n${
-          Object.entries(evidence).map(([where, moments]) => `  ${JSON.stringify(where)}: {\n${
-            Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
-          }\n  }`).join(",\n")}\n}\n`,
-      );
+      writeEvidence({ totals, ...evidence });
       expect(failures).toEqual([]);
     } finally {
       await browser?.close();
       served.stop();
     }
   }, 1_800_000);
+
+  type Page = import("playwright-core").Page;
+  type Controls = { arrive: (kind: "work" | "replies" | "turn", count: number) => void };
+  const arrive = (page: Page, kind: "work" | "replies" | "turn", count: number) =>
+    page.evaluate(({ kind, count }) => (window as unknown as { ownSteps: Controls }).ownSteps.arrive(kind, count), { kind, count });
+  const countOf = (page: Page) => page.locator('[data-own-step-control="count"]').textContent({ timeout: 1_000 }).catch(() => null);
+  /** Where the feed is: how far from its end, whether it shows its way back,
+      and where the own message being read starts under its top edge. */
+  const place = (page: Page) => page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const feed = scroller.getBoundingClientRect();
+    const count = document.querySelector('[data-own-step-control="count"]')?.textContent ?? null;
+    const own = Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    const nearest = own.map((row) => Math.round(row.getBoundingClientRect().top - feed.top)).sort((a, b) => Math.abs(a) - Math.abs(b))[0] ?? null;
+    return {
+      count,
+      row: document.querySelectorAll("[data-own-steps]").length,
+      toEnd: Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop),
+      wayBack: document.querySelectorAll("[data-feed-jump-pill]").length,
+      nextDisabled: document.querySelector<HTMLButtonElement>('[data-own-step-control="next"]')?.disabled ?? null,
+      nearestOwnTop: nearest,
+    };
+  });
+
+  browserTest("the row holds through a long turn, a way back mid-step, the phone's resting tail and arriving rows", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const SIZES = [
+      { name: "desktop-1440", width: 1440, height: 900, phone: false },
+      { name: "phone-390", width: 390, height: 844, phone: true },
+    ] as const;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      const open = (query: string, size: { width: number; height: number }, lang: "en" | "uk", phone: boolean) =>
+        openFixture(browser!, `${served.base}?case=own-message-steps&lang=${lang}${query}`, size, "dark", lang, "reduce", phone);
+      const ready = async (page: Page) => {
+        await page.locator("[data-own-message]").first().waitFor();
+        await page.waitForTimeout(650);
+      };
+      const previous = (page: Page) => page.locator('[data-own-step-control="previous"]');
+
+      /* A long turn of the agent's after the last own message: the page shows
+         the last rows of what is loaded, so every own message slides off it.
+         The row stays, its total does not shrink while the reader is at the
+         tail, and the walk back reaches every own message in turn, by the
+         button and by the key. */
+      for (const size of SIZES) {
+        const where = `long-turn-${size.name}`;
+        const { context, page, pageErrors } = await open("", size, "en", size.phone);
+        const fail = (what: string) => failures.push(`${where}: ${what}`);
+        try {
+          await ready(page);
+          const atTail: unknown[] = [];
+          let onPage = LOADED_OWN;
+          for (let chunk = 1; chunk <= 30 && onPage > 0; chunk += 1) {
+            await arrive(page, "work", 20);
+            await page.waitForTimeout(350);
+            const now = await place(page);
+            onPage = await page.locator("[data-own-message]").count();
+            atTail.push({ calls: chunk * 20, count: now.count, ownOnPage: onPage });
+            if (now.row !== 1) fail(`no row after ${chunk * 20} tool calls`);
+            if (now.count !== `${LOADED_OWN} / ${LOADED_OWN}+`) fail(`count ${now.count} after ${chunk * 20} tool calls`);
+            if (now.wayBack) fail("the feed left its tail while rows arrived");
+          }
+          if (onPage !== 0) fail("the long turn did not push every own message off the page");
+          await page.screenshot({ path: path.join(OUT, `${where}-tail.png`) });
+          /* Each step lands on the own message before: the ninth, the eighth
+             and so on to the first. The feed brings older history as the
+             reader nears the top, so the total opens up along the way. */
+          const lands = size.phone ? 0 : 8;
+          const walk: (string | null)[] = [];
+          for (let fromEnd = 0; fromEnd < ALL_OWN; fromEnd += 1) {
+            if (fromEnd % 2 && !size.phone) {
+              await page.locator("textarea").first().focus();
+              await page.keyboard.press("Alt+ArrowUp");
+            } else await previous(page).click();
+            await page.waitForFunction(({ fromEnd, lands }) => {
+              const [at, of] = (document.querySelector('[data-own-step-control="count"]')?.textContent ?? "").split(" / ");
+              const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+              const top = scroller.getBoundingClientRect().top;
+              return Number.parseInt(of ?? "", 10) - Number(at) === fromEnd
+                && Array.from(scroller.querySelectorAll("[data-own-message]")).some((row) => Math.abs(row.getBoundingClientRect().top - top - lands) <= 2);
+            }, { fromEnd, lands }, { timeout: 8_000 }).catch(() => undefined);
+            await page.waitForTimeout(650);
+            const now = await place(page);
+            walk.push(now.count);
+            const [at, of] = (now.count ?? "").split(" / ");
+            if (Number.parseInt(of ?? "", 10) - Number(at) !== fromEnd) fail(`step ${fromEnd + 1} shows ${now.count}`);
+            if (now.nearestOwnTop === null || Math.abs(now.nearestOwnTop - lands) > 2) fail(`step ${fromEnd + 1} landed ${now.nearestOwnTop}px under the feed's top`);
+          }
+          if (walk.at(-1) !== `1 / ${ALL_OWN}`) fail(`the walk ended on ${walk.at(-1)}`);
+          if (!await previous(page).isDisabled()) fail("a step back is still offered on the first own message");
+          evidence[where] = { "at-tail": atTail, "walk-back": walk };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The way back to the tail, pressed while a step is still landing and
+         while a step is waiting for an older page that takes three seconds. */
+      for (const size of SIZES) {
+        const where = `way-back-${size.name}`;
+        const record: Record<string, unknown> = {};
+        const pill = (page: Page) => page.locator("button:has([data-feed-jump-pill])");
+        for (const pause of [60, 250]) {
+          const { context, page, pageErrors } = await open("", size, "en", size.phone);
+          try {
+            await ready(page);
+            await previous(page).click(); await page.waitForTimeout(650);
+            await previous(page).click(); await page.waitForTimeout(650);
+            await previous(page).click();
+            await page.waitForTimeout(pause);
+            await pill(page).click();
+            await page.waitForTimeout(1_200);
+            const soon = await place(page);
+            await page.waitForTimeout(2_800);
+            const later = await place(page);
+            record[`mid-landing-${pause}ms`] = { soon, later };
+            for (const [when, now] of [["1.2 s", soon], ["4 s", later]] as const) {
+              if (now.wayBack) failures.push(`${where} ${pause} ms: the way back is still offered after ${when}, ${now.toEnd}px from the end at ${now.count}`);
+              if (now.count !== `${LOADED_OWN} / ${LOADED_OWN}+`) failures.push(`${where} ${pause} ms: count ${now.count} after ${when}`);
+            }
+            expect(pageErrors).toEqual([]);
+          } finally {
+            await context.close();
+          }
+        }
+        const { context, page, pageErrors } = await open("&older=3000", size, "en", size.phone);
+        try {
+          await ready(page);
+          for (let presses = 0; presses < LOADED_OWN + 1 && await countOf(page) !== `1 / ${LOADED_OWN}+`; presses += 1) {
+            await previous(page).click();
+            await page.waitForTimeout(650);
+          }
+          expect(await countOf(page)).toBe(`1 / ${LOADED_OWN}+`);
+          await previous(page).click();
+          await page.waitForTimeout(700);
+          await pill(page).click();
+          await page.waitForTimeout(1_200);
+          const soon = await place(page);
+          await page.waitForTimeout(2_800);
+          const later = await place(page);
+          record["waiting-for-older-page"] = { soon, later };
+          for (const [when, now] of [["1.2 s", soon], ["4 s", later]] as const) {
+            if (now.wayBack) failures.push(`${where} older page: the way back is still offered after ${when}, ${now.toEnd}px from the end at ${now.count}`);
+          }
+          if (later.count !== `${ALL_OWN} / ${ALL_OWN}`) failures.push(`${where} older page: count ${later.count} once the page arrived`);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+        evidence[where] = record;
+      }
+
+      /* #1978: a phone feed that follows the tail rests with a row starting
+         at its top edge, up to a row short of the very end. While it holds
+         the tail the count names the last own message on screen and there is
+         no next, whatever the height. */
+      for (const lang of LANGS) {
+        const record: Record<string, unknown> = {};
+        for (let height = 780; height <= 900; height += 10) {
+          const { context, page, pageErrors } = await open("", { width: 390, height }, lang, true);
+          try {
+            await ready(page);
+            await arrive(page, "turn", 1);
+            await page.waitForTimeout(900);
+            const now = await place(page);
+            record[String(height)] = { toEnd: now.toEnd, count: now.count, nextDisabled: now.nextDisabled, wayBack: now.wayBack };
+            const wanted = `${LOADED_OWN + 1} / ${LOADED_OWN + 1}+`;
+            if (now.wayBack) failures.push(`phone-tail-${lang} ${height}: the feed is not holding its tail`);
+            if (now.count !== wanted) failures.push(`phone-tail-${lang} ${height}: count ${now.count}, ${now.toEnd}px from the end`);
+            if (!now.nextDisabled) failures.push(`phone-tail-${lang} ${height}: a next is offered at the tail`);
+            expect(pageErrors).toEqual([]);
+          } finally {
+            await context.close();
+          }
+        }
+        evidence[`phone-tail-390-${lang}`] = record;
+      }
+
+      /* New rows while the reader is away from the tail, on the phone: the
+         way back is a 44 px cell of the step row, and it keeps its arrow
+         whole whatever the count of new rows is. */
+      for (const lang of LANGS) {
+        const where = `phone-390-${lang}`;
+        const { context, page, pageErrors } = await open("", { width: 390, height: 844 }, lang, true);
+        const record: Record<string, unknown> = {};
+        try {
+          await ready(page);
+          await previous(page).click();
+          await page.waitForTimeout(650);
+          let arrived = 0;
+          for (const wanted of [0, 2, 12, 112, 1112]) {
+            if (wanted > arrived) {
+              await arrive(page, "replies", wanted - arrived);
+              arrived = wanted;
+              await page.waitForTimeout(wanted > 200 ? 1_500 : 500);
+            }
+            const reading = await measure(page, 0);
+            const cell = await page.evaluate(() => {
+              const pill = document.querySelector<HTMLElement>("[data-own-steps] [data-feed-jump-pill]");
+              if (!pill) return null;
+              const round = (rect: DOMRect) => [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10);
+              const arrow = pill.querySelector("svg")!.getBoundingClientRect();
+              const count = pill.querySelector<HTMLElement>("[data-feed-jump-count]");
+              const box = pill.getBoundingClientRect();
+              const text = count?.getBoundingClientRect() ?? null;
+              const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+              return {
+                label: count?.textContent ?? "",
+                pill: round(box),
+                arrow: round(arrow),
+                arrowInside: inside(arrow),
+                textInside: text ? inside(text) && count!.scrollWidth <= count!.clientWidth + 1 : true,
+                arrowClearOfText: text ? arrow.bottom <= text.top + 0.5 || text.bottom <= arrow.top + 0.5 : true,
+              };
+            });
+            const latest = reading.controls.find((control) => control.name === "latest");
+            const moment = `new-rows-${wanted}`;
+            record[moment] = { cell, latest, overflowX: reading.overflowX, count: reading.count };
+            const fail = (what: string) => failures.push(`${where} ${moment}: ${what}`);
+            if (!cell || !latest) { fail("the way back is not in the step row"); continue; }
+            if (cell.label !== (wanted === 0 ? "" : wanted > 99 ? "99+" : String(wanted))) fail(`the cell says "${cell.label}"`);
+            if (Math.abs(cell.arrow[2]! - 14) > 0.5 || Math.abs(cell.arrow[3]! - 14) > 0.5 || !cell.arrowInside || !cell.arrowClearOfText) fail(`the arrow is ${cell.arrow[2]} x ${cell.arrow[3]}`);
+            if (!cell.textInside) fail("the count leaves the pill");
+            if (latest.box[2] < 44 || latest.box[3] < 44) fail(`the way back is ${latest.box[2]} x ${latest.box[3]}`);
+            if (!latest.hit) fail("the way back is not what a pointer meets");
+            if (latest.overlaps.length) fail(`the way back intersects ${latest.overlaps.join(", ")}`);
+            for (const control of reading.controls) if (control.overlaps.length) fail(`${control.name} intersects ${control.overlaps.join(", ")}`);
+            if (reading.overflowX) fail(`the page scrolls sideways by ${reading.overflowX}`);
+            if (wanted === 12 || wanted === 1112) await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+        evidence[`${where}-new-rows`] = record;
+      }
+
+      writeEvidence(evidence);
+      expect(failures).toEqual([]);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 900_000);
 });

@@ -11,13 +11,13 @@
  */
 
 import { ChevronDown, ChevronUp } from "@/components/icons";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 
+import { ownMessageRows } from "@/components/feed/scrollMemory";
 import { useLocale } from "@/lib/i18n";
 
-import { STEP_PAD_DESKTOP_PX, STEP_PAD_PHONE_PX, stepCountLabel, stepScrollTop, stepState, stepTarget, type StepReading, type StepState } from "./ownMessageStepModel";
+import { STEP_PAD_DESKTOP_PX, STEP_PAD_PHONE_PX, hasOlder, stepCountLabel, stepRowOffered, stepScrollTop, stepState, stepTarget, type StepReading, type StepState } from "./ownMessageStepModel";
 
-const OWN_ROW = "[data-own-message]";
 /** Rows off screen are laid out at an estimated height, so a landing is held
     this long while the rows around it take their real one. */
 const LAND_HOLD_MS = 500;
@@ -32,8 +32,15 @@ export interface OwnStepsFeed {
   /** The conversation being read; what is held for one is never shown for another. */
   identity: string | null;
   phone: boolean;
-  /** Older history exists that the feed has not revealed. */
+  /** The feed is holding its tail. */
+  atTail: boolean;
+  /** Own messages in history that is loaded and not yet on the page. */
+  olderOwn: number;
+  /** Older history exists that the feed has not loaded. */
   olderUnloaded: boolean;
+  /** The conversation is known to hold a message the operator wrote, on the
+      page or not. One that has none (a pipeline stage's) never gets the row. */
+  operatorWrote: boolean;
   /** A row's sender is still being read, so it may yet become an own message
       (a delivered Claude record before the ledger answers). */
   sendersPending: boolean;
@@ -45,37 +52,56 @@ export interface OwnStepsFeed {
 }
 
 export interface OwnSteps {
-  /** The row has something to offer: two own messages or more. */
+  /** The row has something to offer. */
   shown: boolean;
-  state: StepState;
   step: (direction: -1 | 1) => void;
+  /** Something else moved the feed (the way back to the tail, the reader):
+      a landing being held and a step waiting for older history both end. */
+  release: () => void;
+  /** What the row shows. The row reads it itself, so a scroll redraws the row
+      and never the feed. */
+  subscribe: (listener: () => void) => () => void;
+  read: () => StepState;
 }
 
 const EMPTY: StepState = { position: 0, total: 0, olderUnloaded: false, canPrev: false, canNext: false };
 const sameState = (a: StepState, b: StepState) => (Object.keys(a) as (keyof StepState)[]).every((key) => a[key] === b[key]);
 
-function readFeed(scroller: HTMLElement, phone: boolean, olderUnloaded: boolean): { rows: HTMLElement[]; reading: StepReading } {
+type FeedReading = Pick<OwnStepsFeed, "phone" | "atTail" | "olderOwn" | "olderUnloaded">;
+
+function readFeed(scroller: HTMLElement, feed: FeedReading): { rows: readonly HTMLElement[]; reading: StepReading } {
   const box = scroller.getBoundingClientRect();
   /* A pane on the zoomed board is drawn smaller than it is laid out. */
   const scale = scroller.offsetHeight ? box.height / scroller.offsetHeight || 1 : 1;
-  const rows = Array.from(scroller.querySelectorAll<HTMLElement>(OWN_ROW));
+  const rows = ownMessageRows(scroller);
+  const scrollTop = scroller.scrollTop;
   return {
     rows,
     reading: {
-      tops: rows.map((row) => (row.getBoundingClientRect().top - box.top) / scale + scroller.scrollTop),
-      scrollTop: scroller.scrollTop,
+      count: rows.length,
+      top: (index) => (rows[index]!.getBoundingClientRect().top - box.top) / scale + scrollTop,
+      scrollTop,
       viewport: scroller.clientHeight,
       maxScroll: scroller.scrollHeight - scroller.clientHeight,
-      olderUnloaded,
-      pad: phone ? STEP_PAD_PHONE_PX : STEP_PAD_DESKTOP_PX,
+      atTail: feed.atTail,
+      olderOwn: feed.olderOwn,
+      olderUnloaded: feed.olderUnloaded,
+      pad: feed.phone ? STEP_PAD_PHONE_PX : STEP_PAD_DESKTOP_PX,
     },
   };
+}
+
+/** One reading of the feed, as every scroll frame takes it: the cached own
+    rows and a few bisections over them, whatever the conversation's length. */
+export function readStepState(scroller: HTMLElement, feed: FeedReading): StepState {
+  return stepState(readFeed(scroller, feed).reading);
 }
 
 /* Alt+↑ / Alt+↓. The composer keeps the bare arrows for its own history and
    nothing else takes Alt with an arrow. Several conversations can be on screen
    at once, so the keys go to the one the operator is in: the pane that holds
-   the focus, or the only one there is. */
+   the focus, or the only one there is while the focus is nowhere. A field, a
+   list or a dialog outside the pane keeps its keys. */
 interface KeyTarget { root: () => HTMLElement | null; step: (direction: -1 | 1) => void }
 const keyTargets = new Set<KeyTarget>();
 const onScreen = (root: HTMLElement | null): root is HTMLElement =>
@@ -85,7 +111,8 @@ function onStepKey(event: KeyboardEvent): void {
   if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
   const visible = [...keyTargets].filter((target) => onScreen(target.root()));
   const focused = document.activeElement;
-  const target = visible.find((candidate) => candidate.root()!.contains(focused)) ?? (visible.length === 1 ? visible[0] : undefined);
+  const nowhere = !focused || focused === document.body || focused === document.documentElement;
+  const target = visible.find((candidate) => candidate.root()!.contains(focused)) ?? (nowhere && visible.length === 1 ? visible[0] : undefined);
   if (!target) return;
   event.preventDefault();
   target.step(event.key === "ArrowUp" ? -1 : 1);
@@ -103,30 +130,56 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   const live = useRef(feed);
   useEffect(() => { live.current = feed; });
   const enabled = feed.mount !== null;
-  const [state, setState] = useState<StepState>(EMPTY);
-  /* What the row shows. While a sender is still being read the count is not
-     known, so the last one that was stays up and never passes through a wrong
-     number; a conversation with none yet waits for the answer. */
-  const [held, setHeld] = useState<{ identity: string | null; state: StepState } | null>(null);
+  /* The count and the buttons change with every scroll, so they live outside
+     React state and the row subscribes. Whether the row exists changes a few
+     times in a conversation's life and is the only thing the feed redraws for. */
+  const store = useRef<{ state: StepState; listeners: Set<() => void> }>({ state: EMPTY, listeners: new Set() });
+  const [offered, setOffered] = useState<{ identity: string | null; offered: boolean } | null>(null);
+  /* While a sender is still being read the total is not known, so the last
+     one that was stays up, with the row's presence, and never passes through a
+     wrong number; a conversation with none yet waits for the answer. Where the
+     reader is stays live throughout. */
+  const settled = useRef<{ identity: string | null; total: number; olderUnloaded: boolean; offered: boolean } | null>(null);
   const frame = useRef(0);
   const landing = useRef(0);
   const olderWait = useRef<number | null>(null);
+
+  const subscribe = useCallback((listener: () => void) => {
+    const { listeners } = store.current;
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }, []);
+  const read = useCallback(() => store.current.state, []);
 
   const publish = useCallback(() => {
     frame.current = 0;
     const now = live.current;
     const scroller = now.scroller.current;
-    const next = scroller && now.mount ? stepState(readFeed(scroller, now.phone, now.olderUnloaded).reading) : EMPTY;
-    setState((previous) => sameState(previous, next) ? previous : next);
-    if (now.sendersPending) return;
-    setHeld((previous) => previous && previous.identity === now.identity && sameState(previous.state, next) ? previous : { identity: now.identity, state: next });
+    if (!scroller || !now.mount) return;
+    let next = readStepState(scroller, now);
+    if (!now.sendersPending) {
+      settled.current = { identity: now.identity, total: next.total, olderUnloaded: next.olderUnloaded, offered: stepRowOffered(next, now.operatorWrote) };
+    }
+    const kept = settled.current?.identity === now.identity ? settled.current : null;
+    if (kept) next = { ...next, total: kept.total, olderUnloaded: kept.olderUnloaded, position: Math.min(next.position, kept.total) };
+    if (!sameState(store.current.state, next)) {
+      store.current.state = next;
+      for (const listener of [...store.current.listeners]) listener();
+    }
+    const show = kept?.offered ?? false;
+    setOffered((previous) => previous && previous.identity === now.identity && previous.offered === show ? previous : { identity: now.identity, offered: show });
   }, []);
   const schedule = useCallback(() => {
     if (!frame.current) frame.current = requestAnimationFrame(publish);
   }, [publish]);
 
+  const release = useCallback(() => {
+    landing.current += 1;
+    olderWait.current = null;
+  }, []);
+
   /* Puts `row` on the reading line and keeps it there while the rows around
-     it settle, letting go the moment the reader scrolls. */
+     it settle, letting go the moment anything else moves the feed. */
   const land = useCallback((row: HTMLElement) => {
     const token = landing.current += 1;
     const until = performance.now() + LAND_HOLD_MS;
@@ -134,7 +187,7 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
       const now = live.current;
       const scroller = now.scroller.current;
       if (!scroller || landing.current !== token) return false;
-      const { rows, reading } = readFeed(scroller, now.phone, now.olderUnloaded);
+      const { rows, reading } = readFeed(scroller, now);
       const index = rows.indexOf(row);
       if (index === -1) return false;
       /* Scroll offsets are whole pixels. On the phone the row has to start at
@@ -147,7 +200,7 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
       }
       /* A message that cannot reach the line ends at the tail, and the tail
          is the feed's own to hold. */
-      return exact < reading.maxScroll;
+      return landing.current === token && exact < reading.maxScroll;
     };
     if (!place()) return;
     const hold = () => {
@@ -160,13 +213,13 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     const now = live.current;
     const scroller = now.scroller.current;
     if (!scroller || !now.mount) return;
-    const { rows, reading } = readFeed(scroller, now.phone, now.olderUnloaded);
+    const { rows, reading } = readFeed(scroller, now);
     const target = stepTarget(reading, direction);
     olderWait.current = null;
     if (target !== null) land(rows[target]!);
-    else if (direction < 0 && reading.olderUnloaded) {
-      /* The message before this one is in history the feed has not revealed:
-         ask for it, and finish the step when it is on the page. */
+    else if (direction < 0 && hasOlder(reading)) {
+      /* The message before this one is in history the feed has not put on
+         the page: ask for it, and finish the step when it is there. */
       olderWait.current = performance.now() + OLDER_WAIT_MS;
       now.revealOlder();
     }
@@ -175,11 +228,6 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
   useEffect(() => {
     const scroller = live.current.scroller.current;
     if (!enabled || !scroller) return;
-    const release = (event: Event) => {
-      if (!event.isTrusted) return;
-      landing.current += 1;
-      olderWait.current = null;
-    };
     const resize = new ResizeObserver(schedule);
     resize.observe(scroller);
     scroller.addEventListener("scroll", schedule, { passive: true });
@@ -191,14 +239,19 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
       for (const type of RELEASING_INPUTS) scroller.removeEventListener(type, release);
       if (frame.current) cancelAnimationFrame(frame.current);
       frame.current = 0;
-      landing.current += 1;
-      olderWait.current = null;
+      release();
     };
-  }, [enabled, schedule]);
+  }, [enabled, schedule, release]);
+
+  /* Another conversation in the same pane: nothing held or awaited for the
+     one before it carries over. */
+  useEffect(() => release, [feed.identity, release]);
 
   /* The rows changed: read again, and carry on a step back that was waiting
      for older history. A page can hold no own message at all, so the walk
-     keeps asking until one appears or nothing older is left. */
+     keeps asking until one appears or nothing older is left. The reader has
+     not moved since the step (anything that moves the feed ends the wait), so
+     the message sought is still the one before the reading line. */
   useEffect(() => {
     if (!enabled) return;
     schedule();
@@ -206,29 +259,23 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
     const scroller = now.scroller.current;
     if (olderWait.current === null || !scroller) return;
     if (performance.now() > olderWait.current) { olderWait.current = null; return; }
-    const { rows, reading } = readFeed(scroller, now.phone, now.olderUnloaded);
+    const { rows, reading } = readFeed(scroller, now);
     const target = stepTarget(reading, -1);
     if (target !== null) {
       olderWait.current = null;
       land(rows[target]!);
-    } else if (reading.olderUnloaded) now.revealOlder();
+    } else if (hasOlder(reading)) now.revealOlder();
     else olderWait.current = null;
-  }, [enabled, feed.revision, feed.olderUnloaded, feed.sendersPending, feed.identity, feed.phone, schedule, land]);
+  }, [enabled, feed.revision, feed.atTail, feed.olderOwn, feed.olderUnloaded, feed.operatorWrote, feed.sendersPending, feed.identity, feed.phone, schedule, land]);
 
-  const shownState = held && held.identity === feed.identity ? held.state : EMPTY;
-  const shown = enabled && shownState.total >= 2;
+  const shown = enabled && offered !== null && offered.identity === feed.identity && offered.offered;
   const mount = feed.mount;
   useEffect(() => {
     if (!shown || !mount) return;
     return registerKeyTarget({ root: () => mount.parentElement, step });
   }, [shown, mount, step]);
 
-  return {
-    shown,
-    /* The count is the held one; which way there is to go is always live. */
-    state: { ...shownState, canPrev: state.canPrev, canNext: state.canNext },
-    step,
-  };
+  return { shown, step, release, subscribe, read };
 }
 
 const STEP_BUTTON = "inline-flex h-full min-w-11 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[8px] px-2 text-label font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40";
@@ -258,10 +305,11 @@ function StepButton({ direction, state, onStep }: { direction: -1 | 1; state: St
  * border on the phone. `wayBack` is the feed's "to latest" control while the
  * phone needs both, so the two share this one row; its cell is
  * kept on the phone at the tail too, and the step buttons never move.
+ * The row draws itself again on a scroll; the feed around it does not.
  */
 export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; phone: boolean; wayBack?: ReactNode }) {
   const { t } = useLocale();
-  const { state } = steps;
+  const state = useSyncExternalStore(steps.subscribe, steps.read, steps.read);
   return (
     <div
       data-own-steps
