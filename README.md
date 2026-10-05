@@ -543,10 +543,13 @@ The tools, by area:
 - **bug reports:** `issue_report` takes a Delegatus bug report from preview to
   publication. An orchestrator that hits a Delegatus failure asks you first,
   then an `issue-reporter` agent writes the report and previews it; a preview
-  that carries a host, a path, an address, an id, a name this machine knows or
-  another private value is refused. The orchestrator shows you the exact title
-  and body in chat, and only your yes to that text files it: publication takes
-  the preview's digest, so what is filed is what you read;
+  that carries a host, a path, an address, an id, a name this machine knows,
+  somebody's quoted words or another private value is refused, in whatever
+  encoding it is written. The orchestrator shows you the exact title and body
+  in chat and offers one reply that approves that text. Publication takes the
+  preview's digest and reads your reply in the conversation itself: nothing
+  the orchestrator says about your answer counts, a reply for an earlier
+  wording does not carry over, and one preview is filed once;
 - **Telegram bot:** `telegram_bot_chats`, `telegram_bot_send` (posts to a
   chat you allowed in the Telegram panel, signed with the calling
   conversation), `telegram_bot_send_document` (posts a report file from

@@ -5,8 +5,8 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 
 /*
- * The previews of Delegatus bug reports (#2518), one file per preview, named
- * by the digest of its text.
+ * The previews of Delegatus bug reports (#2518), filed by the digest of their
+ * text.
  *
  * The digest is the whole contract between what the operator read and what is
  * published: a preview is stored under it, the seat reads the stored text back
@@ -14,13 +14,34 @@ import { statePath } from "@/lib/configDir";
  * caller hands publication a title or a body, so the published text cannot
  * differ from the previewed one. An edit is a new preview with a new digest.
  *
- * One file per preview because two processes write here: the reporter's MCP
- * server records a preview and the seat's marks it shown and published.
+ * Several MCP server processes write here at once (the reporter's, and every
+ * seat's), so nothing is read, changed and written back. Each fact is its own
+ * file, and each is created once:
+ *
+ *  - `<digest>.json`: the text, written when it is previewed and never again;
+ *  - `<digest>.shown.<seat>.json`: when one seat first read it back;
+ *  - `<digest>.publication.json`: the claim on publishing it. It is created
+ *    exclusively, so of any number of publications racing for one digest
+ *    exactly one holds the claim and reaches the forge. The holder replaces it
+ *    with the issue's address, or removes it when the forge provably refused
+ *    before anything was written. A claim nobody settled stays, and says the
+ *    outcome is unknown.
  */
 
 export const ISSUE_REPORT_DIGEST = /^[0-9a-f]{64}$/;
 /** A preview nobody published is dropped after this long. */
 export const ISSUE_REPORT_PREVIEW_TTL_MS = 14 * 24 * 60 * 60_000;
+
+export interface IssueReportPublication {
+  /** The seat that published. */
+  by: string;
+  /** The operator's approving message, as the seat's transcript recorded it. */
+  approval: string;
+  approvedAt: string;
+  startedAt: string;
+  publishedAt?: string;
+  issueUrl?: string;
+}
 
 export interface IssueReportPreview {
   schemaVersion: 1;
@@ -30,17 +51,11 @@ export interface IssueReportPreview {
   createdAt: string;
   /** The conversation that wrote it. */
   createdBy: string | null;
-  /** Seats that read the stored text back, which is what they show the operator. */
-  shownTo: string[];
+  /** When each seat first read the stored text back, which is what it shows the operator. */
+  shown: { seat: string; at: string }[];
+  /** `publishing` is a claim nobody settled: the forge may hold the issue. */
   state: "preview" | "publishing" | "published";
-  /** Set with `publishing`: who published, on whose words. */
-  publication?: {
-    by: string;
-    approval: string;
-    startedAt: string;
-    publishedAt?: string;
-    issueUrl?: string;
-  };
+  publication?: IssueReportPublication;
 }
 
 /** The digest of a report's exact text. A change to either part changes it. */
@@ -50,42 +65,91 @@ export function issueReportDigest(report: { title: string; body: string }): stri
 
 export const issueReportsDir = () => statePath("issue-reports");
 
-function fileOf(digest: string, directory: string): string {
-  return path.join(directory, `${digest}.json`);
+const textFile = (digest: string, directory: string) => path.join(directory, `${digest}.json`);
+const publicationFile = (digest: string, directory: string) => path.join(directory, `${digest}.publication.json`);
+const shownFile = (digest: string, seat: string, directory: string) =>
+  path.join(directory, `${digest}.shown.${crypto.createHash("sha256").update(seat).digest("hex").slice(0, 16)}.json`);
+
+function readJson(file: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
-function write(preview: IssueReportPreview, directory: string): void {
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const target = fileOf(preview.digest, directory);
-  const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temp, `${JSON.stringify(preview, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temp, target);
+/** Creates a file with its whole content, or answers false when it exists.
+    The content is linked in complete, so no reader meets half a record. */
+function createOnce(file: string, value: unknown): boolean {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.linkSync(temp, file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
+function publicationOf(digest: string, directory: string): IssueReportPublication | null {
+  const file = publicationFile(digest, directory);
+  const parsed = readJson(file);
+  if (!parsed) {
+    /* A claim that cannot be read is still a claim. */
+    return fs.existsSync(file) ? { by: "", approval: "", approvedAt: "", startedAt: "" } : null;
+  }
+  const word = (key: string) => (typeof parsed[key] === "string" ? parsed[key] as string : "");
+  return {
+    by: word("by"), approval: word("approval"), approvedAt: word("approvedAt"), startedAt: word("startedAt"),
+    ...(word("publishedAt") ? { publishedAt: word("publishedAt") } : {}),
+    ...(word("issueUrl") ? { issueUrl: word("issueUrl") } : {}),
+  };
 }
 
 /** The stored preview, or null when there is none or its text no longer
     matches the digest it is filed under. */
 export function readIssueReportPreview(digest: string, directory = issueReportsDir()): IssueReportPreview | null {
   if (!ISSUE_REPORT_DIGEST.test(digest)) return null;
-  let parsed: IssueReportPreview;
-  try {
-    parsed = JSON.parse(fs.readFileSync(fileOf(digest, directory), "utf8")) as IssueReportPreview;
-  } catch {
-    return null;
-  }
+  const parsed = readJson(textFile(digest, directory));
   if (!parsed || parsed.schemaVersion !== 1 || typeof parsed.title !== "string" || typeof parsed.body !== "string") return null;
-  if (parsed.digest !== digest || issueReportDigest(parsed) !== digest) return null;
-  return { ...parsed, shownTo: Array.isArray(parsed.shownTo) ? parsed.shownTo.filter((id) => typeof id === "string") : [] };
+  if (parsed.digest !== digest || issueReportDigest({ title: parsed.title, body: parsed.body }) !== digest) return null;
+  let names: string[] = [];
+  try { names = fs.readdirSync(directory); } catch { /* No one read it back. */ }
+  const shown = names
+    .filter((name) => name.startsWith(`${digest}.shown.`) && name.endsWith(".json"))
+    .map((name) => readJson(path.join(directory, name)))
+    .filter((row): row is { seat: string; at: string } => typeof row?.seat === "string" && typeof row.at === "string")
+    .map((row) => ({ seat: row.seat, at: row.at }));
+  const publication = publicationOf(digest, directory);
+  return {
+    schemaVersion: 1, digest, title: parsed.title, body: parsed.body,
+    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
+    createdBy: typeof parsed.createdBy === "string" ? parsed.createdBy : null,
+    shown,
+    state: !publication ? "preview" : publication.issueUrl ? "published" : "publishing",
+    ...(publication ? { publication } : {}),
+  };
 }
 
 function prune(directory: string, now: number): void {
   let names: string[];
   try { names = fs.readdirSync(directory); } catch { return; }
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const digest = name.slice(0, -".json".length);
+  const digests = new Set(names.map((name) => name.slice(0, 64)).filter((digest) => ISSUE_REPORT_DIGEST.test(digest)));
+  for (const digest of digests) {
+    /* A publication, settled or not, is the record that an issue may exist. */
+    if (fs.existsSync(publicationFile(digest, directory))) continue;
     const preview = readIssueReportPreview(digest, directory);
-    if (preview && (preview.state !== "preview" || now - Date.parse(preview.createdAt) < ISSUE_REPORT_PREVIEW_TTL_MS)) continue;
-    try { fs.rmSync(path.join(directory, name), { force: true }); } catch { /* Left for the next pass. */ }
+    const created = preview ? Date.parse(preview.createdAt) : NaN;
+    if (preview && Number.isFinite(created) && now - created < ISSUE_REPORT_PREVIEW_TTL_MS) continue;
+    for (const name of names) {
+      if (!name.startsWith(`${digest}.`)) continue;
+      try { fs.rmSync(path.join(directory, name), { force: true }); } catch { /* Left for the next pass. */ }
+    }
   }
 }
 
@@ -101,24 +165,36 @@ export function recordIssueReportPreview(
   const digest = issueReportDigest(report);
   const existing = readIssueReportPreview(digest, directory);
   if (existing) return existing;
-  const preview: IssueReportPreview = {
-    schemaVersion: 1, digest, title: report.title, body: report.body,
-    createdAt: now.toISOString(), createdBy, shownTo: [], state: "preview",
-  };
-  write(preview, directory);
-  return preview;
+  /* Text filed under this digest that is not this text is replaced whole. */
+  fs.rmSync(textFile(digest, directory), { force: true });
+  createOnce(textFile(digest, directory), { schemaVersion: 1, digest, title: report.title, body: report.body, createdAt: now.toISOString(), createdBy });
+  return readIssueReportPreview(digest, directory)!;
 }
 
-/** Notes that a seat read the stored text back. */
-export function markIssueReportShown(digest: string, seat: string, directory = issueReportsDir()): IssueReportPreview | null {
-  const preview = readIssueReportPreview(digest, directory);
-  if (!preview) return null;
-  if (preview.shownTo.includes(seat)) return preview;
-  const next = { ...preview, shownTo: [...preview.shownTo, seat] };
-  write(next, directory);
-  return next;
+/** Notes that a seat read the stored text back. The first reading is the one
+    kept: an approval counts from the moment the seat could first show it. */
+export function markIssueReportShown(digest: string, seat: string, options: { directory?: string; now?: Date } = {}): IssueReportPreview | null {
+  const directory = options.directory ?? issueReportsDir();
+  if (!readIssueReportPreview(digest, directory)) return null;
+  createOnce(shownFile(digest, seat, directory), { seat, at: (options.now ?? new Date()).toISOString() });
+  return readIssueReportPreview(digest, directory);
 }
 
-export function saveIssueReportPreview(preview: IssueReportPreview, directory = issueReportsDir()): void {
-  write(preview, directory);
+/** Takes the one claim on publishing this preview. False when it is taken. */
+export function claimIssueReportPublication(digest: string, claim: IssueReportPublication, directory = issueReportsDir()): boolean {
+  return createOnce(publicationFile(digest, directory), claim);
+}
+
+/** The claim holder's record that the issue exists. */
+export function settleIssueReportPublication(digest: string, publication: IssueReportPublication, directory = issueReportsDir()): void {
+  const file = publicationFile(digest, directory);
+  const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(publication, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temp, file);
+}
+
+/** The claim holder's record that the forge refused before any issue could
+    exist, so the preview may be published again. */
+export function releaseIssueReportPublication(digest: string, directory = issueReportsDir()): void {
+  fs.rmSync(publicationFile(digest, directory), { force: true });
 }

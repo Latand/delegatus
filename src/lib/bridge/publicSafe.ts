@@ -83,6 +83,9 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["email", /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/],
   ["ip", /\b(?:\d{1,3}\.){3}\d{1,3}\b/],
   ["ip", /\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/i],
+  /* The compressed forms: `fd00::1234`, `fe80::1:2`, `::1`. */
+  ["ip", /(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?(?![\w:])/i],
+  ["ip", /(?<![\w:])::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}(?![\w:])/i],
   ["host", /\b[\w-]+\.ts\.net\b/i],
   ["host", /\b[\w-]+\.local\b/i],
   ["host", /\blocalhost\b/i],
@@ -92,13 +95,15 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
   ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
-  ["path", /(?:^|[\s(«"'`=])\/(?:[\w.@-]+\/)+[\w.@-]*/],
+  /* Folder names are letters of any script, so `\w` would miss most of them. */
+  ["path", /(?:^|[\s(«"'`=])\/(?:[\p{L}\p{N}_.@-]+\/)+[\p{L}\p{N}_.@-]*/u],
   ["path", /(?:^|[\s(«"'`=])\/(?:home|root|Users|tmp|var|etc|opt|usr|mnt|srv|proc|run|private)\b/],
   ["path", /\b[a-z]:\\[\w\\. -]+/i],
   ["phone", /\+\d{1,3}[\s-]?\(?\d{2,4}\)?(?:[\s-]?\d{2,4}){2,4}\b/],
   ["id", /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i],
-  ["id", /\bconversation_[\w-]+/i],
-  ["id", /\b(?:rpt|rsg|dep|task|card|pipeline)_[0-9a-z]{6,}\b/i],
+  /* Delegatus's own tool names share the prefix and name nothing private. */
+  ["id", /\bconversation_(?!(?:action|messages|migration|deliverability)\b)[\w-]+/i],
+  ["id", /\b(?:rpt|rsg|dep|task|card|pipeline)_(?!action\b)[0-9a-z]{6,}\b/i],
   /* A share or an amount next to the words for a limit, in English, Ukrainian
      and Russian. `\b` and `\w` are ASCII-only, so the Cyrillic words are
      bounded by letter classes instead. */
@@ -107,6 +112,48 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["usage", /(?:\$|€|₴)\s?\d+(?:[.,]\d+)?[^.;\n]{0,30}(?<!\p{L})(?:plan|tier|subscription|month|план\p{L}*|підписк\p{L}*|подписк\p{L}*|місяц\p{L}*|месяц\p{L}*)/iu],
   ["usage", /\b(?:max|pro|plus|team|enterprise)\s+(?:plan|tier|20x|5x)\b/i],
 ];
+
+/*
+ * The strict reading, for a text that goes to a public repository and can be
+ * reworded by its author before anyone sees it (a Delegatus bug report,
+ * #2518). A manager report drops an item it doubts and the operator loses a
+ * line; a bug report refused in doubt costs its author one more wording. So
+ * the strict reading keeps none of the allowances above:
+ *
+ *  - a domain is any dotted name ending in a top-level domain, country codes
+ *    included (`buildbox.fr`). The two-letter endings that are source file
+ *    extensions stay readable, or no report could name `bindings.ts`;
+ *  - an id is also eight or more bare hex characters, whatever they are: a
+ *    pipeline id is the first eight of a UUID, which can be all digits or all
+ *    letters;
+ *  - every known name counts, however short or ordinary, and a project's name
+ *    in any form. `Delegatus` is the one name a report may carry.
+ */
+export interface PrivateClassOptions {
+  strict?: boolean;
+}
+
+const STRICT_TLD = new Set([
+  ...TLD.slice(3, -1).split("|"),
+  "edu", "gov", "mil", "int", "mobi", "shop", "store", "blog", "club", "news", "wiki", "host",
+]);
+const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
+const DOTTED_NAME = /(?<![\p{L}\p{N}_-])(?:[a-z0-9-]+\.)+([a-z]{2,24})(?![\p{L}\p{N}_-])/giu;
+const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
+const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
+
+function strictDomain(text: string): boolean {
+  for (const match of text.matchAll(DOTTED_NAME)) {
+    const ending = match[1].toLowerCase();
+    if (STRICT_TLD.has(ending) || (ending.length === 2 && !SOURCE_EXTENSIONS.has(ending))) return true;
+  }
+  return false;
+}
+
+function strictName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed.length >= 2 && !STRICT_ALLOWED_NAMES.has(trimmed.toLowerCase());
+}
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -128,28 +175,33 @@ function repositoryShaped(name: string): boolean {
   return /[-_.\d]/.test(name);
 }
 
-function namesHit(text: string, names: readonly string[]): boolean {
-  return names.some((name) => usableName(name) && wholeWord(name.trim()).test(text));
+function namesHit(text: string, names: readonly string[], usable: (name: string) => boolean = usableName): boolean {
+  return names.some((name) => usable(name) && wholeWord(name.trim()).test(text));
 }
 
 /** Every private class found in `text`, each once, in a stable order. */
-export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateClass[] {
+export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST, options: PrivateClassOptions = {}): PrivateClass[] {
   if (!text) return [];
   const found = new Set<PrivateClass>();
   if (hardenedRedact(text) !== text) found.add("secret");
   for (const [kind, pattern] of PATTERNS) {
     if (!found.has(kind) && pattern.test(text)) found.add(kind);
   }
-  if (namesHit(text, deny.accounts)) found.add("account");
-  if (namesHit(text, deny.people)) found.add("person");
-  if (namesHit(text, deny.local)) found.add("host");
+  const usable = options.strict ? strictName : usableName;
+  if (options.strict) {
+    if (strictDomain(text)) found.add("domain");
+    if (BARE_HEX_ID.test(text)) found.add("id");
+  }
+  if (namesHit(text, deny.accounts, usable)) found.add("account");
+  if (namesHit(text, deny.people, usable)) found.add("person");
+  if (namesHit(text, deny.local, usable)) found.add("host");
   const lower = text.toLowerCase();
   for (const project of deny.projects) {
     if (project.repository && project.repository.includes("/") && lower.includes(project.repository.toLowerCase())) {
       found.add("project");
       break;
     }
-    if (namesHit(text, project.names.filter(repositoryShaped))) {
+    if (namesHit(text, options.strict ? project.names : project.names.filter(repositoryShaped), usable)) {
       found.add("project");
       break;
     }

@@ -86,3 +86,96 @@ test("a finding names the class, where it is and the lines, and never the value"
   expect(findings.find((finding) => finding.where === "title")).toMatchObject({ class: "host", lines: [1] });
   expect(JSON.stringify(findings)).not.toContain("someone");
 });
+
+/* The review of #2518 found each of the following passing. A report is read
+   the way Markdown will render it, the detectors keep none of the allowances a
+   manager report has, and somebody else's words are refused in every form. */
+
+const entity = (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join("");
+const percent = (text: string) => [...text].map((char) => `%${char.codePointAt(0)!.toString(16).padStart(2, "0")}`).join("");
+
+test("an encoded value is read as the text a reader will see", () => {
+  const slash = entity("/");
+  expect(classes(`The transcript is under ${["", "home", "someone", "notes.md"].join(slash)}.`)).toEqual(expect.arrayContaining(["path", "home_path"]));
+  expect(classes(`The transcript is under ${["", "home", "someone", "notes.md"].join(percent("/"))}.`)).toContain("home_path");
+  expect(classes(`It failed on ${["build", "box"].join("-")}${entity(".")}${"lan"}.`)).toContain("domain");
+  expect(classes(`The account is registered to ${at.replace("@", entity("@"))}.`)).toContain("email");
+  expect(classes(`The account is registered to ${at.replace("@", "&commat;")}.`)).toContain("email");
+  expect(classes(`The card ${taskId.replaceAll("-", entity("-"))} stayed open.`)).toContain("id");
+  expect(classes(`The listener at ${[203, 0, 113, 7].join("\\.")} refused.`)).toContain("ip");
+  /* Nested: an entity whose ampersand is itself an entity, inside a percent escape. */
+  const nested = percent(entity("/").replace("&", "&amp;"));
+  expect(classes(`The transcript is under ${["", "home", "someone", "notes.md"].join(nested)}.`)).toContain("home_path");
+  /* A zero-width character inside a value hides it from a pattern only. */
+  expect(classes(`The seat ${"conver"}​${"sation_"}seatabc123 was busy.`)).toContain("id");
+
+  const deny: PublicDenyList = { accounts: [], people: ["Ostap Vyshnia"], local: [], projects: [] };
+  expect(classes(`Ostap${entity(" ")}Vyshnia observed the refusal.`, deny)).toContain("person");
+  expect(classes("Ostap&nbsp;Vyshnia observed the refusal.", deny)).toContain("person");
+});
+
+test("an encoded value is refused without the value appearing in the finding", () => {
+  const body = `The file is ${["", "home", "someone", "notes.md"].join(entity("/"))}.`;
+  const findings = scrubIssueReport({ title: CLEAN.title, body });
+  expect(findings.map((finding) => finding.class)).toContain("home_path");
+  expect(findings.every((finding) => finding.where === "body" && finding.lines.join() === "1")).toBe(true);
+  expect(JSON.stringify(findings)).not.toContain("someone");
+});
+
+test("hosts, addresses, paths and ids are found in their real forms", () => {
+  expect(classes(`It failed on ${"buildbox"}.${"fr"}.`)).toContain("domain");
+  expect(classes(`It failed on ${"buildbox"}.${"example"}.${"shop"} twice.`)).toContain("domain");
+  expect(classes(`It failed at ${"fd00"}::${"1234"}.`)).toContain("ip");
+  expect(classes(`It failed at ${"fe80"}::${"1"}:${"2"} once.`)).toContain("ip");
+  expect(classes(`It listened on ::${"1"} only.`)).toContain("ip");
+  expect(classes(`The state is stored at ${["", "дані", "особисте", "звіт.json"].join("/")}.`)).toContain("path");
+  /* A pipeline id is the first eight characters of a UUID: all digits and all letters are both ids. */
+  expect(classes(`The pipeline ${"1234" + "5678"} failed.`)).toContain("id");
+  expect(classes(`The pipeline ${"dead" + "beef"} failed.`)).toContain("id");
+  expect(classes(`The commit ${"0a1b2c3d".repeat(5)} is where it began.`)).toContain("id");
+});
+
+test("references to Delegatus's own code and tools stay readable", () => {
+  for (const line of [
+    "The settlement path in src/lib/mcp/bindings.ts.",
+    "See docs/design/agent-prompt-contract.md and scripts/gate-slot.sh.",
+    "The component is src/components/kanban/KanbanBoard.tsx, and package.json names the runtime.",
+    "pipeline_action answered ok and conversation_messages answered an empty page.",
+    "conversation_action, conversation_migration and conversation_deliverability all agreed.",
+    "The answer came 3 times in 20 seconds, e.g. after each retry.",
+    "The state called \"delivered\" never changed.",
+    "The recipient's turn never started and the agents' queue stayed empty.",
+  ]) expect(classes(line)).toEqual([]);
+});
+
+test("every known name is refused, however short or ordinary, and Delegatus alone passes", () => {
+  const deny: PublicDenyList = {
+    accounts: ["main"],
+    people: ["Ada"],
+    local: ["box"],
+    projects: [{ repository: "example/Artemis", names: ["Artemis"] }, { repository: null, names: ["Delegatus", "tools"] }],
+  };
+  expect(classes("Ada observed the refusal.", deny)).toContain("person");
+  expect(classes("The project Artemis failed to launch.", deny)).toContain("project");
+  expect(classes("The launch picked the account called main.", deny)).toContain("account");
+  expect(classes("It only happens on box.", deny)).toContain("host");
+  expect(classes("A seat of tools sent the message.", deny)).toContain("project");
+  expect(classes("Delegatus refused the launch, and adaptation of the mandate did not help.", deny)).toEqual([]);
+});
+
+test("somebody else's words are refused as a quotation, a quoted block or a conversation line", () => {
+  for (const line of [
+    "The operator said: \"restart every agent now\".",
+    "The operator said: “restart every agent now”.",
+    "Оператор написав: «перезапусти всіх агентів зараз».",
+    "Оператор написав: „перезапусти всіх агентів“.",
+    "The operator said: 'restart every agent now'.",
+    "The operator said: &quot;restart every agent now&quot;.",
+    "> restart every agent now",
+    "Operator: restart every agent now",
+    "**User:** restart every agent now",
+    "- [human] restart every agent now",
+    "Оператор: перезапусти всіх агентів",
+  ]) expect(classes(line)).toContain("quote");
+  expect(classes("The operator asked for every agent to be restarted at once.")).toEqual([]);
+});

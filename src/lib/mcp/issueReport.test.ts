@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
+import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
+import { issueReportApprovalCode, issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview } from "@/lib/issueReports/store";
 
 import { viewerMcpBindings, type CallerAttribution } from "./bindings";
@@ -23,6 +25,8 @@ afterEach(() => { fs.rmSync(sandbox, { recursive: true, force: true }); });
 
 const SEAT = "conversation_seat";
 const SEAT_CALLER: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator" };
+const OTHER_SEAT = "conversation_other_seat";
+const OTHER_SEAT_CALLER: CallerAttribution = { kind: "manager", conversationId: OTHER_SEAT, role: "orchestrator" };
 const REPORTER: CallerAttribution = { kind: "agent", conversationId: "conversation_reporter", role: "issue-reporter" };
 const DEPUTY: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator", via: { deputy: "conversation_deputy" } };
 const DENY: PublicDenyList = { accounts: ["claude-main-b"], people: [], local: [], projects: [] };
@@ -40,29 +44,42 @@ const REPORT = {
   ].join("\n"),
 };
 
-function harness() {
+type Publisher = (report: { title: string; body: string }, repository: string) => Promise<string>;
+
+function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList } = {}) {
   const published: { title: string; body: string; repository: string }[] = [];
-  const receipts = new MemoryMcpReceiptStore();
+  /* What the operator wrote, per conversation: the fake of the transcript read. */
+  const said = new Map<string, { at: number; text: string }[]>();
+  const operatorSays = (words: string, conversationId = SEAT) => {
+    /* The next millisecond: a message is after a reading only by the clock. */
+    const from = Date.now();
+    while (Date.now() === from) { /* wait */ }
+    said.set(conversationId, [...(said.get(conversationId) ?? []), { at: Date.now(), text: words }]);
+  };
+  /* Every caller gets its own service and receipt store, as every agent has
+     its own MCP server process over the one state directory. */
   const as = (caller: CallerAttribution) => createMcpToolService(
     viewerMcpBindings(undefined, undefined, {
       attentionAuthority: () => (caller.conversationId
         ? { kind: "worker", conversationId: caller.conversationId, role: caller.role }
         : { kind: "unidentified" }),
       callerAttribution: () => caller,
-      publicDenyList: () => DENY,
+      publicDenyList: () => options.deny ?? DENY,
       issueReportsDir: () => sandbox,
       issueReportRepository: () => REPOSITORY,
+      operatorMessages: async (conversationId: string) => said.get(conversationId) ?? [],
+      issueReportFinder: async (report: { title: string; body: string }) => (options.finder ? options.finder(report) : null),
       issueReportPublisher: async (report: { title: string; body: string }, repository: string) => {
         published.push({ ...report, repository });
-        return ISSUE_URL;
+        return options.publisher ? options.publisher(report, repository) : ISSUE_URL;
       },
     } as never),
-    receipts,
+    new MemoryMcpReceiptStore(),
   );
   let next = 0;
   const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
     as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...args }) as Promise<McpToolResult & Record<string, unknown>>;
-  return { call, published };
+  return { call, published, operatorSays };
 }
 
 async function previewed(h: ReturnType<typeof harness>, report = REPORT): Promise<string> {
@@ -71,14 +88,23 @@ async function previewed(h: ReturnType<typeof harness>, report = REPORT): Promis
   return preview.digest as string;
 }
 
+/** The seat reads the preview back; the answer names the reply that approves it. */
+async function shown(h: ReturnType<typeof harness>, digest: string, seat = SEAT_CALLER): Promise<{ en: string; uk: string }> {
+  const answer = await h.call(seat, { action: "show", digest });
+  expect(answer.ok).toBe(true);
+  return answer.approvalReplies as { en: string; uk: string };
+}
+
 test("the tool is on the published surface, keyed like every other mutation", () => {
   expect(MCP_TOOL_NAMES).toContain("issue_report");
   expect(MUTATING_MCP_TOOL_NAMES.has("issue_report")).toBe(true);
   const schema = TOOL_INPUT_SCHEMAS.issue_report;
   expect(schema.safeParse({ clientRequestId: "a", action: "preview", title: "t", body: "b" }).success).toBe(true);
-  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(64), approval: "yes" }).success).toBe(true);
+  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(64) }).success).toBe(true);
+  /* Publication takes no approval from its caller: the field is gone. */
+  expect(Object.keys(schema.shape)).not.toContain("approval");
   /* A digest is the whole 64 characters; a shortened one names nothing. */
-  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8), approval: "yes" }).success).toBe(false);
+  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(false);
   expect(schema.safeParse({ clientRequestId: "a", action: "file" }).success).toBe(false);
 });
 
@@ -107,76 +133,276 @@ test("a clean report is stored under the digest of its exact text", async () => 
   const h = harness();
   const preview = await h.call(REPORTER, { action: "preview", ...REPORT });
   expect(preview).toMatchObject({ ok: true, state: "preview", title: REPORT.title, body: REPORT.body, digest: issueReportDigest(REPORT) });
-  expect(readIssueReportPreview(preview.digest as string, sandbox)).toMatchObject({ createdBy: "conversation_reporter", shownTo: [], state: "preview" });
+  expect(readIssueReportPreview(preview.digest as string, sandbox)).toMatchObject({ createdBy: "conversation_reporter", shown: [], state: "preview" });
   expect(h.published).toEqual([]);
 });
 
-test("the seat reads the preview back, and the approved digest files exactly that text, once", async () => {
+test("the seat reads the preview back, and the operator's approving reply files exactly that text, once", async () => {
   const h = harness();
   const digest = await previewed(h);
 
-  const shown = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(shown).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest });
+  const answer = await h.call(SEAT_CALLER, { action: "show", digest });
+  expect(answer).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest });
+  const replies = answer.approvalReplies as { en: string; uk: string };
+  expect(replies).toEqual(issueReportApprovalReplies(digest));
+  /* A reader who is no seat gets the text and no reply to offer. */
+  expect((await h.call(REPORTER, { action: "show", digest })).approvalReplies).toBeUndefined();
 
-  const published = await h.call(SEAT_CALLER, { action: "publish", digest, approval: "Так, публікуй" });
+  h.operatorSays(replies.uk);
+  const published = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(published).toMatchObject({ ok: true, published: true, issueUrl: ISSUE_URL, state: "published" });
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toMatchObject({ by: SEAT, approval: "Так, публікуй", issueUrl: ISSUE_URL });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toMatchObject({ by: SEAT, approval: replies.uk, issueUrl: ISSUE_URL });
 
   /* A second publication of the same preview answers the issue that exists. */
-  const again = await h.call(SEAT_CALLER, { action: "publish", digest, approval: "yes" });
+  const again = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(again).toMatchObject({ ok: true, published: true, replay: true, issueUrl: ISSUE_URL });
   expect(h.published).toHaveLength(1);
+});
+
+test("the approving reply is read loosely in its punctuation and case, and in either language", async () => {
+  for (const reword of [(reply: string) => reply.toUpperCase(), (reply: string) => `  ${reply.replace(",", "")}.  `, (reply: string) => `${reply}!`]) {
+    for (const language of ["en", "uk"] as const) {
+      const h = harness();
+      const digest = await previewed(h);
+      const replies = await shown(h, digest);
+      h.operatorSays(reword(replies[language]));
+      expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    }
+  }
 });
 
 test("a digest that does not match the approved preview is refused and nothing is filed", async () => {
   const h = harness();
   const digest = await previewed(h);
-  await h.call(SEAT_CALLER, { action: "show", digest });
+  const replies = await shown(h, digest);
+  h.operatorSays(replies.en);
 
   /* The digest of an edited text nobody previewed. */
   const edited = issueReportDigest({ title: REPORT.title, body: `${REPORT.body}\nOne more sentence.` });
   expect(edited).not.toBe(digest);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest: edited, approval: "yes" }))
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: edited }))
     .toMatchObject({ ok: false, code: "issue_report_digest_mismatch" });
 
   /* A stored preview whose text was changed under its digest. */
   const file = path.join(sandbox, `${digest}.json`);
   const stored = JSON.parse(fs.readFileSync(file, "utf8")) as { body: string };
   fs.writeFileSync(file, JSON.stringify({ ...stored, body: `${stored.body}\nSlipped in after approval.` }));
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest, approval: "yes" }))
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
     .toMatchObject({ ok: false, code: "issue_report_digest_mismatch" });
 
   expect(h.published).toEqual([]);
 });
 
-test("an edit is a new preview with a new digest, and the old approval does not carry over", async () => {
+/* Review finding 1: an approval was whatever string the seat passed. Each of
+   the following reached the forge; none does now. */
+test("no approval, a refusal, and the seat's own account of an approval file nothing", async () => {
+  const h = harness();
+  const digest = await previewed(h);
+
+  /* Not read back yet. */
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
+  const replies = await shown(h, digest);
+
+  /* The operator has said nothing since. */
+  const silent = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(silent).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_operator_message" } });
+
+  /* What the seat passes is no evidence, whatever it says. */
+  for (const approval of ["yes", replies.en, replies.uk]) {
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest, approval }))
+      .toMatchObject({ ok: false, code: "issue_report_approval_required" });
+  }
+
+  /* A refusal, an edit, a bare yes, and a refusal that names the code. */
+  for (const words of ["Ні, не публікуй", "Change the title first", "yes", "так", `Ні, не публікуй звіт ${issueReportApprovalCode(digest)}`, `${replies.en} but change the title`]) {
+    h.operatorSays(words);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  }
+  expect(h.published).toEqual([]);
+});
+
+test("an approval counts only after the preview was read back, and only while it is the operator's last word", async () => {
+  const h = harness();
+  const digest = await previewed(h);
+  /* Sent before the seat could have shown the text. */
+  h.operatorSays(issueReportApprovalReplies(digest).en);
+  const replies = await shown(h, digest);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_operator_message" } });
+
+  /* Approved, then withdrawn. */
+  h.operatorSays(replies.en);
+  h.operatorSays("Wait, do not send it yet");
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  expect(h.published).toEqual([]);
+
+  h.operatorSays(replies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toHaveLength(1);
+});
+
+test("an approval of one preview does not move to another text or another conversation", async () => {
   const h = harness();
   const first = await previewed(h);
-  await h.call(SEAT_CALLER, { action: "show", digest: first });
+  const firstReplies = await shown(h, first);
   const second = await previewed(h, { title: REPORT.title, body: `${REPORT.body}\nIt happened twice in one hour.` });
   expect(second).not.toBe(first);
 
   /* The seat has not read the edited text back, so it cannot have shown it. */
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second, approval: "yes" }))
-    .toMatchObject({ ok: false, code: "issue_report_not_shown" });
+  h.operatorSays(firstReplies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
+
+  /* Read back after the yes to the first text: that yes names another preview. */
+  const secondReplies = await shown(h, second);
+  expect(secondReplies).not.toEqual(firstReplies);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
+  h.operatorSays(firstReplies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+
+  /* The approving reply of the second text, sent in another seat's conversation. */
+  h.operatorSays(secondReplies.en, OTHER_SEAT);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
+  /* And that other seat never read it back. */
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
+  expect(h.published).toEqual([]);
+
+  h.operatorSays(secondReplies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ title: REPORT.title, body: `${REPORT.body}\nIt happened twice in one hour.`, repository: REPOSITORY }]);
+});
+
+test("only the seat itself publishes", async () => {
+  const h = harness();
+  const digest = await previewed(h);
+  const replies = await shown(h, digest);
+  h.operatorSays(replies.en);
+  h.operatorSays(replies.en, REPORTER.conversationId!);
+
+  for (const caller of [REPORTER, DEPUTY]) {
+    expect(await h.call(caller, { action: "publish", digest }))
+      .toMatchObject({ ok: false, code: "issue_report_publish_refused" });
+  }
   expect(h.published).toEqual([]);
 });
 
-test("only the seat itself publishes, and only with the operator's words", async () => {
-  const h = harness();
-  const digest = await previewed(h);
-  await h.call(SEAT_CALLER, { action: "show", digest });
-
-  for (const caller of [REPORTER, DEPUTY]) {
-    expect(await h.call(caller, { action: "publish", digest, approval: "yes" }))
-      .toMatchObject({ ok: false, code: "issue_report_publish_refused" });
+/* Review findings 2 to 5, at the tool boundary: each body below was stored. */
+test("encoded values, real id and host forms, known names and quotations are refused before any preview exists", async () => {
+  const deny: PublicDenyList = { accounts: [], people: ["Ada", "Ostap Vyshnia"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }] };
+  const h = harness({ deny });
+  const slash = "&#47;";
+  const cases: [string, string][] = [
+    ["home_path", `The transcript is under ${["", "home", "someone", "notes.md"].join(slash)}.`],
+    ["person", "Ostap&#32;Vyshnia observed the refusal."],
+    ["domain", `It failed on ${"buildbox"}.${"fr"}.`],
+    ["ip", `It failed at ${"fd00"}::${"1234"}.`],
+    ["path", `The state is stored at ${["", "дані", "особисте", "звіт.json"].join("/")}.`],
+    ["id", `The pipeline ${"1234" + "5678"} failed.`],
+    ["id", `The pipeline ${"dead" + "beef"} failed.`],
+    ["person", "Ada observed the refusal."],
+    ["project", "The project Artemis failed to launch."],
+    ["quote", "The operator said: \"restart every agent now\"."],
+    ["quote", "The operator said: “restart every agent now”."],
+  ];
+  for (const [kind, line] of cases) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: `${REPORT.body}\n${line}` });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    const findings = (refused.details as { findings: { class: string }[] }).findings;
+    expect(findings.map((finding) => finding.class)).toContain(kind);
+    expect(JSON.stringify(refused)).not.toContain(line);
   }
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest, approval: "   " }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
-  expect(h.published).toEqual([]);
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  /* The same report in the reporter's own words, naming Delegatus, is stored. */
+  expect(await h.call(REPORTER, { action: "preview", title: REPORT.title, body: `${REPORT.body}\nThe operator asked Delegatus to restart every agent.` }))
+    .toMatchObject({ ok: true, state: "preview" });
+});
+
+/* Review finding 7: two publications of one digest both reached the forge. */
+test("concurrent publications of one digest reach the forge once, whoever calls and under whatever request id", async () => {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const h = harness({ publisher: async () => { await held; return ISSUE_URL; } });
+  const digest = await previewed(h);
+  for (const seat of [SEAT_CALLER, OTHER_SEAT_CALLER]) {
+    const replies = await shown(h, digest, seat);
+    h.operatorSays(replies.en, seat.conversationId!);
+  }
+  const racing = [SEAT_CALLER, OTHER_SEAT_CALLER, SEAT_CALLER, OTHER_SEAT_CALLER].map((seat) => h.call(seat, { action: "publish", digest }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  /* A reading that arrives while the claim is held changes nothing about it. */
+  await h.call(SEAT_CALLER, { action: "show", digest });
+  expect(readIssueReportPreview(digest, sandbox)?.state).toBe("publishing");
+  release();
+  const answers = await Promise.all(racing);
+  expect(h.published).toHaveLength(1);
+  expect(answers.filter((answer) => answer.ok && answer.published === true && answer.replay !== true)).toHaveLength(1);
+  for (const answer of answers.filter((row) => !(row.ok && row.published === true))) {
+    expect(answer).toMatchObject({ ok: false, code: "issue_report_outcome_unknown" });
+  }
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, replay: true, issueUrl: ISSUE_URL });
+  expect(h.published).toHaveLength(1);
+});
+
+/* Review finding 8: any failure put the preview back and said "retry". */
+test("a publication whose outcome is unknown is never repeated, and is settled by finding the issue", async () => {
+  let existing: string | null = null;
+  const h = harness({
+    publisher: async () => { throw new Error("the forge accepted the command and answered no issue URL"); },
+    finder: async () => existing,
+  });
+  const digest = await previewed(h);
+  const replies = await shown(h, digest);
+  h.operatorSays(replies.en);
+
+  const first = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(first.ok).toBe(false);
+  expect(first.code).not.toBe("issue_report_publish_failed");
+  expect(readIssueReportPreview(digest, sandbox)?.state).toBe("publishing");
+
+  /* A new request id, a new approval, another seat: none files it again. */
+  h.operatorSays(replies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_outcome_unknown", retryable: false });
+  const otherReplies = await shown(h, digest, OTHER_SEAT_CALLER);
+  h.operatorSays(otherReplies.en, OTHER_SEAT);
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_outcome_unknown" });
+  expect(h.published).toHaveLength(1);
+
+  /* The issue turns up in the repository: the publication is settled on it. */
+  existing = ISSUE_URL;
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true, reconciled: true, issueUrl: ISSUE_URL });
+  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "published", publication: { issueUrl: ISSUE_URL } });
+  expect(h.published).toHaveLength(1);
+});
+
+test("a lost answer is settled at once when the issue is already there", async () => {
+  const h = harness({ publisher: async () => { throw Object.assign(new Error("socket hang up"), { stderr: "error connecting" }); }, finder: async () => ISSUE_URL });
+  const digest = await previewed(h);
+  h.operatorSays((await shown(h, digest)).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true, reconciled: true, issueUrl: ISSUE_URL });
+  expect(h.published).toHaveLength(1);
+});
+
+test("a refusal that provably came before the write frees the preview for another try", async () => {
+  let refuse = true;
+  const h = harness({
+    publisher: async () => {
+      if (refuse) throw new ForgeAppWriteRefused("Delegatus refused this GitHub write: the App is not installed");
+      return ISSUE_URL;
+    },
+  });
+  const digest = await previewed(h);
+  h.operatorSays((await shown(h, digest)).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_publish_failed", retryable: true });
+  expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
+
+  refuse = false;
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true, issueUrl: ISSUE_URL });
+  expect(h.published).toHaveLength(2);
 });
 
 test("a preview needs an identified session and a one-line title", async () => {

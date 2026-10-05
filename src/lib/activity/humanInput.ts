@@ -91,7 +91,7 @@ function fallbackId(host: string, textHash: string, at: number): string {
 }
 
 /** A record's text with its Delegatus delivery marker line dropped. */
-function bodyOf(text: string): string {
+export function bodyOf(text: string): string {
   return decodeCodexStructuredUserText(text.trimStart()).text;
 }
 

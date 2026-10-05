@@ -84,9 +84,10 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { type PublicDenyList } from "@/lib/bridge/publicSafe";
-import { delegatusIssueRepository, issueReportPublisher, type IssueReportPublisher } from "@/lib/issueReports/publish";
+import { issueReportApproval, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
+import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
-import { markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, saveIssueReportPreview, type IssueReportPreview } from "@/lib/issueReports/store";
+import { claimIssueReportPublication, markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, releaseIssueReportPublication, settleIssueReportPublication, type IssueReportPreview, type IssueReportPublication } from "@/lib/issueReports/store";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { renderPlain, renderReport, type TaskChanges } from "@/lib/bridge/reportRender";
 import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
@@ -153,7 +154,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { changeRoleMapping, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, type RoleMappingChange } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
-import { readSpawnAdmissionFence, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
+import { conversationAgentRole, isSpawnDeniedRole, readSpawnAdmissionFence, reviewerOriginSpawnGuidance, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -867,6 +868,13 @@ export interface ViewerMcpDomainDependencies {
   issueReportRepository?(): string | null;
   /** #2518: where previews are stored. Absent means the state directory. */
   issueReportsDir?(): string;
+  /** #2518: what the operator wrote in one conversation, oldest first. Absent
+      means production, which reads the conversation's own transcript and
+      counts a message only on Delegatus's evidence of who wrote it. */
+  operatorMessages?(conversationId: string): Promise<readonly OperatorMessage[]>;
+  /** #2518: looks for an issue that already carries a report's exact text,
+      for a publication whose outcome nobody recorded. Absent means production. */
+  issueReportFinder?: IssueReportFinder;
 }
 
 /**
@@ -1742,12 +1750,17 @@ async function issueReportDenyList(control: ViewerControlDependencies | null, de
  *
  * - `preview` refuses a report that carries private data and stores a clean
  *   one under the digest of its text;
- * - `show` answers the stored text, and notes that a seat read it;
- * - `publish` takes a digest and never a text. It files what is stored under
- *   that digest, only for a seat that read it back, and only once.
+ * - `show` answers the stored text and the reply that approves it, and notes
+ *   when a seat read it;
+ * - `publish` takes a digest and nothing else. It files what is stored under
+ *   that digest, for a seat that read it back, when the operator's last
+ *   message in that seat's conversation since is the approving reply of this
+ *   digest, and only once.
  *
  * So the text an operator approved and the text that is filed are one stored
- * value, and an edit cannot ride an old approval: it has another digest.
+ * value, the approval is read where the operator wrote it and never taken
+ * from the caller, and an edit cannot ride an old approval: it has another
+ * digest and another approving reply.
  */
 async function issueReportTool(args: McpToolArgs, control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action);
@@ -1789,43 +1802,86 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
     ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
   });
-  if (action === "show") return view(seat ? markIssueReportShown(digest, seat, directory) ?? stored : stored);
+  const approvalReplies = issueReportApprovalReplies(digest);
+  if (action === "show") {
+    if (!seat) return view(stored);
+    return {
+      ...view(markIssueReportShown(digest, seat, { directory }) ?? stored),
+      approvalReplies,
+      next: "Put this exact title and body in chat, then suggest_replies with the approvalReplies line in the operator's language as the yes, beside a no and an edit. Publication is admitted only when that line is the operator's last message here.",
+    };
+  }
   if (action !== "publish") throw refuse("action is preview, show or publish", "issue_report_invalid", { field: "action" });
   if (!seat) {
     throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
   }
   if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
-  const approval = text(args.approval);
-  if (!approval) throw refuse("publish needs approval: the operator's approving words from your own conversation", "issue_report_approval_required", { field: "approval" });
-  if (!stored.shownTo.includes(seat)) {
+  const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
+  if (!repository) throw refuse("this Delegatus install names no GitHub repository to file a report in", "issue_report_repository_unknown");
+  const report = { title: stored.title, body: stored.body };
+  /* An unsettled claim is settled only by finding the issue it may have
+     filed. Not finding it proves nothing, so nothing is filed again. */
+  const reconciled = async (claim: IssueReportPublication): Promise<McpToolPayload | null> => {
+    let issueUrl: string | null = null;
+    try { issueUrl = await (dependencies.issueReportFinder ?? issueReportFinder())(report, repository); } catch { /* Still unknown. */ }
+    if (!issueUrl) return null;
+    settleIssueReportPublication(digest, { ...claim, publishedAt: new Date().toISOString(), issueUrl }, directory);
+    return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true, reconciled: true };
+  };
+  const outcomeUnknown = "a publication of this preview did not report its outcome; the issue may exist, so look for it in the repository and file nothing again. Publishing this digest again looks for it too";
+  if (stored.state === "publishing" && stored.publication) {
+    const found = await reconciled(stored.publication);
+    if (found) return found;
+    throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
+  }
+  const shownAt = stored.shown.find((row) => row.seat === seat)?.at;
+  if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  if (stored.state === "publishing") {
-    throw refuse("an earlier publication of this preview did not report its outcome; look for the issue in the repository before anything is filed again", "issue_report_outcome_unknown", { status: 409 });
+  const messages = await (dependencies.operatorMessages
+    ? dependencies.operatorMessages(seat)
+    : operatorMessagesOf(seat, dependencies.registrySnapshot()));
+  const approval = issueReportApproval(messages, digest, Date.parse(shownAt));
+  if (!approval.approved) {
+    throw refuse(
+      approval.reason === "no_operator_message"
+        ? "the operator has not answered since you read this preview back, so nothing was published. Put the exact title and body in chat and offer the approving reply with suggest_replies"
+        : "the operator's last message in this conversation is not the approving reply of this preview, so nothing was published. A no or an edit goes back to the reporter; a yes is the approving reply, sent by the operator",
+      "issue_report_approval_required", { status: 403, reason: approval.reason, approvalReplies },
+    );
   }
   const findings = scrubIssueReport(stored, await issueReportDenyList(control, dependencies));
   if (findings.length) throw refuse("the stored preview no longer passes the private data check and was not published; preview a reworded report", "issue_report_private_data", { findings });
-  const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
-  if (!repository) throw refuse("this Delegatus install names no GitHub repository to file a report in", "issue_report_repository_unknown");
-  const startedAt = new Date().toISOString();
-  saveIssueReportPreview({ ...stored, state: "publishing", publication: { by: seat, approval, startedAt } }, directory);
+  const claim: IssueReportPublication = {
+    by: seat, approval: approval.message.text, approvedAt: new Date(approval.message.at).toISOString(), startedAt: new Date().toISOString(),
+  };
+  /* The claim is the one moment a preview turns into a publication. Of any
+     number of seats and processes publishing one digest, one creates it. */
+  if (!claimIssueReportPublication(digest, claim, directory)) {
+    const current = readIssueReportPreview(digest, directory);
+    if (current?.state === "published" && current.publication?.issueUrl) return { ...view(current), published: true, replay: true };
+    throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
+  }
   let issueUrl: string;
   try {
-    issueUrl = await (dependencies.issueReportPublisher ?? issueReportPublisher())({ title: stored.title, body: stored.body }, repository);
+    issueUrl = await (dependencies.issueReportPublisher ?? issueReportPublisher())(report, repository);
   } catch (error) {
-    /* A command the system stopped may have reached the forge; anything else
-       ended before an issue existed, so the preview can be published again. */
-    const failure = error as { killed?: unknown; signal?: unknown; stderr?: unknown; message?: unknown };
-    if (failure.killed || failure.signal) throw new McpDispatchUncertainError("the publication was interrupted and its outcome is unknown; look for the issue in the repository before anything is filed again");
-    saveIssueReportPreview(stored, directory);
-    const reason = error instanceof ForgeAppWriteRefused
-      ? error.message
-      : `${typeof failure.stderr === "string" && failure.stderr.trim() ? failure.stderr.trim().split("\n")[0] : String(failure.message ?? "the forge refused the issue")}`;
-    throw refuse(`the report was not published: ${reason}`, "issue_report_publish_failed", { status: 502, retryable: true });
+    const failure = error as { code?: unknown; message?: unknown };
+    /* Two failures prove no issue exists: the App credential refused before
+       `gh` was started, and a `gh` that could not be started at all. Every
+       other one (a lost answer, a stopped command, an answer with no address)
+       can follow an issue the forge already created, so the claim stays. */
+    if (error instanceof ForgeAppWriteRefused || failure.code === "ENOENT") {
+      releaseIssueReportPublication(digest, directory);
+      const reason = error instanceof ForgeAppWriteRefused ? error.message : "the gh command is not installed";
+      throw refuse(`the report was not published: ${reason}`, "issue_report_publish_failed", { status: 502, retryable: true });
+    }
+    const found = await reconciled(claim);
+    if (found) return found;
+    throw new McpDispatchUncertainError("the publication did not report its outcome and the issue may exist; look for it in the repository and file nothing again");
   }
-  const published = { ...stored, state: "published" as const, publication: { by: seat, approval, startedAt, publishedAt: new Date().toISOString(), issueUrl } };
-  saveIssueReportPreview(published, directory);
-  return { ...view(published), published: true };
+  settleIssueReportPublication(digest, { ...claim, publishedAt: new Date().toISOString(), issueUrl }, directory);
+  return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true };
 }
 
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -1983,6 +2039,29 @@ function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, 
   if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
 }
 
+/**
+ * #2518: a role with no child-spawn capability (a reviewer, a verifier, a
+ * maintenance run, an issue reporter) creates no pipeline, and an issue
+ * reporter launches no stage of one either. The HTTP route refuses the same caller on create; this is the
+ * door an agent actually uses, and it stands before any dispatch or write.
+ * The role is the one the server attributed to the calling conversation, or
+ * the registry's for it, or the `src` creator's when no caller is named.
+ */
+function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependencies, src?: unknown, denies: (role: string | null) => boolean = isSpawnDeniedRole): void {
+  const caller = attributionOf(dependencies);
+  let snapshot: RegistrySnapshot | null = null;
+  try { snapshot = dependencies.registrySnapshot?.() ?? null; } catch { /* The attributed role decides alone. */ }
+  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const source = !caller.conversationId && typeof src === "string" ? lookup?.conversationForPath(src.trim()) ?? null : null;
+  const conversationId = caller.conversationId ?? source?.id ?? null;
+  const roles = [caller.role, snapshot && conversationId ? conversationAgentRole(snapshot, conversationId as `conversation_${string}`) : null];
+  const denied = roles.find((role) => denies(role));
+  if (denied) throw new McpToolRefusal(reviewerOriginSpawnGuidance(denied), { code: "reviewer_origin_spawn", status: 403, retryable: false });
+}
+
+/** The pipeline actions that start a stage's agent. */
+const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", "retry-stage"]);
+
 /** A capability pins the launch receipt and its exact native generation. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
   const authority = dependencies.attentionAuthority();
@@ -2006,7 +2085,10 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
 }
 
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
+  if (dependencies) {
+    refuseSpawnDeniedPipelineCaller(dependencies, args.src);
+    assertPipelineSeatAuthority(dependencies, args.src);
+  }
   refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
@@ -2093,6 +2175,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
+  /* The other roles in the deny list keep the actions their stages rely on. */
+  if (STAGE_LAUNCHING_PIPELINE_ACTIONS.has(action)) refuseSpawnDeniedPipelineCaller(dependencies, undefined, (role) => role === "issue-reporter");
   /* Clearing a lane off the operator's queue is the dismissal service's write
      (docs/design/needs-attention.md §5): the same gate and the same attributed
      record `dismiss_attention` writes. */

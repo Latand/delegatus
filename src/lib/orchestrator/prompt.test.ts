@@ -166,7 +166,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
-  40: "2482f21b9849f481023b43ac77b4b9ded5ad971b335cda33964567b2b6ca2338",
+  40: "f47058676c2751ec1e7c4031d082b6c513df41c5e085774975e508ebf626427c",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -584,8 +584,8 @@ test("the mandate asks before a bug report is filed, publishes only an approved 
   /* The reporter writes, the seat shows the stored text, and nothing but an
      explicit yes to that text in this conversation publishes it. */
   expect(section).toContain("spawn_agent role issue-reporter");
-  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and ask again");
-  expect(section).toContain("Publish (issue_report publish, the digest, their words) only on an explicit yes to that text in this conversation");
+  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies");
+  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation");
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */

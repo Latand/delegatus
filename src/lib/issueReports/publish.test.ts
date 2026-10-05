@@ -4,7 +4,7 @@ import { ForgeAppWriteRefused, forgeWriter } from "@/lib/forge/appWrite";
 
 import manifest from "../../../package.json";
 
-import { delegatusIssueRepository, issueReportPublisher } from "./publish";
+import { delegatusIssueRepository, issueReportFinder, issueReportPublisher } from "./publish";
 
 /* #2518 with #2485: an approved report is one `gh issue create`, sent through
    the engine's GitHub write seam. No `gh` runs here and no issue is filed. */
@@ -61,4 +61,18 @@ test("in a declared App repository the issue goes out as the App, and a refused 
 test("an answer with no issue URL is a failure, never a published report", async () => {
   const publish = issueReportPublisher({ writer: async () => "Creating issue in the repository\n" });
   await expect(publish(REPORT, REPOSITORY)).rejects.toThrow("answered no issue URL");
+});
+
+/* A publication whose answer was lost is settled only by the issue itself. */
+test("the finder answers an issue only when its title and body are the report's", async () => {
+  const calls: string[][] = [];
+  const rows = (list: unknown) => issueReportFinder({ run: async (args) => { calls.push(args); return JSON.stringify(list); } });
+  const mine = { url: issueUrl(REPOSITORY, 9), title: REPORT.title, body: REPORT.body.replace(/\n/g, "\r\n") };
+
+  expect(await rows([{ url: issueUrl(REPOSITORY, 8), title: REPORT.title, body: "Another body." }, mine])(REPORT, REPOSITORY)).toBe(mine.url);
+  expect(calls[0]).toEqual(["issue", "list", "--repo", REPOSITORY, "--state", "all", "--limit", "30", "--search", `"${REPORT.title}" in:title`, "--json", "url,title,body"]);
+  /* A similar issue is another report, and an empty answer proves nothing. */
+  expect(await rows([{ url: issueUrl(REPOSITORY, 8), title: `${REPORT.title} again`, body: REPORT.body }])(REPORT, REPOSITORY)).toBeNull();
+  expect(await rows([])(REPORT, REPOSITORY)).toBeNull();
+  expect(await rows({ message: "not a list" })(REPORT, REPOSITORY)).toBeNull();
 });

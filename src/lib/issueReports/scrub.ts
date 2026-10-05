@@ -1,4 +1,5 @@
 import { EMPTY_DENY_LIST, privateClasses, privateClassLabel, type PrivateClass, type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/staticDetectors";
 
 /*
@@ -10,19 +11,29 @@ import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/s
  * The matched text is never repeated in the answer.
  *
  * Two existing detector sets do the finding, and this file adds no third:
- * `privateClasses`, which every public manager report already passes through
- * (hosts, domains, addresses, ports, local paths, emails, ids, usage, and the
- * names this machine knows: accounts, people, other projects, the local user),
- * and the publication gate's pattern detectors (home paths, credentials,
- * private networks, resource identifiers, transcript lines). The three rules
- * below are the ones a report needs and neither set states: a bare pipeline id
- * or digest, a quoted block, and an embedded image.
+ * `privateClasses` in its strict reading, which every public manager report
+ * already passes through in its lenient one (hosts, domains, addresses, ports,
+ * local paths, emails, ids, usage, and the names this machine knows: accounts,
+ * people, other projects, the local user), and the publication gate's pattern
+ * detectors (home paths, credentials, private networks, resource identifiers,
+ * transcript lines).
+ *
+ * Both read every view of a line the gate itself reads: the text as written,
+ * and the text with its entities, percent escapes, backslash escapes and
+ * zero-width characters decoded to a fixed point (`canonicalSensitiveText`).
+ * Markdown renders `&#47;home` as a path, so a report is judged by what a
+ * reader will see. The digest and the line numbers stay those of the text as
+ * written.
+ *
+ * The rules below are the ones a report needs and neither set states: somebody
+ * else's words (a quoted block, a quotation, a speaker's line) and an embedded
+ * image.
  */
 
 export const ISSUE_REPORT_MAX_TITLE_CHARS = 160;
 export const ISSUE_REPORT_MAX_BODY_CHARS = 20_000;
 
-export type IssueReportFindingClass = PrivateClass | StaticFindingClass | "quote" | "image";
+export type IssueReportFindingClass = PrivateClass | StaticFindingClass | "quote" | "image" | "encoding";
 
 export interface IssueReportFinding {
   class: IssueReportFindingClass;
@@ -41,19 +52,45 @@ const STATIC_LABELS: Record<StaticFindingClass, string> = {
   transcript_content: "a line copied from a conversation",
 };
 
-/* A pipeline id is eight bare hex characters, and a commit or a digest is a
-   longer run of them. A hex word with no digit ("deadbeef") is left alone. */
-const BARE_HEX_ID = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,64}\b/i;
 const QUOTED_BLOCK = /^\s*>/;
+/* A quotation is two or more words between quotation marks. One marked word
+   (a state called "delivered") is a term, and an apostrophe inside a word
+   opens nothing. Code spans stay readable: an error text belongs in one. */
+const QUOTATION = [
+  /"[^"\s][^"\n]*\s[^"\n]*[^"\s]"/,
+  /[“„«][^“”„«»\n]*\S\s+\S[^“”„«»\n]*[”“»]/,
+  /(?<![\p{L}\p{N}])['‘](?=[^\s'‘’])[^'‘’\n]*\s[^'‘’\n]*(?<=[^\s])['’](?![\p{L}\p{N}])/u,
+];
+/* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
+const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
 const EMBEDDED_IMAGE = /!\[[^\]]*\]\(|<img\b/i;
+
+const OWN_WORDS = "say what happened in your own words";
+
+/** Every reading of a text a detector has to see: as written, and decoded. */
+function viewsOf(text: string): { views: string[]; unresolved: boolean } {
+  const canonical = canonicalSensitiveText(text);
+  const json = canonicalSensitiveText(text, true);
+  const views = new Set<string>();
+  for (const view of [text, canonical.text, json.text]) {
+    views.add(view);
+    views.add(view.normalize("NFKC"));
+  }
+  return { views: [...views], unresolved: canonical.error || json.error };
+}
 
 function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingClass, string> {
   const found = new Map<IssueReportFindingClass, string>();
-  for (const kind of privateClasses(line, deny)) found.set(kind, privateClassLabel(kind));
-  for (const kind of staticSensitiveClasses(line.normalize("NFKC"))) found.set(kind, STATIC_LABELS[kind]);
-  if (BARE_HEX_ID.test(line)) found.set("id", privateClassLabel("id"));
-  if (QUOTED_BLOCK.test(line)) found.set("quote", "a quoted block; say what happened in your own words");
-  if (EMBEDDED_IMAGE.test(line)) found.set("image", "an embedded image; a screenshot is added by the operator after redaction");
+  const { views, unresolved } = viewsOf(line);
+  if (unresolved) found.set("encoding", "encoded text nested too deep to read; write the plain characters");
+  for (const view of views) {
+    for (const kind of privateClasses(view, deny, { strict: true })) found.set(kind, privateClassLabel(kind));
+    for (const kind of staticSensitiveClasses(view)) found.set(kind, STATIC_LABELS[kind]);
+    if (QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", `a quotation; ${OWN_WORDS}`);
+    if (SPEAKER_LINE.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
+    if (EMBEDDED_IMAGE.test(view)) found.set("image", "an embedded image; a screenshot is added by the operator after redaction");
+  }
+  if (QUOTED_BLOCK.test(line)) found.set("quote", `a quoted block; ${OWN_WORDS}`);
   return found;
 }
 
@@ -71,7 +108,7 @@ function findingsIn(where: "title" | "body", text: string, deny: PublicDenyList)
   /* A value split across lines is found in the whole text and reported
      against the first line, so no class slips through a line break. */
   for (const [kind, label] of classesOf(text, deny)) {
-    if (kind !== "quote" && !byClass.has(kind)) note(kind, label, 1);
+    if (!byClass.has(kind)) note(kind, label, 1);
   }
   return [...byClass.values()];
 }

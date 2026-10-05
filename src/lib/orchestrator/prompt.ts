@@ -263,7 +263,10 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  * The first is the only sanctioned way a seat reports a Delegatus failure.
  * Each step is the operator's: the question, then the yes to the exact text.
  * `issue_report` holds the other half: publication takes a preview's digest
- * and never a text, from a seat that read the preview back.
+ * and never a text, from a seat that read the preview back, and it reads the
+ * yes in the seat's own transcript: the operator's last message has to be the
+ * approving reply of that digest. What the seat says the operator said is
+ * never evidence.
  *
  * The second keeps one manager per board. `create_task`, `create_pipeline`
  * and `spawn_agent` refuse a seat acting on a project that has its own seat
@@ -271,7 +274,7 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  * request, quoted in `crossProjectRequest`, is what lifts that.
  */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
-When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask again. Publish (issue_report publish, the digest, their words) only on an explicit yes to that text in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
+When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
 Another project's work goes to its orchestrator: send_message_to_orchestrator with the task context. Never create tasks or pipelines on its board, spawn agents there or message its workers; only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them.`;
 
 /** Identifies the task-ownership section below inside a mandate, however its
