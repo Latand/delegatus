@@ -1885,11 +1885,16 @@ describe("frame sets, design variants", () => {
    * Earlier designs were rejected for lying on top of the interface, so the
    * closed state is proved by measurement: per variant, width and language
    * the entry is hit-tested at its centre and four corners, intersected with
-   * every other interactive element and with every other feed row, and the
-   * rest of the pane is compared with the same pane without the feature
-   * (`variant=0`). The walk then counts the presses to one frame and to a
-   * chosen variant, steps by key and by swipe, and reads the reply out of
-   * the message field.
+   * every other interactive element, with every other feed row and with the
+   * rest of the row it stands in, and the rest of the pane is compared with
+   * the same pane without the feature (`variant=0`). The walk then counts the
+   * presses to one frame and to a chosen variant, and before each press reads
+   * whether its target was on screen and how far it had to be scrolled to,
+   * because a press the driver makes scrolls its target into view by itself.
+   * It steps by key and by swipe and reads the reply out of the message
+   * field. A last pass holds the turn's answer back, delivers it, and reads
+   * whether the entry is on screen at that moment, for both places the entry
+   * can stand.
    *
    * Frames go to `LLV_FRAME_SETS_OUT` (default `.artifacts/frame-sets/`, not
    * committed); the measurements to `evidence/frame-sets/measurements.json`.
@@ -1925,8 +1930,12 @@ describe("frame sets, design variants", () => {
   interface Reading {
     controls: ControlReading[];
     probes: Record<string, Box>;
-    /** The feed row that carries the set: the tool row today, the entry in a variant. */
-    row: Box | null;
+    /** The publishing call's own feed row: a plain tool row today, gone in a variant. */
+    callRow: Box | null;
+    /** The entry's own row in the feed. */
+    entryRow: Box | null;
+    /** The feed's scroll box: what is laid out, what is on screen, how far from its tail. */
+    feed: { scrollHeight: number; clientHeight: number; fromTail: number };
     panel: Box | null;
     modal: boolean;
     overflowX: number;
@@ -1936,6 +1945,14 @@ describe("frame sets, design variants", () => {
     composerFocused: boolean;
   }
   interface Moved { probe: string; delta: Box }
+  interface Press {
+    control: string;
+    /** The whole target was on screen before the press. */
+    onScreen: boolean;
+    /** How far the target had to be brought into view, in px: down or up the feed, and sideways along a strip. */
+    scrollY: number;
+    scrollX: number;
+  }
 
   const measure = (page: import("playwright-core").Page) => page.evaluate((): Reading => {
     const round = (value: number) => Math.round(value * 10) / 10;
@@ -1966,8 +1983,12 @@ describe("frame sets, design variants", () => {
     };
     const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
-    const hostRow = document.querySelector<HTMLElement>("[data-frame-set-row]")
+    const callRow = document.querySelector<HTMLElement>("[data-frame-set-row]")
       ?? Array.from(scroller.querySelectorAll<HTMLElement>('[data-feed-kind="tool"]')).find((row) => (row.textContent ?? "").includes("publish_frames")) ?? null;
+    const host = document.querySelector<HTMLElement>("[data-frame-set-host]");
+    const hostRow = host?.closest<HTMLElement>("[data-feed-kind]") ?? callRow;
+    /* What else stands in the entry's own row: the answer it closes. */
+    const beside = host && hostRow ? Array.from(hostRow.children).filter((child) => child !== host && shown(child)) : [];
     const interactive = Array.from(document.querySelectorAll<HTMLElement>(
       'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [tabindex]:not([tabindex="-1"])',
     )).filter(shown);
@@ -1989,7 +2010,10 @@ describe("frame sets, design variants", () => {
         size: [round(control.getBoundingClientRect().width), round(control.getBoundingClientRect().height)] as [number, number],
         hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
         overlaps: reachable.filter((other) => other !== control && !other.contains(control) && !control.contains(other) && cut(rect, visible(other)) > 1).map(name),
-        overRows: dialog ? [] : rows.filter((row) => cut(rect, visible(row)) > 1).map((row) => `${row.dataset.feedKind}:${(row.textContent ?? "").trim().slice(0, 24)}`),
+        overRows: dialog ? [] : [
+          ...rows.filter((row) => cut(rect, visible(row)) > 1).map((row) => `${row.dataset.feedKind}:${(row.textContent ?? "").trim().slice(0, 24)}`),
+          ...beside.filter((child) => cut(rect, visible(child)) > 1).map((child) => `own row:${(child.textContent ?? "").trim().slice(0, 24)}`),
+        ],
         insideWindow: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
       };
     });
@@ -2018,7 +2042,9 @@ describe("frame sets, design variants", () => {
     return {
       controls: readings,
       probes,
-      row: hostRow ? boxOf(hostRow.getBoundingClientRect()) : null,
+      callRow: callRow ? boxOf(callRow.getBoundingClientRect()) : null,
+      entryRow: host ? boxOf(host.getBoundingClientRect()) : null,
+      feed: { scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight, fromTail: Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) },
       panel: panel ? boxOf(panel.getBoundingClientRect()) : null,
       modal: dialog !== null,
       overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
@@ -2040,6 +2066,54 @@ describe("frame sets, design variants", () => {
     }
     return out;
   };
+
+  /** Where a control is against what its scrolling ancestors and the window let through. */
+  const reach = (page: import("playwright-core").Page, control: string) => page.locator(`[data-frame-control="${control}"]`).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+      const box = parent.getBoundingClientRect();
+      left = Math.max(left, box.left); top = Math.max(top, box.top); right = Math.min(right, box.right); bottom = Math.min(bottom, box.bottom);
+    }
+    const past = (low: number, high: number, from: number, to: number) => Math.round(Math.max(0, from - low, high - to));
+    const scrollY = past(rect.top, rect.bottom, top - 1, bottom + 1);
+    const scrollX = past(rect.left, rect.right, left - 1, right + 1);
+    return { onScreen: scrollX === 0 && scrollY === 0, scrollY, scrollX };
+  });
+
+  /** The open collage against the feed it stands in: what of it needs no scroll, and how large a tile is. */
+  const collage = (page: import("playwright-core").Page) => page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const panel = document.querySelector<HTMLElement>('[data-frame-panel="collage"]')!;
+    const feed = scroller.getBoundingClientRect();
+    const top = Math.max(0, feed.top) - 1, bottom = Math.min(innerHeight, feed.bottom) + 1;
+    const tall = (rect: DOMRect) => rect.top >= top && rect.bottom <= bottom;
+    const whole = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const strip = element.closest("[data-frame-collage-row]")!.getBoundingClientRect();
+      return tall(rect) && rect.left >= strip.left - 1 && rect.right <= strip.right + 1;
+    };
+    const size = (element: Element | null) => element ? [Math.round(element.getBoundingClientRect().width), Math.round(element.getBoundingClientRect().height)] : null;
+    const sections = Array.from(panel.querySelectorAll<HTMLElement>("[data-frame-collage-variant]"));
+    return {
+      form: panel.dataset.frameCollageForm,
+      feedHeight: Math.round(feed.height),
+      panel: [Math.round(panel.getBoundingClientRect().width), Math.round(panel.getBoundingClientRect().height)],
+      panelInsideFeed: tall(panel.getBoundingClientRect()),
+      entryOnScreen: tall(document.querySelector('[data-frame-control="entry"]')!.getBoundingClientRect()),
+      chooseOnScreen: sections.map((section) => tall(section.querySelector('[data-frame-control^="choose-"]')!.getBoundingClientRect())),
+      /* Per variant: tiles wholly on screen, tiles in all, and whether every row of them is inside the feed top to bottom. */
+      tiles: sections.map((section) => {
+        const tiles = Array.from(section.querySelectorAll('[data-frame-control^="tile-"]'));
+        return { onScreen: tiles.filter(whole).length, of: tiles.length, rows: section.querySelectorAll("[data-frame-collage-row]").length,
+          rowsInsideFeed: Array.from(section.querySelectorAll("[data-frame-collage-row]")).every((row) => tall(row.getBoundingClientRect())) };
+      }),
+      /* A tile of a frame taken at each width, in px. */
+      tileOf: Object.fromEntries([1440, 440, 390].map((width) => [width, size(panel.querySelector(`[data-frame-tile-of="${width}"]`))])),
+    };
+  });
 
   browserTest("the closed entry covers nothing, and every variant reaches a frame and a chosen reply", async () => {
     fs.mkdirSync(OUT, { recursive: true });
@@ -2063,12 +2137,19 @@ describe("frame sets, design variants", () => {
           if (variant !== 0) await page.locator('[data-frame-control="entry"]').waitFor();
           await settled();
         };
-        const presses: string[] = [];
+        const presses: Press[] = [];
         const press = async (control: string) => {
+          /* Read first: the click below scrolls its target into view by itself. */
+          const before = await reach(page, control);
           await page.locator(`[data-frame-control="${control}"]`).click();
-          presses.push(control);
+          presses.push({ control, ...before });
           await page.waitForTimeout(200);
         };
+        const walked = () => ({
+          presses: presses.map((entry) => ({ ...entry })),
+          count: presses.length,
+          scrolled: { down: presses.reduce((sum, entry) => sum + entry.scrollY, 0), sideways: presses.reduce((sum, entry) => sum + entry.scrollX, 0) },
+        });
         const check = (moment: string, reading: Reading) => {
           for (const control of reading.controls) {
             if (!control.hit) fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
@@ -2091,7 +2172,7 @@ describe("frame sets, design variants", () => {
           await shot("closed");
           if (variant === 0) {
             baselines.set(key, closed);
-            expect(closed.row).not.toBeNull();
+            expect(closed.callRow).not.toBeNull();
             expect(pageErrors).toEqual([]);
             continue;
           }
@@ -2101,7 +2182,14 @@ describe("frame sets, design variants", () => {
           const closedChanges = moved(baseline, closed);
           for (const change of closedChanges) fail("closed", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
           expect(closed.controls.map((control) => control.name)).toEqual(["entry"]);
-          record.closed = { entry: closed.controls[0], rowHeight: closed.row![3], toolRowHeightToday: baseline.row![3], changedAgainstNoFeature: closedChanges };
+          const title = await page.locator("[data-frame-title]").evaluate((element) => ({ shown: Math.round(element.getBoundingClientRect().width), needs: element.scrollWidth, text: element.textContent ?? "" }));
+          record.closed = {
+            entry: closed.controls[0], rowHeight: closed.entryRow![3], toolRowHeightToday: baseline.callRow![3],
+            feedGrowsBy: closed.feed.scrollHeight - baseline.feed.scrollHeight,
+            title: { ...title, cut: title.needs > title.shown + 1 },
+            counts: await page.locator("[data-frame-counts]").textContent(),
+            changedAgainstNoFeature: closedChanges,
+          };
 
           /* Open. */
           await press("entry");
@@ -2121,8 +2209,18 @@ describe("frame sets, design variants", () => {
             panel: open.panel,
             entryStillOnScreen: open.controls.some((control) => control.name === "entry"),
             controls: open.controls.length,
+            feedFromTail: open.feed.fromTail,
             changedAgainstNoFeature: openChanges,
           };
+          if (variant === 4) {
+            /* The recommended form: every "Choose" and every row of tiles needs no scroll once it is open. */
+            const laid = await collage(page);
+            (record.open as Record<string, unknown>).collage = laid;
+            if (!laid.panelInsideFeed) fail("open", `the collage is ${laid.panel[1]} px tall in a feed of ${laid.feedHeight} px`);
+            if (laid.chooseOnScreen.includes(false)) fail("open", `"Choose" needs a scroll: ${JSON.stringify(laid.chooseOnScreen)}`);
+            if (laid.tiles.some((entry) => !entry.rowsInsideFeed || entry.onScreen === 0)) fail("open", `a variant's tiles need a scroll: ${JSON.stringify(laid.tiles)}`);
+            if (!viewport.phone && !viewport.pane && (laid.tileOf[1440]?.[0] ?? 0) < 180) fail("open", `a desktop frame's tile is ${JSON.stringify(laid.tileOf[1440])} on the desktop`);
+          }
 
           /* To one frame: variant 3, its fifth. */
           if (variant === 1 || variant === 2) { await press(`tab-${TARGET.variant}`); await press(`thumb-${TARGET.index}`); }
@@ -2143,7 +2241,7 @@ describe("frame sets, design variants", () => {
             check("frame", reached);
             if (!reached.modal && !reached.controls.some((control) => control.name === "entry")) fail("frame", "the row that was pressed left the screen");
           }
-          record.toFrame = { presses: [...presses], count: presses.length, shows: await at() };
+          record.toFrame = { ...walked(), shows: await at() };
 
           /* By key on the desktop, by swipe on the phone: one back, one forward again, one on. */
           const steps: Record<string, unknown> = {};
@@ -2200,7 +2298,51 @@ describe("frame sets, design variants", () => {
           const sent = await page.locator('[data-feed-kind="user"]').count();
           if (sent !== 3) fail("choose", `${sent} own messages in the feed, wanted the three it started with`);
           await shot("chosen");
-          record.choose = { presses: [...presses], count: presses.length, draft: chosen.draft, fieldFocused: chosen.composerFocused, afterTyping: edited.draft, sent: sent - 3 };
+          record.choose = { ...walked(), draft: chosen.draft, fieldFocused: chosen.composerFocused, afterTyping: edited.draft, sent: sent - 3 };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+      /* The moment the answer arrives. The turn is a real one's shape: seven
+         Delegatus calls, none of which folds, and an answer of two screens
+         with a table. The feed holds its tail, so what is on screen then is
+         the end of the answer. Read for both places the entry can stand. */
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) for (const place of ["call", "turn"] as const) {
+        const where = `arrival-${place}-${viewport.name}-${lang}`;
+        const url = `${served.base}?case=frame-sets&variant=4&lang=${lang}&arrive=hold&place=${place}${viewport.pane ? `&pane=${viewport.pane}` : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.phone);
+        try {
+          await page.locator('[data-frame-proto="4"]').waitFor();
+          await page.locator('[data-frame-control="entry"]').waitFor();
+          await page.waitForTimeout(350);
+          const held = await measure(page);
+          await page.evaluate(() => (window as unknown as { frameSets: { deliver: () => void } }).frameSets.deliver());
+          await page.waitForFunction((was) => document.querySelector("[data-log-feed-scroller]")!.scrollHeight > was + 200, held.feed.scrollHeight);
+          await page.waitForTimeout(500);
+          const arrived = await measure(page);
+          const entry = await reach(page, "entry");
+          const turn = await page.evaluate(() => {
+            const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-log-feed-scroller] [data-feed-kind]"));
+            const last = rows.map((row) => row.dataset.feedKind).lastIndexOf("user");
+            const answer = rows[rows.length - 1]!;
+            return { delegatusCalls: rows.slice(last + 1).filter((row) => row.dataset.feedKind === "tool").length + document.querySelectorAll("[data-frame-set-row]").length
+              - rows.slice(last + 1).filter((row) => row.dataset.frameSetRow !== undefined).length, answerHeight: Math.round(answer.getBoundingClientRect().height) };
+          });
+          await page.screenshot({ path: path.join(OUT, `${where}.png`) });
+          evidence[where] = {
+            turn: { ...turn, feedHeight: arrived.feed.clientHeight, answerInFeeds: Math.round((turn.answerHeight / arrived.feed.clientHeight) * 10) / 10 },
+            beforeTheAnswer: { entryOnScreen: (await Promise.resolve(held.controls.some((control) => control.name === "entry"))) },
+            whenTheAnswerArrives: { feedFromTail: arrived.feed.fromTail, entryOnScreen: entry.onScreen, scrollToEntry: entry.scrollY },
+          };
+          if (arrived.feed.fromTail > 2) failures.push(`${where}: the feed is ${arrived.feed.fromTail} px off its tail when the answer arrives`);
+          if (place === "turn") {
+            if (!entry.onScreen) failures.push(`${where}: the entry is ${entry.scrollY} px off screen when the answer arrives`);
+            for (const control of arrived.controls) {
+              if (!control.hit) failures.push(`${where}: ${control.name} is not what a pointer meets`);
+              if (control.overlaps.length || control.overRows.length) failures.push(`${where}: ${control.name} intersects ${[...control.overlaps, ...control.overRows].join(", ")}`);
+            }
+          }
           expect(pageErrors).toEqual([]);
         } finally {
           await context.close();

@@ -1195,13 +1195,24 @@ function mountLongHistory(root: HTMLElement): void {
    way `?variant=` opens it (0 is the pane as it is today). */
 function mountFrameSets(root: HTMLElement): void {
   const lang = params.get("lang") === "uk" ? "uk" : "en";
-  const lines = frameSetsTranscript(lang);
-  const tail: LogTailState = {
-    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+  const all = frameSetsTranscript(lang);
+  /* `arrive=hold` keeps the last answer back until the driver delivers it, so
+     the pane is measured at the moment the answer arrives. */
+  let shown = params.get("arrive") === "hold" ? all.length - 1 : all.length;
+  const listeners = new Set<() => void>();
+  let snapshot: LogTailState | null = null;
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(0, shown), linesStart: 0, size: shown, loading: false, error: null, tickTime: null, paused: false,
     setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
   };
   setRuntimeUiEnabledForTests(false);
-  setLogFeedDependenciesForTests({ useLogTail: () => tail });
+  setLogFeedDependenciesForTests({ useLogTail: () => useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    read,
+    read,
+  ) });
+  const controls = window as unknown as { frameSets?: Record<string, unknown> };
+  controls.frameSets = { ...controls.frameSets, deliver: () => { shown = all.length; snapshot = null; for (const listener of listeners) listener(); } };
   installFakeComposerHost();
   const file = {
     ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
@@ -1212,7 +1223,9 @@ function mountFrameSets(root: HTMLElement): void {
   } as unknown as FileEntry;
   const variant = Math.max(0, Math.min(4, Number(params.get("variant") ?? 0))) as FrameSetVariant;
   const pane = Number(params.get("pane") ?? 0);
-  createRoot(root).render(<FrameSetsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} />);
+  createRoot(root).render(
+    <FrameSetsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} place={params.get("place") === "call" ? "call" : "turn"} />,
+  );
 }
 
 setLocale((params.get("lang") as Locale | null) ?? "en");

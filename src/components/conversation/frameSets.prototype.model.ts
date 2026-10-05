@@ -132,8 +132,9 @@ export function chosenReply(set: FrameSet, variant: number, lang: "en" | "uk"): 
   return title ? `${word} ${variant} (${title}).` : `${word} ${variant}.`;
 }
 
-/** "4 variants · 24 frames", the closed row's whole description of a set. */
-export function setCounts(set: FrameSet, lang: "en" | "uk"): string {
+/** "4 variants · 24 frames", the closed row's whole description of a set;
+    `brief` keeps the frames alone, for a row too narrow for both. */
+export function setCounts(set: FrameSet, lang: "en" | "uk", brief = false): string {
   const plural = (count: number, one: string, few: string, many: string) => {
     if (lang === "en") return count === 1 ? one : many;
     const tens = count % 100;
@@ -142,7 +143,92 @@ export function setCounts(set: FrameSet, lang: "en" | "uk"): string {
     return units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? few : many;
   };
   const frames = `${set.frames.length} ${lang === "uk" ? plural(set.frames.length, "кадр", "кадри", "кадрів") : plural(set.frames.length, "frame", "", "frames")}`;
-  if (set.variants.length === 0) return frames;
+  if (set.variants.length === 0 || brief) return frames;
   const variants = `${set.variants.length} ${lang === "uk" ? plural(set.variants.length, "варіант", "варіанти", "варіантів") : plural(set.variants.length, "variant", "", "variants")}`;
   return `${variants} · ${frames}`;
+}
+
+/* ── The short form of a publication: a directory read by its file names ── */
+
+/** The interface languages a file name can carry. */
+export const FRAME_NAME_LANGS = ["en", "uk"] as const;
+
+/**
+ * What one file name says about its frame, by the one convention the capture
+ * drivers already follow: `variant-<N>-<anything>-<width>-<lang>-<moment>.png`.
+ * Words are split on `-` and `_`. `variant-N` (or a leading `vN`) is the
+ * variant, and variant 0 is a frame of no variant (the pane as it is today).
+ * The first number from 240 to 3840 after it is the viewport width, the first
+ * word that is an interface language is the language, and the words left over
+ * are the caption. A name that says none of it is a plain captioned frame.
+ */
+export function frameFromFileName(name: string): { variant: number | null; width: number | null; lang: string | null; caption: string } {
+  const words = name.replace(/^.*\//, "").replace(/\.[a-z0-9]+$/i, "").split(/[-_]+/).filter(Boolean);
+  let variant: number | null = null;
+  let width: number | null = null;
+  let lang: string | null = null;
+  const rest: string[] = [];
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    const lower = word.toLowerCase();
+    const next = words[at + 1];
+    if (variant === null && lower === "variant" && next !== undefined && /^\d$/.test(next)) { variant = Number(next); at += 1; continue; }
+    if (variant === null && at === 0 && /^v\d$/.test(lower)) { variant = Number(lower.slice(1)); continue; }
+    if (width === null && /^\d{3,4}$/.test(word) && Number(word) >= 240 && Number(word) <= 3840) { width = Number(word); continue; }
+    if (lang === null && (FRAME_NAME_LANGS as readonly string[]).includes(lower)) { lang = lower; continue; }
+    rest.push(word);
+  }
+  return { variant: variant === 0 ? null : variant, width, lang, caption: rest.join(" ") };
+}
+
+/** The frames of a directory in publication order: by variant, then by name
+    with numbers compared as numbers, frames of no variant last. */
+export function framesFromFileNames(names: readonly string[]): (ReturnType<typeof frameFromFileName> & { name: string })[] {
+  return names
+    .filter((name) => /\.(png|jpe?g|webp)$/i.test(name))
+    .map((name) => ({ name, ...frameFromFileName(name) }))
+    .sort((a, b) => (a.variant ?? 99) - (b.variant ?? 99) || a.name.localeCompare(b.name, "en", { numeric: true }));
+}
+
+/* ── The collage's layout ───────────────────────────────────────────────── */
+
+export interface TileRow {
+  height: number;
+  tiles: { index: number; width: number }[];
+}
+
+/**
+ * Frames at their own proportions in rows that fill `width`: a row takes
+ * frames at `target` height until the next one would not fit, then grows to
+ * fill the width, by at most `maxScale`. The last row grows the same way, so a
+ * few frames never stretch into giants. `minTile` keeps a narrow frame wide
+ * enough to press.
+ */
+export function justifiedRows(aspects: readonly number[], width: number, options: { target: number; gap: number; minTile?: number; maxScale?: number }): TileRow[] {
+  const { target, gap, minTile = 0, maxScale = 1.25 } = options;
+  const natural = (aspect: number) => Math.max(minTile, aspect * target);
+  const rows: TileRow[] = [];
+  let row: number[] = [];
+  const close = () => {
+    if (row.length === 0) return;
+    const sum = row.reduce((total, index) => total + natural(aspects[index]!), 0);
+    const scale = Math.max(1, Math.min(maxScale, (width - gap * (row.length - 1)) / sum));
+    /* A single frame wider than the row is drawn at the row's width. */
+    const fit = Math.min(scale, sum > width ? width / sum : scale);
+    rows.push({ height: Math.round(target * fit), tiles: row.map((index) => ({ index, width: Math.floor(natural(aspects[index]!) * fit) })) });
+    row = [];
+  };
+  aspects.forEach((aspect, index) => {
+    const taken = row.reduce((total, at) => total + natural(aspects[at]!), 0) + gap * row.length;
+    if (row.length > 0 && taken + natural(aspect) > width) close();
+    row.push(index);
+  });
+  close();
+  return rows;
+}
+
+/** One row at `height` that scrolls sideways past its edge: the collage in a
+    narrow pane, where the height is what runs out. */
+export function stripTiles(aspects: readonly number[], height: number, minTile = 0): TileRow {
+  return { height, tiles: aspects.map((aspect, index) => ({ index, width: Math.max(minTile, Math.round(aspect * height)) })) };
 }

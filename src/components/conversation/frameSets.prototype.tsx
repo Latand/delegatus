@@ -8,10 +8,12 @@
  *
  * The pane is the production one: `BranchPane` on the desktop, and on the
  * phone `BranchPane` inside `MobileShell`. The set arrives the way the build
- * would deliver it: as the feed row of the Delegatus tool call that published
- * it. That row has no presentation for this tool today, so `variant=0` leaves
- * it as it is and the other variants draw their entry inside the same row,
- * which is what the build would replace with a card in `McpCallCard`.
+ * would deliver it: from the Delegatus tool call that published it. That call
+ * has a plain feed row today, so `variant=0` leaves it as it is. The other
+ * variants take that row away and draw one entry where the turn that
+ * published the set ends, under its answer (`place=turn`, the default), which
+ * is where the feed's tail is when the answer arrives. `place=call` keeps the
+ * entry in the call's own row, for the measurement that compares the two.
  *
  * Every frame is drawn on a canvas when the page loads. Nothing here reads a
  * file, and every name and sentence is invented.
@@ -38,8 +40,10 @@ import {
   chosenReply,
   frameAtView,
   framesOfVariant,
+  justifiedRows,
   setCounts,
   stepIndex,
+  stripTiles,
   swipeDirection,
   viewsOf,
   type Frame,
@@ -47,6 +51,8 @@ import {
 } from "./frameSets.prototype.model";
 
 export type FrameSetVariant = 0 | 1 | 2 | 3 | 4;
+/** Where the entry stands: closing the turn that published the set, or in the publishing call's own row. */
+export type FrameSetPlace = "turn" | "call";
 type Lang = "en" | "uk";
 
 const COPY = {
@@ -526,37 +532,76 @@ function ComparePanel({ presenter, onClose, onState }: { presenter: Presenter; o
 
 /* ── Variant 4: the whole set as a collage; a tile opens the feed's viewer ─ */
 
-function CollagePanel({ presenter, onZoomed }: { presenter: Presenter; onZoomed: (index: number | null) => void }) {
+/* Under this width the height is what runs out, so each variant gets one row
+   of tiles that scrolls sideways; from the second width up two variants stand
+   side by side and their frames fill the row. */
+const COLLAGE_STRIP_BELOW = 560;
+const COLLAGE_TWO_COLUMNS_FROM = 960;
+const COLLAGE_ROW_HEIGHT = 120;
+const COLLAGE_STRIP_HEIGHT = 60;
+const COLLAGE_STRIP_HEIGHT_TOUCH = 72;
+const COLLAGE_GAP = 6;
+
+function CollagePanel({ presenter, width, onZoomed }: { presenter: Presenter; width: number; onZoomed: (index: number | null) => void }) {
   const [zoom, setZoom] = useState<number | null>(null);
   const open = (index: number | null) => { setZoom(index); onZoomed(index); };
+  const strip = width < COLLAGE_STRIP_BELOW;
+  const columns = width >= COLLAGE_TWO_COLUMNS_FROM ? 2 : 1;
+  /* The panel's border and padding, then the gap between two columns. */
+  const room = Math.max(120, Math.floor((width - 18 - (columns - 1) * 12) / columns));
+  const minTile = presenter.phone ? 44 : 0;
   return (
-    <div data-frame-panel="collage" className="mt-1.5 flex min-w-0 flex-col gap-2.5 rounded-surface border border-border bg-card p-2">
-      {presenter.set.variants.map((variant) => (
-        <section key={variant.number} data-frame-collage-variant={variant.number} className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-control bg-accent/15 px-1 text-ui font-bold tabular-nums text-accent">{variant.number}</span>
-            <span className="min-w-0 truncate text-ui font-semibold text-primary">{variant.title}</span>
-            <span className="ml-auto" />
-            <ChooseButton presenter={presenter} variant={variant.number} name={`choose-${variant.number}`} />
-          </div>
-          <div className="grid min-w-0 gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(92px,1fr))]">
-            {presenter.set.frames.map((frame, index) => frame.variant !== variant.number ? null : (
-              <button
-                key={frame.id}
-                type="button"
-                data-frame-control={`tile-${index}`}
-                aria-label={frameCaption(presenter, frame)}
-                title={frameCaption(presenter, frame)}
-                onClick={() => open(index)}
-                className={`flex h-[84px] min-w-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-control border border-border bg-sunken ${FOCUS}`}
+    <div
+      data-frame-panel="collage"
+      data-frame-collage-form={strip ? "strip" : `rows-${columns}`}
+      className="mt-1.5 grid min-w-0 gap-x-3 gap-y-2 rounded-surface border border-border bg-card p-2"
+      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+    >
+      {presenter.set.variants.map((variant) => {
+        const own = presenter.set.frames.map((frame, index) => ({ frame, index })).filter((entry) => entry.frame.variant === variant.number);
+        const aspects = own.map((entry) => entry.frame.w / entry.frame.h);
+        const rows = strip
+          ? [stripTiles(aspects, presenter.phone ? COLLAGE_STRIP_HEIGHT_TOUCH : COLLAGE_STRIP_HEIGHT, minTile)]
+          : justifiedRows(aspects, room, { target: COLLAGE_ROW_HEIGHT, gap: COLLAGE_GAP, minTile });
+        return (
+          <section key={variant.number} data-frame-collage-variant={variant.number} className="flex min-w-0 flex-col gap-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-control bg-accent/15 px-1 text-ui font-bold tabular-nums text-accent">{variant.number}</span>
+              <span className="min-w-0 truncate text-ui font-semibold text-primary">{variant.title}</span>
+              <span className="ml-auto" />
+              <ChooseButton presenter={presenter} variant={variant.number} name={`choose-${variant.number}`} />
+            </div>
+            {rows.map((row, at) => (
+              <div
+                key={at}
+                data-frame-collage-row
+                className={`flex min-w-0 ${strip ? "touch-pan-x overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : ""}`}
+                style={{ gap: COLLAGE_GAP }}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element -- a frame drawn in the page */}
-                <img src={frame.src} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
-              </button>
+                {row.tiles.map((tile) => {
+                  const { frame, index } = own[tile.index]!;
+                  return (
+                    <button
+                      key={frame.id}
+                      type="button"
+                      data-frame-control={`tile-${index}`}
+                      data-frame-tile-of={frame.width ?? undefined}
+                      aria-label={frameCaption(presenter, frame)}
+                      title={frameCaption(presenter, frame)}
+                      onClick={() => open(index)}
+                      style={{ width: tile.width, height: row.height }}
+                      className={`flex shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-control border border-border bg-sunken ${FOCUS}`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element -- a frame drawn in the page */}
+                      <img src={frame.src} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
+                    </button>
+                  );
+                })}
+              </div>
             ))}
-          </div>
-        </section>
-      ))}
+          </section>
+        );
+      })}
       {zoom !== null ? <Zoom presenter={presenter} frames={presenter.set.frames} start={zoom} onClose={() => open(null)} /> : null}
     </div>
   );
@@ -570,6 +615,18 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
   const [extra, setExtra] = useState<Record<string, unknown>>({});
   const inPlace = variant === 1 || variant === 4;
   const entry = useRef<HTMLButtonElement | null>(null);
+  /* The row's own width decides the narrow forms: a board pane is narrow in a wide window. */
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const row = entry.current;
+    if (!row) return;
+    const read = () => setWidth(Math.round(row.getBoundingClientRect().width));
+    const observer = new ResizeObserver(read);
+    observer.observe(row);
+    read();
+    return () => observer.disconnect();
+  }, []);
+  const narrow = width > 0 && width < COLLAGE_STRIP_BELOW;
   const close = useCallback(() => { setOpen(false); entry.current?.focus(); }, []);
   /* A full-screen surface gets out of the way of the reply it just wrote. */
   useEffect(() => {
@@ -579,20 +636,31 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
     return () => window.removeEventListener("frame-set-chosen", onChosen);
   }, [inPlace]);
   useEffect(() => { onState({ open, ...position, ...extra }); }, [open, position, extra, onState]);
-  /* Opened in place, the row goes to the top of the feed so what it opened is
-     under it. The feed follows its own tail otherwise and would carry the row
-     out of sight; the move is announced the way a reader's wheel is, which is
-     what the feed's own functions do in the build. */
+  /* Opened in place, the feed moves only as far as it has to: up, when what
+     opened is taller than the room under the row, until the row is at the
+     top; down, when the panel ends below the feed's edge. A panel that fits
+     where it opened moves nothing. A move up is announced the way a reader's
+     wheel is, which is what the feed's own functions do in the build. */
   useEffect(() => {
     if (!open || !inPlace) return;
     const scroller = entry.current?.closest<HTMLElement>("[data-log-feed-scroller]");
     if (!scroller) return;
     const move = () => {
       const row = entry.current;
-      if (!row) return;
-      const top = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 8;
-      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
-      scroller.scrollTop = Math.max(0, Math.min(top, scroller.scrollHeight - scroller.clientHeight));
+      const whole = row?.closest<HTMLElement>("[data-frame-set]");
+      if (!row || !whole) return;
+      const box = scroller.getBoundingClientRect();
+      const above = box.top + 8 - row.getBoundingClientRect().top;
+      const below = whole.getBoundingClientRect().bottom + 8 - box.bottom;
+      if (above > 0.5) {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+        scroller.scrollTop = Math.max(0, scroller.scrollTop - above);
+      } else if (below > 0.5) {
+        const tail = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+        const by = Math.min(below, -above);
+        /* The last thing in the feed: the feed stays on its tail. */
+        scroller.scrollTop += tail - by <= 32 ? Math.min(tail, -above) : by;
+      }
     };
     const frame = requestAnimationFrame(move);
     const timer = window.setTimeout(move, 160);
@@ -601,7 +669,8 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
   const compareState = useCallback((state: { left: number; right: number; view: number }) => setExtra(state), []);
   const zoomed = useCallback((index: number | null) => setExtra({ zoomed: index }), []);
   return (
-    <div data-frame-set={presenter.set.id} className="my-1 min-w-0">
+    /* On the phone the answer's own action row hangs 6 px under its text, so the entry starts clear of it. */
+    <div data-frame-set={presenter.set.id} className="my-1 min-w-0 pointer-coarse:mt-2">
       <button
         ref={entry}
         type="button"
@@ -613,14 +682,14 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
         className={`flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-2.5 text-left text-ui hover:border-accent/45 pointer-coarse:h-11 ${FOCUS}`}
       >
         <Images className="h-4 w-4 shrink-0 text-muted" aria-hidden />
-        <span className="min-w-0 truncate font-semibold text-primary">{presenter.set.title}</span>
-        <span className="shrink-0 whitespace-nowrap text-label tabular-nums text-muted">{setCounts(presenter.set, presenter.lang)}</span>
+        <span data-frame-title className="min-w-0 truncate font-semibold text-primary">{presenter.set.title}</span>
+        <span data-frame-counts className="shrink-0 whitespace-nowrap text-label tabular-nums text-muted">{setCounts(presenter.set, presenter.lang, narrow)}</span>
         <ChevronRight className={`ml-auto h-4 w-4 shrink-0 text-muted transition-transform ${open && inPlace ? "rotate-90" : ""}`} aria-hidden />
       </button>
       {open && variant === 1 ? <InlinePanel presenter={presenter} position={position} setPosition={setPosition} /> : null}
       {open && variant === 2 ? <ViewerPanel presenter={presenter} position={position} setPosition={setPosition} onClose={close} /> : null}
       {open && variant === 3 ? <ComparePanel presenter={presenter} onClose={close} onState={compareState} /> : null}
-      {open && variant === 4 ? <CollagePanel presenter={presenter} onZoomed={zoomed} /> : null}
+      {open && variant === 4 ? <CollagePanel presenter={presenter} width={width} onZoomed={zoomed} /> : null}
     </div>
   );
 }
@@ -629,37 +698,61 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
 
 const TOOL_NAME = "publish_frames";
 
-/** A host node inside the feed row of the publishing tool call, put back if a
-    render drops it. The row's own card is hidden while the host stands in it. */
-function useRowHost(pane: HTMLElement | null, enabled: boolean): HTMLElement | null {
+/** A host node for the entry, put back if a render drops it. The publishing
+    call's own row is taken out of the feed. With `place` "turn" the host
+    stands at the end of the last row of the turn that published the set, so
+    it follows the turn as it grows and ends up under the answer; with "call"
+    it stands where the call's row was. */
+function useRowHost(pane: HTMLElement | null, enabled: boolean, place: FrameSetPlace): HTMLElement | null {
   const [host, setHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     if (!pane || !enabled) return;
     const node = document.createElement("div");
     node.dataset.frameSetHost = "";
     const style = document.createElement("style");
-    style.textContent = "[data-frame-set-row] > :not([data-frame-set-host]) { display: none !important; }";
+    style.textContent = "[data-frame-set-row] > :not([data-frame-set-host]) { display: none !important; }"
+      + " [data-frame-set-row]:not(:has([data-frame-set-host])) { display: none !important; }";
     document.head.append(style);
-    const place = () => {
-      const rows = Array.from(pane.querySelectorAll<HTMLElement>('[data-log-feed-scroller] [data-feed-kind="tool"]'));
-      const row = rows.find((candidate) => candidate.dataset.frameSetRow !== undefined) ?? rows.find((candidate) => (candidate.textContent ?? "").includes(TOOL_NAME));
-      if (!row) {
+    let inset: number | null = null;
+    const put = () => {
+      const rows = Array.from(pane.querySelectorAll<HTMLElement>("[data-log-feed-scroller] [data-feed-kind]"));
+      const call = rows.find((candidate) => candidate.dataset.frameSetRow !== undefined)
+        ?? rows.find((candidate) => candidate.dataset.feedKind === "tool" && (candidate.textContent ?? "").includes(TOOL_NAME));
+      if (!call) {
         if (node.isConnected) { node.remove(); setHost(null); }
         return;
       }
-      if (node.parentElement === row) return;
-      /* The entry starts where the row's own card started. */
-      const card = row.firstElementChild?.getBoundingClientRect();
-      if (card && row.dataset.frameSetRow === undefined) node.style.paddingLeft = `${Math.max(0, Math.round(card.left - row.getBoundingClientRect().left))}px`;
-      row.dataset.frameSetRow = "";
-      row.append(node);
+      let anchor = call;
+      if (place === "turn") {
+        for (const row of rows.slice(rows.indexOf(call) + 1)) {
+          if (row.dataset.feedKind === "user") break;
+          anchor = row;
+        }
+      }
+      if (node.parentElement === anchor && anchor.lastElementChild === node) return;
+      /* The entry starts where the call's own card started. */
+      const card = call.firstElementChild?.getBoundingClientRect();
+      if (inset === null && card && card.width > 0) {
+        inset = Math.max(0, Math.round(card.left - call.getBoundingClientRect().left));
+        node.style.paddingLeft = `${inset}px`;
+      }
+      call.dataset.frameSetRow = "";
+      /* The feed pinned its tail before this move; a pane that was on its tail is put back on it. */
+      const scroller = anchor.closest<HTMLElement>("[data-log-feed-scroller]");
+      const onTail = scroller !== null && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= node.offsetHeight + 16;
+      anchor.append(node);
       setHost(node);
+      if (scroller && onTail) {
+        const pin = () => { scroller.scrollTop = scroller.scrollHeight; };
+        requestAnimationFrame(pin);
+        for (const after of [120, 300]) window.setTimeout(pin, after);
+      }
     };
-    const observer = new MutationObserver(place);
+    const observer = new MutationObserver(put);
     observer.observe(pane, { childList: true, subtree: true });
-    place();
+    put();
     return () => { observer.disconnect(); node.remove(); style.remove(); setHost(null); };
-  }, [pane, enabled]);
+  }, [pane, enabled, place]);
   return host;
 }
 
@@ -677,9 +770,10 @@ interface ProtoControls {
   chosen: () => number[];
 }
 
-export function FrameSetsPrototype({ file, variant, paneWidth }: {
+export function FrameSetsPrototype({ file, variant, paneWidth, place = "turn" }: {
   file: FileEntry;
   variant: FrameSetVariant;
+  place?: FrameSetPlace;
   /** A board-node-sized pane; absent, the pane fills the window. */
   paneWidth?: number;
 }) {
@@ -704,9 +798,10 @@ export function FrameSetsPrototype({ file, variant, paneWidth }: {
   }), [set, copy, lang, phone, cardId]);
   const onState = useCallback((next: Record<string, unknown>) => { state.current = next; }, []);
   useEffect(() => {
-    (window as unknown as { frameSets: ProtoControls }).frameSets = { state: () => state.current, chosen: () => chosen.current };
+    const controls = window as unknown as { frameSets?: Partial<ProtoControls> };
+    controls.frameSets = { ...controls.frameSets, state: () => state.current, chosen: () => chosen.current };
   }, []);
-  const host = useRowHost(pane, variant !== 0);
+  const host = useRowHost(pane, variant !== 0, place);
   const portal: ReactNode = host && variant !== 0 ? createPortal(<Entry presenter={presenter} variant={variant} onState={onState} />, host) : null;
 
   if (phone) {
@@ -754,8 +849,9 @@ const TEXT = {
     replies: [
       "Two cards are waiting for you and the rest move on their own. The release card needs a yes or a no on the second review; the search card needs nothing until its browser check ends.\n\nI changed nothing on the board in this pass.",
       "Started the design lane with one requirement: four working prototypes in the production pane, each with its number printed on every frame, at the desktop, the board pane and the phone, in both languages.\n\nI will bring the frames here when the lane ends.",
-      "The lane is done: four variants, twenty-four frames, all taken from working prototypes. The set is in the row above.\n\nWhich one do I build? My recommendation is variant 2: it keeps the header as it is and costs one row above the message field.",
+      "The design lane is done: four variants, twenty-four frames, all taken from working prototypes in the production pane. The set is right under this message.\n\n## What each variant does\n\n| № | Where the control sits | Space it takes | Presses to step |\n|---|---|---|---|\n| 1 | In the header, beside the title | none; the title gives up 96 px | 1 |\n| 2 | A row above the message field | 28 px of the feed | 1 |\n| 3 | In the message field's own row | none; the field gives up 104 px | 1 |\n| 4 | Keys and two rows in the menu | none | 1 key, or 2 presses in the menu |\n\n## What I saw in the frames\n\n**Variant 1** puts the two arrows and the counter in the header. On the desktop they read well. In the board pane the title is cut to eleven characters, and on the phone the header has no room at all, so the lane moved the control into the menu there.\n\n**Variant 2** adds one thin row above the message field. It is the same at every width, the counter is always visible, and the header stays as it is. The price is 28 px of the feed in every conversation, including the ones where you never step.\n\n**Variant 3** puts the arrows into the message field's own row, left of the attach button. Nothing gets taller. The field is 104 px narrower, which shows on the phone: a long draft wraps one line earlier.\n\n**Variant 4** adds no control. Alt with the up and down arrows steps on the desktop, and the conversation menu gets two rows for the phone. It costs nothing on screen, and nobody finds it without being told.\n\n## What was measured\n\n- Every variant was hit-tested closed and open at 1440, in a 440 px pane and on the phone at 390, in English and Ukrainian.\n- No variant covers a control or a line of text.\n- Variant 2 moves the feed's bottom edge up by 28 px and nothing else.\n- Variants 1 and 3 change the width of the title and of the field; the numbers are in the table.\n- The step itself takes one press in variants 1, 2 and 3.\n- The phone was checked with a touch pointer; every new control is at least 44 px.\n\n## What the lane left out\n\n- Stepping between the agent's answers. You asked about your own messages only.\n- A search box. The step is for a conversation you already know.\n- A setting. Whichever variant you choose is on for everyone.\n- The board. Only the conversation pane changes.\n\n## Risks\n\n- Variant 1 needs a second place for the control on the phone, which is two designs to keep.\n- Variant 3 takes width from the field in every conversation.\n- Variant 4 depends on a hint that somebody has to write and you have to read once.\n\n## What I did on the board\n\n1. The design card moved to \"Waiting for you\" with this question on it.\n2. The lane's draft pull request is open and holds the note and the measurements.\n3. Nothing ships until you answer with a number; a build lane follows your answer.\n\nWhich one do I build? My recommendation is variant 2: it keeps the header as it is, looks the same at every width and costs one thin row above the message field.",
     ],
+    card: "Design: step between my own messages",
   },
   uk: {
     harness: "<environment_context>\n  <cwd>/workspace/delegatus</cwd>\n  <shell>bash</shell>\n</environment_context>",
@@ -767,16 +863,20 @@ const TEXT = {
     replies: [
       "На вас чекають дві картки, решта рухається сама. Картці релізу потрібне «так» чи «ні» щодо другої рецензії; картці пошуку нічого не треба, доки не закінчиться перевірка в браузері.\n\nНа дошці в цьому проході я нічого не змінював.",
       "Запустив дизайн-лінію з однією вимогою: чотири робочі прототипи у справжній панелі, на кожному кадрі надруковано номер варіанта, на десктопі, у панелі дошки й на телефоні, обома мовами.\n\nКадри принесу сюди, коли лінія закінчить.",
-      "Лінія закінчила: чотири варіанти, двадцять чотири кадри, усі зняті з робочих прототипів. Набір у рядку вище.\n\nЯкий будувати? Моя рекомендація: варіант 2. Він лишає шапку як є й коштує один рядок над полем повідомлення.",
+      "Дизайн-лінія закінчила: чотири варіанти, двадцять чотири кадри, усі зняті з робочих прототипів у справжній панелі. Набір одразу під цим повідомленням.\n\n## Що робить кожен варіант\n\n| № | Де стоїть елемент | Скільки місця забирає | Натисків на крок |\n|---|---|---|---|\n| 1 | У шапці, поруч із назвою | нічого; назва віддає 96 px | 1 |\n| 2 | Рядок над полем повідомлення | 28 px стрічки | 1 |\n| 3 | У рядку самого поля повідомлення | нічого; поле віддає 104 px | 1 |\n| 4 | Клавіші та два рядки в меню | нічого | 1 клавіша або 2 натиски в меню |\n\n## Що я побачив на кадрах\n\n**Варіант 1** ставить дві стрілки й лічильник у шапку. На десктопі вони читаються добре. У панелі дошки назва обрізається до одинадцяти знаків, а на телефоні в шапці місця немає зовсім, тож там лінія перенесла елемент у меню.\n\n**Варіант 2** додає один тонкий рядок над полем повідомлення. Він однаковий на кожній ширині, лічильник видно завжди, шапка лишається як є. Ціна: 28 px стрічки в кожній розмові, зокрема там, де ви ніколи не крокуєте.\n\n**Варіант 3** ставить стрілки в рядок самого поля, ліворуч від кнопки вкладення. Нічого не стає вищим. Поле вужчає на 104 px, і на телефоні це помітно: довга чернетка переноситься на рядок раніше.\n\n**Варіант 4** не додає жодного елемента. На десктопі крок робить Alt зі стрілками вгору та вниз, а в меню розмови з'являються два рядки для телефона. На екрані він нічого не коштує, і без підказки його ніхто не знайде.\n\n## Що виміряно\n\n- Кожен варіант пройшов hit-тест закритим і відкритим на 1440, у панелі 440 px і на телефоні 390, англійською та українською.\n- Жоден варіант не перекриває елемент керування чи рядок тексту.\n- Варіант 2 піднімає нижній край стрічки на 28 px і більше нічого не зрушує.\n- Варіанти 1 і 3 змінюють ширину назви та поля; числа в таблиці.\n- Сам крок коштує один натиск у варіантах 1, 2 і 3.\n- Телефон перевірено сенсорним вказівником; кожен новий елемент має щонайменше 44 px.\n\n## Чого лінія не робила\n\n- Кроків між відповідями агента. Ви питали лише про власні повідомлення.\n- Поля пошуку. Крок потрібен у розмові, яку ви вже знаєте.\n- Налаштування. Обраний варіант увімкнено для всіх.\n- Дошки. Змінюється лише панель розмови.\n\n## Ризики\n\n- Варіанту 1 на телефоні потрібне друге місце для елемента, тобто два дизайни на супроводі.\n- Варіант 3 забирає ширину поля в кожній розмові.\n- Варіант 4 залежить від підказки, яку хтось має написати, а ви маєте один раз прочитати.\n\n## Що я зробив на дошці\n\n1. Картку дизайну перенесено в «Чекає на вас» із цим запитанням.\n2. Чернетку pull request лінії відкрито, у ній нотатка й виміри.\n3. Нічого не виходить у реліз, доки ви не відповісте номером; за відповіддю піде лінія збірки.\n\nЯкий будувати? Моя рекомендація: варіант 2. Він лишає шапку як є, однаковий на кожній ширині й коштує один тонкий рядок над полем повідомлення.",
     ],
+    card: "Дизайн: кроки між моїми повідомленнями",
   },
 } as const;
 
 /**
  * A Codex transcript of an orchestrator's morning that ends with a published
- * set: three messages the operator typed, each answered, and before the last
- * answer the Delegatus tool call that published the frames. The call carries
- * the set's id and counts and no bytes. All text is invented.
+ * set: three messages the operator typed, each answered. The last turn is the
+ * shape a real one has: the orchestrator reads the board through four
+ * Delegatus calls, shows the set, makes two more calls, and answers with two
+ * screens of text and a table. Delegatus calls never fold into a group in the
+ * feed, so every one of them is a row. The publishing call carries the set's
+ * id and counts and no bytes. All text is invented.
  */
 export function frameSetsTranscript(lang: Lang): string[] {
   const text = TEXT[lang];
@@ -793,21 +893,27 @@ export function frameSetsTranscript(lang: Lang): string[] {
     lines.push(JSON.stringify({ timestamp: at(0.2), type: "response_item", payload: { type: "function_call", name: "shell", arguments: JSON.stringify({ command: ["bash", "-lc", "git status --short"] }), call_id: id } }));
     lines.push(JSON.stringify({ timestamp: at(0.2), type: "response_item", payload: { type: "function_call_output", call_id: id, output: "clean" } }));
   };
+  const delegatus = (name: string, args: Record<string, unknown>, result: Record<string, unknown>) => {
+    const invocation = { server: "viewer", tool: name, arguments: args };
+    const id = `call_${name}_${lines.length}`;
+    lines.push(JSON.stringify({ timestamp: at(0.3), type: "event_msg", payload: { type: "mcp_tool_call_begin", call_id: id, invocation } }));
+    lines.push(JSON.stringify({ timestamp: at(0.3), type: "event_msg", payload: {
+      type: "mcp_tool_call_end", call_id: id, invocation,
+      result: { Ok: { content: [{ type: "text", text: JSON.stringify({ ok: true, toolName: name, ...result }) }] } },
+    } }));
+  };
   user("", text.harness, 0);
   text.own.forEach((own, index) => {
     user("<!-- llv:structured-user origin=operator -->", own, index === 2 ? 95 : 7);
     if (index < 2) tool(`call_frames_${index}`);
     if (index === 2) {
-      const invocation = {
-        server: "viewer",
-        tool: TOOL_NAME,
-        arguments: { setId: "fs_fixture_own_steps" },
-      };
-      lines.push(JSON.stringify({ timestamp: at(0.3), type: "event_msg", payload: { type: "mcp_tool_call_begin", call_id: "call_publish_frames", invocation } }));
-      lines.push(JSON.stringify({ timestamp: at(0.3), type: "event_msg", payload: {
-        type: "mcp_tool_call_end", call_id: "call_publish_frames", invocation,
-        result: { Ok: { content: [{ type: "text", text: JSON.stringify({ ok: true, toolName: TOOL_NAME, setId: "fs_fixture_own_steps", title: copy.setTitle, variants: FRAME_SET_FIXTURE_VARIANTS, frames: FRAME_SET_FIXTURE_FRAMES }) }] } },
-      } }));
+      delegatus("list_pipelines", { state: "open", compact: true }, { items: [{ id: "pipeline_fixture", state: "completed" }], total: 1 });
+      delegatus("get_pipeline", { pipelineId: "pipeline_fixture", stageId: "design" }, { verdict: "pass", findings: 0, frameSets: ["fs_fixture_own_steps"] });
+      delegatus("get_task", { id: "task_fixture" }, { id: "task_fixture", status: "in_progress" });
+      delegatus("list_tasks", { openOnly: true }, { items: 2 });
+      delegatus(TOOL_NAME, { setId: "fs_fixture_own_steps" }, { setId: "fs_fixture_own_steps", title: copy.setTitle, variants: FRAME_SET_FIXTURE_VARIANTS, frames: FRAME_SET_FIXTURE_FRAMES });
+      delegatus("update_task", { id: "task_fixture", status: "needs_review" }, { changedFields: ["status"], revision: 7 });
+      delegatus("request_attention", { taskId: "task_fixture", text: text.card }, { requested: true });
     }
     agent(text.replies[index]!);
   });

@@ -4,12 +4,16 @@ import {
   chosenReply,
   coverFrames,
   frameAtView,
+  frameFromFileName,
+  framesFromFileNames,
   frameSetInputDefects,
   framesOfVariant,
   FRAME_MAX_BYTES,
   FRAME_SET_MAX_FRAMES,
+  justifiedRows,
   setCounts,
   stepIndex,
+  stripTiles,
   swipeDirection,
   viewsOf,
   type Frame,
@@ -74,5 +78,46 @@ describe("frame set prototype model", () => {
       "frame 1 names variant 2, which the set does not list",
     ]);
     expect(frameSetInputDefects({ title: "Set", variants, frames: paths(1) }, [FRAME_MAX_BYTES + 1])).toEqual(["frame 1 is larger than 4 MB"]);
+  });
+
+  test("a file name says the variant, the width and the language of its frame", () => {
+    expect(frameFromFileName("/var/tmp/lane/variant-4-pane-440-en-open.png")).toEqual({ variant: 4, width: 440, lang: "en", caption: "pane open" });
+    expect(frameFromFileName("variant-1-desktop-1440-uk-closed.png")).toEqual({ variant: 1, width: 1440, lang: "uk", caption: "desktop closed" });
+    expect(frameFromFileName("v2_phone_390_en.webp")).toEqual({ variant: 2, width: 390, lang: "en", caption: "phone" });
+    /* Variant 0 is the pane without the feature: a frame of no variant. */
+    expect(frameFromFileName("variant-0-phone-390-uk-closed.png").variant).toBeNull();
+    /* A name outside the convention is a plain captioned frame; a small number is no width. */
+    expect(frameFromFileName("board-after-12.jpg")).toEqual({ variant: null, width: null, lang: null, caption: "board after 12" });
+  });
+
+  test("a directory is published by variant, then by name, numbers as numbers", () => {
+    const ordered = framesFromFileNames([
+      "variant-2-desktop-1440-en-10.png", "variant-2-desktop-1440-en-9.png", "notes.md", "variant-0-desktop-1440-en.png", "variant-1-phone-390-uk.png",
+    ]).map((entry) => entry.name);
+    expect(ordered).toEqual(["variant-1-phone-390-uk.png", "variant-2-desktop-1440-en-9.png", "variant-2-desktop-1440-en-10.png", "variant-0-desktop-1440-en.png"]);
+  });
+
+  test("the collage fills a row with frames at their own proportions", () => {
+    /* Two desktop frames, two pane frames, two phone frames: the fixture's variant. */
+    const aspects = [1.6, 1.6, 0.55, 0.55, 0.462, 0.462];
+    const [row, ...more] = justifiedRows(aspects, 663, { target: 120, gap: 6 });
+    expect(more).toEqual([]);
+    expect(row!.tiles).toHaveLength(6);
+    expect(row!.height).toBeGreaterThanOrEqual(120);
+    expect(row!.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 5).toBeLessThanOrEqual(663);
+    expect(row!.tiles[0]!.width).toBeGreaterThanOrEqual(190);
+    /* Too narrow for six: the row wraps, and every row still fits. */
+    const wrapped = justifiedRows(aspects, 360, { target: 120, gap: 6 });
+    expect(wrapped.length).toBeGreaterThan(1);
+    for (const each of wrapped) expect(each.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * (each.tiles.length - 1)).toBeLessThanOrEqual(360);
+    expect(wrapped.flatMap((each) => each.tiles.map((tile) => tile.index))).toEqual([0, 1, 2, 3, 4, 5]);
+    /* A few frames never stretch into giants. */
+    expect(justifiedRows([1.6], 1300, { target: 120, gap: 6 })[0]!.height).toBeLessThanOrEqual(150);
+  });
+
+  test("a narrow pane gets one row at a fixed height, wide enough to press", () => {
+    const strip = stripTiles([1.6, 0.462], 76, 44);
+    expect(strip).toEqual({ height: 76, tiles: [{ index: 0, width: 122 }, { index: 1, width: 44 }] });
+    expect(setCounts(set, "en", true)).toBe("5 frames");
   });
 });
