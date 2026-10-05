@@ -22,6 +22,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
   let counted = input.delegatus_confirm === true;
+  let possibleOperator = false;
   let outcome: "skipped" | "failed" = "skipped";
   try {
     if (!/^[a-f0-9-]{36}$/.test(hookId)) return "";
@@ -31,7 +32,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       if (typeof input.delegatus_emitted_at === "number") memoryIndex().confirmPreparedInjection(conversationId, hookId, input.delegatus_emitted_at);
       return "";
     }
-    if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic()) return "";
+    possibleOperator = true;
     if (typeof input.prompt !== "string" || input.prompt.length > 64000 || typeof input.session_id !== "string"
       || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.session_id) || input.hook_event_name !== "UserPromptSubmit") return "";
     const snapshot = agentRegistry().readOnlySnapshot();
@@ -62,10 +63,11 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         origin = queued.entry.origin?.kind ?? "unknown"; requestId = queued.entry.id;
       }
     }
+    if (requestId && origin !== "operator") { possibleOperator = origin === "unknown"; return ""; }
     const transcript = generation?.path ?? receipt?.artifactPath ?? undefined;
     if (!requestId) {
       if (receipt?.transport !== "tmux") return "";
-      if (engine === "claude" && input.source !== undefined && input.source !== "user") return "";
+      if (engine === "claude" && input.source !== undefined && input.source !== "user") { possibleOperator = false; return ""; }
       const nativeId = engine === "claude" ? input.prompt_id : input.turn_id;
       if (typeof nativeId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(nativeId)) return "";
       requestId = `native:${nativeId}`;
@@ -73,6 +75,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // A retry of this native id keeps the same receipt; repeated words on a
       // later id do not consume it again.
       const terminalOrigin = index.terminalOrigin(conversationId, requestId, prompt, transcript, engine);
+      if (terminalOrigin && terminalOrigin !== "operator" && terminalOrigin !== "unknown") { possibleOperator = false; return ""; }
       if (!index.nativeOperatorOwned(conversationId, requestId, prompt)) {
         // Delivery can proceed after both optional receipt stores fail. The
         // registry reservation predates transport and survives reload; without
@@ -115,7 +118,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       // An unknown artifact gets its occurrence join when it materializes.
       index.recordNativeTurn(conversationId, requestId, transcript ?? "", cursor.offset, prompt);
     }
-    if (origin !== "operator" || !sharedMemoryEnabled(project)) return "";
+    if (origin !== "operator") { possibleOperator = false; return ""; }
+    if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic() || !sharedMemoryEnabled(project)) return "";
     const key = readOpenRouterApiKey();
     if (!key) return "";
     if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
@@ -148,6 +152,6 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     });
   } catch { outcome = "failed"; return ""; }
   finally {
-    if (!counted) { try { memoryIndex().recordInjectionActivity(outcome); } catch { /* optional ledger */ } }
+    if (possibleOperator && !counted) { try { memoryIndex().recordInjectionActivity(outcome); } catch { /* optional ledger */ } }
   }
 }

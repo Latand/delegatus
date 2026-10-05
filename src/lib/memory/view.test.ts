@@ -71,27 +71,49 @@ test("unreadable spend reports status unavailable rather than a false ready answ
   expect((await GET(new NextRequest("http://localhost/api/memory/settings?project=fixture-project"))).status).toBe(503);
 });
 
-test("a contended activity write replays once after reload and keeps its original month", () => {
+test("contended activity stays in process and flushes on the next successful write", () => {
   const index = memoryIndex(); index.injectionActivity(now);
   const db = new Database(path.join(root, "memory-index.sqlite")); db.exec("BEGIN IMMEDIATE");
-  try { index.recordInjectionActivity("failed", now); } finally { db.exec("ROLLBACK"); db.close(); }
-  const directory = path.join(root, "memory-activity-pending");
-  const name = fs.readdirSync(directory)[0];
-  const evidence = fs.readFileSync(path.join(directory, name));
-  index.close();
+  try { index.recordInjectionActivity("failed", now); } finally { db.exec("ROLLBACK"); }
+  expect(db.query("SELECT count FROM memory_injection_activity").all()).toEqual([]);
+  index.recordInjectionActivity("decisions", new Date("2026-11-01"));
   expect(index.injectionActivity(now).failed).toBe(1);
-  // Replay after a crash between commit and removal remains idempotent.
-  fs.writeFileSync(path.join(directory, name), evidence);
+  expect(index.injectionActivity(new Date("2026-11-01")).decisions).toBe(1);
+  index.recordInjectionActivity("decisions", now);
   expect(index.injectionActivity(now).failed).toBe(1);
-  expect(index.injectionActivity(new Date("2026-11-01")).failed).toBe(0);
+  expect(fs.existsSync(path.join(root, "memory-activity-pending"))).toBe(false);
+  db.close();
 });
 
-test("malformed and oversized hook envelopes appear in activity without their body", async () => {
+test("ten thousand events use one row per month and event", () => {
+  const index = memoryIndex();
+  for (let i = 0; i < 10000; i++) index.recordInjectionActivity("decisions", now);
+  for (const event of ["skipped", "failed", "noCandidates", "noMatches", "prepared"] as const) index.recordInjectionActivity(event, now);
+  expect(index.injectionActivity(now).decisions).toBe(10000);
+  const db = new Database(path.join(root, "memory-index.sqlite"));
+  expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM memory_injection_activity").get()?.count).toBe(6);
+  db.close();
+  expect(fs.existsSync(path.join(root, "memory-activity-pending"))).toBe(false);
+});
+
+test("the earlier activity schema is aggregated once without losing counts", () => {
+  const db = new Database(path.join(root, "memory-index.sqlite"), { create: true });
+  db.exec("CREATE TABLE memory_injection_activity (id TEXT PRIMARY KEY, month TEXT, event TEXT)");
+  const write = db.query("INSERT INTO memory_injection_activity VALUES (?, ?, ?)");
+  write.run("one", "2026-10", "decisions"); write.run("two", "2026-10", "decisions"); write.run("three", "2026-09", "failed");
+  db.close();
+  expect(memoryIndex().injectionActivity(now).decisions).toBe(2);
+  memoryIndex().close();
+  expect(memoryIndex().injectionActivity(now).decisions).toBe(2);
+  expect(memoryIndex().injectionActivity(new Date("2026-09-30")).failed).toBe(1);
+});
+
+test("unauthenticated malformed or oversized envelopes do not count operator turns", async () => {
   const { POST } = await import("@/app/api/memory/inject/route");
-  expect(await (await POST(new Request("http://localhost/api/memory/inject", { method: "POST", body: "broken fixture body" }))).json()).toEqual({ block: "" });
-  expect(await (await POST(new Request("http://localhost/api/memory/inject", { method: "POST", body: "x".repeat(128001) }))).json()).toEqual({ block: "" });
-  const counts = memoryIndex().injectionActivity();
-  expect(counts.failed).toBe(1); expect(counts.skipped).toBe(1);
+  for (const body of ["broken fixture body", "x".repeat(128001)]) {
+    expect(await (await POST(new Request("http://localhost/api/memory/inject", { method: "POST", body }))).json()).toEqual({ block: "" });
+  }
+  expect(memoryIndex().injectionActivity()).toMatchObject({ failed: 0, skipped: 0 });
 });
 
 test("a confirmed delivery replayed next month counts in its emission month", () => {

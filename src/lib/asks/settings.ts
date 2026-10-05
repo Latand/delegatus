@@ -118,6 +118,11 @@ export function writeOpenRouterApiKey(key: string): boolean {
   let fd: number | undefined;
   try {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    // Remove secret-bearing leftovers from an interrupted atomic replacement.
+    // Writes are synchronous in the Viewer, so another request cannot interleave.
+    for (const name of fs.readdirSync(path.dirname(filename))) {
+      if (/^openrouter-api-key\.[a-f0-9-]{36}\.tmp$/.test(name)) fs.unlinkSync(path.join(path.dirname(filename), name));
+    }
     fd = fs.openSync(temporary, "wx", 0o600);
     fs.fchmodSync(fd, 0o600);
     fs.writeFileSync(fd, key, "utf8");

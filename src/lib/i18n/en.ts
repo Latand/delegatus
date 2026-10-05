@@ -10,7 +10,7 @@ export const en = {
   "memory.status.notOwner": "This release does not own traffic. Open Settings on the active release to check injection.",
   "memory.status.ready": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
   "memory.status.failed": "Could not read injection status. Reopen Settings to retry.",
-  "memory.counts": "Installation, {month} (UTC): decisions made: {decisions}; turns that received memory: {delivered}; prepared offers: {prepared}; without candidates: {noCandidates}; without a match: {noMatches}; skipped attempts: {skipped}; failed attempts: {failed}.",
+  "memory.counts": "Installation, {month} (UTC): decisions made: {decisions}; turns that received memory: {delivered}; prepared offers: {prepared}; without candidates: {noCandidates}; without a match: {noMatches}; operator turns skipped: {skipped}; failed attempts: {failed}.",
   "providerKey.label": "OpenRouter key",
   "providerKey.env": "Key present, source: environment (OPENROUTER_API_KEY). The environment key is authoritative; change it there and restart Delegatus.",
   "providerKey.file": "Key present, source: file. Enter a new key to replace it.",

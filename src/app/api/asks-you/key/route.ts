@@ -32,7 +32,7 @@ export async function PUT(request: NextRequest) {
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const key = typeof body?.key === "string" ? body.key.trim() : "";
-    if (!key || key.length > 4096 || /\s|[\x00-\x1f\x7f]/.test(key)) return answer(400, "invalid_key");
+    if (!key || key.length > 4096 || !/^[\x21-\x7e]+$/.test(key)) return answer(400, "invalid_key");
     return writeOpenRouterApiKey(key) ? answer() : answer(500, "write_failed");
   } catch { return answer(400, "invalid_key"); }
   finally { reader.releaseLock(); }

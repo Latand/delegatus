@@ -1,5 +1,5 @@
 {
-  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
   "cases": [
     {
       "lang": "en",
@@ -59,7 +59,8 @@
         }
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -119,7 +120,8 @@
         }
       ],
       "status": "This release does not own traffic. Open Settings on the active release to check injection.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 0; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 0; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -179,7 +181,8 @@
         }
       ],
       "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -239,7 +242,8 @@
         }
       ],
       "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -299,7 +303,8 @@
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -347,7 +352,8 @@
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -407,7 +413,8 @@
         }
       ],
       "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below. This release does not own traffic. Open Settings on the active release to check injection.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -467,7 +474,8 @@
         }
       ],
       "status": "This release does not own traffic. Open Settings on the active release to check injection.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 1; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 1; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -527,7 +535,8 @@
         }
       ],
       "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -587,7 +596,8 @@
         }
       ],
       "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -647,7 +657,8 @@
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "en",
@@ -695,7 +706,8 @@
         }
       ],
       "status": "Injection is off for this project. Turn on the switch to allow it. Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
-      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; skipped attempts: 0; failed attempts: 0."
+      "counts": "Installation, 2026-10 (UTC): decisions made: 2; turns that received memory: 0; prepared offers: 0; without candidates: 0; without a match: 2; operator turns skipped: 0; failed attempts: 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -755,7 +767,8 @@
         }
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -815,7 +828,8 @@
         }
       ],
       "status": "Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 2; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 2; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -875,7 +889,8 @@
         }
       ],
       "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -935,7 +950,8 @@
         }
       ],
       "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -995,7 +1011,8 @@
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -1043,7 +1060,8 @@
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -1054,18 +1072,18 @@
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 878,
+      "scrollHeight": 899,
       "height": 808,
       "rows": [
         {
           "top": 311.625,
-          "bottom": 669.625,
-          "height": 358,
+          "bottom": 690.75,
+          "height": 379.125,
           "overflow": 0
         },
         {
-          "top": 689.625,
-          "bottom": 904.25,
+          "top": 710.75,
+          "bottom": 925.375,
           "height": 214.625,
           "overflow": 0
         }
@@ -1092,143 +1110,24 @@
         {
           "left": 37,
           "right": 224.15625,
-          "top": 860.25,
-          "bottom": 904.25
+          "top": 881.375,
+          "bottom": 925.375
         },
         {
           "left": 232.15625,
           "right": 353,
-          "top": 860.25,
-          "bottom": 904.25
+          "top": 881.375,
+          "bottom": 925.375
         }
       ],
       "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter». Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
       "width": 390,
       "state": "inactive",
-      "left": 16,
-      "right": 374,
-      "top": 45,
-      "bottom": 855,
-      "overflow": 0,
-      "scrollHeight": 885,
-      "height": 808,
-      "rows": [
-        {
-          "top": 311.625,
-          "bottom": 627.375,
-          "height": 315.75,
-          "overflow": 0
-        },
-        {
-          "top": 647.375,
-          "bottom": 910.625,
-          "height": 263.25,
-          "overflow": 0
-        }
-      ],
-      "controls": [
-        {
-          "left": 277.328125,
-          "right": 353,
-          "top": 66,
-          "bottom": 110
-        },
-        {
-          "left": 313,
-          "right": 353,
-          "top": 257.625,
-          "bottom": 281.625
-        },
-        {
-          "left": 313,
-          "right": 353,
-          "top": 338.625,
-          "bottom": 362.625
-        },
-        {
-          "left": 37,
-          "right": 224.15625,
-          "top": 839.125,
-          "bottom": 883.125
-        },
-        {
-          "left": 232.15625,
-          "right": 353,
-          "top": 839.125,
-          "bottom": 883.125
-        }
-      ],
-      "status": "Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено спроб — 0; невдалих спроб — 0."
-    },
-    {
-      "lang": "uk",
-      "width": 390,
-      "state": "ready",
-      "left": 16,
-      "right": 374,
-      "top": 45,
-      "bottom": 855,
-      "overflow": 0,
-      "scrollHeight": 885,
-      "height": 808,
-      "rows": [
-        {
-          "top": 311.625,
-          "bottom": 627.375,
-          "height": 315.75,
-          "overflow": 0
-        },
-        {
-          "top": 647.375,
-          "bottom": 910.625,
-          "height": 263.25,
-          "overflow": 0
-        }
-      ],
-      "controls": [
-        {
-          "left": 277.328125,
-          "right": 353,
-          "top": 66,
-          "bottom": 110
-        },
-        {
-          "left": 313,
-          "right": 353,
-          "top": 257.625,
-          "bottom": 281.625
-        },
-        {
-          "left": 313,
-          "right": 353,
-          "top": 338.625,
-          "bottom": 362.625
-        },
-        {
-          "left": 37,
-          "right": 224.15625,
-          "top": 839.125,
-          "bottom": 883.125
-        },
-        {
-          "left": 232.15625,
-          "right": 353,
-          "top": 839.125,
-          "bottom": 883.125
-        }
-      ],
-      "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено спроб — 0; невдалих спроб — 0."
-    },
-    {
-      "lang": "uk",
-      "width": 390,
-      "state": "capped",
       "left": 16,
       "right": 374,
       "top": 45,
@@ -1282,30 +1181,31 @@
           "bottom": 904.25
         }
       ],
-      "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено спроб — 0; невдалих спроб — 0."
+      "status": "Цей реліз не обслуговує запити. Відкрийте налаштування активного релізу, щоб перевірити передавання пам’яті.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 3; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 3; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
       "width": 390,
-      "state": "off",
+      "state": "ready",
       "left": 16,
       "right": 374,
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 948,
+      "scrollHeight": 906,
       "height": 808,
       "rows": [
         {
           "top": 311.625,
-          "bottom": 690.75,
-          "height": 379.125,
+          "bottom": 648.5,
+          "height": 336.875,
           "overflow": 0
         },
         {
-          "top": 710.75,
-          "bottom": 974,
+          "top": 668.5,
+          "bottom": 931.75,
           "height": 263.25,
           "overflow": 0
         }
@@ -1332,18 +1232,141 @@
         {
           "left": 37,
           "right": 224.15625,
-          "top": 902.5,
-          "bottom": 946.5
+          "top": 860.25,
+          "bottom": 904.25
         },
         {
           "left": 232.15625,
           "right": 353,
-          "top": 902.5,
-          "bottom": 946.5
+          "top": 860.25,
+          "bottom": 904.25
+        }
+      ],
+      "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "capped",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 927,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 669.625,
+          "height": 358,
+          "overflow": 0
+        },
+        {
+          "top": 689.625,
+          "bottom": 952.875,
+          "height": 263.25,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        },
+        {
+          "left": 37,
+          "right": 224.15625,
+          "top": 881.375,
+          "bottom": 925.375
+        },
+        {
+          "left": 232.15625,
+          "right": 353,
+          "top": 881.375,
+          "bottom": 925.375
+        }
+      ],
+      "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "off",
+      "left": 16,
+      "right": 374,
+      "top": 45,
+      "bottom": 855,
+      "overflow": 0,
+      "scrollHeight": 969,
+      "height": 808,
+      "rows": [
+        {
+          "top": 311.625,
+          "bottom": 711.875,
+          "height": 400.25,
+          "overflow": 0
+        },
+        {
+          "top": 731.875,
+          "bottom": 995.125,
+          "height": 263.25,
+          "overflow": 0
+        }
+      ],
+      "controls": [
+        {
+          "left": 277.328125,
+          "right": 353,
+          "top": 66,
+          "bottom": 110
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 257.625,
+          "bottom": 281.625
+        },
+        {
+          "left": 313,
+          "right": 353,
+          "top": 338.625,
+          "bottom": 362.625
+        },
+        {
+          "left": 37,
+          "right": 224.15625,
+          "top": 923.625,
+          "bottom": 967.625
+        },
+        {
+          "left": 232.15625,
+          "right": 353,
+          "top": 923.625,
+          "bottom": 967.625
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     },
     {
       "lang": "uk",
@@ -1354,18 +1377,18 @@
       "top": 45,
       "bottom": 855,
       "overflow": 0,
-      "scrollHeight": 911,
+      "scrollHeight": 932,
       "height": 808,
       "rows": [
         {
           "top": 311.625,
-          "bottom": 690.75,
-          "height": 379.125,
+          "bottom": 711.875,
+          "height": 400.25,
           "overflow": 0
         },
         {
-          "top": 710.75,
-          "bottom": 936.75,
+          "top": 731.875,
+          "bottom": 957.875,
           "height": 226,
           "overflow": 0
         }
@@ -1391,7 +1414,8 @@
         }
       ],
       "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його. Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця або збільште ліміт «Питає вас».",
-      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено спроб — 0; невдалих спроб — 0."
+      "counts": "Уся інсталяція, 2026-10 (UTC): ухвалено рішень — 4; повідомлень із пам’яттю — 0; підготовлено пропозицій — 0; без кандидатів — 0; без збігу — 4; пропущено ходів оператора — 0; невдалих спроб — 0.",
+      "pageErrors": []
     }
   ]
 }

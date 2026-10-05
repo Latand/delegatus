@@ -47,6 +47,7 @@ function displayPath(filename: string): string {
 /** A rebuildable, private derivative. Every source is opened read-only. */
 export class MemoryIndex {
   private db?: BunDatabase;
+  private pendingActivity = new Map<string, { month: string; event: string; count: number }>();
 
   private normalizeProjects(db: BunDatabase) {
     // Project succession can change independently of the source file's timestamp.
@@ -101,11 +102,21 @@ export class MemoryIndex {
           PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
         );
         CREATE TABLE IF NOT EXISTS memory_injection_activity (
-          id TEXT PRIMARY KEY, month TEXT, event TEXT
+          month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
         );
-        CREATE INDEX IF NOT EXISTS memory_activity_month ON memory_injection_activity(month);
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
       `);
+      // Preserve activity recorded by the earlier per-event schema.
+      if (this.db.query<{ name: string }, []>("PRAGMA table_info(memory_injection_activity)").all().some(column => column.name === "id")) {
+        this.db.transaction(() => {
+          this.db!.exec(`ALTER TABLE memory_injection_activity RENAME TO memory_activity_legacy;
+            CREATE TABLE memory_injection_activity (
+              month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
+            );
+            INSERT INTO memory_injection_activity SELECT month, event, COUNT(*) FROM memory_activity_legacy GROUP BY month, event;
+            DROP TABLE memory_activity_legacy;`);
+        })();
+      }
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
         // can abandon a contended first open and retry on a later prompt.
@@ -503,50 +514,29 @@ export class MemoryIndex {
 
   /** Numeric installation-wide activity only; no prompt, key or memory text. */
   recordInjectionActivity(event: "decisions" | "skipped" | "failed" | "noCandidates" | "noMatches" | "prepared", now = new Date()) {
-    const row = { id: crypto.randomUUID(), month: now.toISOString().slice(0, 7), event };
-    try { this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_injection_activity VALUES (?, ?, ?)").run(row.id, row.month, row.event)); }
-    catch {
-      // A contended derivative must retain this attempt without waiting behind
-      // its writer. Replay joins each pending fact once, as offers already do.
-      const directory = statePath("memory-activity-pending");
-      fsSync.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const filename = path.join(directory, row.id + ".json");
-      const temporary = filename + ".tmp";
-      try {
-        fsSync.writeFileSync(temporary, JSON.stringify(row), { mode: 0o600, flag: "wx" });
-        fsSync.renameSync(temporary, filename);
-      } finally { fsSync.rmSync(temporary, { force: true }); }
-    }
-  }
-
-  private replayInjectionActivity() {
-    const directory = statePath("memory-activity-pending");
-    let names: string[];
-    try { names = fsSync.readdirSync(directory); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
-    const deadline = performance.now() + 100;
-    let replayed = 0;
-    for (const name of names) {
-      if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
-      if (replayed >= 256 || performance.now() >= deadline) return false;
-      const filename = path.join(directory, name), stat = fsSync.lstatSync(filename);
-      if (!stat.isFile() || stat.size > 1024) throw Error("invalid memory activity evidence");
-      const row = JSON.parse(fsSync.readFileSync(filename, "utf8"));
-      if (row.id + ".json" !== name || !/^\d{4}-\d{2}$/.test(row.month)
-        || !["decisions", "skipped", "failed", "noCandidates", "noMatches", "prepared"].includes(row.event)) throw Error("invalid memory activity evidence");
-      this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_injection_activity VALUES (?, ?, ?)").run(row.id, row.month, row.event));
-      fsSync.rmSync(filename); replayed++;
-    }
-    return true;
+    const month = now.toISOString().slice(0, 7), key = `${month}:${event}`;
+    const pending = this.pendingActivity.get(key);
+    this.pendingActivity.set(key, { month, event, count: (pending?.count ?? 0) + 1 });
+    try {
+      this.hookDatabase(db => db.transaction(() => {
+        const write = db.query(`INSERT INTO memory_injection_activity (month, event, count) VALUES (?, ?, ?)
+          ON CONFLICT(month, event) DO UPDATE SET count = count + excluded.count`);
+        for (const row of this.pendingActivity.values()) write.run(row.month, row.event, row.count);
+      })());
+      this.pendingActivity.clear();
+    } catch { /* Retain process-local increments for the next successful write. */ }
   }
 
   injectionActivity(now = new Date()) {
-    if (!this.replayInjectionActivity() || !this.replayConfirmedInjections()) throw Error("memory ledger replay incomplete");
+    if (!this.replayConfirmedInjections()) throw Error("memory ledger replay incomplete");
     const month = now.toISOString().slice(0, 7), db = this.database();
     const counts = { decisions: 0, skipped: 0, failed: 0, noCandidates: 0, noMatches: 0, prepared: 0 };
     for (const row of db.query<{ event: keyof typeof counts; count: number }, [string]>(
-      "SELECT event, COUNT(*) AS count FROM memory_injection_activity WHERE month = ? GROUP BY event").all(month)) {
+      "SELECT event, count FROM memory_injection_activity WHERE month = ?").all(month)) {
       if (Object.hasOwn(counts, row.event)) counts[row.event] = row.count;
+    }
+    for (const row of this.pendingActivity.values()) {
+      if (row.month === month && Object.hasOwn(counts, row.event)) counts[row.event as keyof typeof counts] += row.count;
     }
     const delivered = db.query<{ count: number }, [string]>(`SELECT COUNT(*) AS count FROM (
       SELECT DISTINCT conversation_id, request_id FROM memory_offers WHERE channel = 'inject' AND substr(at, 1, 7) = ?

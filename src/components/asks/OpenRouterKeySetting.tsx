@@ -37,7 +37,7 @@ export function OpenRouterKeySetting() {
     <p role="status" className="mt-2 text-[13px] leading-relaxed text-muted">{view ? t(view.source === "env" ? "providerKey.env" : view.present ? "providerKey.file" : "providerKey.missing") : t("providerKey.loading")}</p>
     <p className="mt-2 text-[13px] leading-relaxed text-muted">{t("providerKey.shared")}</p>
     {view?.source !== "env" && <form className="mt-2 flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); void save(); }}>
-      <input id={id} type="password" autoComplete="new-password" spellCheck={false} ref={input} maxLength={4096}
+      <input id={id} type="password" autoComplete="off" spellCheck={false} ref={input} maxLength={4096}
         disabled={!view || busy} onChange={e => { setHasKey(Boolean(e.target.value.trim())); setSaved(false); }}
         className="min-h-11 min-w-0 flex-1 rounded border border-border bg-canvas px-3" />
       <button type="submit" disabled={!view || busy || !hasKey} className="min-h-11 rounded border border-border px-3 text-sm">{t("providerKey.save")}</button>

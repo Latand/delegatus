@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -78,4 +79,25 @@ test("filesystem write failure is generic and never echoes the key", async () =>
   expect(response.status).toBe(500);
   expect(await response.json()).toEqual({ present: false, source: null, error: "write_failed" });
   expect(fs.readdirSync(path.dirname(filename)).some(name => name.endsWith(".tmp"))).toBe(false);
+});
+
+for (const key of ["fixture\u200bkey", "fixture-ключ"]) test("non-ASCII key is refused without echo or file mutation", async () => {
+  let response = await PUT(request({ key }));
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ present: false, source: null, error: "invalid_key" });
+  expect(fs.existsSync(openRouterKeyPath())).toBe(false);
+  expect((await PUT(request({ key: "fixture-existing-key" }))).status).toBe(200);
+  response = await PUT(request({ key }));
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ present: true, source: "file", error: "invalid_key" });
+  expect(fs.readFileSync(openRouterKeyPath(), "utf8")).toBe("fixture-existing-key");
+});
+
+test("the next write removes interrupted secret-bearing temporary files", async () => {
+  const filename = openRouterKeyPath(), directory = path.dirname(filename);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(filename + "." + crypto.randomUUID() + ".tmp", "fixture-crash-key", { mode: 0o600 });
+  expect((await PUT(request({ key: "fixture-current-key" }))).status).toBe(200);
+  expect(fs.readdirSync(directory)).toEqual(["openrouter-api-key"]);
+  expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
 });
