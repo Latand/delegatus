@@ -636,7 +636,7 @@ for (const withFallback of [false, true]) test(`a pinned expired Claude account 
   } finally { providerReply = null; removeStateDir(); }
 });
 
-for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a changed expired pin stays unreserved after ${outcome} refresh`, async () => {
+for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials"] as const) test(`a changed pin stays unreserved after ${outcome} admission`, async () => {
   const { createManagedClaudeAccount } = await import("./claude");
   const { readAccountSource, writeAccountSource } = await import("./accountsStore");
   const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
@@ -650,7 +650,7 @@ for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a
   const pin = createManagedClaudeAccount("Rejected refresh pin");
   const fallback = createManagedClaudeAccount("Rejected refresh fallback");
   fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
-    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() - 1,
+    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + (outcome === "current queued credentials" ? 60_000 : -1),
   } }), { mode: 0o600 });
   fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
     ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
@@ -664,6 +664,13 @@ for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a
   let requests = 0;
   providerReply = () => {
     requests += 1;
+    if (outcome.includes("queued")) {
+      if (requests === 1 && outcome !== "current queued credentials") {
+        const fresh = crypto.randomUUID();
+        return Response.json({ access_token: fresh, expires_in: 3600 });
+      }
+      return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+    }
     if (requests === 1) {
       const read = readAccountSource("claude-accounts.json");
       if (read.kind !== "collection") throw new Error("Missing fixture catalog");
@@ -679,7 +686,7 @@ for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a
   let resolverStarted!: () => void;
   const started = new Promise<void>(resolve => { resolverStarted = resolve; });
   const resolve: typeof resolveHealthySpawnAccount = (...args) => { resolverStarted(); return resolveHealthySpawnAccount(...args); };
-  if (outcome === "queued removal") {
+  if (outcome.includes("queued")) {
     let holderEntered!: () => void;
     const entered = new Promise<void>(resolve => { holderEntered = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -688,8 +695,17 @@ for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a
       const read = readAccountSource("claude-accounts.json");
       if (read.kind !== "collection") throw new Error("Missing fixture catalog");
       const catalog = read.body as { accounts: { id: string; label: string }[] };
-      catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
-      writeAccountSource("claude-accounts.json", catalog);
+      if (outcome === "queued removal") {
+        catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
+        writeAccountSource("claude-accounts.json", catalog);
+      } else if (outcome === "queued catalog") {
+        catalog.accounts.find(row => row.id === pin.id)!.label = "Changed queued pin";
+        writeAccountSource("claude-accounts.json", catalog);
+      } else {
+        fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+          ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+        } }), { mode: 0o600 });
+      }
     });
     await entered;
   }

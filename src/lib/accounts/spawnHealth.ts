@@ -170,9 +170,13 @@ function claudeCatalogIdentity(value: ClaudeAccount): string {
 }
 
 /** Every snapshot addresses an account already observed by the caller.
-    Disappearance while admission queues must stay unreserved and retryable. */
+    Changes while admission queues must stay unreserved and retryable. */
 async function claudeAdmissionSnapshot(account: ClaudeAccount, holder: string) {
-  try { return await accountProbeSnapshot(() => currentClaudeAccount(account), { holder, caller: "spawn health" }); }
+  try {
+    const snapshot = await accountProbeSnapshot(() => currentClaudeAccount(account), { holder, caller: "spawn health" });
+    if (claudeCatalogIdentity(snapshot.account) !== claudeCatalogIdentity(account)) throw new AccountAdmissionChangedError();
+    return snapshot;
+  }
   catch (error) {
     if (error instanceof UnknownClaudeAccountError) throw new AccountAdmissionChangedError();
     throw error;
@@ -180,12 +184,12 @@ async function claudeAdmissionSnapshot(account: ClaudeAccount, holder: string) {
 }
 
 async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRevision = false): Promise<ClaudeValidityProbeResult> {
-  const original = await claudeAdmissionSnapshot(account, "Claude validity snapshot");
-  // The supplied catalog row predates OAuth refresh. Credential rotation is
-  // expected there; a changed or removed pin must still refuse admission.
-  if (claudeCatalogIdentity(original.account) !== claudeCatalogIdentity(account)) throw new AccountAdmissionChangedError();
-  const credentialIdentity = claudeProbeCredentialIdentity(original.account.home);
+  // Capture credentials before yielding admission: the initial snapshot can
+  // itself queue behind a holder that changes this account.
+  const credentialIdentity = claudeProbeCredentialIdentity(account.home);
   if (credentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+  const original = await claudeAdmissionSnapshot(account, "Claude validity snapshot");
+  if (claudeProbeCredentialIdentity(original.account.home) !== credentialIdentity) throw new AccountAdmissionChangedError();
   for (let attempt = 0; attempt < (retryUnrelatedRevision ? 3 : 1); attempt += 1) {
     let snapshot = original;
     if (attempt > 0) snapshot = await claudeAdmissionSnapshot(account, "Claude validity snapshot");
@@ -207,11 +211,12 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
 }
 
 async function refreshValidityProbe(account: ClaudeAccount, retryUnrelatedRevision = false): Promise<ClaudeValidityProbeResult> {
-  const { account: current } = await claudeAdmissionSnapshot(account, "Claude refresh admission");
-  // The existing OAuth refresh fence compares the credential read before its
-  // network request with the current credential at replacement time.
-  const expectedCredentialIdentity = retryUnrelatedRevision ? claudeProbeCredentialIdentity(current.home) : undefined;
+  // A pinned refresh must retain the credential observed before its initial
+  // account admission yields as well as across the later network exchange.
+  const expectedCredentialIdentity = retryUnrelatedRevision ? claudeProbeCredentialIdentity(account.home) : undefined;
   if (expectedCredentialIdentity === null) throw new ClaudeCredentialUnavailableError();
+  const { account: current } = await claudeAdmissionSnapshot(account, "Claude refresh admission");
+  if (retryUnrelatedRevision && claudeProbeCredentialIdentity(current.home) !== expectedCredentialIdentity) throw new AccountAdmissionChangedError();
   const refreshed = await refreshClaudeOauth(current, undefined, expectedCredentialIdentity);
   // A rejection/unknown result can still follow an external pin change.
   // Revalidate before either branch can degrade the pin or burn its key.
