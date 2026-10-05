@@ -127,7 +127,7 @@ test("strict endpoint ports allow whitespace after the colon", () => {
 });
 
 test("complete shell homes and quoted leading-space absolute paths are private", () => {
-  for (const home of ["~", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"]) {
+  for (const home of ["~", "~+", "~-", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"]) {
     for (const line of [`The directory is \`${home}\`.`, `The directory is (${home}),`, `The directory is '${home}';`]) {
       expect(privateClasses(line)).toContain("path");
       expect(privateClasses(line, undefined, { strict: true })).toContain("path");

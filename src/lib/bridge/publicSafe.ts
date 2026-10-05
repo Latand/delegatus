@@ -101,7 +101,7 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/|\$HOME\b|\$\{HOME\})/u],
   /* A complete shell home expression needs no slash. Keep approximate
      numbers and Markdown strike-through readable. */
-  ["path", /(?:^|[\s[(«“‹"'`=:>*_])~(?!~)(?:[\p{L}\p{M}_][\p{L}\p{M}\p{N}_.+-]*)?(?=$|[\s/)\]»”›"'`,.;:!?*_])/u],
+  ["path", /(?:^|[\s[(«“‹"'`=:>*_])~(?!~)(?:[+-]|[\p{L}\p{M}_][\p{L}\p{M}\p{N}_.+-]*)?(?=$|[\s/)\]»”›"'`,.;:!?*_])/u],
   /* Folder names are letters of any script, so `\w` would miss most of them,
      and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
      space-separated run counts only once a later slash closes the folder. */

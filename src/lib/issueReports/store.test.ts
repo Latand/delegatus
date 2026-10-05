@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import {
-  claimIssueReportPublication, ISSUE_REPORT_PREVIEW_TTL_MS, issueReportDigest, markIssueReportShown, readIssueReportPreview,
+  claimIssueReportPublication, issueReportDigest, markIssueReportShown, readIssueReportPreview,
   recordIssueReportPreview, releaseIssueReportPublication, settleIssueReportPublication,
 } from "./store";
 
@@ -69,15 +69,64 @@ test("processes racing for one digest: exactly one takes the claim", () => {
   expect(outcomes.filter((outcome) => outcome === "lost")).toHaveLength(7);
 });
 
-test("an old preview nobody published is dropped with its readings; a publication is kept", () => {
-  const old = new Date(Date.now() - ISSUE_REPORT_PREVIEW_TTL_MS - 60_000);
+test("old previews, readings and publication receipts survive an unrelated preview", () => {
+  const old = new Date("2026-01-01T00:00:00.000Z");
   const stale = recordIssueReportPreview(REPORT, null, { directory, now: old }).digest;
   markIssueReportShown(stale, "conversation_seat", { directory });
   const filed = recordIssueReportPreview({ ...REPORT, title: "Another report" }, null, { directory, now: old }).digest;
   claimIssueReportPublication(filed, CLAIM, directory);
+  settleIssueReportPublication(filed, { ...CLAIM, issueUrl: ISSUE_URL }, directory);
 
   recordIssueReportPreview({ ...REPORT, title: "A third report" }, null, { directory });
-  expect(readIssueReportPreview(stale, directory)).toBeNull();
-  expect(fs.readdirSync(directory).filter((name) => name.startsWith(stale))).toEqual([]);
-  expect(readIssueReportPreview(filed, directory)?.state).toBe("publishing");
+  expect(readIssueReportPreview(stale, directory)).toMatchObject({ state: "preview", shown: [{ seat: "conversation_seat" }] });
+  expect(readIssueReportPreview(filed, directory)).toMatchObject({ state: "published", publication: { issueUrl: ISSUE_URL } });
+  expect(claimIssueReportPublication(filed, CLAIM, directory)).toBe(false);
+});
+
+test("preview creation preserves another process's unfinished immutable record", () => {
+  const digest = issueReportDigest(REPORT);
+  const other = { ...REPORT, title: "Another report" };
+  const write = fs.writeFileSync.bind(fs);
+  let interleaved = false;
+  const writing = spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+    write(file, data, options);
+    if (!interleaved && String(file).startsWith(path.join(directory, `${digest}.json.`)) && String(file).endsWith(".tmp")) {
+      interleaved = true;
+      recordIssueReportPreview(other, null, { directory });
+    }
+  });
+  try {
+    expect(recordIssueReportPreview(REPORT, null, { directory })).toMatchObject({ digest, state: "preview" });
+  } finally {
+    writing.mockRestore();
+  }
+  expect(interleaved).toBe(true);
+  expect(readIssueReportPreview(issueReportDigest(other), directory)).toMatchObject({ title: other.title });
+});
+
+test("an unrelated preview preserves a publication fence across release and reclaim", () => {
+  const { digest } = recordIssueReportPreview(REPORT, null, { directory, now: new Date("2026-01-01T00:00:00.000Z") });
+  expect(claimIssueReportPublication(digest, CLAIM, directory)).toBe(true);
+  const file = path.join(directory, `${digest}.publication.json`);
+  const exists = fs.existsSync.bind(fs);
+  let interleaved = false;
+  const checking = spyOn(fs, "existsSync").mockImplementation((candidate) => {
+    if (!interleaved && String(candidate) === file) {
+      interleaved = true;
+      releaseIssueReportPublication(digest, directory);
+      const present = exists(candidate);
+      expect(claimIssueReportPublication(digest, { ...CLAIM, by: "conversation_other" }, directory)).toBe(true);
+      return present;
+    }
+    return exists(candidate);
+  });
+  try {
+    recordIssueReportPreview({ ...REPORT, title: "Another report" }, null, { directory });
+  } finally {
+    checking.mockRestore();
+  }
+  /* Removing retention removes the check-and-delete window altogether;
+     implementations that still inspect it must preserve the new claim. */
+  expect(readIssueReportPreview(digest, directory)).toMatchObject({ state: "publishing" });
+  expect(claimIssueReportPublication(digest, CLAIM, directory)).toBe(false);
 });

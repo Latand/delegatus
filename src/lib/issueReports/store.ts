@@ -29,8 +29,6 @@ import { statePath } from "@/lib/configDir";
  */
 
 export const ISSUE_REPORT_DIGEST = /^[0-9a-f]{64}$/;
-/** A preview nobody published is dropped after this long. */
-export const ISSUE_REPORT_PREVIEW_TTL_MS = 14 * 24 * 60 * 60_000;
 
 export interface IssueReportPublication {
   /** The seat that published. */
@@ -136,24 +134,9 @@ export function readIssueReportPreview(digest: string, directory = issueReportsD
   };
 }
 
-function prune(directory: string, now: number): void {
-  let names: string[];
-  try { names = fs.readdirSync(directory); } catch { return; }
-  const digests = new Set(names.map((name) => name.slice(0, 64)).filter((digest) => ISSUE_REPORT_DIGEST.test(digest)));
-  for (const digest of digests) {
-    /* A publication, settled or not, is the record that an issue may exist. */
-    if (fs.existsSync(publicationFile(digest, directory))) continue;
-    const preview = readIssueReportPreview(digest, directory);
-    const created = preview ? Date.parse(preview.createdAt) : NaN;
-    if (preview && Number.isFinite(created) && now - created < ISSUE_REPORT_PREVIEW_TTL_MS) continue;
-    for (const name of names) {
-      if (!name.startsWith(`${digest}.`)) continue;
-      try { fs.rmSync(path.join(directory, name), { force: true }); } catch { /* Left for the next pass. */ }
-    }
-  }
-}
-
-/** Records a scrubbed report. The same text previewed again is the same preview. */
+/** Records a scrubbed report. The same text previewed again is the same preview.
+    Records are retained: an inline cleanup cannot distinguish another process's
+    unfinished immutable write or protect a publication being claimed. */
 export function recordIssueReportPreview(
   report: { title: string; body: string },
   createdBy: string | null,
@@ -161,7 +144,6 @@ export function recordIssueReportPreview(
 ): IssueReportPreview {
   const directory = options.directory ?? issueReportsDir();
   const now = options.now ?? new Date();
-  prune(directory, now.getTime());
   const digest = issueReportDigest(report);
   const existing = readIssueReportPreview(digest, directory);
   if (existing) return existing;

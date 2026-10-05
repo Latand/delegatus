@@ -387,7 +387,7 @@ test("attributed code quotes, complete home expressions, spaced absolute paths a
     ["quote", "Оператор відповів словами `перезапусти всіх агентів зараз`."],
     ["quote", "Користувач відповіла так: `перезапусти всіх агентів зараз`."],
     ["quote", "Точна відповідь оператора була `перезапусти всіх агентів зараз`."],
-    ...["~", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"].map((home): [string, string] => ["path", `The state directory is \`${home}\`.`]),
+    ...["~", "~+", "~-", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"].map((home): [string, string] => ["path", `The state directory is \`${home}\`.`]),
     ["path", "The state directory is (~reportuser), and the read failed."],
     ["path", "The state directory is '~'."],
     ["path", "The state directory is **~reportuser**."],
