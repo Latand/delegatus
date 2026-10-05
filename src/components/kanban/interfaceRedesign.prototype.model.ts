@@ -7,9 +7,9 @@
  * cannot lose a function without saying so.
  *
  * Inventory ids are the ones in docs/design/interface-redesign-usage-audit.md.
- * An entry that is a whole menu (W3, W4, W8) or that holds two controls (B3,
- * B11) is spelled out in ACTIONS, and rows name the action (`W3.hold`), so the
- * check counts actions, never groups.
+ * An entry that is a whole menu (W3, W4, W8) or that holds several controls
+ * (B3, B11, V2, V6) is spelled out in ACTIONS, and rows name the action
+ * (`W3.hold`), so the check counts actions, never groups.
  */
 
 export type Lang = "en" | "uk";
@@ -100,6 +100,14 @@ export const INVENTORY: Record<string, string> = {
   O6: "Speech context menu",
   O7: "Phone row swipe and long-press sheet",
   O8: "Conversation account badge menu",
+  /* The phone Overview's own "⋯": no project is chosen there, so every entry is installation-wide. */
+  V1: "Hidden work (phone Overview menu, where the board is drawn)",
+  V2: "Sound on or off, sound levels (phone Overview menu)",
+  V3: "Keep the screen awake (phone Overview menu)",
+  V4: "Activity page (phone Overview menu)",
+  V5: "Team page (phone Overview menu)",
+  V6: "Four onboarding entries (phone Overview menu)",
+  V7: "Updates (phone Overview menu)",
 };
 
 /** The actions inside an inventory entry that is more than one control (audit tables, "Every function"). */
@@ -119,6 +127,8 @@ export const ACTIONS: Record<string, Record<string, string>> = {
   },
   B3: { sound: "Sound on or off", levels: "Sound levels" },
   B11: { tasks: "Task list", pipelines: "Pipelines list" },
+  V2: { sound: "Sound on or off", levels: "Sound levels" },
+  V6: { guide: "Setup guide", walk: "Interface walkthrough", mapping: "Agent mapping", dictation: "Dictation setup" },
 };
 
 /** Every id a home is stated for: plain ids, and `W3.hold` for each action of a composite entry. */
@@ -189,6 +199,24 @@ const PEOPLE = [
   row("signout", ["G14"], "Sign out", "Вийти", { kind: "danger" }),
 ];
 
+/**
+ * The phone Overview's menu holds copies of installation-wide entries under its
+ * own ids. A row drawn there, or in Settings, carries those ids as well; the
+ * same row in a project's menu does not, so each direction has to place them
+ * where the Overview can reach them.
+ */
+const OVERVIEW_REFS: Record<string, string[]> = {
+  sound: ["V2.sound"], levels: ["V2.levels"], awake: ["V3"], activity: ["V4"], team: ["V5"],
+  "setup-guide": ["V6.guide"], walk: ["V6.walk"], mapping: ["V6.mapping"], dictation: ["V6.dictation"], update: ["V7"],
+};
+const forOverview = (rows: Row[]): Row[] => rows.map((entry) => (OVERVIEW_REFS[entry.key] ? { ...entry, refs: [...entry.refs, ...OVERVIEW_REFS[entry.key]!] } : entry));
+const SOUND = [
+  row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
+  row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
+  row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
+];
+const AWAKE = row("awake", ["B15"], "Keep the screen awake", "Не вимикати екран", { kind: "toggle" });
+
 /** Direction A: frequent actions promoted, the rest in named groups. */
 export const MENUS_A: Record<string, Menu> = {
   board: {
@@ -199,9 +227,7 @@ export const MENUS_A: Record<string, Menu> = {
     ],
     rows: [
       row("notify", ["B7"], "Notifications", "Сповіщення", { into: [
-        row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
-        row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
-        row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
+        ...SOUND,
       ] }),
       row("policies", ["B4", "B5", "B6"], "Project policies", "Правила проєкту", { into: [
         row("merge", ["B4"], "Merge when review passes", "Мерджити, коли рев’ю пройдено", { kind: "toggle" }),
@@ -278,10 +304,8 @@ export const MENUS_A: Record<string, Menu> = {
       row("accounts", ["B2"], "Accounts and limits", "Акаунти й ліміти"),
       row("host", ["B14"], "Host details", "Стан хоста"),
       row("notify", ["B7", "B15", "G3"], "Notifications", "Сповіщення", { into: [
-        row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
-        row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
-        row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
-        row("awake", ["B15"], "Keep the screen awake", "Не вимикати екран", { kind: "toggle" }),
+        ...SOUND,
+        AWAKE,
         row("push", ["G3"], "Push notifications", "Push-сповіщення", { kind: "toggle" }),
       ] }),
       row("policies", ["B4", "B5", "B6", "B8"], "Project settings", "Налаштування проєкту", { into: [
@@ -294,6 +318,26 @@ export const MENUS_A: Record<string, Menu> = {
         row("language", ["G1"], "Language", "Мова", { kind: "segment", choices: LANGS }),
         row("phone", ["G2"], "Phone access link", "Посилання для телефона"),
         ...SETUP, ...CONNECTIONS, ...PEOPLE,
+      ] }),
+    ],
+  },
+  /* The phone Overview's "⋯": no project is chosen, so nothing here acts on one. */
+  phoneOverview: {
+    title: T("Overview", "Огляд"),
+    promoted: [
+      row("hidden", ["V1"], "Hidden", "Сховані", { trail: T("2", "2") }),
+      ...forOverview([PEOPLE[0]!, PEOPLE[1]!]),
+    ],
+    rows: [
+      row("notify", [], "Notifications", "Сповіщення", { into: [
+        ...forOverview(SOUND),
+        ...forOverview([AWAKE]),
+        row("push", ["G3"], "Push notifications", "Push-сповіщення", { kind: "toggle" }),
+      ] }),
+      row("delegatus", [], "Delegatus", "Delegatus", { into: [
+        row("language", ["G1"], "Language", "Мова", { kind: "segment", choices: LANGS }),
+        row("phone", ["G2"], "Phone access link", "Посилання для телефона"),
+        ...forOverview(SETUP), ...forOverview(CONNECTIONS), PEOPLE[2]!,
       ] }),
     ],
   },
@@ -350,20 +394,18 @@ export const SETTINGS: SettingsSection[] = [
   { key: "general", scope: "delegatus", title: T("General", "Загальні"), rows: [
     row("language", ["G1"], "Language", "Мова", { kind: "segment", choices: LANGS }),
     row("phone", ["G2"], "Open on phone", "Відкрити на телефоні"),
-    row("awake", ["B15"], "Keep the screen awake", "Не вимикати екран", { kind: "toggle" }),
+    ...forOverview([AWAKE]),
   ] },
   { key: "notifications", scope: "delegatus", title: T("Notifications", "Сповіщення"), rows: [
     row("push", ["G3"], "Push notifications", "Push-сповіщення", { kind: "toggle" }),
-    row("sound", ["B3.sound"], "Sound", "Звук", { kind: "toggle" }),
-    row("levels", ["B3.levels"], "Sound levels", "Рівні звуку"),
-    row("asks", ["B7"], "Asks you", "Питає вас", { kind: "toggle" }),
+    ...forOverview(SOUND),
   ] },
-  { key: "setup", scope: "delegatus", title: T("Setup and guides", "Налаштування й посібники"), rows: SETUP },
+  { key: "setup", scope: "delegatus", title: T("Setup and guides", "Налаштування й посібники"), rows: forOverview(SETUP) },
   { key: "connections", scope: "delegatus", title: T("Connections and updates", "З’єднання й оновлення"), rows: [
-    ...CONNECTIONS,
+    ...forOverview(CONNECTIONS),
     row("telegram", ["S10"], "Telegram", "Telegram", { trail: T("Not connected", "Не підключено") }),
   ] },
-  { key: "people", scope: "delegatus", title: T("Activity and team", "Активність і команда"), rows: PEOPLE },
+  { key: "people", scope: "delegatus", title: T("Activity and team", "Активність і команда"), rows: forOverview(PEOPLE) },
 ];
 
 /** Direction B: only what acts on the object itself; every setting is in Settings. */
@@ -422,6 +464,15 @@ export const MENUS_B: Record<string, Menu> = {
       row("settings", ["B2", "B4", "B5", "B6", "B7", "B8", "B15", "B16"], "Settings", "Налаштування"),
     ],
   },
+  /* The phone Overview's "⋯": its hidden work, and Settings with the Delegatus scope alone. */
+  phoneOverview: {
+    title: T("Overview", "Огляд"),
+    promoted: [],
+    rows: [
+      row("hidden", ["V1"], "Hidden work", "Сховане", { trail: T("2", "2") }),
+      row("settings", [], "Settings", "Налаштування"),
+    ],
+  },
   phoneConversation: {
     title: T("Orchestrator", "Оркестратор"),
     promoted: [],
@@ -470,11 +521,14 @@ export function refsOf(rows: Row[]): string[] {
 
 /** Menus each direction regroups. Direction B has no rail menu: the rail's "⋯" opens Settings. */
 export const REGROUPED: Record<"A" | "B", string[]> = {
-  A: ["board", "rail", "card", "phoneBoard", "phoneConversation", "phoneTask"],
-  B: ["board", "card", "phoneBoard", "phoneConversation", "phoneTask"],
+  A: ["board", "rail", "card", "phoneBoard", "phoneOverview", "phoneConversation", "phoneTask"],
+  B: ["board", "card", "phoneBoard", "phoneOverview", "phoneConversation", "phoneTask"],
 };
-/** The entries a menu direction must place: the rail menu, the board menus, the card, the phone task and conversation menus. */
-export const MENU_FAMILIES = ["G", "B", "M"];
+/** The entries a menu direction must place: the rail menu, the board menus, the phone Overview's, the card, the phone task and conversation menus. */
+export const MENU_FAMILIES = ["G", "B", "M", "V"];
+/** Rows that act on one project. A surface opened where no project is chosen (the Overview) may draw none of them. */
+export const PROJECT_ONLY_ROWS = ["tasks", "pipelines", "create", "view", "accounts", "host", "policies", "merge", "share", "reports", "archive", "delete", "project", "settings-project"];
+export const allRowKeys = (rows: Row[]): string[] => rows.flatMap((entry) => [entry.key, ...(entry.into ? allRowKeys(entry.into) : [])]);
 const MENU_ENTRIES = ["W3", "W4", "W8"];
 
 /**
@@ -532,7 +586,7 @@ const SHEET_SETTINGS = "Settings row of the project sheet";
 
 /** Variants 1 to 3 move the rail (S) and its header menu (G); everything else stays where it is. */
 export const SIDEBAR_HOMES: Record<string, { 1: Home; 2: Home; 3: Home }> = {
-  S1: { 1: H("removed: there is no rail to hide; B opens the Go-to palette", "n/a (no rail on the phone)"), 2: H("hide control in the rail header; B", "n/a"), 3: H("collapse control at the rail's foot; B", "n/a") },
+  S1: { 1: H("removed: there is no rail to hide; B opens the Go-to palette", "n/a (no rail on the phone)"), 2: H("hide control at the rail's foot; B. Hidden, no rail is left and one control restores it", "n/a"), 3: H("collapse control at the rail's foot; B", "n/a") },
   S2: { 1: H("the palette's field, focused when it opens (title, B or Ctrl+K)", "field at the top of the project sheet (new on the phone)"), 2: H("field at the top of the rail", "field at the top of the project sheet (new on the phone)"), 3: H("field at the top of the open rail; / opens the rail on it", "field at the top of the project sheet (new on the phone)") },
   S3: { 1: H("New project row of the palette", `${SHEET}, New project row`), 2: H("+ beside the rail's field", `${SHEET}, New project row`), 3: H("+ tile under the project tiles; + beside the field when open", `${SHEET}, New project row`) },
   S4: { 1: H("the project title at the start of the board header opens the palette: Overview, then projects with their counts; on the Overview the same control reads Overview", `${SHEET} (as today)`), 2: H("the rail's list", `${SHEET} (as today)`), 3: H("project tiles with an attention dot; names and counts when open", `${SHEET} (as today)`) },
@@ -581,6 +635,11 @@ export function menuHomes(direction: "A" | "B"): Record<string, Home> {
     if (id === "W8") { out[key] = H("n/a (phone)", `task menu, ${menuHome(menus, "phoneTask", key)}`); continue; }
     if (id === "W3") { out[key] = H(`card menu, ${menuHome(menus, "card", key)}`, "n/a (desktop card; the phone task's menu is W8)"); continue; }
     if (id === "W4") { out[key] = H(`card menu, row "Pipeline: <name>", one level in, ${menuHome(menus, "card", key).replace(/^row "[^"]*", one level in, /, "")}`, "n/a (desktop card; the phone's lane sheet W9 is unchanged)"); continue; }
+    if (family === "V") {
+      const place = direction === "B" ? settingsHome(key) : "";
+      out[key] = H("n/a (phone Overview menu)", place ? `Overview menu, "Settings", then ${place}` : `Overview menu, ${menuHome(menus, "phoneOverview", key)}`);
+      continue;
+    }
     if (family === "M") {
       const inTitle = direction === "B" && B_CONVERSATION_TITLE_REFS.includes(id);
       out[key] = H("n/a (phone menu)", inTitle ? "the conversation sheet's title row" : `conversation menu, ${menuHome(menus, "phoneConversation", key)}`);

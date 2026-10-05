@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  ACTIONS, HOME_KEYS, INVENTORY, MENUS_A, MENUS_B, REGROUPED, SETTINGS, SIDEBAR_HOMES, SUBAGENTS,
-  combinedHomes, firstViewControls, menuHomes, missingActions, pressesTo, refsOf, type Menu, type Row,
+  ACTIONS, HOME_KEYS, INVENTORY, MENUS_A, MENUS_B, PROJECT_ONLY_ROWS, REGROUPED, SETTINGS, SIDEBAR_HOMES, SUBAGENTS,
+  allRowKeys, combinedHomes, firstViewControls, menuHomes, missingActions, pressesTo, refsOf, type Menu, type Row,
 } from "./interfaceRedesign.prototype.model";
 
 const ids = Object.keys(INVENTORY);
@@ -15,13 +15,17 @@ const without = (menus: Record<string, Menu>, ref: string): Record<string, Menu>
 };
 
 describe("interface redesign: no variant loses a function without saying so", () => {
-  test("the inventory is the audit's 81 functions, and its composite entries are spelled out as actions", () => {
+  test("the inventory is the audit's 88 functions, and its composite entries are spelled out as actions", () => {
     expect(family("S").length).toBe(10);
     expect(family("G").length).toBe(14);
     expect(family("B").length).toBe(16);
     expect(family("W").length).toBe(13);
     expect(family("M").length).toBe(20);
     expect(family("O").length).toBe(8);
+    expect(family("V").length).toBe(7);
+    expect(ids.length).toBe(88);
+    expect(Object.keys(ACTIONS.V2!)).toEqual(["sound", "levels"]);
+    expect(Object.keys(ACTIONS.V6!)).toEqual(["guide", "walk", "mapping", "dictation"]);
     expect(Object.keys(ACTIONS.W3!)).toEqual(["status", "hold", "priority", "colour", "icon", "collapse", "rename", "description", "links", "hide", "lanes"]);
     expect(Object.keys(ACTIONS.W4!).length).toBe(7);
     expect(Object.keys(ACTIONS.W8!).length).toBe(7);
@@ -62,6 +66,28 @@ describe("interface redesign: no variant loses a function without saying so", ()
     expect(missingActions("B", without(MENUS_B, "W3.hold"))).toEqual(["W3.hold"]);
   });
 
+  test("the phone Overview has its own menu: every entry it has today, and nothing that acts on one project", () => {
+    const today = HOME_KEYS.filter((key) => key.startsWith("V"));
+    expect(today.length).toBe(11);
+    for (const [direction, menus] of [["A", MENUS_A], ["B", MENUS_B]] as const) {
+      const menu = menus.phoneOverview!;
+      const rows = [...menu.promoted, ...menu.rows];
+      for (const key of allRowKeys(rows)) expect(PROJECT_ONLY_ROWS.includes(key), `${direction}: ${key}`).toBe(false);
+      /* Direction A draws every entry in the menu; B keeps the hidden work there and sends the rest to the Delegatus scope of Settings. */
+      const inSettings = SETTINGS.filter((section) => section.scope === "delegatus").flatMap((section) => refsOf(section.rows));
+      const reached = direction === "A" ? refsOf(rows) : [...refsOf(rows), ...inSettings];
+      for (const key of today) expect(reached.includes(key), `${direction}: ${key}`).toBe(true);
+      expect(rows.some((entry) => entry.face), `${direction}: a row that leads to a project's menu`).toBe(false);
+    }
+    /* A project's own menu carries none of the Overview's ids, so the check above cannot pass through it. */
+    for (const surface of ["phoneBoard", "rail", "board"]) for (const ref of refsOf([...(MENUS_A[surface]?.promoted ?? []), ...(MENUS_A[surface]?.rows ?? [])])) expect(ref.startsWith("V"), `${surface}: ${ref}`).toBe(false);
+    expect(SETTINGS.filter((section) => section.scope === "project").flatMap((section) => refsOf(section.rows)).some((ref) => ref.startsWith("V"))).toBe(false);
+    expect(menuHomes("A")["V6.walk"]!.phone).toBe('Overview menu, row "Delegatus", one level in, "Interface walkthrough"');
+    expect(menuHomes("B")["V2.sound"]!.phone).toBe('Overview menu, "Settings", then Settings, Delegatus, Notifications');
+    expect(menuHomes("B").V1!.phone).toBe('Overview menu, row "Hidden work"');
+    expect(combinedHomes().V7!.phone).toBe('Overview menu, "Settings", then Settings, Delegatus, Connections and updates');
+  });
+
   test("the home tables are complete, never empty, and read from the rows the menus draw", () => {
     for (const table of [menuHomes("A"), menuHomes("B"), combinedHomes()]) for (const key of HOME_KEYS) {
       expect(table[key]?.desktop, key).toBeTruthy();
@@ -81,6 +107,8 @@ describe("interface redesign: no variant loses a function without saying so", ()
     expect(firstViewControls(MENUS_B.phoneConversation!)).toBe(12);
     expect(firstViewControls(MENUS_A.phoneBoard!)).toBe(13);
     expect(firstViewControls(MENUS_B.phoneBoard!)).toBe(10);
+    expect(firstViewControls(MENUS_A.phoneOverview!)).toBe(5);
+    expect(firstViewControls(MENUS_B.phoneOverview!)).toBe(2);
     expect(firstViewControls(MENUS_A.phoneTask!)).toBe(9);
     expect(firstViewControls(MENUS_B.phoneTask!)).toBe(9);
     expect(firstViewControls(MENUS_A.board!)).toBe(5);

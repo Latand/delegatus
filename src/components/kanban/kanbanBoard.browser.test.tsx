@@ -15,6 +15,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { PROJECT_ONLY_ROWS } from "./interfaceRedesign.prototype.model";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -17967,8 +17968,10 @@ describe("interface redesign, numbered design variants", () => {
    * hit-tested at its centre and four corners, intersected with every other
    * control a pointer can reach, and held inside the window; every real
    * control today's frame lets a pointer reach is still reachable in the
-   * variant, and the attention notice answers at all fifteen points of a grid
-   * over it; the resting frame counts its controls the way the audit counted
+   * variant, the product's own attention notice included among what may not
+   * cover one; the notice answers at all fifteen points of a grid over it and
+   * lies over no control and no text that it does not lie over in today's
+   * frame; the resting frame counts its controls the way the audit counted
    * today's; an open menu reports its box, its controls and whether it
    * scrolls. Every variant's own text is read against the pixels behind it for
    * WCAG AA, and its icon controls, switch tracks and chosen segments for 3:1,
@@ -18013,13 +18016,11 @@ describe("interface redesign, numbered design variants", () => {
     intersecting: string[];
     outside: string[];
     surface: { name: string; view: string | null; box: Box; mounted: number; visible: number; scrolls: boolean; insideWindow: boolean } | null;
-    /** The attention notice: how many of fifteen points over it answer with it, and whether its title does. */
-    notice: { points: number; hit: number; title: boolean } | null;
+    /** The attention notice: how many of fifteen points over it answer with it, whether its title does, and every control and text outside it that its box cuts. */
+    notice: { points: number; hit: number; title: boolean; over: string[] } | null;
     /** Real controls (not the variant's) shown in the window, and those a pointer meets at their centre and four corners. */
     realShown: string[];
     realReachable: string[];
-    /** Real controls only the product's own attention notice lies over (a transient notice the operator dismisses). */
-    realUnderNotice: string[];
     /** Real controls only their own pane's content lies over (the pane's resize grip under its composer row), as in today's frame at another width. */
     realUnderOwnPane: string[];
     boxes: Record<string, Box>;
@@ -18070,12 +18071,11 @@ describe("interface redesign, numbered design variants", () => {
         [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
       ] as const;
     };
-    /** What lies over a control that does not answer: the product's notice, its own pane, or anything else. */
+    /** What lies over a control that does not answer: its own pane, or anything else (the product's notice included). */
     const coverOf = (control: Element) => {
       for (const [x, y] of pointsOf(control)) {
         const at = document.elementFromPoint(x, y);
         if (!at || control.contains(at) || at.contains(control)) continue;
-        if (at.closest("[data-attention-toast], [data-attention-island]")) return "notice";
         const pane = control.closest(".kb .seat");
         return pane && pane.contains(at) && !at.closest("[data-ir-control], [data-ir-layer], [data-ir-own]") ? "own pane" : "other";
       }
@@ -18114,7 +18114,6 @@ describe("interface redesign, numbered design variants", () => {
     const real = keyed(interactive.filter((element) => !element.closest("[data-ir-control], [data-ir-layer], [data-ir-own], .kb .column, [data-log-feed-scroller], [data-phone-kanban]")));
     const realShown = surface ? [] : real.map(([key]) => key);
     const realReachable = surface ? [] : real.filter(([, element]) => answers(element)).map(([key]) => key);
-    const realUnderNotice = surface ? [] : real.filter(([key, element]) => !realReachable.includes(key) && coverOf(element) === "notice").map(([key]) => key);
     const realUnderOwnPane = surface ? [] : real.filter(([key, element]) => !realReachable.includes(key) && coverOf(element) === "own pane").map(([key]) => key);
     /* The notice the board header hosts (desktop) or the banner (phone): a 5 × 3 grid over it. */
     const noticeRoot = document.querySelector<HTMLElement>("[data-attention-toast], [data-mobile2-arrival]");
@@ -18128,7 +18127,26 @@ describe("interface redesign, numbered design variants", () => {
       }
       const title = noticeRoot.querySelector("[data-attention-toast-title]")?.getBoundingClientRect();
       const atTitle = title ? document.elementFromPoint(title.left + title.width / 2, title.top + title.height / 2) : null;
-      notice = { points: 15, hit, title: Boolean(atTitle && noticeRoot.contains(atTitle)) };
+      /* What the notice's box cuts outside itself: every control, and every text a pointer could meet there. */
+      const over: string[] = [];
+      const apart = (element: Element) => !noticeRoot.contains(element) && !element.contains(noticeRoot);
+      for (const [key, element] of keyed(interactive.filter(apart))) if (cut(rect, visible(element)) > 1) over.push(key);
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const seen = new Set<string>();
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? "").trim();
+        const element = node.parentElement;
+        if (!text || !element || noticeRoot.contains(element) || !shown(element)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const box = range.getBoundingClientRect();
+        const clip = visible(element);
+        const part = new DOMRect(Math.max(box.left, clip.left), Math.max(box.top, clip.top), Math.max(0, Math.min(box.right, clip.right) - Math.max(box.left, clip.left)), Math.max(0, Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top)));
+        if (cut(rect, part) <= 1) continue;
+        const key = `text:${text.slice(0, 28).replace(/\d+/g, "#")}`;
+        if (!seen.has(key)) { seen.add(key); over.push(key); }
+      }
+      notice = { points: 15, hit, title: Boolean(atTitle && noticeRoot.contains(atTitle)), over };
     }
     const realRail = document.querySelector<HTMLElement>("[data-ir-stage] > div > aside");
     const ownRail = document.querySelector<HTMLElement>(".ir-rail");
@@ -18164,7 +18182,7 @@ describe("interface redesign, numbered design variants", () => {
         insideWindow: surface.getBoundingClientRect().left >= -0.5 && surface.getBoundingClientRect().top >= -0.5 && surface.getBoundingClientRect().right <= innerWidth + 0.5 && surface.getBoundingClientRect().bottom <= innerHeight + 0.5,
       } : null,
       notice,
-      realShown, realReachable, realUnderNotice, realUnderOwnPane,
+      realShown, realReachable, realUnderOwnPane,
       boxes,
     };
   });
@@ -18308,6 +18326,17 @@ describe("interface redesign, numbered design variants", () => {
   const LOADING: Spec = { query: "&files-pending=1" };
   const PIPELINE: Spec = { hash: "#pipeline=p-search", ready: '[data-mobile2-screen="pipeline"]' };
   const own = (sheet: string) => `[data-ir-own] [data-ir-sheet-name="${sheet}"]`;
+  /* What acts on one project: a row of a project's menu, a project section of Settings. On the Overview none may be drawn. */
+  const OF_A_PROJECT = [...PROJECT_ONLY_ROWS.map((key) => `[data-ir-own] [data-ir-control$=":${key}"]`), ...["accounts", "policies", "lifecycle"].map((key) => `[data-ir-control="settings:section:${key}"]`)].join(", ");
+  /* The phone's Overview, with work on it and with none: its "⋯" is its own menu. */
+  const overviewMenu = (sheet: string): Record<string, Spec> => ({
+    "overview-menu": { ...OVERVIEW, act: PHONE_MENU, expect: sheet, expectNot: OF_A_PROJECT },
+    "overview-empty-menu": { ...EMPTY, act: PHONE_MENU, expect: sheet, expectNot: `${OF_A_PROJECT}, [data-ir-own] [data-ir-control$=":hidden"]` },
+  });
+  const overviewSettings: Record<string, Spec> = {
+    "overview-settings": { ...OVERVIEW, act: chain(PHONE_MENU, press("phoneOverview:settings")), expect: own("settings"), expectNot: OF_A_PROJECT },
+    "overview-settings-section": { ...OVERVIEW, act: chain(PHONE_MENU, press("phoneOverview:settings"), press("settings:section:notifications")), expect: own("settings"), expectNot: OF_A_PROJECT },
+  };
   /* What each variant is judged on: the resting frame, then each surface it changes. */
   const STATES: Record<number, { desktop: Record<string, Spec>; phone: Record<string, Spec> }> = {
     0: {
@@ -18315,6 +18344,7 @@ describe("interface redesign, numbered design variants", () => {
       phone: {
         rest: {}, "board-menu": { act: PHONE_MENU }, projects: { act: PHONE_TITLE }, conversation: { act: toConversation }, "conversation-menu": { act: chain(toConversation, PHONE_MENU) },
         "task-menu": { act: chain(toTask, PHONE_MENU), expect: "[data-phone-task-menu-sheet]" }, "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]" },
+        "overview-menu": { ...OVERVIEW, act: PHONE_MENU }, "overview-empty-menu": { ...EMPTY, act: PHONE_MENU },
       },
     },
     1: {
@@ -18324,7 +18354,7 @@ describe("interface redesign, numbered design variants", () => {
       },
       phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") }, "projects-system": { act: chain(PHONE_TITLE, press("palette:system")) } },
     },
-    2: { desktop: { rest: {}, system: { act: press("rail:system") }, settings: { act: press("rail:settings") } }, phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") } } },
+    2: { desktop: { rest: {}, hidden: { act: press("rail:toggle"), expect: '.ir-restore [data-ir-control="rail:toggle"]', expectNot: ".ir-rail" }, system: { act: press("rail:system") }, settings: { act: press("rail:settings") } }, phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") } } },
     3: { desktop: { rest: {}, open: { act: press("rail:toggle") }, system: { act: press("rail:system") }, settings: { act: press("rail:settings") } }, phone: { rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") } } },
     4: {
       desktop: {
@@ -18336,6 +18366,7 @@ describe("interface redesign, numbered design variants", () => {
         "conversation-menu": { act: chain(toConversation, PHONE_MENU), expect: own("menu-phoneConversation") }, "conversation-agents": { act: chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
         "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "task-menu-colour": { act: chain(toTask, PHONE_MENU, press("phoneTask:colour")) }, "task-menu-board": { act: chain(toTask, PHONE_MENU, press("phoneTask:board")), expect: own("menu-phoneBoard") },
         "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" }, "pipeline-menu-board": { ...PIPELINE, act: chain(PHONE_MENU, real('[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]')), expect: own("menu-phoneBoard") },
+        ...overviewMenu(own("menu-phoneOverview")), "overview-menu-delegatus": { ...OVERVIEW, act: chain(PHONE_MENU, press("phoneOverview:delegatus")), expect: own("menu-phoneOverview"), expectNot: OF_A_PROJECT },
       },
     },
     5: {
@@ -18345,6 +18376,7 @@ describe("interface redesign, numbered design variants", () => {
         "conversation-menu": { act: chain(toConversation, PHONE_MENU), expect: own("menu-phoneConversation") }, "conversation-agents": { act: chain(toConversation, PHONE_MENU, press("phoneConversation:agents")) },
         "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "task-menu-board": { act: chain(toTask, PHONE_MENU, press("phoneTask:board")), expect: own("menu-phoneBoard") },
         "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" },
+        ...overviewMenu(own("menu-phoneOverview")), ...overviewSettings,
       },
     },
     6: { desktop: { rest: {}, "rail-menu": { act: RAIL_MENU }, "board-menu": { act: BOARD_MENU }, "card-menu": { act: CARD_MENU } }, phone: { rest: {}, "board-menu": { act: PHONE_MENU }, conversation: { act: toConversation } } },
@@ -18356,6 +18388,9 @@ describe("interface redesign, numbered design variants", () => {
       phone: {
         rest: {}, projects: { act: PHONE_TITLE, expect: own("palette") }, "board-menu": { act: PHONE_MENU }, settings: { act: chain(PHONE_MENU, press("phoneBoard:settings")), expect: own("settings") }, conversation: { act: toConversation },
         "conversation-menu": { act: chain(toConversation, PHONE_MENU) }, "task-menu": { act: chain(toTask, PHONE_MENU), expect: own("menu-phoneTask") }, "pipeline-menu": { ...PIPELINE, act: PHONE_MENU, expect: "[data-mobile2-pipeline-menu]", expectNot: "[data-ir-own]" },
+        overview: OVERVIEW, ...overviewMenu(own("menu-phoneOverview")), ...overviewSettings,
+        "overview-projects": { ...OVERVIEW, act: PHONE_TITLE, expect: own("palette") },
+        "overview-projects-settings": { ...OVERVIEW, act: chain(PHONE_TITLE, press("palette:settings")), expect: own("settings"), expectNot: OF_A_PROJECT },
       },
     },
   };
@@ -18370,6 +18405,8 @@ describe("interface redesign, numbered design variants", () => {
     const glass: Record<string, unknown> = {};
     /* Today's reachable real controls, per frame, language and state: the variants are held to them. */
     const baseline = new Map<string, string[]>();
+    /* What today's notice lies over, per frame, language and state: a variant may add nothing to it. */
+    const underToday = new Map<string, string[]>();
     try {
       browser = await chromium.launch(LAUNCH);
       for (const variant of [0, 1, 2, 3, 4, 5, 6, 7]) for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of variant === 0 ? ["light"] as const : ["light", "dark"] as const) {
@@ -18410,13 +18447,12 @@ describe("interface redesign, numbered design variants", () => {
               const handle = await page.locator(`[data-ir-frame="${variant}"]`).elementHandle();
               const content = (await handle!.contentFrame())!;
               const reading = await measure(content);
-              const { boxes, realShown, realReachable, realUnderNotice, realUnderOwnPane, ...kept } = reading;
+              const { boxes, realShown, realReachable, realUnderOwnPane, ...kept } = reading;
               /* Recorded only where today's frame reaches the control: what the variant's layout put under them. */
               const today0 = baseline.get(`${frame.name}-${lang}-${state}`) ?? [];
               const newly = (list: string[]) => list.filter((control) => today0.includes(control));
               states[where] = {
                 ...kept, realControls: realShown.length, realReachable: realReachable.length,
-                ...(variant !== 0 && newly(realUnderNotice).length ? { underTheNotice: newly(realUnderNotice) } : {}),
                 ...(variant !== 0 && newly(realUnderOwnPane).length ? { underItsOwnPane: newly(realUnderOwnPane) } : {}),
               };
               for (const control of reading.missed) fail(`${control} is not what a pointer meets at its centre and corners`);
@@ -18432,11 +18468,13 @@ describe("interface redesign, numbered design variants", () => {
               if (!reading.surface && reading.notice && (reading.notice.hit < reading.notice.points || !reading.notice.title)) fail(`the attention notice answers at ${reading.notice.hit} of ${reading.notice.points} points${reading.notice.title ? "" : ", and its title is covered"}`);
               /* Nothing the variant adds lies on a real control today's frame lets a pointer reach. */
               const key = `${frame.name}-${lang}-${state}`;
-              if (variant === 0 && !reading.surface) baseline.set(key, realReachable);
+              if (variant === 0 && !reading.surface) { baseline.set(key, realReachable); underToday.set(key, reading.notice?.over ?? []); }
               else if (!reading.surface && baseline.has(key)) {
-                /* The product's own notice is transient and dismissed by the operator; what it alone lies over is recorded, not failed. */
-                const covered = baseline.get(key)!.filter((control) => realShown.includes(control) && !realReachable.includes(control) && !realUnderNotice.includes(control) && !realUnderOwnPane.includes(control));
+                /* No exemption for the product's own notice: a variant that moves the layout under it has covered the control. */
+                const covered = baseline.get(key)!.filter((control) => realShown.includes(control) && !realReachable.includes(control) && !realUnderOwnPane.includes(control));
                 for (const control of covered) fail(`${control} is reachable in today's frame and covered in this one`);
+                /* Nor may the notice's box cut a control or a text it does not cut today. */
+                for (const under of (reading.notice?.over ?? []).filter((entry) => !underToday.get(key)!.includes(entry))) fail(`the attention notice lies over ${under}, which it does not in today's frame`);
               }
               if (variant !== 0) {
                 const layer = GLASS.includes(variant) ? `${GLASS_LAYER}, ${OWN_LAYER}` : OWN_LAYER;
@@ -18481,7 +18519,7 @@ describe("interface redesign, numbered design variants", () => {
       fs.writeFileSync(path.join(EVIDENCE, "measurements.json"), `${JSON.stringify({
         fixture: "src/components/kanban/issue1695Evidence.fixture.tsx?scenario=<stages|issue1820|issue1820-empty>&redesign=<n>",
         frames: FRAMES.map(({ name, width, height }) => ({ name, width, height })),
-        counting: "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control. realControls / realReachable: the product's own controls outside the board's columns and the feed, and those a pointer meets at their centre and four corners; each one reachable in today's frame must stay reachable unless only the product's own attention notice lies over it (listed as underTheNotice) or only its own pane's content does (underItsOwnPane: the orchestrator pane's 14 px resize grip, whose top corners lie under the pane's composer row at some widths in today's frame as well). notice: a 5 x 3 grid of points over the attention notice and the centre of its title.",
+        counting: "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control. realControls / realReachable: the product's own controls outside the board's columns and the feed, and those a pointer meets at their centre and four corners; each one reachable in today's frame must stay reachable, with no exemption for the product's own attention notice, unless only its own pane's content lies over it (underItsOwnPane: the orchestrator pane's 14 px resize grip, whose top corners lie under the pane's composer row at some widths in today's frame as well). notice: a 5 x 3 grid of points over the attention notice and the centre of its title; over lists every control and every text outside the notice that its box cuts by more than 1 px², and a variant may list nothing today's frame does not.",
         contrastMethod: "Texts: computed ink and opacity against every second pixel of the frame behind the text's box, the text made transparent while the picture is taken; 4.5:1, 3:1 for large text. Marks: an icon-only control's glyph ink, a switch track's fill and a chosen segment's accent edge against every pixel behind them, the mark hidden while the picture is taken; 3:1.",
         states, contrast, glass, failures,
       }, null, 2)}\n`);
@@ -18506,18 +18544,33 @@ describe("interface redesign, numbered design variants", () => {
     });
     const surfaceOf = (page: Page) => page.evaluate(() => {
       const surface = document.querySelector<HTMLElement>("[data-ir-surface]") ?? document.querySelector<HTMLElement>("[data-ir-own] [data-mobile2-sheet]");
-      return surface ? { name: surface.dataset.irSurface ?? surface.querySelector<HTMLElement>("[data-ir-sheet-name]")?.dataset.irSheetName ?? "sheet", modal: surface.getAttribute("aria-modal"), label: surface.getAttribute("aria-label") } : null;
+      return surface ? { name: surface.dataset.irSurface ?? surface.querySelector<HTMLElement>("[data-ir-sheet-name]")?.dataset.irSheetName ?? "sheet", modal: surface.getAttribute("aria-modal"), label: surface.getAttribute("aria-label"), role: surface.getAttribute("role") } : null;
+    });
+    /* What an entry tells a screen reader it opens, and whether it is open. */
+    const popupOf = (page: Page, entry: string) => page.locator(entry).first().evaluate((element) => ({ declares: element.getAttribute("aria-haspopup"), expanded: element.getAttribute("aria-expanded") }));
+    const railOf = (page: Page) => page.evaluate(() => {
+      const rail = document.querySelector<HTMLElement>(".ir-rail");
+      const toggles = Array.from(document.querySelectorAll<HTMLElement>('[data-ir-control="rail:toggle"]')).filter((element) => element.getBoundingClientRect().width > 0);
+      const active = document.activeElement as HTMLElement | null;
+      return {
+        rails: document.querySelectorAll(".ir-rail").length,
+        width: rail ? Math.round(rail.getBoundingClientRect().width) : 0,
+        restoreControls: document.querySelectorAll(".ir-restore").length,
+        toggles: toggles.length,
+        focus: active?.dataset.irControl ?? active?.tagName ?? null,
+        focusIn: active?.closest(".ir-restore") ? "restore" : active?.closest(".ir-rail") ? "rail" : "elsewhere",
+      };
     });
     try {
       browser = await chromium.launch(LAUNCH);
       for (const lang of LANGS) {
         if (ONLY_LANGS && !ONLY_LANGS.includes(lang)) continue;
         /* Desktop, 1440: open from the keyboard, walk Tab both ways inside, close with Escape, land on the entry. */
-        const desk = async (variant: number, name: string, search: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>) => {
+        const desk = async (variant: number, name: string, search: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>, size: { width: number; height: number } = { width: 1440, height: 900 }) => {
           if (ONLY && !ONLY.includes(variant)) return;
-          const where = `v${variant}-1440-${lang}-${name}`;
+          const where = `v${variant}-${size.width}-${lang}-${name}`;
           const record: Record<string, unknown> = (cases[where] = {});
-          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?${search}&redesign=${variant}&inner=1`, { width: 1440, height: 900 }, "light", lang, "reduce");
+          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?${search}&redesign=${variant}&inner=1`, size, "light", lang, "reduce");
           try {
             await page.locator(`[data-ir-inner="${variant}"]`).waitFor();
             await page.waitForTimeout(1200);
@@ -18538,12 +18591,18 @@ describe("interface redesign, numbered design variants", () => {
         };
         const opensAndReturns = async (page: Page, where: string, record: Record<string, unknown>, entry: string, expected: string, entryName: string, first?: string) => {
           await page.locator(entry).first().focus();
+          const closed = await popupOf(page, entry);
           await page.keyboard.press("Enter");
           await page.waitForTimeout(350);
           const surface = await surfaceOf(page);
           const focus = await focusOf(page);
+          const opened = await popupOf(page, entry);
           record.opened = surface;
           record.focusOnOpen = focus.control;
+          /* The entry declares the kind of surface it opens, and says it is open while it is. */
+          if (closed.declares !== surface?.role) failures.push(`${where}: ${entry} declares aria-haspopup=${closed.declares} and opens a ${surface?.role ?? "nothing"}`);
+          if (opened.declares !== surface?.role) failures.push(`${where}: open, ${entry} declares aria-haspopup=${opened.declares} for a ${surface?.role ?? "nothing"}`);
+          if (opened.expanded !== "true") failures.push(`${where}: open, ${entry} has aria-expanded=${opened.expanded}`);
           if (surface?.name !== expected) failures.push(`${where}: Enter on ${entry} opened ${surface?.name ?? "nothing"}, not ${expected}`);
           if (surface && surface.modal !== "true") failures.push(`${where}: the surface is not aria-modal`);
           if (!focus.inside) failures.push(`${where}: focus stayed outside the surface on ${focus.control}`);
@@ -18555,6 +18614,10 @@ describe("interface redesign, numbered design variants", () => {
           record.focusAfterEscape = after.control;
           if (await surfaceOf(page)) failures.push(`${where}: Escape left the surface open`);
           if (after.control !== entryName) failures.push(`${where}: focus went to ${after.control} after Escape, not back to ${entryName}`);
+          const shut = await popupOf(page, entry);
+          record.popup = { declares: closed.declares, role: surface?.role ?? null, expanded: [closed.expanded, opened.expanded, shut.expanded] };
+          if (shut.expanded !== "false") failures.push(`${where}: closed, ${entry} has aria-expanded=${shut.expanded}`);
+          if (shut.declares !== surface?.role) failures.push(`${where}: closed, ${entry} declares aria-haspopup=${shut.declares}`);
         };
         const drill = async (page: Page, where: string, record: Record<string, unknown>, row: string, back: string) => {
           await page.locator(`[data-ir-control="${row}"]`).focus();
@@ -18598,6 +18661,31 @@ describe("interface redesign, numbered design variants", () => {
           }
         }
         await desk(2, "rail-settings", STAGES, (page, record) => opensAndReturns(page, `v2-${lang}-rail-settings`, record, '[data-ir-control="rail:settings"]', "menu-rail", "rail:settings"));
+        await desk(2, "rail-system", STAGES, (page, record) => opensAndReturns(page, `v2-${lang}-rail-system`, record, '[data-ir-control="rail:system"]', "system", "rail:system"));
+        /* Variant 2 hides its rail whole (S1): no rail is left, one control restores it, and focus follows the toggle both ways. */
+        for (const size of [{ width: 1440, height: 900 }, { width: 1000, height: 800 }]) for (const by of ["button", "B"] as const) {
+          await desk(2, `hide-by-${by}`, STAGES, async (page, record) => {
+            const where = `v2-${size.width}-${lang}-hide-by-${by}`;
+            const toggle = async () => {
+              if (by === "B") await page.keyboard.press("b");
+              else { await page.locator('[data-ir-control="rail:toggle"]').focus(); await page.keyboard.press("Enter"); }
+              await page.waitForTimeout(350);
+            };
+            const before = await railOf(page);
+            await toggle();
+            const hidden = await railOf(page);
+            await toggle();
+            const restored = await railOf(page);
+            Object.assign(record, { before, hidden, restored });
+            if (before.rails !== 1 || before.width !== 208) failures.push(`${where}: at rest the rail is ${before.rails} x ${before.width} px`);
+            if (hidden.rails !== 0) failures.push(`${where}: hidden, ${hidden.rails} rail is left (${hidden.width} px)`);
+            if (hidden.restoreControls !== 1 || hidden.toggles !== 1) failures.push(`${where}: hidden, there are ${hidden.restoreControls} restore controls and ${hidden.toggles} toggles`);
+            if (hidden.focus !== "rail:toggle" || hidden.focusIn !== "restore") failures.push(`${where}: hidden, focus is on ${hidden.focus} (${hidden.focusIn}); expected the restore control`);
+            if (restored.rails !== 1 || restored.width !== 208) failures.push(`${where}: restored, the rail is ${restored.rails} x ${restored.width} px`);
+            if (restored.restoreControls !== 0 || restored.toggles !== 1) failures.push(`${where}: restored, there are ${restored.restoreControls} restore controls and ${restored.toggles} toggles`);
+            if (restored.focus !== "rail:toggle" || restored.focusIn !== "rail") failures.push(`${where}: restored, focus is on ${restored.focus} (${restored.focusIn}); expected the rail's hide control`);
+          }, size);
+        }
         await desk(3, "slash", STAGES, async (page, record) => {
           await page.keyboard.press("/");
           await page.waitForTimeout(300);
@@ -18629,11 +18717,11 @@ describe("interface redesign, numbered design variants", () => {
         await desk(5, "rail-settings", STAGES, (page, record) => opensAndReturns(page, `v5-${lang}-rail-settings`, record, "[data-rail-menu]", "settings", "[data-rail-menu]"));
 
         /* The phone, 390: every surface is a sheet; Back closes it first, the handle drags it shut, × and the scrim close it. */
-        const phone = async (variant: number, name: string, hash: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>) => {
+        const phone = async (variant: number, name: string, hash: string, run: (page: Page, record: Record<string, unknown>) => Promise<void>, scenario = "stages") => {
           if (ONLY && !ONLY.includes(variant)) return;
           const where = `v${variant}-390-${lang}-${name}`;
           const record: Record<string, unknown> = (cases[where] = {});
-          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?scenario=stages&redesign=${variant}&inner=1${hash}`, { width: 390, height: 844 }, "light", lang, "reduce", true);
+          const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?scenario=${scenario}&redesign=${variant}&inner=1${hash}`, { width: 390, height: 844 }, "light", lang, "reduce", true);
           try {
             await page.locator("[data-mobile2-bar]").waitFor();
             await page.waitForTimeout(1000);
@@ -18652,7 +18740,7 @@ describe("interface redesign, numbered design variants", () => {
           };
         });
         const expectSheet = (variant: number, regrouped: string) => (variant === 0 ? "product:menu" : regrouped);
-        const sheetCase = (variant: number, name: string, setup: (page: Page) => Promise<void>, sheet: string) => phone(variant, name, "", async (page, record) => {
+        const sheetCase = (variant: number, name: string, setup: (page: Page) => Promise<void>, sheet: string, scenario = "stages") => phone(variant, name, "", async (page, record) => {
           await setup(page);
           /* The reading position behind the sheet is kept. */
           await page.evaluate(() => {
@@ -18696,9 +18784,38 @@ describe("interface redesign, numbered design variants", () => {
           if (scrim.sheet) failures.push(`v${variant}-${lang}-${name}: the scrim left ${scrim.sheet} open`);
           if (scrim.screen !== before.screen) failures.push(`v${variant}-${lang}-${name}: closing moved the screen to ${scrim.screen}`);
           Object.assign(record, { before, opened, back, shortDrag: short, longDrag: long, closeButton, scrim });
-        });
+        }, scenario);
         for (const variant of [0, 4, 5, 7]) {
           await sheetCase(variant, "board-menu", async () => {}, expectSheet(variant, "menu-phoneBoard"));
+          /* The Overview is a board screen with no project chosen: its "⋯" opens its own menu, with work on it and with none. */
+          for (const [name, scenario] of [["overview-menu", "issue1820"], ["overview-empty-menu", "issue1820-empty"]] as const) {
+            await sheetCase(variant, name, async () => {}, expectSheet(variant, "menu-phoneOverview"), scenario);
+            await phone(variant, `${name}-scope`, "", async (page, record) => {
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.waitForTimeout(450);
+              const read = () => page.evaluate((ofAProject) => {
+                const sheet = document.querySelector<HTMLElement>("[data-ir-own] [data-mobile2-sheet]") ?? Array.from(document.querySelectorAll<HTMLElement>("[data-mobile2-sheet]")).find((element) => element.getBoundingClientRect().height > 0) ?? null;
+                return {
+                  title: sheet?.querySelector("[data-mobile2-sheet-header] h2")?.textContent ?? null,
+                  rows: Array.from(sheet?.querySelectorAll<HTMLElement>("[data-ir-control]") ?? []).map((element) => element.dataset.irControl!),
+                  ofAProject: Array.from(document.querySelectorAll<HTMLElement>(ofAProject)).map((element) => element.dataset.irControl!),
+                };
+              }, OF_A_PROJECT);
+              const menu = await read();
+              Object.assign(record, { screen: (await shape(page)).screen, menu });
+              if (variant === 0) return;
+              const title = lang === "uk" ? "Огляд" : "Overview";
+              if (menu.title !== title) failures.push(`v${variant}-${lang}-${name}: the Overview's menu is titled ${menu.title}; expected ${title}`);
+              if (menu.ofAProject.length) failures.push(`v${variant}-${lang}-${name}: the Overview's menu offers ${menu.ofAProject.join(", ")} with no project chosen`);
+              if (variant === 4) return;
+              await page.locator('[data-ir-control="phoneOverview:settings"]').click();
+              await page.waitForTimeout(450);
+              const settings = await read();
+              record.settings = settings;
+              if (settings.ofAProject.length) failures.push(`v${variant}-${lang}-${name}: Settings from the Overview offers ${settings.ofAProject.join(", ")} with no project chosen`);
+              if (!settings.rows.includes("settings:section:general")) failures.push(`v${variant}-${lang}-${name}: Settings from the Overview has no Delegatus sections`);
+            }, scenario);
+          }
           await sheetCase(variant, "task-menu", async (page) => {
             await page.locator('[data-phone-card^="task:"]').first().click();
             await page.locator('[data-mobile2-screen="task"]').waitFor();

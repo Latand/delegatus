@@ -17,7 +17,7 @@
       "height": 844
     }
   ],
-  "counting": "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control. realControls / realReachable: the product's own controls outside the board's columns and the feed, and those a pointer meets at their centre and four corners; each one reachable in today's frame must stay reachable unless only the product's own attention notice lies over it (listed as underTheNotice) or only its own pane's content does (underItsOwnPane: the orchestrator pane's 14 px resize grip, whose top corners lie under the pane's composer row at some widths in today's frame as well). notice: a 5 x 3 grid of points over the attention notice and the centre of its title.",
+  "counting": "visibleControls: interactive elements with a visible box of at least 4 px a pointer can reach (under an open menu, the menu's own). drawn: controls the variant itself draws; each is hit-tested at its centre and four corners and intersected with every other reachable control. realControls / realReachable: the product's own controls outside the board's columns and the feed, and those a pointer meets at their centre and four corners; each one reachable in today's frame must stay reachable, with no exemption for the product's own attention notice, unless only its own pane's content lies over it (underItsOwnPane: the orchestrator pane's 14 px resize grip, whose top corners lie under the pane's composer row at some widths in today's frame as well). notice: a 5 x 3 grid of points over the attention notice and the centre of its title; over lists every control and every text outside the notice that its box cuts by more than 1 px², and a variant may list nothing today's frame does not.",
   "contrastMethod": "Texts: computed ink and opacity against every second pixel of the frame behind the text's box, the text made transparent while the picture is taken; 4.5:1, 3:1 for large text. Marks: an icon-only control's glyph ink, a switch track's fill and a chosen segment's accent edge against every pixel behind them, the mark hidden while the picture is taken; 3:1.",
   "states": {
     "v0-1440-en-rest": {
@@ -43,7 +43,22 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 52,
       "realReachable": 41
@@ -84,7 +99,22 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -125,7 +155,26 @@
       "notice": {
         "points": 15,
         "hit": 9,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Search your messages (/)",
+          "button:Mute sound notifications",
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Search your messages (/)",
+          "text:Mute sound notifications",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -166,7 +215,22 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -194,7 +258,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 28,
       "realReachable": 28
@@ -267,7 +332,20 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 52,
       "realReachable": 42
@@ -308,7 +386,20 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -349,7 +440,24 @@
       "notice": {
         "points": 15,
         "hit": 9,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Пошук моїх повідомлень (/)",
+          "button:Вимкнути звукові сповіщення",
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:Пошук моїх повідомлень (/)",
+          "text:Вимкнути звукові сповіщення",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -390,7 +498,20 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -418,7 +539,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 28,
       "realReachable": 28
@@ -491,7 +613,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 49,
       "realReachable": 47
@@ -532,7 +655,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -573,7 +697,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -614,7 +739,13 @@
       "notice": {
         "points": 15,
         "hit": 3,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Inbox",
+          "button:In progress",
+          "button:Waiting",
+          "text:In progress"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -642,7 +773,13 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "input:Find a task",
+          "button:# hidden tasks and conversations",
+          "text:Hidden",
+          "text:#"
+        ]
       },
       "realControls": 28,
       "realReachable": 26
@@ -715,7 +852,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 49,
       "realReachable": 47
@@ -756,7 +894,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -797,7 +936,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -838,7 +978,12 @@
       "notice": {
         "points": 15,
         "hit": 3,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Вхідні",
+          "button:У роботі",
+          "button:Очікують"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -866,7 +1011,13 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "input:Знайти задачу",
+          "button:# приховані задачі чи розмови",
+          "text:Приховані",
+          "text:#"
+        ]
       },
       "realControls": 28,
       "realReachable": 26
@@ -1017,7 +1168,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -1053,7 +1205,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1089,7 +1242,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1125,8 +1279,73 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v0-390-en-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 12,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "view": null,
+        "box": [
+          0,
+          284.9,
+          390,
+          559.1
+        ],
+        "mounted": 12,
+        "visible": 12,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v0-390-en-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "view": null,
+        "box": [
+          0,
+          341.9,
+          390,
+          502.1
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -1231,7 +1450,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -1267,7 +1487,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1303,7 +1524,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1339,14 +1561,79 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v0-390-uk-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 12,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "view": null,
+        "box": [
+          0,
+          284.9,
+          390,
+          559.1
+        ],
+        "mounted": 12,
+        "visible": 12,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v0-390-uk-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 11,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "sheet:menu",
+        "view": null,
+        "box": [
+          0,
+          341.9,
+          390,
+          502.1
+        ],
+        "mounted": 11,
+        "visible": 11,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1440-en-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -1370,10 +1657,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 30
+      "realReachable": 34
     },
     "v1-1440-en-palette": {
       "overflowX": 0,
@@ -1414,7 +1702,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1458,7 +1747,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1502,7 +1792,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1546,14 +1837,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1440-en-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -1577,7 +1869,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -1621,7 +1914,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1679,7 +1973,7 @@
     },
     "v1-1440-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -1703,10 +1997,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 32
+      "realReachable": 34
     },
     "v1-1440-uk-palette": {
       "overflowX": 0,
@@ -1747,7 +2042,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1791,7 +2087,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1835,7 +2132,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -1879,14 +2177,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1440-uk-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -1910,7 +2209,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -1954,7 +2254,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2012,7 +2313,7 @@
     },
     "v1-1440-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2036,10 +2337,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 32
+      "realReachable": 34
     },
     "v1-1440-uk-dark-palette": {
       "overflowX": 0,
@@ -2080,7 +2382,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2124,7 +2427,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2168,7 +2472,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2212,14 +2517,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1440-uk-dark-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2243,7 +2549,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -2287,7 +2594,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2345,7 +2653,7 @@
     },
     "v1-1000-en-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2369,16 +2677,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Show reports",
-        "button:Dock at the side",
-        "button:Collapse the orchestrator chat (O)",
-        "div:Resize the orchestrator chat’s width"
-      ]
+      "realReachable": 36
     },
     "v1-1000-en-palette": {
       "overflowX": 0,
@@ -2419,7 +2722,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2463,7 +2767,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2507,7 +2812,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2551,14 +2857,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1000-en-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2582,7 +2889,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -2626,7 +2934,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2684,7 +2993,7 @@
     },
     "v1-1000-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2708,16 +3017,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v1-1000-uk-palette": {
       "overflowX": 0,
@@ -2758,7 +3062,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2802,7 +3107,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2846,7 +3152,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -2890,14 +3197,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1000-uk-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -2921,7 +3229,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -2965,7 +3274,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3023,7 +3333,7 @@
     },
     "v1-1000-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -3047,16 +3357,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v1-1000-uk-dark-palette": {
       "overflowX": 0,
@@ -3097,7 +3402,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3141,7 +3447,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3185,7 +3492,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3229,14 +3537,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v1-1000-uk-dark-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -3260,7 +3569,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -3304,7 +3614,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3629,7 +3940,7 @@
     },
     "v2-1440-en-rest": {
       "overflowX": 0,
-      "visibleControls": 95,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -3653,10 +3964,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
+    },
+    "v2-1440-en-hidden": {
+      "overflowX": 0,
+      "visibleControls": 73,
+      "nav": null,
+      "mainWidth": 1404,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 37,
+      "realReachable": 34
     },
     "v2-1440-en-system": {
       "overflowX": 0,
@@ -3697,7 +4036,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3741,14 +4081,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v2-1440-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 93,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -3772,10 +4113,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
+    },
+    "v2-1440-uk-hidden": {
+      "overflowX": 0,
+      "visibleControls": 73,
+      "nav": null,
+      "mainWidth": 1404,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 37,
+      "realReachable": 34
     },
     "v2-1440-uk-system": {
       "overflowX": 0,
@@ -3816,7 +4185,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3860,14 +4230,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v2-1440-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 93,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -3891,10 +4262,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
+    },
+    "v2-1440-uk-dark-hidden": {
+      "overflowX": 0,
+      "visibleControls": 73,
+      "nav": null,
+      "mainWidth": 1404,
+      "header": {
+        "height": 48,
+        "controls": 14
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 37,
+      "realReachable": 34
     },
     "v2-1440-uk-dark-system": {
       "overflowX": 0,
@@ -3935,7 +4334,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -3979,14 +4379,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v2-1000-en-rest": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4010,16 +4411,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Show reports",
-        "button:Dock at the side",
-        "button:Collapse the orchestrator chat (O)",
-        "div:Resize the orchestrator chat’s width"
-      ]
+      "realReachable": 36
+    },
+    "v2-1000-en-hidden": {
+      "overflowX": 0,
+      "visibleControls": 43,
+      "nav": null,
+      "mainWidth": 964,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 38,
+      "realReachable": 36
     },
     "v2-1000-en-system": {
       "overflowX": 0,
@@ -4060,7 +4483,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4104,14 +4528,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v2-1000-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4135,16 +4560,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
+    },
+    "v2-1000-uk-hidden": {
+      "overflowX": 0,
+      "visibleControls": 43,
+      "nav": null,
+      "mainWidth": 964,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 38,
+      "realReachable": 36
     },
     "v2-1000-uk-system": {
       "overflowX": 0,
@@ -4185,7 +4632,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4229,14 +4677,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v2-1000-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4260,16 +4709,38 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
+    },
+    "v2-1000-uk-dark-hidden": {
+      "overflowX": 0,
+      "visibleControls": 43,
+      "nav": null,
+      "mainWidth": 964,
+      "header": {
+        "height": 48,
+        "controls": 12
+      },
+      "drawn": 1,
+      "smallest": [
+        28,
+        28
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": {
+        "points": 15,
+        "hit": 15,
+        "title": true,
+        "over": []
+      },
+      "realControls": 38,
+      "realReachable": 36
     },
     "v2-1000-uk-dark-system": {
       "overflowX": 0,
@@ -4310,7 +4781,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4354,7 +4826,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4523,7 +4996,7 @@
     },
     "v3-1440-en-rest": {
       "overflowX": 0,
-      "visibleControls": 88,
+      "visibleControls": 82,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -4547,14 +5020,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 28
+      "realReachable": 34
     },
     "v3-1440-en-open": {
       "overflowX": 0,
-      "visibleControls": 95,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4578,10 +5052,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
     },
     "v3-1440-en-system": {
       "overflowX": 0,
@@ -4622,7 +5097,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4666,14 +5142,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v3-1440-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 86,
+      "visibleControls": 82,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -4697,14 +5174,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 29
+      "realReachable": 34
     },
     "v3-1440-uk-open": {
       "overflowX": 0,
-      "visibleControls": 93,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4728,10 +5206,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
     },
     "v3-1440-uk-system": {
       "overflowX": 0,
@@ -4772,7 +5251,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4816,14 +5296,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v3-1440-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 86,
+      "visibleControls": 82,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -4847,14 +5328,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 29
+      "realReachable": 34
     },
     "v3-1440-uk-dark-open": {
       "overflowX": 0,
-      "visibleControls": 93,
+      "visibleControls": 89,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -4878,10 +5360,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 27
+      "realReachable": 34
     },
     "v3-1440-uk-dark-system": {
       "overflowX": 0,
@@ -4922,7 +5405,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -4966,14 +5450,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v3-1000-en-rest": {
       "overflowX": 0,
-      "visibleControls": 55,
+      "visibleControls": 52,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -4997,20 +5482,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Show reports",
-        "button:Dock at the side",
-        "button:Collapse the orchestrator chat (O)",
-        "div:Resize the orchestrator chat’s width"
-      ]
+      "realReachable": 36
     },
     "v3-1000-en-open": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -5034,10 +5514,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32
+      "realReachable": 36
     },
     "v3-1000-en-system": {
       "overflowX": 0,
@@ -5078,7 +5559,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -5122,14 +5604,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v3-1000-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 55,
+      "visibleControls": 52,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -5153,20 +5636,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v3-1000-uk-open": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -5190,10 +5668,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32
+      "realReachable": 36
     },
     "v3-1000-uk-system": {
       "overflowX": 0,
@@ -5234,7 +5713,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -5278,14 +5758,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v3-1000-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 55,
+      "visibleControls": 52,
       "nav": {
         "kind": "prototype rail (closed)",
         "width": 52,
@@ -5309,20 +5790,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v3-1000-uk-dark-open": {
       "overflowX": 0,
-      "visibleControls": 62,
+      "visibleControls": 59,
       "nav": {
         "kind": "prototype rail (open)",
         "width": 208,
@@ -5346,10 +5822,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32
+      "realReachable": 36
     },
     "v3-1000-uk-dark-system": {
       "overflowX": 0,
@@ -5390,7 +5867,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -5434,7 +5912,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -5640,7 +6119,27 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "button:board:search",
+          "button:board:accounts",
+          "button:board:notify",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold",
+          "text:Search my messages",
+          "text:Accounts"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5684,7 +6183,27 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "button:board:back",
+          "button:board:policies:merge",
+          "button:board:policies:share",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold",
+          "text:Project policies",
+          "text:Merge when review passes"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5728,7 +6247,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5772,7 +6306,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5816,7 +6365,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5860,7 +6424,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5904,7 +6483,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5948,7 +6542,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:search",
+          "button:board:accounts",
+          "button:board:notify",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Пошук моїх повідомлень",
+          "text:Акаунти"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -5992,7 +6604,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:back",
+          "button:board:policies:merge",
+          "button:board:policies:share",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Правила проєкту",
+          "text:Мерджити, коли рев’ю пройден"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6036,7 +6666,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6080,7 +6723,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6124,7 +6780,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6168,7 +6837,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6212,7 +6894,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6256,7 +6951,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:search",
+          "button:board:accounts",
+          "button:board:notify",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Пошук моїх повідомлень",
+          "text:Акаунти"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6300,7 +7013,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:back",
+          "button:board:policies:merge",
+          "button:board:policies:share",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Правила проєкту",
+          "text:Мерджити, коли рев’ю пройден"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6344,7 +7075,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6388,7 +7132,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6432,7 +7189,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6476,7 +7246,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6520,7 +7303,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6564,7 +7360,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:accounts",
+          "text:Accounts"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6608,7 +7409,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:back",
+          "text:Project policies"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6652,7 +7457,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -6696,7 +7502,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -6740,7 +7547,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -6784,7 +7592,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -6828,7 +7637,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -6872,7 +7682,13 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:accounts",
+          "text:Пошук моїх повідомлень",
+          "text:Акаунти"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6916,7 +7732,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:back",
+          "text:Правила проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -6960,7 +7780,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7004,7 +7825,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7048,7 +7870,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7092,7 +7915,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7136,7 +7960,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7180,7 +8005,13 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:accounts",
+          "text:Пошук моїх повідомлень",
+          "text:Акаунти"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -7224,7 +8055,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:back",
+          "text:Правила проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -7268,7 +8103,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7312,7 +8148,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7356,7 +8193,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7400,7 +8238,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7444,7 +8283,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7553,7 +8393,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7592,7 +8433,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7631,7 +8473,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7670,7 +8513,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7709,7 +8553,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7745,7 +8590,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7784,8 +8630,114 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-en-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        120.7,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-en-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 4,
+      "smallest": [
+        184,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-en-overview-menu-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 13,
+      "smallest": [
+        71.9,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "delegatus",
+        "box": [
+          0,
+          184,
+          390,
+          660
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -7893,7 +8845,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7932,7 +8885,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -7971,7 +8925,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8010,7 +8965,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8049,7 +9005,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8085,7 +9042,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8124,8 +9082,114 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        120.7,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 4,
+      "smallest": [
+        184,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-overview-menu-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 13,
+      "smallest": [
+        71.9,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "delegatus",
+        "box": [
+          0,
+          184,
+          390,
+          660
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -8233,7 +9297,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8272,7 +9337,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8311,7 +9377,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8350,7 +9417,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8389,7 +9457,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8425,7 +9494,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -8464,8 +9534,114 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-dark-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        120.7,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-dark-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 5,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 4,
+      "smallest": [
+        184,
+        60
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          587,
+          390,
+          257
+        ],
+        "mounted": 5,
+        "visible": 5,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v4-390-uk-dark-overview-menu-delegatus": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 13,
+      "smallest": [
+        71.9,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "delegatus",
+        "box": [
+          0,
+          184,
+          390,
+          660
+        ],
+        "mounted": 14,
+        "visible": 14,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -8508,7 +9684,27 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "button:board:search",
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold",
+          "text:Search my messages",
+          "text:Project settings"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8552,7 +9748,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8596,7 +9807,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8640,7 +9866,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8684,7 +9925,22 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8728,7 +9984,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:search",
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Пошук моїх повідомлень",
+          "text:Налаштування проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8772,7 +10046,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8816,7 +10103,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8860,7 +10160,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8904,7 +10217,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8948,7 +10274,25 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "button:board:search",
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути",
+          "text:Пошук моїх повідомлень",
+          "text:Налаштування проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -8992,7 +10336,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9036,7 +10393,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9080,7 +10450,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9124,7 +10507,20 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9168,7 +10564,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "text:Search my messages"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9212,7 +10612,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9256,7 +10659,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9300,7 +10706,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9344,7 +10751,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9388,7 +10796,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "text:Пошук моїх повідомлень"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9432,7 +10844,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9476,7 +10891,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9520,7 +10938,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9564,7 +10983,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9608,7 +11028,11 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "text:Пошук моїх повідомлень"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9652,7 +11076,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9696,7 +11123,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -9740,7 +11170,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9784,7 +11215,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9928,7 +11360,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -9967,7 +11400,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10006,7 +11440,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10045,7 +11480,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10081,8 +11517,149 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-en-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-en-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-en-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-en-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -10225,7 +11802,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10264,7 +11842,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10303,7 +11882,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10342,7 +11922,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10378,8 +11959,149 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -10522,7 +12244,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10561,7 +12284,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10600,7 +12324,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10639,7 +12364,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -10675,18 +12401,159 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-dark-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-dark-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-dark-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v5-390-uk-dark-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
     "v6-1440-en-rest": {
       "overflowX": 0,
-      "visibleControls": 83,
+      "visibleControls": 82,
       "nav": {
         "kind": "today's rail",
         "width": 248,
-        "controls": 12,
+        "controls": 11,
         "projectControls": 3
       },
       "mainWidth": 1192,
@@ -10703,10 +12570,25 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
-      "realControls": 53,
-      "realReachable": 42
+      "realControls": 52,
+      "realReachable": 41
     },
     "v6-1440-en-rail-menu": {
       "overflowX": 0,
@@ -10744,7 +12626,22 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -10785,7 +12682,26 @@
       "notice": {
         "points": 15,
         "hit": 9,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Search your messages (/)",
+          "button:Mute sound notifications",
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Search your messages (/)",
+          "text:Mute sound notifications",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -10826,18 +12742,33 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Report settings. Reports go to the log only.",
+          "button:Seat tick settings. Tick: could not be read",
+          "button:Replace this orchestrator with a fresh one. Nothing rotates until you confirm.",
+          "button:Stop host",
+          "button:Hide reports",
+          "button:Dock at the side",
+          "button:Collapse the orchestrator chat (O)",
+          "div:Resize the orchestrator chat’s width",
+          "text:Log",
+          "text:—",
+          "text:Rotate",
+          "text:Stop host",
+          "text:Fold"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v6-1440-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 83,
+      "visibleControls": 82,
       "nav": {
         "kind": "today's rail",
         "width": 248,
-        "controls": 12,
+        "controls": 11,
         "projectControls": 3
       },
       "mainWidth": 1192,
@@ -10854,10 +12785,23 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
-      "realControls": 53,
-      "realReachable": 43
+      "realControls": 52,
+      "realReachable": 42
     },
     "v6-1440-uk-rail-menu": {
       "overflowX": 0,
@@ -10895,7 +12839,20 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -10936,7 +12893,24 @@
       "notice": {
         "points": 15,
         "hit": 9,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Пошук моїх повідомлень (/)",
+          "button:Вимкнути звукові сповіщення",
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:Пошук моїх повідомлень (/)",
+          "text:Вимкнути звукові сповіщення",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -10977,18 +12951,31 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v6-1440-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 82,
+      "visibleControls": 83,
       "nav": {
         "kind": "today's rail",
         "width": 248,
-        "controls": 11,
+        "controls": 12,
         "projectControls": 3
       },
       "mainWidth": 1192,
@@ -11005,10 +12992,23 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
-      "realControls": 52,
-      "realReachable": 42
+      "realControls": 53,
+      "realReachable": 43
     },
     "v6-1440-uk-dark-rail-menu": {
       "overflowX": 0,
@@ -11046,7 +13046,20 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -11087,7 +13100,24 @@
       "notice": {
         "points": 15,
         "hit": 9,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Пошук моїх повідомлень (/)",
+          "button:Вимкнути звукові сповіщення",
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:Пошук моїх повідомлень (/)",
+          "text:Вимкнути звукові сповіщення",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -11128,18 +13158,31 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": [
+          "button:Налаштування тікера. Тікер: не вдалося прочитати",
+          "button:Замінити цього оркестратора новим. Нічого не заміниться, доки ви не підтвердите.",
+          "button:Зупинити хост",
+          "button:Сховати звіти",
+          "button:Закріпити збоку",
+          "button:Згорнути чат оркестратора (O)",
+          "div:Змінити ширину чату оркестратора",
+          "text:—",
+          "text:Замінити",
+          "text:Зупинити хост",
+          "text:Згорнути"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v6-1000-en-rest": {
       "overflowX": 0,
-      "visibleControls": 53,
+      "visibleControls": 54,
       "nav": {
         "kind": "today's rail",
         "width": 248,
-        "controls": 11,
+        "controls": 12,
         "projectControls": 3
       },
       "mainWidth": 752,
@@ -11156,10 +13199,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
-      "realControls": 49,
-      "realReachable": 47
+      "realControls": 50,
+      "realReachable": 48
     },
     "v6-1000-en-rail-menu": {
       "overflowX": 0,
@@ -11197,7 +13241,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11238,7 +13283,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11279,7 +13325,13 @@
       "notice": {
         "points": 15,
         "hit": 3,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Inbox",
+          "button:In progress",
+          "button:Waiting",
+          "text:In progress"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -11307,7 +13359,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 49,
       "realReachable": 47
@@ -11348,7 +13401,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11389,7 +13443,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11430,18 +13485,23 @@
       "notice": {
         "points": 15,
         "hit": 3,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Вхідні",
+          "button:У роботі",
+          "button:Очікують"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v6-1000-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 53,
+      "visibleControls": 54,
       "nav": {
         "kind": "today's rail",
         "width": 248,
-        "controls": 11,
+        "controls": 12,
         "projectControls": 3
       },
       "mainWidth": 752,
@@ -11458,10 +13518,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
-      "realControls": 49,
-      "realReachable": 47
+      "realControls": 50,
+      "realReachable": 48
     },
     "v6-1000-uk-dark-rail-menu": {
       "overflowX": 0,
@@ -11499,7 +13560,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11540,7 +13602,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11581,7 +13644,12 @@
       "notice": {
         "points": 15,
         "hit": 3,
-        "title": false
+        "title": false,
+        "over": [
+          "button:Вхідні",
+          "button:У роботі",
+          "button:Очікують"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -11655,7 +13723,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -11729,7 +13798,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -11803,14 +13873,15 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
     },
     "v7-1440-en-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -11834,10 +13905,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 30
+      "realReachable": 34
     },
     "v7-1440-en-palette": {
       "overflowX": 0,
@@ -11878,7 +13950,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11922,7 +13995,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -11966,7 +14040,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:settings-project",
+          "text:Search my messages"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -12010,7 +14089,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12042,7 +14122,7 @@
         "view": "first",
         "box": [
           821.3,
-          461.5,
+          505.5,
           300,
           375.5
         ],
@@ -12054,14 +14134,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1440-en-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12085,7 +14166,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -12129,7 +14211,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12187,7 +14270,7 @@
     },
     "v7-1440-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12211,10 +14294,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 32
+      "realReachable": 34
     },
     "v7-1440-uk-palette": {
       "overflowX": 0,
@@ -12255,7 +14339,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12299,7 +14384,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12343,7 +14429,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:settings-project",
+          "text:Пошук моїх повідомлень"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -12387,7 +14478,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12419,7 +14511,7 @@
         "view": "first",
         "box": [
           821.3,
-          461.5,
+          505.5,
           300,
           375.5
         ],
@@ -12431,14 +14523,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1440-uk-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12462,7 +14555,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -12506,7 +14600,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12564,7 +14659,7 @@
     },
     "v7-1440-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 80,
+      "visibleControls": 74,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12588,10 +14683,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 37,
-      "realReachable": 32
+      "realReachable": 34
     },
     "v7-1440-uk-dark-palette": {
       "overflowX": 0,
@@ -12632,7 +14728,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12676,7 +14773,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12720,7 +14818,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:search",
+          "button:board:settings-project",
+          "text:Пошук моїх повідомлень"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -12764,7 +14867,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12796,7 +14900,7 @@
         "view": "first",
         "box": [
           821.3,
-          461.5,
+          505.5,
           300,
           375.5
         ],
@@ -12808,14 +14912,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1440-uk-dark-overview": {
       "overflowX": 0,
-      "visibleControls": 92,
+      "visibleControls": 89,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12839,7 +14944,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 9,
       "realReachable": 9
@@ -12883,7 +14989,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -12941,7 +15048,7 @@
     },
     "v7-1000-en-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -12965,16 +15072,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Show reports",
-        "button:Dock at the side",
-        "button:Collapse the orchestrator chat (O)",
-        "div:Resize the orchestrator chat’s width"
-      ]
+      "realReachable": 36
     },
     "v7-1000-en-palette": {
       "overflowX": 0,
@@ -13015,7 +15117,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13059,7 +15162,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13103,7 +15207,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:Project settings"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13147,7 +15256,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13191,14 +15303,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1000-en-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -13222,7 +15335,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -13266,7 +15380,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13324,7 +15439,7 @@
     },
     "v7-1000-uk-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -13348,16 +15463,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v7-1000-uk-palette": {
       "overflowX": 0,
@@ -13398,7 +15508,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13442,7 +15553,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13486,7 +15598,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:Налаштування проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13530,7 +15647,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13574,14 +15694,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1000-uk-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -13605,7 +15726,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -13649,7 +15771,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13707,7 +15830,7 @@
     },
     "v7-1000-uk-dark-rest": {
       "overflowX": 0,
-      "visibleControls": 47,
+      "visibleControls": 44,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -13731,16 +15854,11 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 38,
-      "realReachable": 32,
-      "underTheNotice": [
-        "button:Показати звіти",
-        "button:Закріпити збоку",
-        "button:Згорнути чат оркестратора (O)",
-        "div:Змінити ширину чату оркестратора"
-      ]
+      "realReachable": 36
     },
     "v7-1000-uk-dark-palette": {
       "overflowX": 0,
@@ -13781,7 +15899,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13825,7 +15944,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -13869,7 +15989,12 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:board:settings-project",
+          "button:board:settings",
+          "text:Налаштування проєкту"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13913,7 +16038,10 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": [
+          "button:settings:close"
+        ]
       },
       "realControls": 0,
       "realReachable": 0
@@ -13957,14 +16085,15 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
     },
     "v7-1000-uk-dark-overview": {
       "overflowX": 0,
-      "visibleControls": 65,
+      "visibleControls": 64,
       "nav": {
         "kind": "two controls in the board header",
         "width": 0,
@@ -13988,7 +16117,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 13,
       "realReachable": 13
@@ -14032,7 +16162,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14230,7 +16361,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -14269,7 +16401,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14308,7 +16441,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14344,8 +16478,238 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": null,
+      "realControls": 4,
+      "realReachable": 4
+    },
+    "v7-390-en-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview-projects": {
+      "overflowX": 0,
+      "visibleControls": 17,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "view": "palette",
+        "box": [
+          0,
+          134.5,
+          390,
+          709.5
+        ],
+        "mounted": 17,
+        "visible": 17,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-en-overview-projects-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -14491,7 +16855,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -14530,7 +16895,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14569,7 +16935,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14605,8 +16972,238 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": null,
+      "realControls": 4,
+      "realReachable": 4
+    },
+    "v7-390-uk-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview-projects": {
+      "overflowX": 0,
+      "visibleControls": 17,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "view": "palette",
+        "box": [
+          0,
+          134.5,
+          390,
+          709.5
+        ],
+        "mounted": 17,
+        "visible": 17,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-overview-projects-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     },
@@ -14752,7 +17349,8 @@
       "notice": {
         "points": 15,
         "hit": 15,
-        "title": true
+        "title": true,
+        "over": []
       },
       "realControls": 12,
       "realReachable": 11
@@ -14791,7 +17389,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14830,7 +17429,8 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
       "realControls": 0,
       "realReachable": 0
@@ -14866,8 +17466,238 @@
       "notice": {
         "points": 15,
         "hit": 0,
-        "title": false
+        "title": false,
+        "over": []
       },
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview": {
+      "overflowX": 0,
+      "visibleControls": 14,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 0,
+      "smallest": null,
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": null,
+      "notice": null,
+      "realControls": 4,
+      "realReachable": 4
+    },
+    "v7-390-uk-dark-overview-menu": {
+      "overflowX": 0,
+      "visibleControls": 3,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 2,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          664,
+          390,
+          180
+        ],
+        "mounted": 3,
+        "visible": 3,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview-empty-menu": {
+      "overflowX": 0,
+      "visibleControls": 2,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 3
+      },
+      "drawn": 1,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "menu-phoneOverview",
+        "view": "first",
+        "box": [
+          0,
+          712,
+          390,
+          132
+        ],
+        "mounted": 2,
+        "visible": 2,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview-settings-section": {
+      "overflowX": 0,
+      "visibleControls": 6,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 5,
+      "smallest": [
+        370,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          514,
+          390,
+          330
+        ],
+        "mounted": 6,
+        "visible": 6,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview-projects": {
+      "overflowX": 0,
+      "visibleControls": 17,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 16,
+      "smallest": [
+        44,
+        44
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "palette",
+        "view": "palette",
+        "box": [
+          0,
+          134.5,
+          390,
+          709.5
+        ],
+        "mounted": 17,
+        "visible": 17,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
+      "realControls": 0,
+      "realReachable": 0
+    },
+    "v7-390-uk-dark-overview-projects-settings": {
+      "overflowX": 0,
+      "visibleControls": 7,
+      "nav": null,
+      "mainWidth": 390,
+      "header": {
+        "height": 52,
+        "controls": 4
+      },
+      "drawn": 6,
+      "smallest": [
+        378,
+        48
+      ],
+      "missed": [],
+      "intersecting": [],
+      "outside": [],
+      "surface": {
+        "name": "settings",
+        "view": "settings",
+        "box": [
+          0,
+          443.5,
+          390,
+          400.5
+        ],
+        "mounted": 7,
+        "visible": 7,
+        "scrolls": false,
+        "insideWindow": true
+      },
+      "notice": null,
       "realControls": 0,
       "realReachable": 0
     }
@@ -14974,9 +17804,9 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "31 s ago",
+        "text": "Projects",
         "where": "palette",
-        "ratio": 4.51,
+        "ratio": 5.1,
         "floor": 4.5,
         "kind": "text"
       },
@@ -15118,9 +17948,9 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "31 с тому",
+        "text": "Проєкти",
         "where": "palette",
-        "ratio": 4.51,
+        "ratio": 5.1,
         "floor": 4.5,
         "kind": "text"
       },
@@ -15406,9 +18236,9 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "31 s ago",
+        "text": "Projects",
         "where": "palette",
-        "ratio": 4.51,
+        "ratio": 5.1,
         "floor": 4.5,
         "kind": "text"
       },
@@ -15550,9 +18380,9 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "31 с тому",
+        "text": "Проєкти",
         "where": "palette",
-        "ratio": 4.51,
+        "ratio": 5.1,
         "floor": 4.5,
         "kind": "text"
       },
@@ -15883,6 +18713,20 @@
       },
       "under": []
     },
+    "v2-1440-en-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 4.59,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v2-1440-en-system": {
       "texts": 23,
       "overlaid": [],
@@ -15932,6 +18776,20 @@
         "text": "rail:new-project icon",
         "where": "ir-rail",
         "ratio": 5.1,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v2-1440-uk-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 4.59,
         "floor": 3,
         "kind": "mark"
       },
@@ -15991,6 +18849,20 @@
       },
       "under": []
     },
+    "v2-1440-uk-dark-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 5.56,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v2-1440-uk-dark-system": {
       "texts": 23,
       "overlaid": [],
@@ -16040,6 +18912,20 @@
         "text": "rail:new-project icon",
         "where": "ir-rail",
         "ratio": 5.1,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v2-1000-en-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 4.59,
         "floor": 3,
         "kind": "mark"
       },
@@ -16099,6 +18985,20 @@
       },
       "under": []
     },
+    "v2-1000-uk-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 4.59,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v2-1000-uk-system": {
       "texts": 23,
       "overlaid": [],
@@ -16148,6 +19048,20 @@
         "text": "rail:new-project icon",
         "where": "ir-rail",
         "ratio": 5.11,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v2-1000-uk-dark-hidden": {
+      "texts": 0,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": null,
+      "lowestMark": {
+        "text": "rail:toggle icon",
+        "where": "ir-restore",
+        "ratio": 5.56,
         "floor": 3,
         "kind": "mark"
       },
@@ -17689,6 +20603,54 @@
       },
       "under": []
     },
+    "v4-390-en-overview-menu": {
+      "texts": 7,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-en-overview-empty-menu": {
+      "texts": 5,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Overview",
+        "where": "sheet-phoneOverview",
+        "ratio": 16.7,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-en-overview-menu-delegatus": {
+      "texts": 15,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": {
+        "text": "Sign out",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.9,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "phoneOverview:delegatus:language:0 chosen edge",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.96,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v4-390-uk-board-menu": {
       "texts": 17,
       "overlaid": [],
@@ -17842,6 +20804,54 @@
       },
       "under": []
     },
+    "v4-390-uk-overview-menu": {
+      "texts": 7,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-uk-overview-empty-menu": {
+      "texts": 5,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Огляд",
+        "where": "sheet-phoneOverview",
+        "ratio": 16.7,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-uk-overview-menu-delegatus": {
+      "texts": 15,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": {
+        "text": "Вийти",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.9,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "phoneOverview:delegatus:language:0 chosen edge",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.96,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v4-390-uk-dark-board-menu": {
       "texts": 17,
       "overlaid": [],
@@ -17989,6 +20999,54 @@
       "lowestMark": {
         "text": "phoneBoard:view:0 chosen edge",
         "where": "sheet-phoneBoard",
+        "ratio": 6.13,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v4-390-uk-dark-overview-menu": {
+      "texts": 7,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.11,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-uk-dark-overview-empty-menu": {
+      "texts": 5,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Огляд",
+        "where": "sheet-phoneOverview",
+        "ratio": 12.84,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v4-390-uk-dark-overview-menu-delegatus": {
+      "texts": 15,
+      "overlaid": [],
+      "marks": 1,
+      "lowestText": {
+        "text": "Вийти",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.27,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "phoneOverview:delegatus:language:0 chosen edge",
+        "where": "sheet-phoneOverview",
         "ratio": 6.13,
         "floor": 3,
         "kind": "mark"
@@ -18679,6 +21737,68 @@
       "lowestMark": null,
       "under": []
     },
+    "v5-390-en-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-en-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Overview",
+        "where": "sheet-phoneOverview",
+        "ratio": 16.7,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-en-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-en-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Push notifications",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.77,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:push switch (on)",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.96,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v5-390-uk-board-menu": {
       "texts": 16,
       "overlaid": [],
@@ -18825,6 +21945,68 @@
       "marks": 0,
       "lowestText": null,
       "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Огляд",
+        "where": "sheet-phoneOverview",
+        "ratio": 16.7,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.1,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Push-сповіщення",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.77,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:push switch (on)",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.96,
+        "floor": 3,
+        "kind": "mark"
+      },
       "under": []
     },
     "v5-390-uk-dark-board-menu": {
@@ -18975,8 +22157,70 @@
       "lowestMark": null,
       "under": []
     },
+    "v5-390-uk-dark-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.67,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-dark-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Огляд",
+        "where": "sheet-phoneOverview",
+        "ratio": 12.84,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-dark-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.67,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v5-390-uk-dark-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Налаштування",
+        "where": "sheet-phoneOverview",
+        "ratio": 12.84,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:asks switch",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.67,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
     "v6-1440-en-rest": {
-      "texts": 42,
+      "texts": 37,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
@@ -19036,7 +22280,7 @@
       "under": []
     },
     "v6-1440-uk-rest": {
-      "texts": 42,
+      "texts": 37,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
@@ -19152,7 +22396,7 @@
       "under": []
     },
     "v6-1000-en-rest": {
-      "texts": 23,
+      "texts": 28,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
@@ -19264,7 +22508,7 @@
       "under": []
     },
     "v6-1000-uk-dark-rest": {
-      "texts": 23,
+      "texts": 28,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
@@ -19458,7 +22702,7 @@
       "lowestText": {
         "text": "4 working",
         "where": "col-head",
-        "ratio": 5.01,
+        "ratio": 5,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19490,9 +22734,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "System",
+        "text": "65% left",
         "where": "system",
-        "ratio": 7.11,
+        "ratio": 7.24,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19520,14 +22764,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.71,
+        "ratio": 6.69,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.69,
+        "ratio": 6.65,
         "floor": 3,
         "kind": "mark"
       },
@@ -19554,11 +22798,8 @@
       "under": []
     },
     "v7-1440-en-overview": {
-      "texts": 21,
-      "overlaid": [
-        "col-head|Done",
-        "col-head|1 of 5"
-      ],
+      "texts": 23,
+      "overlaid": [],
       "marks": 0,
       "lowestText": {
         "text": "4 working",
@@ -19582,9 +22823,9 @@
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:atlas icon (on)",
+        "text": "palette:crown:harbor-ledger icon (on)",
         "where": "palette",
-        "ratio": 5.43,
+        "ratio": 5.44,
         "floor": 3,
         "kind": "mark"
       },
@@ -19625,7 +22866,7 @@
       "lowestText": {
         "text": "4 працює",
         "where": "col-head",
-        "ratio": 5.01,
+        "ratio": 5,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19657,9 +22898,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Система",
+        "text": "лишилось 65%",
         "where": "system",
-        "ratio": 7.11,
+        "ratio": 7.24,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19673,7 +22914,7 @@
       "lowestText": {
         "text": "Налаштування Delegatus",
         "where": "menu-board",
-        "ratio": 16.31,
+        "ratio": 16.3,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19687,14 +22928,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.71,
+        "ratio": 6.69,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.65,
+        "ratio": 6.64,
         "floor": 3,
         "kind": "mark"
       },
@@ -19723,11 +22964,8 @@
       "under": []
     },
     "v7-1440-uk-overview": {
-      "texts": 21,
-      "overlaid": [
-        "col-head|Готові",
-        "col-head|1 з 5"
-      ],
+      "texts": 23,
+      "overlaid": [],
       "marks": 0,
       "lowestText": {
         "text": "4 працює",
@@ -19751,7 +22989,7 @@
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:atlas icon (on)",
+        "text": "palette:crown:harbor-ledger icon (on)",
         "where": "palette",
         "ratio": 5.47,
         "floor": 3,
@@ -19808,12 +23046,12 @@
       "lowestText": {
         "text": "Проєкти",
         "where": "palette",
-        "ratio": 6.66,
+        "ratio": 6.69,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:lantern-docs icon",
+        "text": "palette:crown:quarry icon",
         "where": "palette",
         "ratio": 6.47,
         "floor": 3,
@@ -19826,9 +23064,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Система",
+        "text": "лишилось 65%",
         "where": "system",
-        "ratio": 6.37,
+        "ratio": 6.57,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19842,7 +23080,7 @@
       "lowestText": {
         "text": "Пошук моїх повідомлень",
         "where": "menu-board",
-        "ratio": 12.82,
+        "ratio": 12.79,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19856,14 +23094,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.81,
+        "ratio": 6.8,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.72,
+        "ratio": 6.76,
         "floor": 3,
         "kind": "mark"
       },
@@ -19892,16 +23130,13 @@
       "under": []
     },
     "v7-1440-uk-dark-overview": {
-      "texts": 21,
-      "overlaid": [
-        "col-head|Готові",
-        "col-head|1 з 5"
-      ],
+      "texts": 23,
+      "overlaid": [],
       "marks": 0,
       "lowestText": {
         "text": "5 з 9",
         "where": "col-head",
-        "ratio": 6.06,
+        "ratio": 6.15,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19915,14 +23150,14 @@
       "lowestText": {
         "text": "3",
         "where": "palette",
-        "ratio": 6.57,
+        "ratio": 6.63,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:quarry icon",
+        "text": "palette:crown:lantern-docs icon",
         "where": "palette",
-        "ratio": 6.46,
+        "ratio": 6.48,
         "floor": 3,
         "kind": "mark"
       },
@@ -19957,13 +23192,13 @@
       "under": []
     },
     "v7-1000-en-rest": {
-      "texts": 18,
+      "texts": 9,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "4 working",
-        "where": "col-head",
-        "ratio": 4.94,
+        "text": "permission prompt",
+        "where": "bar",
+        "ratio": 5.17,
         "floor": 4.5,
         "kind": "text"
       },
@@ -19995,7 +23230,7 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "System",
+        "text": "9.0 GiB free",
         "where": "system",
         "ratio": 7.31,
         "floor": 4.5,
@@ -20009,9 +23244,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Search my messages",
+        "text": "Delegatus settings",
         "where": "menu-board",
-        "ratio": 16.44,
+        "ratio": 16.47,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20025,14 +23260,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.6,
+        "ratio": 6.65,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.54,
+        "ratio": 6.58,
         "floor": 3,
         "kind": "mark"
       },
@@ -20086,7 +23321,7 @@
       "lowestMark": {
         "text": "palette:crown:harbor-ledger icon (on)",
         "where": "palette",
-        "ratio": 5.43,
+        "ratio": 5.48,
         "floor": 3,
         "kind": "mark"
       },
@@ -20121,13 +23356,13 @@
       "under": []
     },
     "v7-1000-uk-rest": {
-      "texts": 18,
+      "texts": 9,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "4 працює",
-        "where": "col-head",
-        "ratio": 4.95,
+        "text": "запит дозволу",
+        "where": "bar",
+        "ratio": 5.17,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20159,9 +23394,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Система",
+        "text": "лишилось 65%",
         "where": "system",
-        "ratio": 7.31,
+        "ratio": 7.25,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20173,9 +23408,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Пошук моїх повідомлень",
+        "text": "Налаштування Delegatus",
         "where": "menu-board",
-        "ratio": 16.44,
+        "ratio": 16.45,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20189,14 +23424,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.6,
+        "ratio": 6.65,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.54,
+        "ratio": 6.58,
         "floor": 3,
         "kind": "mark"
       },
@@ -20252,7 +23487,7 @@
       "lowestMark": {
         "text": "palette:crown:harbor-ledger icon (on)",
         "where": "palette",
-        "ratio": 5.47,
+        "ratio": 5.48,
         "floor": 3,
         "kind": "mark"
       },
@@ -20287,7 +23522,7 @@
       "under": []
     },
     "v7-1000-uk-dark-rest": {
-      "texts": 18,
+      "texts": 9,
       "overlaid": [],
       "marks": 0,
       "lowestText": {
@@ -20305,14 +23540,14 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "Проєкти",
+        "text": "43 хв тому",
         "where": "palette",
-        "ratio": 6.5,
+        "ratio": 6.59,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:lantern-docs icon",
+        "text": "palette:crown:quarry icon",
         "where": "palette",
         "ratio": 6.65,
         "floor": 3,
@@ -20339,9 +23574,9 @@
       "overlaid": [],
       "marks": 0,
       "lowestText": {
-        "text": "Пошук моїх повідомлень",
+        "text": "Налаштування проєкту",
         "where": "menu-board",
-        "ratio": 12.82,
+        "ratio": 12.98,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20355,14 +23590,14 @@
       "lowestText": {
         "text": "Main",
         "where": "settings",
-        "ratio": 6.71,
+        "ratio": 6.72,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
         "text": "settings:close icon",
         "where": "settings",
-        "ratio": 6.48,
+        "ratio": 6.56,
         "floor": 3,
         "kind": "mark"
       },
@@ -20377,7 +23612,7 @@
       "lowestText": {
         "text": "Статус",
         "where": "menu-card",
-        "ratio": 6.73,
+        "ratio": 6.81,
         "floor": 4.5,
         "kind": "text"
       },
@@ -20409,14 +23644,14 @@
       "overlaid": [],
       "marks": 5,
       "lowestText": {
-        "text": "2",
+        "text": "лишилось 56%",
         "where": "palette",
-        "ratio": 6.63,
+        "ratio": 6.57,
         "floor": 4.5,
         "kind": "text"
       },
       "lowestMark": {
-        "text": "palette:crown:lantern-docs icon",
+        "text": "palette:crown:quarry icon",
         "where": "palette",
         "ratio": 6.48,
         "floor": 3,
@@ -20594,6 +23829,116 @@
       "lowestMark": null,
       "under": []
     },
+    "v7-390-en-overview": {
+      "texts": 3,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "4",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-en-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.41,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-en-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Overview",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.54,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-en-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.45,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-en-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Sound levels",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.54,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:sound switch (on)",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.92,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-en-overview-projects": {
+      "texts": 26,
+      "overlaid": [],
+      "marks": 5,
+      "lowestText": {
+        "text": "3",
+        "where": "sheet-projects",
+        "ratio": 5.17,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "palette:crown:atlas icon (on)",
+        "where": "sheet-projects",
+        "ratio": 4.88,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-en-overview-projects-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-projects",
+        "ratio": 6.45,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
     "v7-390-uk-rest": {
       "texts": 3,
       "overlaid": [],
@@ -20736,6 +24081,116 @@
       "lowestMark": null,
       "under": []
     },
+    "v7-390-uk-overview": {
+      "texts": 3,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "4",
+        "where": "flex",
+        "ratio": 5.17,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.41,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Налаштування",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.51,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.45,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Рівні звуку",
+        "where": "sheet-phoneOverview",
+        "ratio": 14.54,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:sound switch (on)",
+        "where": "sheet-phoneOverview",
+        "ratio": 4.92,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-uk-overview-projects": {
+      "texts": 26,
+      "overlaid": [],
+      "marks": 5,
+      "lowestText": {
+        "text": "3",
+        "where": "sheet-projects",
+        "ratio": 5.17,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "palette:crown:atlas icon (on)",
+        "where": "sheet-projects",
+        "ratio": 4.88,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-uk-overview-projects-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-projects",
+        "ratio": 6.45,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
     "v7-390-uk-dark-rest": {
       "texts": 3,
       "overlaid": [],
@@ -20872,6 +24327,116 @@
         "text": "Закрити конвеєр",
         "where": "flex",
         "ratio": 5.8,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-dark-overview": {
+      "texts": 3,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 6.89,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-dark-overview-menu": {
+      "texts": 4,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "2",
+        "where": "sheet-phoneOverview",
+        "ratio": 7.04,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-dark-overview-empty-menu": {
+      "texts": 2,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Налаштування",
+        "where": "sheet-phoneOverview",
+        "ratio": 13.66,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-dark-overview-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-phoneOverview",
+        "ratio": 6.96,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": null,
+      "under": []
+    },
+    "v7-390-uk-dark-overview-settings-section": {
+      "texts": 6,
+      "overlaid": [],
+      "marks": 3,
+      "lowestText": {
+        "text": "Налаштування",
+        "where": "sheet-phoneOverview",
+        "ratio": 13.45,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "settings:notifications:sound switch (on)",
+        "where": "sheet-phoneOverview",
+        "ratio": 5.66,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-uk-dark-overview-projects": {
+      "texts": 26,
+      "overlaid": [],
+      "marks": 5,
+      "lowestText": {
+        "text": "43 хв тому",
+        "where": "sheet-projects",
+        "ratio": 6.9,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "lowestMark": {
+        "text": "palette:crown:river-mesh icon",
+        "where": "sheet-projects",
+        "ratio": 6.96,
+        "floor": 3,
+        "kind": "mark"
+      },
+      "under": []
+    },
+    "v7-390-uk-dark-overview-projects-settings": {
+      "texts": 8,
+      "overlaid": [],
+      "marks": 0,
+      "lowestText": {
+        "text": "Delegatus",
+        "where": "sheet-projects",
+        "ratio": 6.96,
         "floor": 4.5,
         "kind": "text"
       },
@@ -21458,7 +25023,7 @@
       ]
     },
     "v7-1440-en-empty": {
-      "todayTexts": 12,
+      "todayTexts": 17,
       "todayLowest": {
         "text": "Claude",
         "where": "flex",
@@ -21471,7 +25036,7 @@
       ]
     },
     "v7-1440-en-loading": {
-      "todayTexts": 15,
+      "todayTexts": 20,
       "todayLowest": {
         "text": "Claude",
         "where": "flex",
@@ -21704,7 +25269,7 @@
       "underAAToday": []
     },
     "v7-1440-uk-dark-empty": {
-      "todayTexts": 12,
+      "todayTexts": 17,
       "todayLowest": {
         "text": "Система",
         "where": "flex",
@@ -21715,7 +25280,7 @@
       "underAAToday": []
     },
     "v7-1440-uk-dark-loading": {
-      "todayTexts": 15,
+      "todayTexts": 20,
       "todayLowest": {
         "text": "Система",
         "where": "flex",
@@ -21804,7 +25369,7 @@
       ]
     },
     "v7-1000-en-overview": {
-      "todayTexts": 29,
+      "todayTexts": 34,
       "todayLowest": {
         "text": "Claude",
         "where": "flex",
@@ -21832,7 +25397,7 @@
       ]
     },
     "v7-1000-en-empty": {
-      "todayTexts": 12,
+      "todayTexts": 17,
       "todayLowest": {
         "text": "Claude",
         "where": "flex",
@@ -21936,7 +25501,7 @@
       ]
     },
     "v7-1000-uk-overview": {
-      "todayTexts": 29,
+      "todayTexts": 34,
       "todayLowest": {
         "text": "Claude",
         "where": "flex",
@@ -22056,7 +25621,7 @@
       "underAAToday": []
     },
     "v7-1000-uk-dark-overview": {
-      "todayTexts": 29,
+      "todayTexts": 34,
       "todayLowest": {
         "text": "5 з 9",
         "where": "col-head",
@@ -22078,7 +25643,7 @@
       "underAAToday": []
     },
     "v7-1000-uk-dark-empty": {
-      "todayTexts": 12,
+      "todayTexts": 17,
       "todayLowest": {
         "text": "Система",
         "where": "flex",
@@ -22190,6 +25755,83 @@
         "flex|·|3.17"
       ]
     },
+    "v7-390-en-overview": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-menu": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-empty-menu": {
+      "todayTexts": 1,
+      "todayLowest": {
+        "text": "Overview",
+        "where": "flex",
+        "ratio": 15.05,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-settings-section": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-projects": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-en-overview-projects-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Working now only",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
     "v7-390-uk-rest": {
       "todayTexts": 3,
       "todayLowest": {
@@ -22281,6 +25923,83 @@
         "flex|·|3.17"
       ]
     },
+    "v7-390-uk-overview": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-menu": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-empty-menu": {
+      "todayTexts": 1,
+      "todayLowest": {
+        "text": "Огляд",
+        "where": "flex",
+        "ratio": 15.05,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-settings-section": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-projects": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-overview-projects-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 4.59,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
     "v7-390-uk-dark-rest": {
       "todayTexts": 3,
       "todayLowest": {
@@ -22371,6 +26090,83 @@
         "flex|·|3.98",
         "flex|·|3.98"
       ]
+    },
+    "v7-390-uk-dark-overview": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-menu": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-empty-menu": {
+      "todayTexts": 1,
+      "todayLowest": {
+        "text": "Огляд",
+        "where": "flex",
+        "ratio": 15.3,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-settings-section": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-projects": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
+    },
+    "v7-390-uk-dark-overview-projects-settings": {
+      "todayTexts": 3,
+      "todayLowest": {
+        "text": "Лише те, що в роботі",
+        "where": "flex",
+        "ratio": 5.56,
+        "floor": 4.5,
+        "kind": "text"
+      },
+      "underAAToday": []
     }
   },
   "failures": []

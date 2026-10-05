@@ -17,8 +17,10 @@
  * own navigation as a layout sibling of the Viewer; it answers the EXISTING
  * menu buttons (the rail's, the board's, a card's, the phone's) with its own
  * regrouped menu; and it restyles the real surfaces through one stylesheet.
- * Every project, count and limit drawn by the prototype's own chrome is
- * invented.
+ * Variants whose header is shorter than today's also give the Viewer's
+ * attention notice a row of its own under the header (`useNoticeBand`), so the
+ * notice lies over nothing whatever the header's height. Every project, count
+ * and limit drawn by the prototype's own chrome is invented.
  *
  * The prototype's surfaces use the product's own contracts, so a build inherits
  * them: a desktop menu or dialog is a `useModalLayer` layer (Tab stays inside,
@@ -202,6 +204,120 @@ function useSlot(enabled: boolean, candidates: readonly (readonly [selector: str
 
 /** The overview's title row: its heading followed by its status line. */
 const OVERVIEW_TITLE_ROW = "div:has(> h1 + span[data-reach])";
+
+/**
+ * An intercepted product trigger opens a dialog here, so it says so. The
+ * product declares `aria-haspopup="menu"` on the rail's, the board's and a
+ * card's "⋯", for the menus the prototype answers in their place; a screen
+ * reader would announce a menu and meet a dialog. What each trigger declared
+ * comes back when the prototype goes.
+ */
+export function useDialogTriggers(enabled: boolean, selector: string) {
+  useEffect(() => {
+    if (!enabled) return;
+    const declared = new Map<HTMLElement, string | null>();
+    const mark = () => {
+      for (const trigger of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
+        if (!declared.has(trigger)) declared.set(trigger, trigger.getAttribute("aria-haspopup"));
+        if (trigger.getAttribute("aria-haspopup") !== "dialog") trigger.setAttribute("aria-haspopup", "dialog");
+      }
+    };
+    mark();
+    const observer = new MutationObserver(mark);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-haspopup"] });
+    return () => {
+      observer.disconnect();
+      for (const [trigger, value] of declared) {
+        if (value === null) trigger.removeAttribute("aria-haspopup");
+        else trigger.setAttribute("aria-haspopup", value);
+      }
+    };
+  }, [enabled, selector]);
+}
+
+/** The space above and below the notice in its band. */
+const NOTICE_GAP = 6;
+/** Where the notice's band goes: above the board's body, or under a header that has no board. */
+const NOTICE_HOSTS = [[".kb .kb-body", "before"], ["[data-project-bar]", "after"], [OVERVIEW_TITLE_ROW, "after"]] as const;
+
+/**
+ * The attention notice's own place. The Viewer hangs the notice from its
+ * badge, fixed to the window, and counts on the header under it being tall
+ * enough: where a variant's header is one row and today's wraps into two, the
+ * notice ended over the orchestrator pane's controls. Here the notice gets a
+ * row of the layout: a band under the header, as tall as the notice
+ * and present only while one is shown, to which the notice is pinned. The band
+ * is measured, so the header may be any height, and nothing is under the
+ * notice but the band. (A build renders the notice in that row; the prototype
+ * may not move a node React owns, so it pins the notice to the row's box.)
+ */
+function useNoticeBand(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const root = document.documentElement;
+    const band = document.createElement("div");
+    band.dataset.irNoticeBand = "";
+    let toast: HTMLElement | null = null;
+    let watched: Element[] = [];
+    const place = () => {
+      if (!toast?.isConnected || !band.isConnected) return;
+      band.style.height = `${toast.offsetHeight + 2 * NOTICE_GAP}px`;
+      const rect = band.getBoundingClientRect();
+      root.style.setProperty("--ir-notice-top", `${rect.top + NOTICE_GAP}px`);
+      root.style.setProperty("--ir-notice-right", `${innerWidth - rect.right + 16}px`);
+      root.style.setProperty("--ir-notice-max", `${Math.max(160, rect.width - 32)}px`);
+    };
+    const sizes = new ResizeObserver(place);
+    const clear = () => {
+      band.remove();
+      delete root.dataset.irNoticeBand;
+      for (const name of ["--ir-notice-top", "--ir-notice-right", "--ir-notice-max"]) root.style.removeProperty(name);
+      sizes.disconnect();
+      toast = null;
+      watched = [];
+    };
+    const attach = () => {
+      const next = document.querySelector<HTMLElement>("[data-attention-toast]");
+      const found = next ? NOTICE_HOSTS.map(([selector, where]) => [document.querySelector(selector), where] as const).find(([host]) => host) : undefined;
+      if (!next || !found) { if (toast) clear(); return; }
+      const [host, where] = found;
+      if (where === "before" && host!.previousSibling !== band) host!.parentNode?.insertBefore(band, host);
+      if (where === "after" && host!.nextSibling !== band) host!.parentNode?.insertBefore(band, host!.nextSibling);
+      root.dataset.irNoticeBand = "";
+      /* The band moves when anything above it changes height: the header wrapping, a filter row arriving. */
+      const above: Element[] = [next];
+      for (let node = band.previousElementSibling; node; node = node.previousElementSibling) above.push(node);
+      if (band.parentElement) above.push(band.parentElement);
+      if (above.length !== watched.length || above.some((node, index) => node !== watched[index])) {
+        sizes.disconnect();
+        for (const node of above) sizes.observe(node);
+        watched = above;
+      }
+      toast = next;
+      place();
+    };
+    attach();
+    const observer = new MutationObserver(attach);
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", place);
+    return () => { observer.disconnect(); window.removeEventListener("resize", place); clear(); };
+  }, [enabled]);
+}
+
+/** True while the desktop shows the Overview: no project is chosen there. */
+function useOverviewHere(enabled: boolean) {
+  const [here, setHere] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    const read = () => setHere(Boolean(document.querySelector(`.kb .bar[data-bar="overview"], ${OVERVIEW_TITLE_ROW}`)));
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [enabled]);
+  return here;
+}
+
 const LEADS = [
   ['[data-bar="project"] [data-bar-group="where"]', "first", "project"],
   ['[data-project-bar] [data-bar-group="where"]', "first", "project"],
@@ -220,7 +336,7 @@ const firstTabbable = (root: ParentNode | null) => root?.querySelector<HTMLEleme
 
 type Open =
   | { kind: "menu"; menu: string; anchor: DOMRect; returnTo: HTMLElement | null }
-  | { kind: "palette" | "system" | "settings"; anchor: DOMRect | null; scope?: "project" | "delegatus"; returnTo: HTMLElement | null }
+  | { kind: "palette" | "system" | "settings"; anchor: DOMRect | null; scope?: "project" | "delegatus"; /** False where no project is chosen (the Overview). */ project?: boolean; returnTo: HTMLElement | null }
   | null;
 
 /** What a row does beyond its own state: a drill-in, another sheet face, the Settings place. False when it does nothing (an inert product action). */
@@ -395,20 +511,20 @@ function Surface({ open, width, label, onClose, children, name }: {
   );
 }
 
-function ProjectRows({ lang, name, query, compact, withCrown = true }: { lang: Lang; name: string; query: string; compact?: boolean; withCrown?: boolean }) {
+function ProjectRows({ lang, name, query, compact, withCrown = true, overview = false }: { lang: Lang; name: string; query: string; compact?: boolean; withCrown?: boolean; /** The Overview is the place on screen: no project is the current one. */ overview?: boolean }) {
   const t = COPY[lang];
   const [crowned, setCrowned] = useState(() => new Set(PROJECTS.filter((project) => project.crowned).map((project) => project.name)));
   const [archived, setArchived] = useState(false);
   const shown = PROJECTS.filter((project) => project.name.includes(query.trim().toLowerCase()));
   return (
     <>
-      <button type="button" className="ir-row ir-project" data-ir-control={`${name}:overview`}>
+      <button type="button" className="ir-row ir-project" aria-current={overview ? "page" : undefined} data-ir-control={`${name}:overview`}>
         <LayoutGrid className="ir-ico" aria-hidden />
         <span className="ir-row-label">{t.overview}</span>
       </button>
       {shown.map((project) => (
         <div key={project.name} className="ir-project-line">
-          <button type="button" className="ir-row ir-project" aria-current={project.name === "atlas" ? "page" : undefined} data-ir-control={`${name}:project:${project.name}`}>
+          <button type="button" className="ir-row ir-project" aria-current={!overview && project.name === "atlas" ? "page" : undefined} data-ir-control={`${name}:project:${project.name}`}>
             <i className={`ir-dot ${project.live ? "ir-dot-live" : ""}`} aria-hidden />
             <span className="ir-row-label">
               {project.name}
@@ -462,7 +578,7 @@ function BackRow({ name, label, lang, onBack }: { name: string; label: string; l
 }
 
 /** Variant 1's one finder: projects first, then the system and everything the rail's menu held. */
-function Palette({ lang, phone, onSettings, settingsRows }: { lang: Lang; phone: boolean; onSettings: () => void; settingsRows: Row[] | null }) {
+function Palette({ lang, phone, onSettings, settingsRows, overview }: { lang: Lang; phone: boolean; onSettings: () => void; settingsRows: Row[] | null; overview: boolean }) {
   const t = COPY[lang];
   const [query, setQuery] = useState("");
   const [view, setView] = useState<"list" | "settings" | "system">("list");
@@ -488,7 +604,7 @@ function Palette({ lang, phone, onSettings, settingsRows }: { lang: Lang; phone:
     <div ref={body} className="ir-menu-body" data-ir-menu="palette" data-ir-menu-view="palette">
       <Field lang={lang} name="palette" value={query} onChange={setQuery} placeholder={phone ? t.filter : t.goTo} hint={!phone} autoFocus />
       <div className="ir-head">{t.projects}</div>
-      <ProjectRows lang={lang} name="palette" query={query} />
+      <ProjectRows lang={lang} name="palette" query={query} overview={overview} />
       <button type="button" className="ir-row" data-ir-control="palette:new-project"><Plus className="ir-ico" aria-hidden /><span className="ir-row-label">{t.newProject}</span></button>
       <div className="ir-rule" />
       <button type="button" className="ir-row" data-ir-control="palette:system" onClick={() => setView("system")}>
@@ -547,9 +663,12 @@ function SystemPanel({ lang }: { lang: Lang }) {
 }
 
 /** Direction B's one Settings place. On the phone it is the content of a sheet, whose header carries the title and the ×. */
-function SettingsPlace({ lang, phone, scope, onClose, onBack, backLabel }: { lang: Lang; phone: boolean; scope: "project" | "delegatus"; onClose: () => void; onBack?: () => void; backLabel?: string }) {
+function SettingsPlace({ lang, phone, scope, withProject, onClose, onBack, backLabel }: {
+  lang: Lang; phone: boolean; scope: "project" | "delegatus"; /** False where no project is chosen: the project's sections are not offered. */ withProject: boolean; onClose: () => void; onBack?: () => void; backLabel?: string;
+}) {
   const t = COPY[lang];
-  const first = SETTINGS.find((section) => section.scope === scope)!.key;
+  const scopes = withProject ? ["project", "delegatus"] as const : ["delegatus"] as const;
+  const first = SETTINGS.find((section) => section.scope === (withProject ? scope : "delegatus"))!.key;
   const [key, setKey] = useState<string | null>(phone ? null : first);
   const section = SETTINGS.find((entry) => entry.key === key) ?? null;
   const body = useRef<HTMLDivElement>(null);
@@ -562,7 +681,7 @@ function SettingsPlace({ lang, phone, scope, onClose, onBack, backLabel }: { lan
   const list = (
     <nav className="ir-settings-nav" aria-label={t.settings}>
       {phone && onBack ? <BackRow name="settings:menu" label={backLabel ?? t.back} lang={lang} onBack={onBack} /> : null}
-      {(["project", "delegatus"] as const).map((group) => (
+      {scopes.map((group) => (
         <div key={group}>
           <div className="ir-head">{group === "project" ? `${t.thisProject}: atlas` : t.delegatus}</div>
           {SETTINGS.filter((entry) => entry.scope === group).map((entry) => (
@@ -594,8 +713,9 @@ function SettingsPlace({ lang, phone, scope, onClose, onBack, backLabel }: { lan
 }
 
 /** Variants 2 and 3: the rail as a layout sibling of the Viewer. */
-function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusField }: {
+function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusField, overview, showing }: {
   lang: Lang; collapsible: boolean; open: boolean; onToggle: () => void; onSystem: (trigger: HTMLElement) => void; onSettings: (trigger: HTMLElement) => void; focusField: number;
+  overview: boolean; /** The dialog one of the rail's two entries has open. */ showing: "system" | "settings" | null;
 }) {
   const t = COPY[lang];
   const [query, setQuery] = useState("");
@@ -603,21 +723,23 @@ function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusFi
   useEffect(() => {
     if (focusField && open) ref.current?.querySelector<HTMLElement>('[data-ir-control="rail:field"]')?.focus();
   }, [focusField, open]);
+  /* Only variant 3 has a closed rail. Variant 2 hides its rail whole (S1), as today's does, and one control brings it back. */
+  if (!open && !collapsible) return null;
   if (!open) {
     return (
       <nav ref={ref} className="ir-rail ir-rail-closed" data-ir-rail="closed" aria-label={t.projects}>
-        <button type="button" className="ir-tile" aria-label={t.overview} title={t.overview} data-ir-control="rail:overview"><LayoutGrid aria-hidden /></button>
+        <button type="button" className="ir-tile" aria-current={overview ? "page" : undefined} aria-label={t.overview} title={t.overview} data-ir-control="rail:overview"><LayoutGrid aria-hidden /></button>
         <div className="ir-rail-rule" />
         {[...PROJECTS].sort((a, b) => Number(b.crowned) - Number(a.crowned)).map((project) => (
-          <button key={project.name} type="button" className="ir-tile ir-monogram" aria-current={project.name === "atlas" ? "page" : undefined} aria-label={project.name} title={project.name} data-ir-control={`rail:project:${project.name}`}>
+          <button key={project.name} type="button" className="ir-tile ir-monogram" aria-current={!overview && project.name === "atlas" ? "page" : undefined} aria-label={project.name} title={project.name} data-ir-control={`rail:project:${project.name}`}>
             {project.name.slice(0, 2)}
             {project.needs ? <i className="ir-badge" aria-hidden /> : project.live ? <i className="ir-badge ir-badge-live" aria-hidden /> : null}
           </button>
         ))}
         <button type="button" className="ir-tile" aria-label={t.newProject} title={t.newProject} data-ir-control="rail:new-project"><Plus aria-hidden /></button>
         <span className="ir-grow" />
-        <button type="button" className="ir-tile" aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}><Ring left={tightestLimit()} /></button>
-        <button type="button" className="ir-tile" aria-label={t.settings} title={t.settings} data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear aria-hidden /></button>
+        <button type="button" className="ir-tile" aria-haspopup="dialog" aria-expanded={showing === "system"} aria-label={t.systemAria(tightestLimit())} title={t.system} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}><Ring left={tightestLimit()} /></button>
+        <button type="button" className="ir-tile" aria-haspopup="dialog" aria-expanded={showing === "settings"} aria-label={t.settings} title={t.settings} data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear aria-hidden /></button>
         <button type="button" className="ir-tile" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={onToggle}><PanelLeftOpen aria-hidden /></button>
       </nav>
     );
@@ -628,13 +750,13 @@ function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusFi
         <Field lang={lang} name="rail" value={query} onChange={setQuery} placeholder={t.filter} />
         <button type="button" className="ir-icon" aria-label={t.newProject} title={t.newProject} data-ir-control="rail:new-project"><Plus aria-hidden /></button>
       </div>
-      <div className="ir-rail-list"><ProjectRows lang={lang} name="rail" query={query} /></div>
-      <button type="button" className="ir-row ir-status" aria-label={t.systemAria(tightestLimit())} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}>
+      <div className="ir-rail-list"><ProjectRows lang={lang} name="rail" query={query} overview={overview} /></div>
+      <button type="button" className="ir-row ir-status" aria-haspopup="dialog" aria-expanded={showing === "system"} aria-label={t.systemAria(tightestLimit())} data-ir-control="rail:system" onClick={(event) => onSystem(event.currentTarget)}>
         <Ring left={tightestLimit()} />
         <span className="ir-row-label">{t.system}<span className="ir-sub">{LIMITS.map((limit) => `${limit.engine} ${Math.min(...limit.windows.map((window) => window.left))}%`).join(" · ")}</span></span>
       </button>
       <div className="ir-rail-foot">
-        <button type="button" className="ir-row" data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear className="ir-ico" aria-hidden /><span className="ir-row-label">{t.settings}</span></button>
+        <button type="button" className="ir-row" aria-haspopup="dialog" aria-expanded={showing === "settings"} data-ir-control="rail:settings" onClick={(event) => onSettings(event.currentTarget)}><Gear className="ir-ico" aria-hidden /><span className="ir-row-label">{t.settings}</span></button>
         <button type="button" className="ir-icon" aria-label={collapsible ? t.collapse : t.hide} title={collapsible ? t.collapse : t.hide} data-ir-control="rail:toggle" onClick={onToggle}><PanelLeftClose aria-hidden /></button>
       </div>
     </nav>
@@ -644,7 +766,19 @@ function Rail({ lang, collapsible, open, onToggle, onSystem, onSettings, focusFi
 /* ── The phone's sheets ────────────────────────────────────────────────── */
 
 /** What the prototype draws in a phone sheet: a regrouped menu, the project palette, or Settings opened from either. */
-type PhoneSheetState = { sheet: "menu" | "projects"; menu: string | null; view: "settings" | null; scope: "project" | "delegatus" };
+type PhoneSheetState = {
+  sheet: "menu" | "projects"; menu: string | null; view: "settings" | null; scope: "project" | "delegatus";
+  /** The screen the sheet was opened on. On the Overview no project is chosen, so nothing in the sheet may act on one. */
+  place: "project" | "overview";
+  /** The Overview draws its board (and so has hidden work to show) only when something is on it. */
+  board: boolean;
+};
+/** The phone's Overview and a project's board are both the "board" screen; only the Overview carries its own search control. */
+const isOverviewScreen = (screen: Element | null) => Boolean(screen?.querySelector('[data-testid="overview-search"]'));
+const phonePlace = (trigger: HTMLElement): Pick<PhoneSheetState, "place" | "board"> => {
+  const screen = trigger.closest("[data-mobile2-screen]");
+  return { place: isOverviewScreen(screen) ? "overview" : "project", board: Boolean(screen?.querySelector("[data-phone-kanban]")) };
+};
 
 /**
  * The product's `MobileSheet`, opened through `mobileNav` under the name the
@@ -694,13 +828,29 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
     if (glass) document.documentElement.dataset.irGlass = "";
   }, [glass]);
 
-  /* An intercepted product trigger says it is expanded while its surface is open. */
+  /* An intercepted product trigger says it is expanded while its surface is open, and collapsed once it has closed.
+     What it said before the prototype touched it comes back when the prototype goes. */
+  const expandedWas = useRef(new Map<HTMLElement, string | null>());
   useEffect(() => {
     const trigger = open?.returnTo;
     if (!trigger || trigger.dataset.irControl) return;
+    if (!expandedWas.current.has(trigger)) expandedWas.current.set(trigger, trigger.getAttribute("aria-expanded"));
     trigger.setAttribute("aria-expanded", "true");
     return () => trigger.setAttribute("aria-expanded", "false");
   }, [open]);
+  useEffect(() => {
+    const touched = expandedWas.current;
+    return () => {
+      for (const [trigger, value] of touched) {
+        if (value === null) trigger.removeAttribute("aria-expanded");
+        else trigger.setAttribute("aria-expanded", value);
+      }
+    };
+  }, []);
+  /* Each of them opens a dialog here (a menu, Settings), where the product declares a menu. */
+  useDialogTriggers(direction !== null && !phone, "[data-bar-more], .kb .card [data-menu], [data-rail-menu]");
+  useNoticeBand((noRail || ownRail) && !phone);
+  const overviewHere = useOverviewHere(!phone);
 
   /* The phone: the sheet is the product's, so leaving it by Back, the handle, the scrim or × ends it here too. */
   const lastNavSheet = useRef(navState.sheet);
@@ -732,24 +882,28 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
   useIntercept(direction !== null && !phone, "[data-bar-more]", (trigger) => setOpen({ kind: "menu", menu: "board", anchor: anchorOf(trigger), returnTo: trigger }));
   useIntercept(direction !== null && !phone, ".kb .card [data-menu]", (trigger) => setOpen({ kind: "menu", menu: "card", anchor: anchorOf(trigger), returnTo: trigger }));
   useIntercept(direction === "A" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "menu", menu: "rail", anchor: anchorOf(trigger), returnTo: trigger }));
-  useIntercept(direction === "B" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "settings", anchor: null, scope: "delegatus", returnTo: trigger }));
-  /* The phone's "⋯" belongs to the screen it is on. A pipeline's menu (W10) is left as it is. */
+  useIntercept(direction === "B" && !phone, "[data-rail-menu]", (trigger) => setOpen({ kind: "settings", anchor: null, scope: "delegatus", project: !overviewHere, returnTo: trigger }));
+  /* The phone's "⋯" belongs to the screen it is on. The Overview is a "board" screen with no project chosen:
+     it has its own menu, as today's does. A pipeline's menu (W10) is left as it is. */
   const PHONE_MENUS: Record<string, string> = { board: "phoneBoard", chat: "phoneConversation", task: "phoneTask" };
   useIntercept(direction !== null && phone, '[data-mobile2-open="menu"]', (trigger) => {
     const screen = trigger.closest<HTMLElement>("[data-mobile2-screen]")?.dataset.mobile2Screen ?? "";
-    const menu = PHONE_MENUS[screen];
+    const where = phonePlace(trigger);
+    const menu = screen === "board" && where.place === "overview" ? "phoneOverview" : PHONE_MENUS[screen];
     if (!menu) return false;
-    openPhone({ sheet: "menu", menu, view: null, scope: "project" });
+    openPhone({ sheet: "menu", menu, view: null, scope: where.place === "overview" ? "delegatus" : "project", ...where });
   });
   /* A pipeline's menu keeps its own face; its "Board menu" row leads to the regrouped board menu. */
-  useIntercept(direction !== null && phone, '[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]', () => openPhone({ sheet: "menu", menu: "phoneBoard", view: null, scope: "project" }));
+  useIntercept(direction !== null && phone, '[data-mobile2-pipeline-menu] [data-mobile2-menu-row="board"]', () => openPhone({ sheet: "menu", menu: "phoneBoard", view: null, scope: "project", place: "project", board: true }));
   /* The phone's title already opens the projects; the sidebar variants give that sheet the rail's missing functions. */
-  useIntercept((noRail || ownRail) && phone, '[data-mobile2-title][data-mobile2-open="projects"]', () => openPhone({ sheet: "projects", menu: null, view: null, scope: "delegatus" }));
+  useIntercept((noRail || ownRail) && phone, '[data-mobile2-title][data-mobile2-open="projects"]', (trigger) => openPhone({ sheet: "projects", menu: null, view: null, scope: "delegatus", ...phonePlace(trigger) }));
 
   /* Variants 1 and 7 on the desktop: the header's title is the switcher, and one
      chip is the system. Every header that names where the operator is carries
      them: the project board's, the bar of a loading or empty project, and the
      Overview's title row (with or without a board under it). */
+  /* The rail's toggle is a different button open and closed (in variant 2, hidden: the one restore control); focus moves to the new one. */
+  const toggled = useRef(false);
   const [lead, leadHost] = useSlot(noRail && !phone, LEADS);
   const [status] = useSlot(noRail && !phone, STATUS_SLOTS);
   useEffect(() => {
@@ -768,7 +922,8 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
         const entry = document.querySelector<HTMLElement>('[data-ir-control="shell:project"]');
         setOpen((was) => (was?.kind === "palette" ? null : { kind: "palette", anchor: entry?.getBoundingClientRect() ?? null, returnTo: active ?? entry }));
       } else if (toggle) {
-        if (!railOpen) setRailField((count) => count + 1);
+        /* B is the toggle's key: focus follows it to the control that undoes it, as a press of the control does. */
+        toggled.current = true;
         setRailOpen(!railOpen);
       } else {
         setRailOpen(true);
@@ -778,8 +933,6 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [phone, noRail, ownRail, variant, railOpen]);
-  /* The rail's toggle is a different button open and closed; focus moves to the new one. */
-  const toggled = useRef(false);
   useEffect(() => {
     if (!toggled.current) return;
     toggled.current = false;
@@ -789,9 +942,9 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
   /** A row that leads somewhere: Settings in direction B, the board menu from a task or a conversation. */
   const rowAction = (surface: "desktop" | "phone", menu: string): RowAction => (entry) => {
     if (direction === "B" && (entry.key === "settings-project" || entry.key === "settings")) {
-      const scope = entry.key === "settings-project" || menu.startsWith("phone") ? "project" : "delegatus";
+      const scope = entry.key === "settings-project" || (menu.startsWith("phone") && menu !== "phoneOverview") ? "project" : "delegatus";
       if (surface === "phone") setPhoneSheet((was) => (was ? { ...was, view: "settings", scope } : was));
-      else setOpen((was) => ({ kind: "settings", anchor: null, scope, returnTo: was?.returnTo ?? null }));
+      else setOpen((was) => ({ kind: "settings", anchor: null, scope, project: !overviewHere, returnTo: was?.returnTo ?? null }));
       return true;
     }
     if (entry.face && surface === "phone") { setPhoneSheet((was) => (was ? { ...was, menu: entry.face!, view: null } : was)); return true; }
@@ -800,7 +953,7 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
 
   const openSystem = (trigger: HTMLElement) => setOpen({ kind: "system", anchor: trigger.getBoundingClientRect(), returnTo: trigger });
   const openSettings = (trigger: HTMLElement | null) => setOpen((was) => direction === "B"
-    ? { kind: "settings", anchor: null, scope: "delegatus", returnTo: trigger ?? was?.returnTo ?? null }
+    ? { kind: "settings", anchor: null, scope: "delegatus", project: !overviewHere, returnTo: trigger ?? was?.returnTo ?? null }
     : { kind: "menu", menu: "rail", anchor: trigger?.getBoundingClientRect() ?? new DOMRect(8, 8, 0, 0), returnTo: trigger ?? was?.returnTo ?? null });
   const railMenu = MENUS_A.rail!;
   const flatSettings = [...railMenu.promoted, ...railMenu.rows.flatMap((entry) => entry.into ?? [entry])];
@@ -825,13 +978,13 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
   } else if (!phone && open?.kind === "palette") {
     surface = (
       <Surface key="palette" open={open} width={380} label={t.goTo} onClose={close} name="palette">
-        <Palette lang={lang} phone={false} onSettings={() => openSettings(null)} settingsRows={direction === "B" ? null : flatSettings} />
+        <Palette lang={lang} phone={false} onSettings={() => openSettings(null)} settingsRows={direction === "B" ? null : flatSettings} overview={overviewHere} />
       </Surface>
     );
   } else if (!phone && open?.kind === "system") {
     surface = <Surface key="system" open={open} width={320} label={t.system} onClose={close} name="system"><SystemPanel lang={lang} /></Surface>;
   } else if (!phone && open?.kind === "settings") {
-    surface = <Surface key="settings" open={open} width={Math.min(720, innerWidth - 32)} label={t.settings} onClose={close} name="settings"><SettingsPlace lang={lang} phone={false} scope={open.scope ?? "delegatus"} onClose={close} /></Surface>;
+    surface = <Surface key="settings" open={open} width={Math.min(720, innerWidth - 32)} label={t.settings} onClose={close} name="settings"><SettingsPlace lang={lang} phone={false} scope={open.scope ?? "delegatus"} withProject={open.project !== false} onClose={close} /></Surface>;
   }
 
   let sheet: ReactNode = null;
@@ -839,15 +992,18 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
     const closeSheet = () => nav.closeSheet();
     /* The product's own sheet title (the task's or the conversation's title, the project) heads the regrouped menu. */
     const productTitle = document.querySelector(`[data-mobile2-sheet="${phoneSheet.sheet}"] [data-mobile2-sheet-header] h2`)?.textContent ?? null;
-    const menu = phoneSheet.menu ? menus[phoneSheet.menu] ?? null : null;
+    const whole = phoneSheet.menu ? menus[phoneSheet.menu] ?? null : null;
+    /* An Overview with nothing on it draws no board, and so has no hidden work to open. */
+    const drawn = (rows: Row[]) => (phoneSheet.board ? rows : rows.filter((entry) => entry.key !== "hidden"));
+    const menu = whole && phoneSheet.menu === "phoneOverview" ? { ...whole, promoted: drawn(whole.promoted), rows: drawn(whole.rows) } : whole;
     if (phoneSheet.view === "settings") {
       sheet = (
         <PhoneSheet state={phoneSheet} title={t.settings} onClose={closeSheet}>
-          <SettingsPlace lang={lang} phone scope={phoneSheet.scope} onClose={closeSheet} backLabel={menu?.title[lang] ?? t.projects} onBack={() => setPhoneSheet((was) => (was ? { ...was, view: null } : was))} />
+          <SettingsPlace lang={lang} phone scope={phoneSheet.scope} withProject={phoneSheet.place === "project"} onClose={closeSheet} backLabel={menu?.title[lang] ?? t.projects} onBack={() => setPhoneSheet((was) => (was ? { ...was, view: null } : was))} />
         </PhoneSheet>
       );
     } else if (menu && phoneSheet.menu) {
-      const title = phoneSheet.menu === "phoneBoard" ? menu.title[lang] : productTitle ?? menu.title[lang];
+      const title = phoneSheet.menu === "phoneBoard" || phoneSheet.menu === "phoneOverview" ? menu.title[lang] : productTitle ?? menu.title[lang];
       sheet = (
         <PhoneSheet state={phoneSheet} title={title} onClose={closeSheet} extra={direction === "B" && phoneSheet.menu === "phoneConversation" ? titleControls : undefined}>
           <MenuView key={phoneSheet.menu} menu={menu} name={phoneSheet.menu} lang={lang} onRow={rowAction("phone", phoneSheet.menu)} />
@@ -856,7 +1012,7 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
     } else if (phoneSheet.sheet === "projects") {
       sheet = (
         <PhoneSheet state={phoneSheet} title={productTitle ?? t.projects} onClose={closeSheet}>
-          <Palette lang={lang} phone onSettings={() => setPhoneSheet((was) => (was ? { ...was, view: "settings", scope: "delegatus" } : was))} settingsRows={direction === "B" ? null : flatSettings} />
+          <Palette lang={lang} phone onSettings={() => setPhoneSheet((was) => (was ? { ...was, view: "settings", scope: "delegatus" } : was))} settingsRows={direction === "B" ? null : flatSettings} overview={phoneSheet.place === "overview"} />
         </PhoneSheet>
       );
     }
@@ -870,13 +1026,14 @@ export function InterfaceRedesignInner({ variant, children }: { variant: Redesig
       <style>{CSS}</style>
       {ownRail && !phone ? (
         <Rail
-          lang={lang} collapsible={variant === 3} open={railOpen} focusField={railField}
+          lang={lang} collapsible={variant === 3} open={railOpen} focusField={railField} overview={overviewHere}
+          showing={open?.kind === "system" ? "system" : open?.kind === "settings" || (open?.kind === "menu" && open.menu === "rail") ? "settings" : null}
           onToggle={() => { toggled.current = true; setRailOpen((was) => !was); }}
           onSystem={openSystem} onSettings={openSettings}
         />
       ) : null}
       {ownRail && !phone && variant === 2 && !railOpen ? (
-        <div className="ir-restore"><button type="button" className="ir-icon" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={() => { toggled.current = true; setRailOpen(true); }}><PanelLeftOpen aria-hidden /></button></div>
+        <div className="ir-restore" data-ir-rail="hidden"><button type="button" className="ir-icon" aria-label={t.expand} title={t.expand} data-ir-control="rail:toggle" onClick={() => { toggled.current = true; setRailOpen(true); }}><PanelLeftOpen aria-hidden /></button></div>
       ) : null}
       <div data-ir-stage="" className="ir-stage">{children}</div>
       {lead ? createPortal(
@@ -909,14 +1066,16 @@ const CSS = `
 [data-ir-shell="none"] [data-rail-restore], [data-ir-shell="own"] [data-rail-restore] { display: none; }
 [data-ir-shell="none"] .ir-stage > div > div:has(> [data-rail-restore]), [data-ir-shell="own"] .ir-stage > div > div:has(> [data-rail-restore]) { display: none; }
 [data-ir-shell="none"] :is([data-bar="project"], [data-project-bar]) [data-bar-group="where"] > h1, [data-ir-shell="none"] ${OVERVIEW_TITLE_ROW} > h1 { display: none; }
-/* Without the rail the Overview's bar reaches its wide face, where its tools
-   would end under the Viewer's island and the notice hanging from it. The bar
-   keeps a reserve as wide as the notice (360 px at most, 16 px from the edge).
-   The project board's header is one row where today's wraps into two at
-   1000 px, so the pane under it starts higher: the island's gap closes from
-   16 to 8 px, and the notice ends above the pane's head. */
-[data-ir-shell="none"] .kb .bar[data-bar="overview"] { padding-right: 384px; }
-[data-ir-shell="none"] .kb .bar[data-bar="project"] [data-bar-island-slot] > div { gap: 8px; }
+/* The attention notice's band (useNoticeBand): a row of the layout under the
+   header, present while a notice is shown. The notice is pinned to it and
+   drawn as one line (its question, then the conversation's title), so the row
+   is 44 px. Nothing else is in the row, whatever the header's height. */
+[data-ir-notice-band] { flex-shrink: 0; box-sizing: border-box; border-bottom: 1px solid var(--border-default); background: var(--surface-card); }
+html[data-ir-notice-band] [data-attention-toast] { position: fixed; top: var(--ir-notice-top); right: var(--ir-notice-right); max-width: min(560px, var(--ir-notice-max)); align-items: center; padding: 3px 6px 3px 12px; box-shadow: none; }
+html[data-ir-notice-band] [data-attention-toast-open] { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+html[data-ir-notice-band] [data-attention-toast-open] > span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+html[data-ir-notice-band] [data-attention-toast-title] { flex-shrink: 0; }
+html[data-ir-notice-band] [data-attention-toast-dismiss] { margin-top: 0; }
 /* A phone sheet the prototype draws is the product's MobileSheet under the product's own name; the product's copy of that sheet waits hidden under it. */
 html[data-ir-phone-sheet] [data-mobile2-scrim]:not([data-ir-own] > [data-mobile2-scrim]) { display: none; }
 
@@ -1129,6 +1288,7 @@ html[data-ir-glass] :is(.ir-stage > div > aside, .ir-rail, .kb .bar, .kb .col-he
 }
 /* The engine's name in the rail's limits footer is drawn in the engine's tint, 3.03:1 on today's card: on glass it takes the text ink. */
 html[data-ir-glass] .ir-stage > div > aside button[aria-haspopup="dialog"] > div > span:first-child { color: var(--color-primary) !important; }
+html[data-ir-glass] [data-ir-notice-band] { background: var(--glass-fill); border-color: var(--glass-edge); }
 html[data-ir-glass] .ir-settings-panes .ir-settings-nav { background: color-mix(in srgb, var(--surface-sunken) 50%, transparent); }
 html[data-ir-glass] :is(.ir-promoted, .ir-segment button[aria-pressed="true"]) { background: color-mix(in srgb, var(--surface-card) 82%, transparent); }
 @media (prefers-reduced-transparency: reduce) {

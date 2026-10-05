@@ -131,6 +131,18 @@ Maximum phone project-menu shape: 27 logical rows, including two view choices, s
 
 The phone Overview overflow has a smaller branch: hidden work where the board is drawn, sound/options, keep-awake when supported, activity, team, four onboarding entries, and update (`src/components/OverviewBoard.tsx:255`). That is at most ten logical rows. Telemetry, linked settings, relay, and project policies are reached through a project's board menu. Identical overflow icons therefore lead to different configuration coverage.
 
+The viability review of the prototypes showed that this branch needs ids of its own: a redesign that reads the phone Overview as a project's board gives it a project's menu. No project is chosen on the Overview, so every entry below is installation-wide.
+
+| ID | Function in the phone Overview overflow | Source | Importance |
+| --- | --- | --- | --- |
+| V1 | Open hidden work, where the Overview draws its board | `src/components/OverviewBoard.tsx:260` | C/R: recover deliberately hidden work across projects |
+| V2 | Sound on or off; sound levels | `src/components/OverviewBoard.tsx:270` | R: device preference |
+| V3 | Keep the screen awake when supported | `src/components/OverviewBoard.tsx:279` | C/U: phone reading preference |
+| V4 | Open the Activity page | `src/components/OverviewBoard.tsx:281` | R: inspection |
+| V5 | Open the Team page | `src/components/OverviewBoard.tsx:282` | R: administration |
+| V6 | Four onboarding entries: setup guide, interface walkthrough, agent mapping, dictation | `src/components/OverviewBoard.tsx:283`; `src/components/onboarding/menuEntries.tsx:13` | R: setup |
+| V7 | Updates | `src/components/OverviewBoard.tsx:284` | R: maintenance |
+
 The compact desktop Create menu contains new task and new agent; wide mode exposes those as separate controls (`src/components/ProjectBar.tsx:137`, `:151`; `src/components/kanban/KanbanBoard.tsx:1353`). This is already an example of collapsing optional chrome without removing a capability.
 
 ## Work, pipeline, and reader overflow

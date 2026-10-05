@@ -6,7 +6,8 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
@@ -16,21 +17,41 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-en-system": {
       "opened": {
         "name": "system",
         "modal": "true",
-        "label": "System"
+        "label": "System",
+        "role": "dialog"
       },
       "focusOnOpen": "system:resources",
       "tabStops": 14,
-      "focusAfterEscape": "shell:system"
+      "focusAfterEscape": "shell:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-en-palette-system": {
       "drill": {
@@ -46,11 +67,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-en-empty": {
       "leads": [
@@ -60,11 +91,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-en-loading": {
       "leads": [
@@ -74,17 +115,28 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-ctrl-k": {
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
@@ -94,21 +146,41 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-system": {
       "opened": {
         "name": "system",
         "modal": "true",
-        "label": "System"
+        "label": "System",
+        "role": "dialog"
       },
       "focusOnOpen": "system:resources",
       "tabStops": 14,
-      "focusAfterEscape": "shell:system"
+      "focusAfterEscape": "shell:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-palette-system": {
       "drill": {
@@ -124,11 +196,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-empty": {
       "leads": [
@@ -138,11 +220,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-loading": {
       "leads": [
@@ -152,21 +244,165 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Go to a project, an agent or a setting"
+        "label": "Go to a project, an agent or a setting",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v2-1440-en-rail-settings": {
       "opened": {
         "name": "menu-rail",
         "modal": "true",
-        "label": "Delegatus"
+        "label": "Delegatus",
+        "role": "dialog"
       },
       "focusOnOpen": "rail:language:0",
       "tabStops": 14,
-      "focusAfterEscape": "rail:settings"
+      "focusAfterEscape": "rail:settings",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
+    },
+    "v2-1440-en-rail-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "System",
+        "role": "dialog"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "rail:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
+    },
+    "v2-1440-en-hide-by-button": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1440-en-hide-by-B": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1000-en-hide-by-button": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1000-en-hide-by-B": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
     },
     "v3-1440-en-slash": {
       "focus": "rail:field"
@@ -178,11 +414,21 @@
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Project"
+        "label": "Project",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 10,
       "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      },
       "drill": {
         "in": "board:back",
         "out": "board:policies"
@@ -192,61 +438,121 @@
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Task"
+        "label": "Task",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 22,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-en-board-menu": {
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Project"
+        "label": "Project",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 6,
-      "focusAfterEscape": "[data-bar-more]"
+      "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-en-card-menu": {
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Task"
+        "label": "Task",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 30,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-board-menu": {
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Project"
+        "label": "Project",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 6,
-      "focusAfterEscape": "[data-bar-more]"
+      "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-en-card-menu": {
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Task"
+        "label": "Task",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 30,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-en-rail-settings": {
       "opened": {
         "name": "settings",
         "modal": "true",
-        "label": "Settings"
+        "label": "Settings",
+        "role": "dialog"
       },
       "focusOnOpen": "settings:close",
       "tabStops": 26,
-      "focusAfterEscape": "[data-rail-menu]"
+      "focusAfterEscape": "[data-rail-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v0-390-en-board-menu": {
       "before": {
@@ -275,6 +581,80 @@
         "sheet": null,
         "history": 3,
         "scroll": 40
+      }
+    },
+    "v0-390-en-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v0-390-en-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [],
+        "ofAProject": []
+      }
+    },
+    "v0-390-en-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v0-390-en-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [],
+        "ofAProject": []
       }
     },
     "v0-390-en-task-menu": {
@@ -384,6 +764,91 @@
         "scroll": 40
       }
     },
+    "v4-390-en-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v4-390-en-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:activity",
+          "phoneOverview:team",
+          "phoneOverview:notify",
+          "phoneOverview:delegatus"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v4-390-en-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v4-390-en-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:activity",
+          "phoneOverview:team",
+          "phoneOverview:notify",
+          "phoneOverview:delegatus"
+        ],
+        "ofAProject": []
+      }
+    },
     "v4-390-en-task-menu": {
       "before": {
         "screen": "task",
@@ -491,6 +956,109 @@
         "scroll": 40
       }
     },
+    "v5-390-en-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v5-390-en-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Settings",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v5-390-en-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v5-390-en-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Settings",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
     "v5-390-en-task-menu": {
       "before": {
         "screen": "task",
@@ -596,6 +1164,109 @@
         "sheet": null,
         "history": 3,
         "scroll": 40
+      }
+    },
+    "v7-390-en-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v7-390-en-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Settings",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v7-390-en-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v7-390-en-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Overview",
+        "rows": [
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Settings",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
       }
     },
     "v7-390-en-task-menu": {
@@ -740,7 +1411,8 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
@@ -750,21 +1422,41 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-uk-system": {
       "opened": {
         "name": "system",
         "modal": "true",
-        "label": "Система"
+        "label": "Система",
+        "role": "dialog"
       },
       "focusOnOpen": "system:resources",
       "tabStops": 14,
-      "focusAfterEscape": "shell:system"
+      "focusAfterEscape": "shell:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-uk-palette-system": {
       "drill": {
@@ -780,11 +1472,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-uk-empty": {
       "leads": [
@@ -794,11 +1496,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v1-1440-uk-loading": {
       "leads": [
@@ -808,17 +1520,28 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-ctrl-k": {
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
@@ -828,21 +1551,41 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-system": {
       "opened": {
         "name": "system",
         "modal": "true",
-        "label": "Система"
+        "label": "Система",
+        "role": "dialog"
       },
       "focusOnOpen": "system:resources",
       "tabStops": 14,
-      "focusAfterEscape": "shell:system"
+      "focusAfterEscape": "shell:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-palette-system": {
       "drill": {
@@ -858,11 +1601,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-empty": {
       "leads": [
@@ -872,11 +1625,21 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-loading": {
       "leads": [
@@ -886,21 +1649,165 @@
       "opened": {
         "name": "palette",
         "modal": "true",
-        "label": "Перейти до проєкту, агента чи налаштування"
+        "label": "Перейти до проєкту, агента чи налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "palette:field",
       "tabStops": 32,
-      "focusAfterEscape": "shell:project"
+      "focusAfterEscape": "shell:project",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v2-1440-uk-rail-settings": {
       "opened": {
         "name": "menu-rail",
         "modal": "true",
-        "label": "Delegatus"
+        "label": "Delegatus",
+        "role": "dialog"
       },
       "focusOnOpen": "rail:language:0",
       "tabStops": 14,
-      "focusAfterEscape": "rail:settings"
+      "focusAfterEscape": "rail:settings",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
+    },
+    "v2-1440-uk-rail-system": {
+      "opened": {
+        "name": "system",
+        "modal": "true",
+        "label": "Система",
+        "role": "dialog"
+      },
+      "focusOnOpen": "system:resources",
+      "tabStops": 14,
+      "focusAfterEscape": "rail:system",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
+    },
+    "v2-1440-uk-hide-by-button": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1440-uk-hide-by-B": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1000-uk-hide-by-button": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
+    },
+    "v2-1000-uk-hide-by-B": {
+      "before": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "BODY",
+        "focusIn": "elsewhere"
+      },
+      "hidden": {
+        "rails": 0,
+        "width": 0,
+        "restoreControls": 1,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "restore"
+      },
+      "restored": {
+        "rails": 1,
+        "width": 208,
+        "restoreControls": 0,
+        "toggles": 1,
+        "focus": "rail:toggle",
+        "focusIn": "rail"
+      }
     },
     "v3-1440-uk-slash": {
       "focus": "rail:field"
@@ -912,11 +1819,21 @@
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Проєкт"
+        "label": "Проєкт",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 10,
       "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      },
       "drill": {
         "in": "board:back",
         "out": "board:policies"
@@ -926,61 +1843,121 @@
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Задача"
+        "label": "Задача",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 22,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-uk-board-menu": {
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Проєкт"
+        "label": "Проєкт",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 6,
-      "focusAfterEscape": "[data-bar-more]"
+      "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-uk-card-menu": {
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Задача"
+        "label": "Задача",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 30,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-board-menu": {
       "opened": {
         "name": "menu-board",
         "modal": "true",
-        "label": "Проєкт"
+        "label": "Проєкт",
+        "role": "dialog"
       },
       "focusOnOpen": "board:search",
       "tabStops": 6,
-      "focusAfterEscape": "[data-bar-more]"
+      "focusAfterEscape": "[data-bar-more]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v7-1440-uk-card-menu": {
       "opened": {
         "name": "menu-card",
         "modal": "true",
-        "label": "Задача"
+        "label": "Задача",
+        "role": "dialog"
       },
       "focusOnOpen": "card:status:0",
       "tabStops": 30,
-      "focusAfterEscape": "card [data-menu]"
+      "focusAfterEscape": "card [data-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          null,
+          "true",
+          "false"
+        ]
+      }
     },
     "v5-1440-uk-rail-settings": {
       "opened": {
         "name": "settings",
         "modal": "true",
-        "label": "Налаштування"
+        "label": "Налаштування",
+        "role": "dialog"
       },
       "focusOnOpen": "settings:close",
       "tabStops": 26,
-      "focusAfterEscape": "[data-rail-menu]"
+      "focusAfterEscape": "[data-rail-menu]",
+      "popup": {
+        "declares": "dialog",
+        "role": "dialog",
+        "expanded": [
+          "false",
+          "true",
+          "false"
+        ]
+      }
     },
     "v0-390-uk-board-menu": {
       "before": {
@@ -1009,6 +1986,80 @@
         "sheet": null,
         "history": 3,
         "scroll": 40
+      }
+    },
+    "v0-390-uk-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v0-390-uk-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [],
+        "ofAProject": []
+      }
+    },
+    "v0-390-uk-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "product:menu",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "product:menu",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v0-390-uk-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [],
+        "ofAProject": []
       }
     },
     "v0-390-uk-task-menu": {
@@ -1118,6 +2169,91 @@
         "scroll": 40
       }
     },
+    "v4-390-uk-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v4-390-uk-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:activity",
+          "phoneOverview:team",
+          "phoneOverview:notify",
+          "phoneOverview:delegatus"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v4-390-uk-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v4-390-uk-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:activity",
+          "phoneOverview:team",
+          "phoneOverview:notify",
+          "phoneOverview:delegatus"
+        ],
+        "ofAProject": []
+      }
+    },
     "v4-390-uk-task-menu": {
       "before": {
         "screen": "task",
@@ -1225,6 +2361,109 @@
         "scroll": 40
       }
     },
+    "v5-390-uk-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v5-390-uk-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Налаштування",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v5-390-uk-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v5-390-uk-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Налаштування",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
     "v5-390-uk-task-menu": {
       "before": {
         "screen": "task",
@@ -1330,6 +2569,109 @@
         "sheet": null,
         "history": 3,
         "scroll": 40
+      }
+    },
+    "v7-390-uk-overview-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v7-390-uk-overview-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:hidden",
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Налаштування",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
+      }
+    },
+    "v7-390-uk-overview-empty-menu": {
+      "before": {
+        "screen": "board",
+        "sheet": null,
+        "history": 2,
+        "scroll": null
+      },
+      "opened": {
+        "screen": "board",
+        "sheet": "menu-phoneOverview",
+        "history": 3,
+        "scroll": null
+      },
+      "back": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      },
+      "shortDrag": "menu-phoneOverview",
+      "longDrag": null,
+      "closeButton": null,
+      "scrim": {
+        "screen": "board",
+        "sheet": null,
+        "history": 3,
+        "scroll": null
+      }
+    },
+    "v7-390-uk-overview-empty-menu-scope": {
+      "screen": "board",
+      "menu": {
+        "title": "Огляд",
+        "rows": [
+          "phoneOverview:settings"
+        ],
+        "ofAProject": []
+      },
+      "settings": {
+        "title": "Налаштування",
+        "rows": [
+          "settings:menu:back",
+          "settings:section:general",
+          "settings:section:notifications",
+          "settings:section:setup",
+          "settings:section:connections",
+          "settings:section:people"
+        ],
+        "ofAProject": []
       }
     },
     "v7-390-uk-task-menu": {
