@@ -105,7 +105,7 @@ test("a conversation whose senders have never been read shows no row until they 
 
 test("Alt+arrow steps the conversation that holds the focus, or the only one", async () => {
   const press = async (key: "ArrowUp" | "ArrowDown") => {
-    await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }) as unknown as Event); });
+    await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true })); });
   };
   const scrolled = (id: string) => {
     const scroller = host().querySelector(`[data-pane="${id}"] > div`) as HTMLElement;
@@ -124,8 +124,8 @@ test("Alt+arrow steps the conversation that holds the focus, or the only one", a
   expect(reader.a).toBeUndefined();
   expect(reader.b).toEqual([-1]);
   /* A bare arrow, or Alt with another modifier, is the composer's own. */
-  await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }) as unknown as Event); });
-  await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, shiftKey: true, bubbles: true }) as unknown as Event); });
+  await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); });
+  await act(async () => { dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, shiftKey: true, bubbles: true })); });
   expect(reader.b).toEqual([-1]);
 
   await render({ id: "a", own: 3 });
