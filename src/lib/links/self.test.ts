@@ -253,10 +253,14 @@ async function listen(server: http.Server): Promise<number> {
   return address.port;
 }
 async function close(server: http.Server): Promise<void> { await new Promise((resolve) => server.close(resolve)); }
-/** Answers one request with the real self-check route. */
+/** Answers one request with the real self-check route, after the two headers
+ * Next writes before any route runs (`base-server.js`: `x-forwarded-host ??=
+ * host`, `x-forwarded-proto ??=` the socket's scheme). */
 async function answerAsRoute(incoming: http.IncomingMessage, outgoing: http.ServerResponse, rewrite: Record<string, string> = {}): Promise<void> {
   const headers = new Headers();
   for (const [name, value] of Object.entries({ ...incoming.headers, ...rewrite })) if (typeof value === "string") headers.set(name, value);
+  if (!headers.has("x-forwarded-host") && headers.has("host")) headers.set("x-forwarded-host", headers.get("host")!);
+  if (!headers.has("x-forwarded-proto")) headers.set("x-forwarded-proto", (incoming.socket as { encrypted?: boolean }).encrypted ? "https" : "http");
   const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
   outgoing.writeHead(response.status, Object.fromEntries(response.headers));
   outgoing.end(Buffer.from(await response.arrayBuffer()));
@@ -399,20 +403,27 @@ test.each(KEPT)("the address check passes behind %s", async (_shape, address, sh
   expect(await checkBehind(address, shape)).toMatchObject({ code: "ok" });
 });
 
-const REWRITTEN: [string, string, ProxyShape, Record<string, string | null>][] = [
+const REWRITTEN: [string, string, ProxyShape, Record<string, string | null | string[]>][] = [
   // The operator's proxy in #2516: Host is the upstream, and only X-Forwarded-Host still names the address.
   ["Caddy with header_up Host set to the upstream", "https://board.example.test",
     (headers, upstream) => ({ ...headers, host: upstream, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https", "x-forwarded-host": headers.host }),
-    { host: "{upstream}", forwardedHost: "board.example.test", forwardedProto: "https", forwarded: null }],
+    { host: "{upstream}", forwardedHost: "board.example.test", forwardedProto: "https", forwarded: null, unknown: [] }],
   ["nginx proxy_pass with no Host line, which sends the upstream", "https://board.example.test",
     (headers, upstream) => ({ ...headers, host: upstream }),
-    { host: "{upstream}", forwardedHost: null, forwardedProto: null, forwarded: null }],
+    { host: "{upstream}", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
+  // What Next would have written anyway cannot be told from what this proxy wrote.
+  ["a proxy that sends the upstream as Host and as X-Forwarded-Host, with X-Forwarded-Proto http", "https://board.example.test",
+    (headers, upstream) => ({ ...headers, host: upstream, "x-forwarded-host": upstream, "x-forwarded-proto": "http" }),
+    { host: "{upstream}", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
   ["a proxy that sends localhost and describes the request in Forwarded", "https://board.example.test",
     (headers) => ({ ...headers, host: "localhost", forwarded: `host=${headers.host};proto=https` }),
-    { host: "localhost", forwardedHost: null, forwardedProto: null, forwarded: "host=board.example.test;proto=https" }],
+    { host: "localhost", forwardedHost: null, forwardedProto: null, forwarded: "host=board.example.test;proto=https", unknown: ["forwardedHost", "forwardedProto"] }],
   ["a proxy that keeps the name and writes the upstream port", "https://board.example.test",
     (headers) => ({ ...headers, host: `${name(headers.host)}:8898` }),
-    { host: "board.example.test:8898", forwardedHost: null, forwardedProto: null, forwarded: null }],
+    { host: "board.example.test:8898", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
+  ["a proxy that writes the upstream port into Host and the bare name into X-Forwarded-Host", "https://board.example.test",
+    (headers) => ({ ...headers, host: `${name(headers.host)}:8898`, "x-forwarded-host": name(headers.host), "x-forwarded-proto": "https" }),
+    { host: "board.example.test:8898", forwardedHost: "board.example.test", forwardedProto: "https", forwarded: null, unknown: [] }],
 ];
 test.each(REWRITTEN)("the address check fails behind %s and reports what arrived", async (_shape, address, shape, seen) => {
   let upstream = "";

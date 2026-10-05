@@ -295,10 +295,12 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
                   {arrived ? <div data-linked-host-seen="" className="space-y-1">
                     <p>{t("links.hostSeen.expected", { expected: arrived.expected })}</p>
                     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
-                      {([["Host", arrived.seen.host], ["X-Forwarded-Host", arrived.seen.forwardedHost], ["X-Forwarded-Proto", arrived.seen.forwardedProto], ["Forwarded", arrived.seen.forwarded]] as const).map(([name, header]) =>
-                        <div key={name} className="contents"><dt>{name}</dt><dd className={`min-w-0 break-all ${header === null ? "" : "font-mono"}`}>{header ?? t("links.hostSeen.absent")}</dd></div>)}
+                      {([["Host", "host"], ["X-Forwarded-Host", "forwardedHost"], ["X-Forwarded-Proto", "forwardedProto"], ["Forwarded", "forwarded"]] as const).map(([name, key]) => {
+                        const header = arrived.seen[key];
+                        return <div key={name} className="contents"><dt>{name}</dt><dd className={header === null ? "min-w-0" : "min-w-0 break-all font-mono"}>{header ?? t(arrived.seen.unknown.includes(key) ? "links.hostSeen.unknown" : "links.hostSeen.absent")}</dd></div>;
+                      })}
                     </dl>
-                    <p>{t(forwardedNamesAddress(arrived.expected, arrived.seen.forwardedHost) ? "links.hostSeen.actionForwarded" : "links.hostSeen.action")}</p>
+                    <p>{t(forwardedNamesAddress(arrived.expected, arrived.seen) ? "links.hostSeen.actionForwarded" : "links.hostSeen.action")}</p>
                   </div> : null}
                   {severity === "warning" && savedAddress ? <div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 break-words">{t("links.checkFromOther", { address: savedAddress })}</p><LinkCopyButton text={savedAddress} label={t("links.copyAddress")} /></div> : null}
                 </div> : null}

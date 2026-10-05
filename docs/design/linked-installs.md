@@ -577,7 +577,10 @@ install"):
      **What proves the address (#2516).** The route admits each nonce once
      and writes what it read (`Host`, `X-Forwarded-Host`,
      `X-Forwarded-Proto`, `Forwarded`, 200 characters each) into the
-     process's own table of pending probes (`consumeSelfNonce`). The check
+     process's own table of pending probes (`consumeSelfNonce`). Next writes
+     `X-Forwarded-Host` from `Host` and `X-Forwarded-Proto: http` before any
+     route runs when the proxy sent none, so the route keeps a value equal to
+     that as null and names the header in `unknown`: it may be Next's own. The check
      rules on that record. The nonce is 32 random bytes that leave this
      process only inside the probe, and the probe is dialled at the address
      the public name resolves to, on the public port, with the public SNI.
@@ -636,10 +639,15 @@ install"):
     `open-to-internet` when it also arrived vouched. The saved check keeps
     `expected` (the address's host) and `seen` (the four recorded headers),
     and the same error box lists them under the sentence: "Expected Host:
-    {expected}. This server received:", one row per header with "none" for a
-    header that did not arrive, then the action. When `X-Forwarded-Host`
-    still carries the address's name the action says so, since then the proxy
-    knows the name and withholds it from `Host` alone. Nothing here changes
+    {expected}. This server received:", one row per header, then the action.
+    A header listed in `unknown` reads "cannot tell: this server writes this
+    header itself when the proxy sends none", so a proxy that sent no
+    `X-Forwarded-*` never shows two values as received; "none" is left for a
+    header nothing fills in, which is `Forwarded`. When `Host` carries
+    another name and `X-Forwarded-Host` carries the address's, the action
+    says so, since then the proxy knows the name and withholds it from
+    `Host`. A `Host` with the right name and another port gets the general
+    action. Nothing here changes
     the verdict;
   - "The certificate is not valid" (TLS failure);
   - "This server could not reach its own address, so the proxy could not be
@@ -1356,8 +1364,9 @@ vps-2         Not connected                    [Connect this machine]
 | `peer-open` (on A) | {address} is open to the internet: a request that claimed to be local reached it as its owner. Nothing was sent, and the code was cancelled there. Its owner must point the proxy at the port shown in its Settings, then make a new code. | {address} відкрита в інтернет: запит, що видавав себе за локальний, дістався до неї як до власника. Нічого не надіслано, а код там скасовано. Її власник має спрямувати проксі на порт, указаний у її налаштуваннях, і створити новий код. |
 | `host-rewritten` | Your proxy replaces the address it was called at. Keep the Host header in the proxy and point it at 127.0.0.1:{port}. | Ваш проксі підміняє адресу, за якою до нього звернулися. Збережіть заголовок Host у проксі та спрямуйте його на 127.0.0.1:{port}. |
 | `host-rewritten`, what arrived (#2516) | Expected Host: {expected}. This server received: | Очікуваний Host: {expected}. Сервер отримав: |
+| `host-rewritten`, a header Next may have written | cannot tell: this server writes this header itself when the proxy sends none | невідомо: сервер сам дописує цей заголовок, коли проксі його не надсилає |
 | `host-rewritten`, action | Send the Host your proxy was called with: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again. | Надсилайте той Host, з яким звернулися до проксі: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз. |
-| `host-rewritten`, action when `X-Forwarded-Host` names the address | The public name arrived in X-Forwarded-Host alone. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again. | Публічне ім'я дійшло лише в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз. |
+| `host-rewritten`, action when `Host` carries another name and `X-Forwarded-Host` names the address | Host carries another name, and the public name arrived in X-Forwarded-Host. Send it as Host too: in nginx set proxy_set_header Host $http_host; in Caddy remove the header_up Host line. Then check again. | У Host інше ім'я, і публічне ім'я дійшло в X-Forwarded-Host. Надсилайте його і як Host: у nginx задайте proxy_set_header Host $http_host; у Caddy приберіть рядок header_up Host. Потім перевірте адресу ще раз. |
 | `unverified` | This server could not reach its own address, so the proxy could not be checked from here. Make sure it points at 127.0.0.1:{port}. A machine that connects checks it again from outside. | Цей сервер не зміг звернутися до власної адреси, тому проксі звідси не перевірено. Переконайтеся, що він спрямований на 127.0.0.1:{port}. Машина, що під'єднується, перевірить його ще раз ззовні. |
 | code burned | This code was burned after too many wrong attempts. Make a new one. | Цей код анульовано після забагатьох хибних спроб. Створіть новий. |
 

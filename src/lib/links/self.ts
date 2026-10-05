@@ -13,7 +13,9 @@ import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 /** The request line a self-check probe arrived with, as this server's own route read it. */
-export type SeenRequest = { host: string | null; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null };
+/** `unknown` names the headers the route could not tell from the ones Next
+ * writes itself when a proxy sends none; their value is kept as null. */
+export type SeenRequest = { host: string | null; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null; unknown: ("forwardedHost" | "forwardedProto")[] };
 /** `expected` and `seen` accompany `host-rewritten`: the address's own host beside what arrived. */
 export type SelfCheck = { code: CheckCode; at: string; expected?: string; seen?: SeenRequest };
 export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string; saveRevision?: string };

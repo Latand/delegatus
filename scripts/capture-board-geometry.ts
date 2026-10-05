@@ -5852,7 +5852,7 @@ type LinkingFixture = {
   role: "accept" | "connect"; state: string | null; publicUrl: string | null; vouches: boolean;
   peers: unknown[]; grants: unknown[]; used: boolean; connect: { status: number; body: unknown } | null; focus: string;
   /** What a failed Host check recorded beside its code (#2516). */
-  detail?: { expected: string; seen: Record<string, string | null> };
+  detail?: { expected: string; seen: { host: string; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null; unknown: string[] } };
 };
 
 async function linkingMain(): Promise<void> {
@@ -5871,11 +5871,15 @@ async function linkingMain(): Promise<void> {
     "accept-blocked": { fixture: accept({ state: "tls-failure", focus: "[data-linked-state]" }), steps: async () => {} },
     /* The proxy shape of #2516: Host is the upstream and X-Forwarded-Host alone names the address. */
     "accept-host-rewritten": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
-      seen: { host: "127.0.0.1:8898", forwardedHost: "delegatus.example.com", forwardedProto: "https", forwarded: null } } }), steps: async () => {} },
-    /* The longest values the route keeps (200 characters each) must wrap inside the box. */
+      seen: { host: "127.0.0.1:8898", forwardedHost: "delegatus.example.com", forwardedProto: "https", forwarded: null, unknown: [] } } }), steps: async () => {} },
+    /* A proxy that sends no X-Forwarded-*: Next writes both itself, so the route records them as unknown.
+       The longest value the route keeps (200 characters) must wrap inside the box. */
     "accept-host-rewritten-long": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
-      seen: { host: "upstream.internal.example.test:8898", forwardedHost: "upstream.internal.example.test:8898", forwardedProto: "http",
+      seen: { host: "upstream.internal.example.test:8898", forwardedHost: null, forwardedProto: null, unknown: ["forwardedHost", "forwardedProto"],
         forwarded: `for=203.0.113.7;host=delegatus.example.com;proto=https, ${"for=198.51.100.17;by=203.0.113.43, ".repeat(5)}`.slice(0, 200) } } }), steps: async () => {} },
+    /* Host keeps the name and carries the upstream's port: the name was never lost. */
+    "accept-host-rewritten-port": { fixture: accept({ state: "host-rewritten", focus: "[data-linked-host-seen]", detail: { expected: "delegatus.example.com",
+      seen: { host: "delegatus.example.com:8898", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] } } }), steps: async () => {} },
     "accept-code": { fixture: accept({ focus: "[data-pair-code]" }), steps: async (page, lang) => {
       await page.getByRole("button", { name: translate(lang, "links.allow"), exact: true }).click();
       await page.waitForSelector("[data-pair-code-value]");
@@ -5992,11 +5996,15 @@ async function linkingMain(): Promise<void> {
         if (name === "accept-blocked" && !geometry.hasBlocking) report.failures.push(`${tag}: blocker not drawn as blocking`);
         if (fixture.detail) {
           const { expected, seen } = fixture.detail;
-          const action = translate(lang, seen.forwardedHost === expected ? "links.hostSeen.actionForwarded" : "links.hostSeen.action");
+          const forwarded = seen.forwardedHost === expected && !seen.host.startsWith(expected);
+          const action = translate(lang, forwarded ? "links.hostSeen.actionForwarded" : "links.hostSeen.action");
+          if (!forwarded && after.hostSeen.text.includes(translate(lang, "links.hostSeen.actionForwarded"))) report.failures.push(`${tag}: the box says the name arrived in X-Forwarded-Host`);
+          const unknown = after.hostSeen.text.split(translate(lang, "links.hostSeen.unknown")).length - 1;
+          if (unknown !== seen.unknown.length) report.failures.push(`${tag}: ${unknown} headers read as unknown, ${seen.unknown.length} recorded`);
           if (!geometry.hasBlocking || after.hostSeen.rows !== 4) report.failures.push(`${tag}: the box does not list the four headers`);
           if (after.hostSeen.outside) report.failures.push(`${tag}: ${after.hostSeen.outside} header lines leave the box or are clipped`);
           if (after.hostSeen.controls) report.failures.push(`${tag}: the box gained a control`);
-          for (const value of [translate(lang, "links.hostSeen.expected", { expected }), seen.host!, action, seen.forwarded ?? translate(lang, "links.hostSeen.absent")]) {
+          for (const value of [translate(lang, "links.hostSeen.expected", { expected }), seen.host, action, seen.forwarded ?? translate(lang, "links.hostSeen.absent")]) {
             if (!after.hostSeen.text.includes(value)) report.failures.push(`${tag}: the box does not say "${value.slice(0, 40)}"`);
           }
         } else if (after.hostSeen.rows) report.failures.push(`${tag}: header lines drawn without a failed Host check`);
