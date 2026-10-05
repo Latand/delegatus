@@ -1876,3 +1876,346 @@ describe("delivery outcome settlement", () => {
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
 });
+
+describe("frame sets, design variants", () => {
+  /*
+   * A design lane's frames and its measurements (docs/design/frame-sets.md):
+   * four ways to open a set of prototypes and screenshots an agent published,
+   * each mounted into the production pane by the fixture's `frame-sets` case.
+   * Earlier designs were rejected for lying on top of the interface, so the
+   * closed state is proved by measurement: per variant, width and language
+   * the entry is hit-tested at its centre and four corners, intersected with
+   * every other interactive element and with every other feed row, and the
+   * rest of the pane is compared with the same pane without the feature
+   * (`variant=0`). The walk then counts the presses to one frame and to a
+   * chosen variant, steps by key and by swipe, and reads the reply out of
+   * the message field.
+   *
+   * Frames go to `LLV_FRAME_SETS_OUT` (default `.artifacts/frame-sets/`, not
+   * committed); the measurements to `evidence/frame-sets/measurements.json`.
+   */
+  const OUT = path.resolve(process.env.LLV_FRAME_SETS_OUT ?? ".artifacts/frame-sets");
+  const EVIDENCE = path.resolve("evidence/frame-sets");
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, phone: false, pane: 0 },
+    /* A board-node-sized pane. */
+    { name: "pane-440", width: 1000, height: 800, phone: false, pane: 440 },
+    { name: "phone-390", width: 390, height: 844, phone: true, pane: 0 },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  /* The frame the walk goes to: variant 3, its fifth frame (the phone, en). */
+  const TARGET = { variant: 3, index: 4, id: "fixture-3-390-en", before: "fixture-3-440-uk", after: "fixture-3-390-uk", inSet: 16, frames: 24 };
+  const REPLY = { en: "Variant 3 (In the message field's own row).", uk: "Варіант 3 (У рядку самого поля повідомлення)." };
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface ControlReading {
+    name: string;
+    /** What of the control is on screen. */
+    box: Box;
+    /** Its own width and height, whatever a scrolling edge cuts off. */
+    size: [width: number, height: number];
+    /** Centre and four corners of what is visible all answer with the control itself. */
+    hit: boolean;
+    /** Other interactive elements whose visible box intersects this one. */
+    overlaps: string[];
+    /** Other feed rows whose visible box intersects this one. */
+    overRows: string[];
+    insideWindow: boolean;
+  }
+  interface Reading {
+    controls: ControlReading[];
+    probes: Record<string, Box>;
+    /** The feed row that carries the set: the tool row today, the entry in a variant. */
+    row: Box | null;
+    panel: Box | null;
+    modal: boolean;
+    overflowX: number;
+    shown: string[];
+    lightbox: string | null;
+    draft: string;
+    composerFocused: boolean;
+  }
+  interface Moved { probe: string; delta: Box }
+
+  const measure = (page: import("playwright-core").Page) => page.evaluate((): Reading => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const boxOf = (rect: DOMRect): [number, number, number, number] => [round(rect.x), round(rect.y), round(rect.width), round(rect.height)];
+    const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    /* What of an element its scrolling ancestors and the window let through. */
+    const visible = (element: Element): DOMRect => {
+      let rect = element.getBoundingClientRect();
+      let left = Math.max(rect.left, 0), top = Math.max(rect.top, 0), right = Math.min(rect.right, innerWidth), bottom = Math.min(rect.bottom, innerHeight);
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        rect = parent.getBoundingClientRect();
+        left = Math.max(left, rect.left); top = Math.max(top, rect.top); right = Math.min(right, rect.right); bottom = Math.min(bottom, rect.bottom);
+      }
+      return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+    };
+    const shown = (element: Element) => {
+      const style = getComputedStyle(element);
+      const rect = visible(element);
+      /* A sliver left by a scrolling strip's edge is not a control anyone meets. */
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width >= 8 && rect.height >= 8;
+    };
+    const name = (element: Element) => {
+      const text = element.getAttribute("data-frame-control") ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("data-testid")
+        ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
+      return `${element.tagName.toLowerCase()}:${text}`;
+    };
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+    const hostRow = document.querySelector<HTMLElement>("[data-frame-set-row]")
+      ?? Array.from(scroller.querySelectorAll<HTMLElement>('[data-feed-kind="tool"]')).find((row) => (row.textContent ?? "").includes("publish_frames")) ?? null;
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [tabindex]:not([tabindex="-1"])',
+    )).filter(shown);
+    /* Under an open full-screen surface only what is in it can be met. */
+    const reachable = dialog ? interactive.filter((element) => dialog.contains(element)) : interactive;
+    const rows = Array.from(scroller.querySelectorAll<HTMLElement>("[data-feed-kind]")).filter((row) => row !== hostRow && shown(row));
+    const controls = Array.from(document.querySelectorAll<HTMLElement>("[data-frame-control]")).filter(shown).filter((control) => !dialog || dialog.contains(control));
+    const readings = controls.map((control) => {
+      const rect = visible(control);
+      const inset = Math.min(rect.width, rect.height) / 2 - 0.5 < 3 ? 1 : Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1;
+      const points = [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+      return {
+        name: control.dataset.frameControl!,
+        box: boxOf(rect),
+        size: [round(control.getBoundingClientRect().width), round(control.getBoundingClientRect().height)] as [number, number],
+        hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
+        overlaps: reachable.filter((other) => other !== control && !other.contains(control) && !control.contains(other) && cut(rect, visible(other)) > 1).map(name),
+        overRows: dialog ? [] : rows.filter((row) => cut(rect, visible(row)) > 1).map((row) => `${row.dataset.feedKind}:${(row.textContent ?? "").trim().slice(0, 24)}`),
+        insideWindow: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      };
+    });
+
+    const probes: Record<string, [number, number, number, number]> = {};
+    const put = (key: string, element: Element | null | undefined) => { if (element && shown(element)) probes[key] = boxOf(element.getBoundingClientRect()); };
+    const header = document.querySelector("[data-mobile2-bar]") ?? document.querySelector("[data-link-path] > header");
+    put("header", header);
+    put("title", document.querySelector("[data-mobile2-title]") ?? header?.querySelector(".truncate"));
+    put("feed", scroller);
+    put("jump-strip", document.querySelector("[data-feed-jump-strip]"));
+    put("composer", document.querySelector('[data-testid="composer-input-unit"]'));
+    put("field", document.querySelector("textarea"));
+    const seen = new Map<string, number>();
+    for (const element of interactive) {
+      if (scroller.contains(element) || element.closest("[data-frame-set], [data-feed-jump-strip]") || dialog?.contains(element) || element.tagName === "TEXTAREA") continue;
+      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-input-unit"]') ? "composer"
+        : element.closest("[data-mobile2-bar], [data-link-path] > header") ? "header" : "control";
+      const key = `${group}:${name(element)}`;
+      const count = (seen.get(key) ?? 0) + 1;
+      seen.set(key, count);
+      probes[count > 1 ? `${key} #${count}` : key] = boxOf(element.getBoundingClientRect());
+    }
+    const panel = document.querySelector("[data-frame-panel]");
+    const field = document.querySelector<HTMLTextAreaElement>("textarea");
+    return {
+      controls: readings,
+      probes,
+      row: hostRow ? boxOf(hostRow.getBoundingClientRect()) : null,
+      panel: panel ? boxOf(panel.getBoundingClientRect()) : null,
+      modal: dialog !== null,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      shown: Array.from(document.querySelectorAll<HTMLElement>("[data-frame-shown]")).map((img) => img.dataset.frameShown!),
+      lightbox: document.querySelector("[data-lightbox-position]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+      draft: field?.value ?? "",
+      composerFocused: document.activeElement === field,
+    };
+  });
+
+  const moved = (baseline: Reading, reading: Reading): Moved[] => {
+    const out: Moved[] = [];
+    for (const probe of new Set([...Object.keys(baseline.probes), ...Object.keys(reading.probes)])) {
+      const was = baseline.probes[probe];
+      const now = reading.probes[probe];
+      if (!was || !now) { out.push({ probe: `${probe} ${was ? "gone" : "new"}`, delta: [0, 0, 0, 0] }); continue; }
+      const delta = now.map((value, index) => Math.round((value - was[index]!) * 10) / 10) as Box;
+      if (delta.some((value) => Math.abs(value) > 0.5)) out.push({ probe, delta });
+    }
+    return out;
+  };
+
+  browserTest("the closed entry covers nothing, and every variant reaches a frame and a chosen reply", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | undefined;
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const baselines = new Map<string, Reading>();
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) for (const variant of [0, 1, 2, 3, 4] as const) {
+        const where = `variant-${variant}-${viewport.name}-${lang}`;
+        const url = `${served.base}?case=frame-sets&variant=${variant}&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.phone);
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const settled = () => page.waitForTimeout(350);
+        const ready = async () => {
+          await page.locator(`[data-frame-proto="${variant}"]`).waitFor();
+          await page.locator('[data-feed-kind="user"]').first().waitFor();
+          if (variant !== 0) await page.locator('[data-frame-control="entry"]').waitFor();
+          await settled();
+        };
+        const presses: string[] = [];
+        const press = async (control: string) => {
+          await page.locator(`[data-frame-control="${control}"]`).click();
+          presses.push(control);
+          await page.waitForTimeout(200);
+        };
+        const check = (moment: string, reading: Reading) => {
+          for (const control of reading.controls) {
+            if (!control.hit) fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+            if (control.overlaps.length) fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`);
+            if (control.overRows.length) fail(moment, `${control.name} lies over ${control.overRows.join(", ")}`);
+            if (!control.insideWindow) fail(moment, `${control.name} leaves the window`);
+            if (viewport.phone && (control.size[0] < 44 || control.size[1] < 44)) fail(moment, `${control.name} is ${control.size[0]} x ${control.size[1]}, under 44 px`);
+          }
+          if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+        };
+        const shot = (moment: string) => page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+        const key = `${viewport.name}-${lang}`;
+        try {
+          await ready();
+          expect(await page.locator("[data-frame-variant-number]").textContent()).toBe(String(variant));
+          expect((await page.locator("[data-frame-variant-number]").boundingBox())!.height).toBeGreaterThanOrEqual(28);
+
+          /* Closed: the pane with the entry against the pane without it. */
+          const closed = await measure(page);
+          await shot("closed");
+          if (variant === 0) {
+            baselines.set(key, closed);
+            expect(closed.row).not.toBeNull();
+            expect(pageErrors).toEqual([]);
+            continue;
+          }
+          const baseline = baselines.get(key)!;
+          const record: Record<string, unknown> = (evidence[where] = {});
+          check("closed", closed);
+          const closedChanges = moved(baseline, closed);
+          for (const change of closedChanges) fail("closed", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
+          expect(closed.controls.map((control) => control.name)).toEqual(["entry"]);
+          record.closed = { entry: closed.controls[0], rowHeight: closed.row![3], toolRowHeightToday: baseline.row![3], changedAgainstNoFeature: closedChanges };
+
+          /* Open. */
+          await press("entry");
+          await page.locator("[data-frame-panel]").waitFor();
+          await settled();
+          const open = await measure(page);
+          await shot("open");
+          check("open", open);
+          if (!open.modal && !open.controls.some((control) => control.name === "entry")) fail("open", "the row that was pressed left the screen");
+          const openChanges = open.modal ? [] : moved(baseline, open);
+          /* Opened in place, the row moves to the top of the feed, so the feed
+             is off its tail and shows its own way-back row, as it does after
+             any scroll up. Nothing else may differ. */
+          for (const change of openChanges.filter((entry) => !/^(feed|jump-strip new)$/.test(entry.probe))) fail("open", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
+          record.open = {
+            surface: open.modal ? "full screen, as the image viewer is" : "in the feed's own flow",
+            panel: open.panel,
+            entryStillOnScreen: open.controls.some((control) => control.name === "entry"),
+            controls: open.controls.length,
+            changedAgainstNoFeature: openChanges,
+          };
+
+          /* To one frame: variant 3, its fifth. */
+          if (variant === 1 || variant === 2) { await press(`tab-${TARGET.variant}`); await press(`thumb-${TARGET.index}`); }
+          if (variant === 3) { await press(`left-tab-${TARGET.variant}`); await press(`view-${TARGET.index}`); }
+          if (variant === 4) { await press(`tile-${TARGET.inSet}`); await page.locator("[data-lightbox-position]").waitFor(); }
+          await settled();
+          const at = async () => {
+            const reading = await measure(page);
+            return variant === 4 ? reading.lightbox : reading.shown[0];
+          };
+          const there = variant === 4 ? `${TARGET.inSet + 1} / ${TARGET.frames}` : TARGET.id;
+          const before = variant === 4 ? `${TARGET.inSet} / ${TARGET.frames}` : TARGET.before;
+          const after = variant === 4 ? `${TARGET.inSet + 2} / ${TARGET.frames}` : TARGET.after;
+          if (await at() !== there) fail("frame", `shows ${await at()}, wanted ${there}`);
+          await shot("frame");
+          if (variant !== 4) {
+            const reached = await measure(page);
+            check("frame", reached);
+            if (!reached.modal && !reached.controls.some((control) => control.name === "entry")) fail("frame", "the row that was pressed left the screen");
+          }
+          record.toFrame = { presses: [...presses], count: presses.length, shows: await at() };
+
+          /* By key on the desktop, by swipe on the phone: one back, one forward again, one on. */
+          const steps: Record<string, unknown> = {};
+          if (!viewport.phone) {
+            await page.keyboard.press("ArrowLeft"); await page.waitForTimeout(150);
+            steps.arrowLeft = await at();
+            await page.keyboard.press("ArrowRight"); await page.waitForTimeout(150);
+            steps.arrowRight = await at();
+            if (steps.arrowLeft !== before || steps.arrowRight !== there) fail("keys", `arrows gave ${JSON.stringify(steps)}`);
+            if (variant === 1 || variant === 2) {
+              await page.keyboard.press("2"); await page.waitForTimeout(150);
+              steps.digit2 = await at();
+              if (steps.digit2 !== "fixture-2-1440-en") fail("keys", `the digit gave ${steps.digit2}`);
+            }
+          } else {
+            const stage = variant === 1 ? page.locator('[data-frame-control="stage"]') : variant === 4 ? page.locator('[role="dialog"] img:not([hidden])') : page.locator("[data-frame-stage]");
+            const area = (await stage.boundingBox())!;
+            const cdp = await context.newCDPSession(page);
+            const y = Math.round(area.y + area.height / 2);
+            const swipe = async (from: number, to: number) => {
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+              for (let step = 1; step <= 4; step += 1) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: Math.round(from + ((to - from) * step) / 4), y }] });
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+              await page.waitForTimeout(250);
+            };
+            const centre = Math.round(area.x + area.width / 2);
+            await swipe(centre + 90, centre - 90);
+            steps.swipeLeft = await at();
+            await swipe(centre - 90, centre + 90);
+            steps.swipeRight = await at();
+            if (steps.swipeLeft !== after || steps.swipeRight !== there) fail("swipe", `swipes gave ${JSON.stringify(steps)}`);
+          }
+          record.steps = steps;
+
+          /* To a chosen variant, from the closed row of a fresh pane. */
+          await page.reload();
+          await ready();
+          presses.length = 0;
+          await press("entry");
+          if (variant === 1 || variant === 2) { await press(`tab-${TARGET.variant}`); await press("choose"); }
+          if (variant === 3) { await press(`left-tab-${TARGET.variant}`); await press("choose-left"); }
+          if (variant === 4) await press(`choose-${TARGET.variant}`);
+          await settled();
+          const chosen = await measure(page);
+          if (chosen.draft !== REPLY[lang]) fail("choose", `the field holds ${JSON.stringify(chosen.draft)}`);
+          if (chosen.modal) fail("choose", "the full-screen surface still covers the field");
+          /* The reply is a draft: the operator adds to it and nothing was sent. */
+          await page.locator("textarea").first().click();
+          await page.keyboard.press("End");
+          await page.keyboard.type(lang === "uk" ? " Лічильник лишити." : " Keep the counter.");
+          await page.waitForTimeout(200);
+          const edited = await measure(page);
+          if (!edited.draft.startsWith(REPLY[lang]) || edited.draft === REPLY[lang]) fail("choose", `the draft did not take typing: ${JSON.stringify(edited.draft)}`);
+          const sent = await page.locator('[data-feed-kind="user"]').count();
+          if (sent !== 3) fail("choose", `${sent} own messages in the feed, wanted the three it started with`);
+          await shot("chosen");
+          record.choose = { presses: [...presses], count: presses.length, draft: chosen.draft, fieldFocused: chosen.composerFocused, afterTyping: edited.draft, sent: sent - 3 };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(
+        path.join(EVIDENCE, "measurements.json"),
+        `{\n${Object.entries(evidence).map(([where, moments]) => `  ${JSON.stringify(where)}: {\n${
+          Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
+        }\n  }`).join(",\n")}\n}\n`,
+      );
+      expect(failures).toEqual([]);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 1_800_000);
+});

@@ -35,6 +35,7 @@ import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceB
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 
+import { FrameSetsPrototype, frameSetsTranscript, type FrameSetVariant } from "./frameSets.prototype";
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -89,7 +90,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
-  | "agent-images";
+  | "agent-images"
+  | "frame-sets";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -930,6 +932,15 @@ function mountLifecycle(root: HTMLElement): void {
       loadOlder: async () => 0, prependGen: 0,
     }),
   });
+  installFakeComposerHost();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(<LifecycleFixture />);
+}
+
+/** The composer's side of the fake host: a hosted structured session, its
+    receipts and the transport behind Send. */
+function installFakeComposerHost(): void {
   setTmuxComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
@@ -955,9 +966,6 @@ function mountLifecycle(root: HTMLElement): void {
      forgetting them — the language seeded into localStorage stays. */
   try { sessionStorage.clear(); } catch { /* opaque origin */ }
   resetOutboxForTests();
-  fakeHost.lines = [LIFE_OPENING];
-  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
 }
 
 /* #2075: one conversation per engine, each viewing pictures the way that
@@ -1182,6 +1190,31 @@ function mountLongHistory(root: HTMLElement): void {
   );
 }
 
+/* Design prototype (docs/design/frame-sets.md): the production pane over an
+   orchestrator's conversation that ends with a published frame set, opened the
+   way `?variant=` opens it (0 is the pane as it is today). */
+function mountFrameSets(root: HTMLElement): void {
+  const lang = params.get("lang") === "uk" ? "uk" : "en";
+  const lines = frameSetsTranscript(lang);
+  const tail: LogTailState = {
+    lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
+  };
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({ useLogTail: () => tail });
+  installFakeComposerHost();
+  const file = {
+    ...(LIFE_CODEX_FILE as unknown as Record<string, unknown>),
+    title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
+    model: "gpt-6.1-sol",
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 120,
+  } as unknown as FileEntry;
+  const variant = Math.max(0, Math.min(4, Number(params.get("variant") ?? 0))) as FrameSetVariant;
+  const pane = Number(params.get("pane") ?? 0);
+  createRoot(root).render(<FrameSetsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} />);
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1190,4 +1223,5 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
+else if (root && requested === "frame-sets") mountFrameSets(root);
 else if (root) createRoot(root).render(<Fixture id={requested} />);

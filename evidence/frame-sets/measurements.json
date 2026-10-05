@@ -1,0 +1,170 @@
+{
+  "variant-1-desktop-1440-en": {
+    "closed": {"entry":{"name":"entry","box":[61,548.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[61,163.8,1354,508.5],"entryStillOnScreen":true,"controls":13,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-2-desktop-1440-en": {
+    "closed": {"entry":{"name":"entry","box":[61,548.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1440,900],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-3-desktop-1440-en": {
+    "closed": {"entry":{"name":"entry","box":[61,548.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1440,900],"entryStillOnScreen":false,"controls":17,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-4-desktop-1440-en": {
+    "closed": {"entry":{"name":"entry","box":[61,548.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[61,163.8,1354,536],"entryStillOnScreen":true,"controls":29,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"arrowLeft":"16 / 24","arrowRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-1-desktop-1440-uk": {
+    "closed": {"entry":{"name":"entry","box":[61,568.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[61,163.8,1354,508.5],"entryStillOnScreen":true,"controls":13,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-2-desktop-1440-uk": {
+    "closed": {"entry":{"name":"entry","box":[61,568.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1440,900],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-3-desktop-1440-uk": {
+    "closed": {"entry":{"name":"entry","box":[61,568.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1440,900],"entryStillOnScreen":false,"controls":17,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-4-desktop-1440-uk": {
+    "closed": {"entry":{"name":"entry","box":[61,568.8,1354,32],"size":[1354,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[61,163.8,1354,536],"entryStillOnScreen":true,"controls":29,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"arrowLeft":"16 / 24","arrowRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-1-pane-440-en": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[329,164.3,378,373.5],"entryStillOnScreen":true,"controls":13,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-2-pane-440-en": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1000,800],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-3-pane-440-en": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1000,800],"entryStillOnScreen":false,"controls":17,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-4-pane-440-en": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[329,164.3,378,896],"entryStillOnScreen":true,"controls":15,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"arrowLeft":"16 / 24","arrowRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-1-pane-440-uk": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[329,164.3,378,373.5],"entryStillOnScreen":true,"controls":13,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-2-pane-440-uk": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1000,800],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en","digit2":"fixture-2-1440-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-3-pane-440-uk": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,1000,800],"entryStillOnScreen":false,"controls":17,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"arrowLeft":"fixture-3-440-uk","arrowRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-4-pane-440-uk": {
+    "closed": {"entry":{"name":"entry","box":[329,429.3,378,32],"size":[378,32],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":40,"toolRowHeightToday":30,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[329,164.3,378,896],"entryStillOnScreen":true,"controls":15,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"arrowLeft":"16 / 24","arrowRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-1-phone-390-en": {
+    "closed": {"entry":{"name":"entry","box":[49,437.5,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[49,153.5,328,354.3],"entryStillOnScreen":true,"controls":12,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-2-phone-390-en": {
+    "closed": {"entry":{"name":"entry","box":[49,437.5,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,390,844],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-3-phone-390-en": {
+    "closed": {"entry":{"name":"entry","box":[49,437.5,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,390,844],"entryStillOnScreen":false,"controls":14,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-4-phone-390-en": {
+    "closed": {"entry":{"name":"entry","box":[49,437.5,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[49,153.5,328,944],"entryStillOnScreen":true,"controls":19,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"swipeLeft":"18 / 24","swipeRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Variant 3 (In the message field's own row).","fieldFocused":true,"afterTyping":"Variant 3 (In the message field's own row). Keep the counter.","sent":0}
+  },
+  "variant-1-phone-390-uk": {
+    "closed": {"entry":{"name":"entry","box":[49,437.3,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[49,153.3,328,354.3],"entryStillOnScreen":true,"controls":12,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-2-phone-390-uk": {
+    "closed": {"entry":{"name":"entry","box":[49,437.3,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,390,844],"entryStillOnScreen":false,"controls":13,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","tab-3","thumb-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","tab-3","choose"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-3-phone-390-uk": {
+    "closed": {"entry":{"name":"entry","box":[49,437.3,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"full screen, as the image viewer is","panel":[0,0,390,844],"entryStillOnScreen":false,"controls":14,"changedAgainstNoFeature":[]},
+    "toFrame": {"presses":["entry","left-tab-3","view-4"],"count":3,"shows":"fixture-3-390-en"},
+    "steps": {"swipeLeft":"fixture-3-390-uk","swipeRight":"fixture-3-390-en"},
+    "choose": {"presses":["entry","left-tab-3","choose-left"],"count":3,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  },
+  "variant-4-phone-390-uk": {
+    "closed": {"entry":{"name":"entry","box":[49,437.3,328,44],"size":[328,44],"hit":true,"overlaps":[],"overRows":[],"insideWindow":true},"rowHeight":44,"toolRowHeightToday":44,"changedAgainstNoFeature":[]},
+    "open": {"surface":"in the feed's own flow","panel":[49,153.3,328,944],"entryStillOnScreen":true,"controls":19,"changedAgainstNoFeature":[{"probe":"feed","delta":[0,0,0,-44]},{"probe":"jump-strip new","delta":[0,0,0,0]}]},
+    "toFrame": {"presses":["entry","tile-16"],"count":2,"shows":"17 / 24"},
+    "steps": {"swipeLeft":"18 / 24","swipeRight":"17 / 24"},
+    "choose": {"presses":["entry","choose-3"],"count":2,"draft":"Варіант 3 (У рядку самого поля повідомлення).","fieldFocused":true,"afterTyping":"Варіант 3 (У рядку самого поля повідомлення). Лічильник лишити.","sent":0}
+  }
+}
