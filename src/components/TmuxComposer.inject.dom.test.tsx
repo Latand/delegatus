@@ -104,6 +104,7 @@ let injections: Record<string, unknown>[] = [];
 let durableReceipts: Record<string, unknown>[] = [];
 let injectAnswer: Record<string, unknown> = { ok: true, status: 202, receipt: { status: "queued" }, operationId: "inject-1" };
 let holdInjection = false;
+let rejectInjection = false;
 let releaseInjection: (() => void) | null = null;
 
 /** The journal's own answer, in the shape the route actually returns: the
@@ -191,6 +192,7 @@ beforeEach(() => {
   durableReceipts = [];
   injectAnswer = { ok: true, status: 202, receipt: { status: "queued" }, operationId: "inject-1" };
   holdInjection = false;
+  rejectInjection = false;
   releaseInjection = null;
   /* These cases are about the one-shot action and the ordinary submissions
      beside it. With auto on, a running turn would put the composer in context
@@ -221,6 +223,7 @@ beforeEach(() => {
          "what does it say before the answer" untestable — and that window is
          exactly where an optimistic claim would live. */
       if (holdInjection) await new Promise<void>((resolve) => { releaseInjection = resolve; });
+      if (rejectInjection) throw new Error("connection lost after admission");
       return injectAnswer;
     }) as never,
   });
@@ -504,7 +507,7 @@ test("the composer reports a submission, not a placement it has not observed", a
 });
 
 test("a refusal gives the draft back instead of reporting success", async () => {
-  injectAnswer = { ok: false, status: 503, error: "structured delivery ownership is unavailable" };
+  injectAnswer = { ok: false, status: 503, delivery: "refused", error: "structured delivery ownership is unavailable" };
   const { host, root } = await mount();
   await type(host, "give this back");
   await openSendMenu(host);
@@ -603,10 +606,14 @@ test("a document already on its way into the context cannot be submitted again w
   root.unmount();
 });
 
-test("a refused injection leaves its document staged and sendable, beside documents added meanwhile", async () => {
+test.each([
+  { ok: false, status: 503, delivery: "refused", error: "structured delivery ownership is unavailable" },
+  { ok: false, status: 401, error: "sign in required" },
+  { ok: false, status: 403, error: "origin refused" },
+])("a refused injection leaves its document staged and sendable, beside documents added meanwhile: %j", async (answer) => {
   turn = "running";
   holdInjection = true;
-  injectAnswer = { ok: false, status: 503, error: "structured delivery ownership is unavailable" };
+  injectAnswer = answer;
   const { host, root } = await mount();
   await type(host, "read the notes");
   await stageFile(host, "design-notes.md", "# notes\n");
@@ -615,7 +622,9 @@ test("a refused injection leaves its document staged and sendable, beside docume
   await stageFile(host, "later.md", "later");
 
   await settle(() => releaseInjection?.());
-  expect(host.textContent ?? "").toContain("structured delivery ownership is unavailable");
+  expect(textarea(host).value).toBe("read the notes");
+  expect(readOutbox(CARD).filter((entry) => entry.intent === "context")).toEqual([]);
+  expect(host.textContent ?? "").toContain(answer.error);
   expect(host.textContent).toContain("design-notes.md");
   expect(host.textContent).toContain("later.md");
 
@@ -627,6 +636,116 @@ test("a refused injection leaves its document staged and sendable, beside docume
   root.unmount();
 });
 
+test.each([
+  { ok: false, error: "network" },
+  { ok: false, status: 503, delivery: "uncertain", error: "host connection lost" },
+  { ok: false, status: 502 },
+  { ok: false, status: 409, error: "idempotency-conflict" },
+  { ok: false, status: 202, error: "receipt-identity-mismatch" },
+  { ok: false, error: "network", reject: true },
+])("an unanswered injection keeps its document under the original key: %j", async (answer) => {
+  injectAnswer = answer;
+  rejectInjection = "reject" in answer;
+  const { host, root } = await mount();
+  await type(host, "read the notes");
+  await stageFile(host, "design-notes.md", "# notes\n");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+  const key = String(injections[0]!.idempotencyKey);
+
+  expect(textarea(host).value).toBe("");
+  expect(host.textContent).toContain("design-notes.md");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+  await type(host, "answer later");
+  await settle(() => press(textarea(host), "Enter"));
+  await settle(() => press(textarea(host), "Enter", { altKey: true }));
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  expect(readOutbox(CARD).filter((entry) => entry.intent === "context")).toMatchObject([
+    { id: key, deliveryUncertain: true },
+  ]);
+  await stageFile(host, "later.md", "later");
+
+  // The journal's receipt settles that same operation, including its documents.
+  durableReceipts = [{
+    conversationId: CARD, idempotencyKey: key, operationId: "inject-observed",
+    kind: "inject", status: "delivered", revision: 2,
+    text: "read the notes", at: new Date().toISOString(),
+  }];
+  await settle(() => root.render(<TmuxComposer file={{ ...file }} />));
+  expect(host.textContent).not.toContain("design-notes.md");
+  expect(host.textContent).toContain("later.md");
+  expect(textarea(host).value).toBe("answer later");
+  expect(readOutbox(CARD).find((entry) => entry.id === key)?.state).toBe("delivered");
+  await settle(() => press(textarea(host), "Enter"));
+  await settleUntil(() => sends.length > 0);
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.files).toMatchObject([{ name: "later.md" }]);
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  root.unmount();
+});
+
+test.each([false, true])("an unanswered document remains fenced after remount (identity adopted: %j)", async (adopted) => {
+  injectAnswer = { ok: false, error: "network" };
+  if (adopted) observed = { conversationId: undefined };
+  const first = await mount();
+  await type(first.host, "read the notes");
+  await stageFile(first.host, "design-notes.md", "# notes\n");
+  await openSendMenu(first.host);
+  await settle(() => menuAction(first.host, "Add to context")!.click());
+  const key = String(injections[0]!.idempotencyKey);
+  await settle(() => first.root.unmount());
+  observed = { conversationId: CARD };
+  const { host, root } = await mount();
+  expect(host.textContent).toContain("design-notes.md");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+  expect(carrying("design-notes.md")).toHaveLength(1);
+  expect(readOutbox(CARD).filter((entry) => entry.intent === "context").map((entry) => entry.id)).toEqual([key]);
+  durableReceipts = [{
+    conversationId: CARD, idempotencyKey: key, operationId: "inject-observed",
+    kind: "inject", status: "delivered", revision: 2,
+    text: "read the notes", at: new Date().toISOString(),
+  }];
+  await settle(() => root.render(<TmuxComposer file={{ ...file, ...observed }} />));
+  expect(host.textContent).not.toContain("design-notes.md");
+  root.unmount();
+});
+
+test.each([
+  { outcome: "refused", warm: false },
+  { outcome: "accepted", warm: false },
+  { outcome: "refused", warm: true },
+  { outcome: "accepted", warm: true },
+])("a pending injection releases its adopted document fence: %j", async ({ outcome, warm }) => {
+  observed = { conversationId: warm ? CARD : undefined };
+  holdInjection = true;
+  const { host, root } = await mount();
+  if (warm) {
+    observed = { conversationId: undefined };
+    await settle(() => root.render(<TmuxComposer file={{ ...file, ...observed }} />));
+  }
+  await type(host, "read the notes");
+  await stageFile(host, "design-notes.md", "# notes\n");
+  await openSendMenu(host);
+  await settle(() => menuAction(host, "Add to context")!.click());
+  observed = { conversationId: CARD };
+  await settle(() => root.render(<TmuxComposer file={{ ...file, ...observed }} />));
+  expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).toContain(String(injections[0]!.idempotencyKey));
+  await stageFile(host, "later.md", "later");
+  injectAnswer = outcome === "refused"
+    ? { ok: false, status: 503, delivery: "refused", error: "refused before admission" }
+    : { ok: true, status: 202, operationId: "inject-accepted" };
+  await settle(() => releaseInjection?.());
+  expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).toBeNull();
+  expect(host.textContent).toContain("later.md");
+  if (outcome === "accepted") {
+    expect(host.textContent).not.toContain("design-notes.md");
+    expect(sessionStorage.getItem(`llvDraftFiles:${CARD}`)).not.toContain("design-notes.md");
+  } else expect(host.textContent).toContain("design-notes.md");
+  root.unmount();
+});
+
 /* #1652 × #1560: the queue hand-off and the durable save are the two
    submissions the attachment work added, and each can meet a pending Add to
    context. Neither may carry a document twice. */
@@ -634,7 +753,7 @@ test("a refused injection leaves its document staged and sendable, beside docume
 test("Alt+Enter cannot hand Codex's queue a document that is on its way into the context", async () => {
   turn = "running";
   holdInjection = true;
-  injectAnswer = { ok: false, status: 409, error: "the injection was refused" };
+  injectAnswer = { ok: false, status: 409, delivery: "refused", error: "the injection was refused" };
   const { host, root } = await mount();
   await type(host, "read the notes");
   await stageFile(host, "design-notes.md", "# notes\n");
@@ -785,7 +904,7 @@ const otherConversation = () => ({ ...file, ...observed, path: "/other.jsonl", c
 test("a refusal that lands after the composer moved to another conversation gives the words back to their own", async () => {
   turn = "running";
   holdInjection = true;
-  injectAnswer = { ok: false, status: 409, error: "the injection was refused" };
+  injectAnswer = { ok: false, status: 409, delivery: "refused", error: "the injection was refused" };
   const first = await mount();
   await type(first.host, "context for the first conversation");
   await openSendMenu(first.host);

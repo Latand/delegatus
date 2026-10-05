@@ -340,6 +340,7 @@ test("an injection is REFUSED where a send is held, so nothing can replay it int
   expect(response.status).toBeGreaterThanOrEqual(400);
   expect(await response.json()).toMatchObject({
     error: expect.stringContaining("cannot be held"),
+    delivery: "refused",
   });
   expect(Object.values(link.registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
 });

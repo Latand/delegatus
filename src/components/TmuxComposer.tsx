@@ -15,7 +15,7 @@ import { composerSubmissionPayloads, composerSubmissionSaving, presentedPayloadR
 import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
-import { interruptRuntime, useRuntimeBusState, type RuntimeSessionView } from "@/hooks/useRuntime";
+import { interruptRuntime, useRuntimeBusState, type CommandResult, type RuntimeSessionView } from "@/hooks/useRuntime";
 import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { useViewerSelectedContext, viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
@@ -227,6 +227,24 @@ function readRecoveryReceipts(id: string): RuntimeReceipt[] {
 function writeRecoveryReceipts(id: string, receipts: RuntimeReceipt[]): void {
   try { sessionStorage.setItem(recoveryReceiptsKey(id), JSON.stringify(receipts.slice(0, 512))); }
   catch { /* Keep in-memory evidence if session storage is unavailable. */ }
+}
+
+/* A document stays owned by its injection across a lost answer and a remount.
+   Only intake ids are persisted; attachment bytes remain in the draft tray. */
+const contextDocumentFencesKey = (id: string) => "llvContextDocumentFences:" + id;
+function readContextDocumentFences(id: string): Record<string, string[]> {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(contextDocumentFencesKey(id)) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string[]] =>
+      Array.isArray(entry[1]) && entry[1].every((fileId: unknown) => typeof fileId === "string")));
+  } catch { return {}; }
+}
+function writeContextDocumentFences(id: string, fences: Record<string, string[]>): void {
+  try {
+    if (Object.keys(fences).length) sessionStorage.setItem(contextDocumentFencesKey(id), JSON.stringify(fences));
+    else sessionStorage.removeItem(contextDocumentFencesKey(id));
+  } catch { /* Keep the in-memory fence when session storage is unavailable. */ }
 }
 
 export function deliveryAttemptKey(current: string, stored?: string): string {
@@ -1370,7 +1388,7 @@ export function adoptComposerState(path: string, cardId: string): void {
     const previousOwner = sessionStorage.getItem(composerOwnerKey(path));
     for (const from of [previousOwner, path]) {
       if (!from || from === cardId) continue;
-      for (const keyOf of [draftKey, draftImagesKey, draftFilesKey, pendingSendKey, sentKey, dismissedReceiptsKey, queueAdmissionKey]) {
+      for (const keyOf of [draftKey, draftImagesKey, draftFilesKey, contextDocumentFencesKey, pendingSendKey, sentKey, dismissedReceiptsKey, queueAdmissionKey]) {
         const legacy = sessionStorage.getItem(keyOf(from));
         if (legacy === null) continue;
         if (sessionStorage.getItem(keyOf(cardId)) === null) sessionStorage.setItem(keyOf(cardId), legacy);
@@ -1938,17 +1956,43 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      the editable draft — that draft was already cleared at submit time and
      anything in it now belongs to the next message. */
   const outboxKeys = useRef<Set<string>>(new Set());
-  /* Intake ids of staged documents an Add to context request is carrying and
-     has not been answered for (#1560). Their chips stay in the tray until the
-     answer, so a second Add to context, the queue-first submit (Send, Enter,
+  /* Intake ids of staged documents an Add to context request owns (#1688).
+     Their chips stay fenced until admission or a proven refusal, so a lost
+     answer cannot let a second Add to context, the queue-first submit (Send, Enter,
      steer, dictation) and Codex's queue hand-off (Alt+Enter, Queue for Codex)
-     refuse while one of them is still there: Codex does not deduplicate
-     injections, and an Enter would carry the same bytes into an interrupting
-     send. */
-  const injectingFileIds = useRef<Set<string>>(new Set());
+     carry those bytes again. Codex does not deduplicate injections. */
+  const contextDocumentFences = useRef(new Map<string, Record<string, string[]>>());
+  const injectionFencesFor = (owner: string) => {
+    let fences = contextDocumentFences.current.get(owner);
+    if (!fences) {
+      fences = readContextDocumentFences(owner);
+      contextDocumentFences.current.set(owner, fences);
+    } else Object.assign(fences, readContextDocumentFences(owner));
+    return fences;
+  };
+  const releaseInjectionFence = (owner: string, key: string, admitted: boolean) => {
+    /* An answer can arrive after this transcript gained its canonical id.
+       Read its current owner, then retire every cached alias of the same key. */
+    const owners = new Set([owner]);
+    try { owners.add(sessionStorage.getItem(composerOwnerKey(file.path)) ?? file.path); }
+    catch { /* The original in-memory owner still carries the fence. */ }
+    const ids = [...new Set([...owners].flatMap((alias) => injectionFencesFor(alias)[key] ?? []))];
+    if (!ids.length) return;
+    for (const [alias, fences] of contextDocumentFences.current) {
+      if (!fences[key]) continue;
+      delete fences[key];
+      writeContextDocumentFences(alias, fences);
+    }
+    if (admitted) {
+      for (const alias of owners) forgetDraftFiles(alias, ids);
+      if (owners.has(payloadOwner.current)) for (const id of ids) attachments.remove(id);
+    }
+  };
   const refuseWhileInjecting = (files: readonly PendingFile[]): boolean => {
-    if (!files.some((file) => injectingFileIds.current.has(file.id))) return false;
-    setStatus({ kind: "err", text: t("inject.submitting") });
+    const fence = Object.entries(injectionFencesFor(cardId)).find(([, ids]) => files.some((file) => ids.includes(file.id)));
+    if (!fence) return false;
+    const uncertain = readOutbox(cardId).find((entry) => entry.id === fence[0])?.deliveryUncertain;
+    setStatus({ kind: uncertain ? "info" : "err", text: t(uncertain ? "composer.context.unconfirmed" : "inject.submitting") });
     return true;
   };
   const [immediateRuntimeReceipts, setImmediateRuntimeReceipts] = useState<RuntimeReceipt[]>(() => readRecoveryReceipts(cardId));
@@ -2602,6 +2646,23 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (!patch) continue;
       updateOutbox(cardId, entry.id, patch);
     }
+  }, [displayedRuntimeReceipts, outbox, cardId]);
+
+  /* The original key owns the documents until its receipt proves admission or
+     a safe refusal. Repeated presses only show the existing unconfirmed state;
+     injection operations cannot be retried on the engine wire. */
+  useEffect(() => {
+    for (const key of Object.keys(injectionFencesFor(cardId))) {
+      const entry = outbox.find((candidate) => candidate.id === key);
+      const receipt = [...displayedRuntimeReceipts, ...(entry?.deliveryReceipt ? [entry.deliveryReceipt] : [])]
+        .filter((candidate) => candidate.conversationId === cardId && candidate.idempotencyKey === key && candidate.kind === "inject")
+        .sort(receiptEvidenceOrder)[0];
+      if (!receipt) continue;
+      if (receiptIsAdmitted(receipt.status) || receiptHasAbsorbingOutcome(receipt)) releaseInjectionFence(cardId, key, true);
+      else if (!receiptHasUnknownFate(receipt)
+        && (receipt.status === "rejected" || (receipt.status === "failed" && receipt.resend === "safe"))) releaseInjectionFence(cardId, key, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fences and attachment refs are owned by the conversation
   }, [displayedRuntimeReceipts, outbox, cardId]);
 
   /* Level-triggered release of switch-held submissions (P1: messages held for
@@ -4384,14 +4445,18 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (chipProject) settleTaskChips(chipProject, chips);
     setInjectsPending((count) => count + 1);
     setText("");
-    /* THE STAGED DOCUMENTS STAY UNTIL THE ANSWER. Clearing them now would be
+    /* THE STAGED DOCUMENTS STAY UNTIL ADMISSION OR REFUSAL. Clearing them now would be
        unrecoverable: the restore path rebuilds a file slot WITHOUT its bytes —
        it exists for a page reload, where the bytes are genuinely gone — so a
        refusal would leave the operator holding a chip that can no longer be
        sent. Text is different: it is a string this closure still has, so it
        clears immediately and comes back if the request is refused. Staying in
        the tray, they are fenced from every other submission until then. */
-    for (const file of requestedFiles) injectingFileIds.current.add(file.id);
+    if (requestedFiles.length) {
+      const fences = injectionFencesFor(cardId);
+      fences[clientMessageId] = requestedFiles.map((file) => file.id);
+      writeContextDocumentFences(cardId, fences);
+    }
     /* A SUBMISSION, NOT AN OUTCOME. The request has not been answered yet, and
        even a successful answer only means the injection was admitted: it can
        still settle `uncertain` because an empty engine acknowledgement proves
@@ -4409,8 +4474,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? { files: requestedFiles.map((file) => ({ name: file.name, base64: file.base64 })) }
           : {}),
         ...(reference ? { selectedContext: reference } : {}),
-      }).finally(() => {
-        for (const file of requestedFiles) injectingFileIds.current.delete(file.id);
+      }).catch((): CommandResult => ({ ok: false, error: "network" })).finally(() => {
         setInjectsPending((count) => Math.max(0, count - 1));
       });
       /* THE ROW SETTLES FIRST, whoever the composer shows now. An operation id
@@ -4421,7 +4485,13 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          thread, so the row stays marked unconfirmed and offers only a read. */
       const rowEntry = () => readOutbox(cardId).find((candidate) => candidate.id === clientMessageId);
       const operationExists = Boolean(answer.operationId || answer.receipt);
-      const answerLost = answer.error === "network" || answer.delivery === "uncertain";
+      /* An unclassified conflict can describe a prior admission. Only the
+         route's explicit refusal or a status it emits before admission may
+         return the draft; the receipt owns a named operation's fate. */
+      const provenRefusal = answer.delivery === "refused" || (answer.delivery === undefined
+        && (answer.status === 401 || PRE_ADMISSION_REFUSALS.has(answer.status ?? 0)));
+      const answerLost = answer.error === "network" || answer.error === "receipt-identity-mismatch" || answer.delivery === "uncertain"
+        || (!answer.ok && !operationExists && !provenRefusal);
       if (operationExists) {
         const entry = rowEntry();
         const patch = entry && answer.receipt ? outboxReceiptPatch(entry, answer.receipt.status, answer.receipt, nowMs()) : null;
@@ -4433,6 +4503,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         updateOutbox(cardId, clientMessageId, { deliveryUncertain: true });
       }
       const restoreDraft = !answer.ok && !operationExists && !answerLost;
+      if (answer.ok || restoreDraft) releaseInjectionFence(cardId, clientMessageId, answer.ok);
       if (restoreDraft) {
         const laterWords = payloadOwner.current === cardId ? textRef.current.trim() : sessionStorage.getItem(draftKey(cardId))?.trim();
         const laterChips = chipProject ? readTaskChips(chipProject) : [];
