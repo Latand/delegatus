@@ -5,7 +5,7 @@ import path from "node:path";
 
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
-import { issueReportApprovalCode, issueReportApprovalReplies } from "@/lib/issueReports/approval";
+import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview } from "@/lib/issueReports/store";
 
 import { viewerMcpBindings, type CallerAttribution } from "./bindings";
@@ -129,6 +129,26 @@ test("a body with a host, a path, an email or an id is refused before any previe
   expect(fs.readdirSync(sandbox)).toEqual([]);
 });
 
+test("Markdown markup, an uncommon top-level domain, a spaced folder and a quotation over lines are refused before any preview exists", async () => {
+  const h = harness({ deny: { ...DENY, people: ["Ada"] } });
+  const bodies: [string, string][] = [
+    ["person", "A**da** observed the failure."],
+    ["id", `The pipeline ${"dead"}**${"beef"}** stayed queued.`],
+    ["domain", `The failure happened on ${"buildbox"}.**${"fr"}**.`],
+    ["domain", `The failure happened on ${"buildbox"}.${"tools"}.`],
+    ["domain", `The failure happened on ${"buildbox"}.${"xn--p1ai"}.`],
+    ["domain", `The failure happened on ${"вузол"}.${"укр"}.`],
+    ["path", `The evidence file is ${["", "My data", "notes.txt"].join("/")}.`],
+    ["quote", "The operator said: \"restart\nevery agent\nnow\"."],
+  ];
+  for (const [kind, body] of bodies) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+  }
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+});
+
 test("a clean report is stored under the digest of its exact text", async () => {
   const h = harness();
   const preview = await h.call(REPORTER, { action: "preview", ...REPORT });
@@ -214,13 +234,35 @@ test("no approval, a refusal, and the seat's own account of an approval file not
       .toMatchObject({ ok: false, code: "issue_report_approval_required" });
   }
 
-  /* A refusal, an edit, a bare yes, and a refusal that names the code. */
-  for (const words of ["Ні, не публікуй", "Change the title first", "yes", "так", `Ні, не публікуй звіт ${issueReportApprovalCode(digest)}`, `${replies.en} but change the title`]) {
+  /* A refusal, an edit, a bare yes, and a refusal that names the digest. */
+  for (const words of ["Ні, не публікуй", "Change the title first", "yes", "так", `Ні, не публікуй звіт ${digest}`, `${replies.en} but change the title`]) {
     h.operatorSays(words);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
       .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
   }
   expect(h.published).toEqual([]);
+});
+
+test("the yes for one preview never publishes another whose digest begins the same way", async () => {
+  const h = harness();
+  const title = "Delegatus refuses a requested launch";
+  const approved = { title, body: "The launch was refused during check 4388." };
+  const sibling = { title, body: "The launch was refused during check 181675." };
+  const approvedDigest = await previewed(h, approved);
+  const siblingDigest = await previewed(h, sibling);
+  /* The pair is real: their digests differ and share their first eight characters. */
+  expect(approvedDigest).not.toBe(siblingDigest);
+  expect(siblingDigest.slice(0, 8)).toBe(approvedDigest.slice(0, 8));
+  const replies = await shown(h, approvedDigest);
+  await shown(h, siblingDigest);
+
+  h.operatorSays(replies.en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: siblingDigest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+  expect(h.published).toEqual([]);
+
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: approvedDigest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...approved, repository: REPOSITORY }]);
 });
 
 test("an approval counts only after the preview was read back, and only while it is the operator's last word", async () => {

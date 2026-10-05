@@ -15,11 +15,13 @@ import { readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib
  * result and anything the seat wrote itself are never the operator's.
  *
  * The approval names the text it is for. Reading a preview back answers a
- * reply that carries a code taken from the preview's digest, the seat offers
- * that reply as a suggested reply under the text, and the operator sends it.
- * A reply for another text carries another code, so a "yes" cannot move from
- * the text the operator read to an edited one, and a "no" or any other
- * sentence is no approval however the seat reads it.
+ * reply that carries the preview's whole digest, the seat offers that reply
+ * as a suggested reply under the text, and the operator sends it. A reply for
+ * another text carries another digest, so a "yes" cannot move from the text
+ * the operator read to an edited one, and a "no" or any other sentence is no
+ * approval however the seat reads it. The digest goes whole: a prefix of it
+ * can be matched by a second text found by trying wordings, and the yes for
+ * one would then publish the other.
  *
  * The approval is the operator's LAST message since the seat read the preview
  * back: a "yes" followed by "wait" is withdrawn.
@@ -31,14 +33,9 @@ export interface OperatorMessage {
   text: string;
 }
 
-export function issueReportApprovalCode(digest: string): string {
-  return digest.slice(0, 8);
-}
-
 /** The replies that approve this exact preview, one per interface language. */
 export function issueReportApprovalReplies(digest: string): { en: string; uk: string } {
-  const code = issueReportApprovalCode(digest);
-  return { en: `Yes, publish report ${code}`, uk: `Так, публікуй звіт ${code}` };
+  return { en: `Yes, publish report ${digest}`, uk: `Так, публікуй звіт ${digest}` };
 }
 
 function normalized(text: string): string {

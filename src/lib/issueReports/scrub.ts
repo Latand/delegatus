@@ -22,8 +22,10 @@ import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/s
  * and the text with its entities, percent escapes, backslash escapes and
  * zero-width characters decoded to a fixed point (`canonicalSensitiveText`).
  * Markdown renders `&#47;home` as a path, so a report is judged by what a
- * reader will see. The digest and the line numbers stay those of the text as
- * written.
+ * reader will see: one more view drops the inline markup Markdown draws and
+ * never shows (emphasis, strike-through, code-span ticks, link brackets, HTML
+ * tags and comments), since `A**da**` and `dead<b>beef</b>` read as one
+ * word. The digest and the line numbers stay those of the text as written.
  *
  * The rules below are the ones a report needs and neither set states: somebody
  * else's words (a quoted block, a quotation, a speaker's line) and an embedded
@@ -55,11 +57,13 @@ const STATIC_LABELS: Record<StaticFindingClass, string> = {
 const QUOTED_BLOCK = /^\s*>/;
 /* A quotation is two or more words between quotation marks. One marked word
    (a state called "delivered") is a term, and an apostrophe inside a word
-   opens nothing. Code spans stay readable: an error text belongs in one. */
+   opens nothing. Code spans stay readable: an error text belongs in one. A
+   quotation may run over any number of lines, so the patterns cross line
+   breaks; a mark cannot pair across another mark of its kind. */
 const QUOTATION = [
-  /"[^"\s][^"\n]*\s[^"\n]*[^"\s]"/,
-  /[“„«][^“”„«»\n]*\S\s+\S[^“”„«»\n]*[”“»]/,
-  /(?<![\p{L}\p{N}])['‘](?=[^\s'‘’])[^'‘’\n]*\s[^'‘’\n]*(?<=[^\s])['’](?![\p{L}\p{N}])/u,
+  /"[^"\s][^"]*\s[^"]*[^"\s]"/,
+  /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/,
+  /(?<![\p{L}\p{N}])['‘](?=[^\s'‘’])[^'‘’]*\s[^'‘’]*(?<=[^\s])['’](?![\p{L}\p{N}])/u,
 ];
 /* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
 const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
@@ -67,17 +71,38 @@ const EMBEDDED_IMAGE = /!\[[^\]]*\]\(|<img\b/i;
 
 const OWN_WORDS = "say what happened in your own words";
 
-/** Every reading of a text a detector has to see: as written, and decoded. */
+/*
+ * What a reader sees of a line once Markdown drew it: the inline markup is
+ * gone and the characters on either side of it meet. `*` and `~` mark up
+ * inside a word too; `_` only at a word's edge, which is why `issue_report`
+ * keeps its underscore. A link shows its text; its address stays in the
+ * written view, where the URL rule reads it. An image is the image rule's.
+ */
+function markdownVisible(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*~`]+/g, "")
+    .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
+}
+
+/** Every reading of a text a detector has to see: as written, decoded, and as
+    Markdown shows each of those. */
 function viewsOf(text: string): { views: string[]; unresolved: boolean } {
   const canonical = canonicalSensitiveText(text);
   const json = canonicalSensitiveText(text, true);
   const views = new Set<string>();
   for (const view of [text, canonical.text, json.text]) {
-    views.add(view);
-    views.add(view.normalize("NFKC"));
+    for (const reading of [view, markdownVisible(view)]) {
+      views.add(reading);
+      views.add(reading.normalize("NFKC"));
+    }
   }
   return { views: [...views], unresolved: canonical.error || json.error };
 }
+
+const QUOTATION_LABEL = `a quotation; ${OWN_WORDS}`;
 
 function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingClass, string> {
   const found = new Map<IssueReportFindingClass, string>();
@@ -86,7 +111,7 @@ function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingCl
   for (const view of views) {
     for (const kind of privateClasses(view, deny, { strict: true })) found.set(kind, privateClassLabel(kind));
     for (const kind of staticSensitiveClasses(view)) found.set(kind, STATIC_LABELS[kind]);
-    if (QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", `a quotation; ${OWN_WORDS}`);
+    if (QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", QUOTATION_LABEL);
     if (SPEAKER_LINE.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
     if (EMBEDDED_IMAGE.test(view)) found.set("image", "an embedded image; a screenshot is added by the operator after redaction");
   }
@@ -105,8 +130,15 @@ function findingsIn(where: "title" | "body", text: string, deny: PublicDenyList)
   lines.forEach((line, index) => {
     for (const [kind, label] of classesOf(line, deny)) note(kind, label, index + 1);
   });
-  /* A value split across lines is found in the whole text and reported
-     against the first line, so no class slips through a line break. */
+  /* A quotation over several lines is reported against the line it opens on. */
+  for (const view of viewsOf(text).views) {
+    for (const pattern of QUOTATION) {
+      const match = new RegExp(pattern.source, `${pattern.flags}g`).exec(view);
+      if (match) note("quote", QUOTATION_LABEL, Math.min(lines.length, view.slice(0, match.index).split("\n").length));
+    }
+  }
+  /* Any other value split across lines is found in the whole text and
+     reported against the first line, so no class slips through a line break. */
   for (const [kind, label] of classesOf(text, deny)) {
     if (!byClass.has(kind)) note(kind, label, 1);
   }

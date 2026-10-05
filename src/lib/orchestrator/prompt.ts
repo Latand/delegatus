@@ -269,8 +269,9 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  * never evidence.
  *
  * The second keeps one manager per board. `create_task`, `create_pipeline`
- * and `spawn_agent` refuse a seat acting on a project that has its own seat
- * (`refuseCrossProjectFromSeat` in `mcp/bindings.ts`); the operator's explicit
+ * and `spawn_agent` refuse a seat acting on another project, whether or not
+ * that project has a seat yet (`refuseCrossProjectFromSeat` in
+ * `mcp/bindings.ts`); the operator's explicit
  * request, quoted in `crossProjectRequest`, is what lifts that.
  */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}

@@ -179,3 +179,64 @@ test("somebody else's words are refused as a quotation, a quoted block or a conv
   ]) expect(classes(line)).toContain("quote");
   expect(classes("The operator asked for every agent to be restarted at once.")).toEqual([]);
 });
+
+/* The second review of #2518 found the following passing: Markdown markup
+   inside a value, a top-level domain outside a short list, a folder with a
+   space in its name, and a quotation over more than two lines. */
+
+test("a value broken up by Markdown markup is read as the word a reader sees", () => {
+  const deny: PublicDenyList = {
+    accounts: ["claude-main-b"], people: ["Ada"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }],
+  };
+  expect(classes("A**da** observed the failure.", deny)).toContain("person");
+  expect(classes("A<b>da</b> observed the failure.", deny)).toContain("person");
+  expect(classes("A<!-- -->da observed the failure.", deny)).toContain("person");
+  expect(classes("[A](#)da observed the failure.", deny)).toContain("person");
+  expect(classes("The launch picked claude-**main**-b.", deny)).toContain("account");
+  expect(classes("The project Arte~~mis~~ failed to launch.", deny)).toContain("project");
+  expect(classes(`The pipeline ${"dead"}**${"beef"}** stayed queued.`)).toContain("id");
+  expect(classes(`The pipeline ${"dead"}\`${"beef"}\` stayed queued.`)).toContain("id");
+  expect(classes(`The failure happened on ${"buildbox"}.**${"fr"}**.`)).toContain("domain");
+  /* Formatted references to Delegatus's own code and tools stay readable. */
+  for (const line of [
+    "Call **issue_report** with action `preview`, then `mcp__viewer__issue_report` answers.",
+    "The `send_message` tool answered __delivered__ in *src/lib/mcp/bindings.ts*.",
+    "See [the contract](docs/design/agent-prompt-contract.md) for the rule.",
+  ]) expect(classes(line, deny)).toEqual([]);
+});
+
+test("a domain is found whatever its top-level domain, in any script", () => {
+  for (const host of [`${"buildbox"}.${"tools"}`, `${"buildbox"}.${"xn--p1ai"}`, `${"вузол"}.${"укр"}`, `${"buildbox"}．${"tools"}`, `${"build_box"}.${"cloud"}`]) {
+    const findings = scrubIssueReport({ title: CLEAN.title, body: `The failure happened on ${host}.` });
+    expect(findings.map((finding) => finding.class)).toContain("domain");
+    expect(findings.find((finding) => finding.class === "domain")).toMatchObject({ where: "body", lines: [1], label: "a domain" });
+    expect(JSON.stringify(findings)).not.toContain(host);
+  }
+  /* Code is no domain: a call follows it, or it ends in a file extension or a word no zone holds. */
+  for (const line of [
+    "The clock read Date.now() and rows.map(render) returned nothing.",
+    "process.env.LLV_STATE_DIR was unset, and Node.js printed nothing.",
+    "package.json, README.md and bun.lock were unchanged.",
+  ]) expect(classes(line)).toEqual([]);
+});
+
+test("a local path with a space in a folder name is a path in every form", () => {
+  expect(classes(`The evidence file is ${["", "My data", "notes.txt"].join("/")}.`)).toContain("path");
+  expect(classes(`The evidence file is ${["", "Мої дані", "нотатки.txt"].join("/")}.`)).toContain("path");
+  expect(classes(`The evidence file is ${percent("/My data/")}notes.txt.`)).toContain("path");
+  expect(classes(`The evidence file is ${["", "My\\ data", "notes.txt"].join("/")}.`)).toContain("path");
+  expect(classes(`The evidence file is ${["", "My", "data"].join("/").replace("My/", `My${entity(" ")}`)}/notes.txt.`)).toContain("path");
+  expect(classes("The settlement path in src/lib/mcp/bindings.ts.")).toEqual([]);
+});
+
+test("a quotation over several lines is refused against the line it opens on", () => {
+  const opened = (body: string) => scrubIssueReport({ title: CLEAN.title, body }).filter((finding) => finding.class === "quote");
+  expect(opened("The operator said: \"restart\nevery agent\nnow\".")).toEqual([expect.objectContaining({ where: "body", lines: [1] })]);
+  expect(opened("## Observed evidence\nThe operator said: “restart\nevery\nagent\nnow”.")).toEqual([expect.objectContaining({ lines: [2] })]);
+  expect(opened("Intro.\nОператор написав: «перезапусти\nвсіх\nагентів».")).toEqual([expect.objectContaining({ lines: [2] })]);
+  expect(opened("Intro.\n\nThe operator said: 'restart\nevery\nagent'.")).toEqual([expect.objectContaining({ lines: [3] })]);
+  /* One-word terms on different lines pair with nothing, and a retelling passes. */
+  expect(classes("The state \"delivered\" was shown.\nLater \"queued\" appeared.\nThen “parked”.")).toEqual([]);
+  expect(classes("The recipient's turn never\nstarted, and the agents' queue\nstayed empty.")).toEqual([]);
+  expect(classes("The operator asked\nfor every agent\nto be restarted.")).toEqual([]);
+});

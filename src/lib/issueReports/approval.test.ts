@@ -5,7 +5,7 @@ import path from "node:path";
 
 import type { RegistryFile } from "@/lib/agent/registry";
 
-import { approvesIssueReport, issueReportApproval, issueReportApprovalCode, issueReportApprovalReplies, operatorMessagesOf } from "./approval";
+import { approvesIssueReport, issueReportApproval, issueReportApprovalReplies, operatorMessagesOf } from "./approval";
 
 /*
  * #2518: an approval is the operator's own message, read from the seat's
@@ -21,12 +21,24 @@ let sandbox = "";
 beforeEach(() => { sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-issue-approval-")); });
 afterEach(() => { fs.rmSync(sandbox, { recursive: true, force: true }); });
 
-test("the approving reply carries a code taken from the digest, one reply per language", () => {
+test("the approving reply carries the whole digest, one reply per language", () => {
   const replies = issueReportApprovalReplies(DIGEST);
-  expect(issueReportApprovalCode(DIGEST)).toBe(DIGEST.slice(0, 8));
-  expect(replies.en).toContain(issueReportApprovalCode(DIGEST));
-  expect(replies.uk).toContain(issueReportApprovalCode(DIGEST));
+  expect(replies.en).toContain(DIGEST);
+  expect(replies.uk).toContain(DIGEST);
   expect(issueReportApprovalReplies(OTHER)).not.toEqual(replies);
+});
+
+/* Two real report texts whose digests share their first eight characters,
+   found by trying wordings; a code cut from the digest let one's yes publish
+   the other. */
+test("a digest that shares a prefix with the approved one is not approved", () => {
+  const approved = "ad820fd8eb8edb0d44f40af36f245662056dd588ebea7c7a1fb926d69fe59567";
+  const sibling = "ad820fd8ca56001a1f08a9f037f652bb906160c9effff1070f72ac9bdf372af9";
+  const yes = issueReportApprovalReplies(approved);
+  expect(approvesIssueReport(yes.en, approved)).toBe(true);
+  expect(approvesIssueReport(yes.en, sibling)).toBe(false);
+  expect(approvesIssueReport(yes.uk, sibling)).toBe(false);
+  expect(approvesIssueReport(`Yes, publish report ${approved.slice(0, 8)}`, approved)).toBe(false);
 });
 
 test("only the approving reply of this digest approves", () => {
@@ -34,8 +46,7 @@ test("only the approving reply of this digest approves", () => {
   for (const said of [replies.en, replies.uk, replies.en.toLowerCase(), ` ${replies.uk}. `, replies.en.replace(",", "")]) {
     expect(approvesIssueReport(said, DIGEST)).toBe(true);
   }
-  const code = issueReportApprovalCode(DIGEST);
-  for (const said of ["yes", "так", "Так, публікуй", code, `No, do not publish report ${code}`, `${replies.en} after you fix the title`, issueReportApprovalReplies(OTHER).en, ""]) {
+  for (const said of ["yes", "так", "Так, публікуй", DIGEST, `No, do not publish report ${DIGEST}`, `${replies.en} after you fix the title`, issueReportApprovalReplies(OTHER).en, ""]) {
     expect(approvesIssueReport(said, DIGEST)).toBe(false);
   }
 });

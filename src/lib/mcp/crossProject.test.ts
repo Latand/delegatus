@@ -11,9 +11,10 @@ import { createMcpToolService, MemoryMcpReceiptStore, TOOL_INPUT_SCHEMAS, type M
 
 /*
  * #2518 part 4: cross-project work goes seat to seat. A designated seat that
- * puts a task, a pipeline or an agent on a project that has its own seat is
- * refused with a pointer to send_message_to_orchestrator, unless it quotes the
- * operator's request for exactly that in crossProjectRequest.
+ * puts a task, a pipeline or an agent on another project, with or without a
+ * seat of its own, is refused with a pointer to send_message_to_orchestrator,
+ * unless it quotes the operator's request for exactly that in
+ * crossProjectRequest.
  */
 
 let sandbox = "";
@@ -104,11 +105,24 @@ test("the operator's explicit request, quoted in crossProjectRequest, lets the t
   expect(cardsNamed("Blank quote card")).toEqual([]);
 });
 
-test("a seat works its own board, and a project with no seat has nobody to hand over to", async () => {
+test("a seat works its own board without a quote", async () => {
   expect((await call(SEAT, "create_task", { project: OWN, text: "Our own work" })).ok).toBe(true);
-  expect((await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" })).ok).toBe(true);
   expect(cardsNamed("Our own work").map((task) => task.project)).toEqual([OWN]);
-  expect(cardsNamed("Nobody manages this board").map((task) => task.project)).toEqual(["project-without-a-seat"]);
+});
+
+test("a project with no seat yet is refused the same way, and the answer says the handover designates its seat", async () => {
+  const refused = await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" });
+  expect(refused).toMatchObject(REFUSED);
+  expect(refused.error).toContain("no orchestrator seat yet");
+  expect(refused.error).toContain("send_message_to_orchestrator");
+  expect(refused.error).toContain("crossProjectRequest");
+  expect(refused.details).toMatchObject({ tool: "create_task", targetProject: "project-without-a-seat", targetHasSeat: false, use: "send_message_to_orchestrator" });
+  expect(cardsNamed("Nobody manages this board")).toEqual([]);
+  /* The operator's explicit request lets it through. */
+  expect((await call(SEAT, "create_task", {
+    project: "project-without-a-seat", text: "Asked for on an unmanaged board", crossProjectRequest: "Add the card to that project yourself.",
+  })).ok).toBe(true);
+  expect(cardsNamed("Asked for on an unmanaged board").map((task) => task.project)).toEqual(["project-without-a-seat"]);
 });
 
 test("only a seat is judged: a worker and the operator's own session create the task as before", async () => {
@@ -143,7 +157,15 @@ test("the recoverable launch tools refuse while they bind, so no receipt is clai
   /* With the operator's request quoted, the pipeline binds to the other project. */
   const bound = tools.create_pipeline!.bind({ clientRequestId: "bind-pipeline-asked", repoDir: otherDir(), task: "t", stages: [], crossProjectRequest: "Do it on their board." });
   expect(bound).toMatchObject({ target: { project: otherProject() } });
-  /* A directory no seat manages binds as before. */
-  expect(tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged", repoDir: unmanagedDir(), task: "t", stages: [] }))
+  /* A directory no seat manages is refused the same way by both, and binds once the operator asked. */
+  const unmanagedSpawn = () => tools.spawn_agent!.bind({ clientRequestId: "bind-unmanaged-spawn", cwd: unmanagedDir(), prompt: "p", title: "t" });
+  const unmanagedPipeline = () => tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged", repoDir: unmanagedDir(), task: "t", stages: [] });
+  for (const bind of [unmanagedSpawn, unmanagedPipeline]) {
+    let thrown: unknown;
+    try { bind(); } catch (error) { thrown = error; }
+    expect((thrown as { details?: { code?: string; targetHasSeat?: boolean; use?: string } }).details)
+      .toMatchObject({ code: "cross_project_refused", targetHasSeat: false, use: "send_message_to_orchestrator" });
+  }
+  expect(tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged-asked", repoDir: unmanagedDir(), task: "t", stages: [], crossProjectRequest: "Run it there." }))
     .toMatchObject({ target: { project: projectForCwd(unmanagedDir()) } });
 });

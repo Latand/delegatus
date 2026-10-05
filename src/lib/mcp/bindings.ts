@@ -1697,10 +1697,11 @@ function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task
  * The call is refused. A warning would arrive with the work already on the
  * other board and its seat already bypassed; a refusal costs one more call.
  *
- * Two things lift it. The operator asked for exactly this, which the seat
- * states by quoting the request in `crossProjectRequest`; or the target has no
- * designated seat, so there is nobody to hand over to and a seat cannot
- * create one. Only a seat is judged: a worker, a stage and the operator's own
+ * One thing lifts it: the operator asked for exactly this, which the seat
+ * states by quoting the request in `crossProjectRequest`. A target with no
+ * designated seat is refused the same way, and the answer says so:
+ * send_message_to_orchestrator designates one for that project before it
+ * delivers. Only a seat is judged: a worker, a stage and the operator's own
  * session launch as they did.
  */
 function refuseCrossProjectFromSeat(
@@ -1725,12 +1726,15 @@ function refuseCrossProjectFromSeat(
   const seatProject = canonicalOrchestratorProject(own);
   const targetProject = canonicalOrchestratorProject(named);
   if (seatProject === targetProject) return;
-  if (!seats.some((seat) => !!seat.project && canonicalOrchestratorProject(seat.project) === targetProject)) return;
+  const targetHasSeat = seats.some((seat) => !!seat.project && canonicalOrchestratorProject(seat.project) === targetProject);
   throw new McpToolRefusal(
-    `${tool} from an orchestrator seat onto another project's board is refused: that project's own seat manages its board. `
+    `${tool} from an orchestrator seat onto another project's board is refused: `
+    + (targetHasSeat
+      ? "that project's own seat manages its board. "
+      : "that project has no orchestrator seat yet, and the handover designates one before it delivers. ")
     + "Hand the work over with send_message_to_orchestrator, giving that project and the task context. "
     + "When the operator explicitly asked you to act on that project directly, repeat the call with crossProjectRequest quoting their request.",
-    { code: "cross_project_refused", status: 403, retryable: false, tool, seatProject, targetProject, use: "send_message_to_orchestrator" },
+    { code: "cross_project_refused", status: 403, retryable: false, tool, seatProject, targetProject, targetHasSeat, use: "send_message_to_orchestrator" },
   );
 }
 

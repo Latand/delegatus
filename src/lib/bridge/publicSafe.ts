@@ -1,3 +1,6 @@
+import { domainToASCII } from "node:url";
+
+import { IANA_TOP_LEVEL_DOMAINS } from "@/lib/bridge/topLevelDomains";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 /*
@@ -95,8 +98,10 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
   ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
-  /* Folder names are letters of any script, so `\w` would miss most of them. */
-  ["path", /(?:^|[\s(«"'`=])\/(?:[\p{L}\p{N}_.@-]+\/)+[\p{L}\p{N}_.@-]*/u],
+  /* Folder names are letters of any script, so `\w` would miss most of them,
+     and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
+     space-separated run counts only once a later slash closes the folder. */
+  ["path", /(?:^|[\s(«"'`=])\/(?:[\p{L}\p{N}_.@-]+(?:(?: |\\ )[\p{L}\p{N}_.@-]+)*\/)+[\p{L}\p{N}_.@-]*/u],
   ["path", /(?:^|[\s(«"'`=])\/(?:home|root|Users|tmp|var|etc|opt|usr|mnt|srv|proc|run|private)\b/],
   ["path", /\b[a-z]:\\[\w\\. -]+/i],
   ["phone", /\+\d{1,3}[\s-]?\(?\d{2,4}\)?(?:[\s-]?\d{2,4}){2,4}\b/],
@@ -120,9 +125,12 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
  * line; a bug report refused in doubt costs its author one more wording. So
  * the strict reading keeps none of the allowances above:
  *
- *  - a domain is any dotted name ending in a top-level domain, country codes
- *    included (`buildbox.fr`). The two-letter endings that are source file
- *    extensions stay readable, or no report could name `bindings.ts`;
+ *  - a domain is any dotted name, in any script, ending in a top-level domain
+ *    of the root zone (`buildbox.fr`, `buildbox.tools`, `buildbox.xn--p1ai`,
+ *    `вузол.укр`) or a private one (`.lan`, `.internal`), and any ending in
+ *    `xn--`. The endings that are source file extensions stay readable, or no
+ *    report could name `bindings.ts`, and so does a name a call follows
+ *    (`Date.now()`, `rows.map(...)`): that is code;
  *  - an id is also eight or more bare hex characters, whatever they are: a
  *    pipeline id is the first eight of a UUID, which can be all digits or all
  *    letters;
@@ -133,19 +141,27 @@ export interface PrivateClassOptions {
   strict?: boolean;
 }
 
-const STRICT_TLD = new Set([
-  ...TLD.slice(3, -1).split("|"),
-  "edu", "gov", "mil", "int", "mobi", "shop", "store", "blog", "club", "news", "wiki", "host",
-]);
+/* Names a private network resolves that the root zone never will. */
+const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion"]);
 const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
-const DOTTED_NAME = /(?<![\p{L}\p{N}_-])(?:[a-z0-9-]+\.)+([a-z]{2,24})(?![\p{L}\p{N}_-])/giu;
+/* Labels of any script, joined by any of the dots IDNA reads as one. */
+const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\s*\()?/giu;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
 
+function topLevelDomain(ending: string): boolean {
+  const lower = ending.toLowerCase();
+  if (lower.startsWith("xn--")) return true;
+  if (PRIVATE_TLD.has(lower) || IANA_TOP_LEVEL_DOMAINS.has(lower)) return true;
+  if (/^[a-z]+$/.test(lower)) return false;
+  const ascii = domainToASCII(lower);
+  return !!ascii && IANA_TOP_LEVEL_DOMAINS.has(ascii);
+}
+
 function strictDomain(text: string): boolean {
   for (const match of text.matchAll(DOTTED_NAME)) {
-    const ending = match[1].toLowerCase();
-    if (STRICT_TLD.has(ending) || (ending.length === 2 && !SOURCE_EXTENSIONS.has(ending))) return true;
+    if (match[2] || SOURCE_EXTENSIONS.has(match[1].toLowerCase())) continue;
+    if (topLevelDomain(match[1])) return true;
   }
   return false;
 }
