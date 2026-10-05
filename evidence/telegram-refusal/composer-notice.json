@@ -254,5 +254,133 @@
       "overflowX": 0,
       "viewportWidth": 1440
     }
+  },
+  "conflict-phone-390-en": {
+    "closed": {
+      "line": "Not delivered — A Codex setting blocks Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Not delivered — A Codex setting blocks Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "This Codex account has its own entry named telegram in its settings, so the agent cannot start with the Telegram tool. Remove or rename that entry, then send the message again.",
+      "detailInsideViewport": true,
+      "detailLines": 3,
+      "chip": "not delivered: A Codex setting blocks Telegram",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "conflict-phone-390-uk": {
+    "closed": {
+      "line": "Не доставлено — Codex блокує Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "line": "Не доставлено — Codex блокує Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 228,
+      "attempts": "×2",
+      "detail": "У налаштуваннях цього акаунта Codex є власний запис із назвою telegram, тому агент не може стартувати з інструментом Telegram. Видаліть або перейменуйте цей запис і надішліть повідомлення ще раз.",
+      "detailInsideViewport": true,
+      "detailLines": 4,
+      "chip": "не доставлено: Codex блокує Telegram",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "conflict-desktop-1440-en": {
+    "closed": {
+      "line": "Not delivered — A Codex setting blocks Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Not delivered — A Codex setting blocks Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "This Codex account has its own entry named telegram in its settings, so the agent cannot start with the Telegram tool. Remove or rename that entry, then send the message again.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "not delivered: A Codex setting blocks Telegram",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "conflict-desktop-1440-uk": {
+    "closed": {
+      "line": "Не доставлено — Codex блокує Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": null,
+      "detailInsideViewport": false,
+      "detailLines": 0,
+      "chip": null,
+      "chipClippedPx": null,
+      "chipInsideViewport": false,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "line": "Не доставлено — Codex блокує Telegram",
+      "lineClippedPx": 0,
+      "lineWidth": 1280,
+      "attempts": "×2",
+      "detail": "У налаштуваннях цього акаунта Codex є власний запис із назвою telegram, тому агент не може стартувати з інструментом Telegram. Видаліть або перейменуйте цей запис і надішліть повідомлення ще раз.",
+      "detailInsideViewport": true,
+      "detailLines": 1,
+      "chip": "не доставлено: Codex блокує Telegram",
+      "chipClippedPx": 0,
+      "chipInsideViewport": true,
+      "runtimeWords": false,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
   }
 }

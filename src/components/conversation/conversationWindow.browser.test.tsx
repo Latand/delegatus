@@ -520,6 +520,15 @@ describe("composer stays usable with a dead host", () => {
   }, 240_000);
 });
 
+/** The refusals a Telegram launch can leave on a message, by the fixture's
+    `?cause=`, with the lines each one renders. */
+const TELEGRAM_REFUSALS = ["off", "withdrawn", "conflict"] as const;
+const TELEGRAM_REFUSAL_KEYS = {
+  off: { outbox: "outbox.failure.telegramOff", cause: "receipt.cause.telegramOff", remedy: "receipt.remedy.telegramOff" },
+  withdrawn: { outbox: "outbox.failure.telegramWithdrawn", cause: "receipt.cause.telegramWithdrawn", remedy: "receipt.remedy.telegramWithdrawn" },
+  conflict: { outbox: "outbox.failure.telegramNameTaken", cause: "receipt.cause.telegramNameTaken", remedy: "receipt.remedy.telegramNameTaken" },
+} as const;
+
 describe("a restart refused for Telegram reads as one line with what to do", () => {
   /*
    * A conversation that holds the Telegram tool used to refuse every message
@@ -531,10 +540,11 @@ describe("a restart refused for Telegram reads as one line with what to do", () 
    *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
    *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "refused for Telegram"
    *
-   * The failed row over `?case=dead-host-telegram-refused`, at 390 and 1440 px
-   * in en and uk: the reason is one sentence in the interface language with its
-   * action, it appears once, and the disclosure behind it prints no raw
-   * sentence. Readings go to `evidence/telegram-refusal/outbox.json`; frames to
+   * The failed row over `?case=dead-host-telegram-refused`, for the three
+   * refusals (Telegram disconnected, the grant withdrawn, the account's own
+   * entry in the way), at 390 and 1440 px in en and uk: the reason is one
+   * sentence in the interface language with its action, it appears once, and
+   * the disclosure behind it prints no raw sentence. Readings go to `evidence/telegram-refusal/outbox.json`; frames to
    * `.artifacts/telegram-refusal/`, which is not committed.
    */
   const OUT = path.resolve(".artifacts/telegram-refusal");
@@ -552,11 +562,12 @@ describe("a restart refused for Telegram reads as one line with what to do", () 
     const readings: Record<string, unknown> = {};
     try {
       browser = await chromium.launch(LAUNCH);
-      for (const viewport of VIEWPORTS) {
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
         for (const lang of ["en", "uk"] as const) {
+          const sentence = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].outbox);
           const { context, page, pageErrors } = await openFixture(
             browser,
-            `${served.base}?case=dead-host-telegram-refused&lang=${lang}`,
+            `${served.base}?case=dead-host-telegram-refused&cause=${refusal}&lang=${lang}`,
             { width: viewport.width, height: viewport.height },
             "dark",
             lang,
@@ -581,17 +592,17 @@ describe("a restart refused for Telegram reads as one line with what to do", () 
                 overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
                 viewportWidth: window.innerWidth,
               };
-            }, translate(lang, "outbox.failure.telegramOff"));
+            }, sentence);
             const closed = await read();
-            await page.screenshot({ path: path.join(OUT, `${viewport.name}-${lang}.png`), fullPage: true });
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
             await page.locator("[data-outbox-reason]").first().click();
             await page.waitForSelector("[data-outbox-detail]");
             const open = await read();
-            await page.screenshot({ path: path.join(OUT, `${viewport.name}-${lang}-open.png`), fullPage: true });
-            readings[`${viewport.name}-${lang}`] = { closed, open };
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
             expect(pageErrors).toEqual([]);
             for (const reading of [closed, open]) {
-              expect(reading.statusLabel).toBe(translate(lang, "outbox.failure.telegramOff"));
+              expect(reading.statusLabel).toBe(sentence);
               expect(reading.timesSaid).toBe(1);
               expect(reading.runtimeWords).toBe(false);
               expect(reading.rawLines).toBe(0);
@@ -623,7 +634,8 @@ describe("the composer's notice for a Telegram refusal fits a phone and says wha
    *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "composer's notice for a Telegram refusal"
    *
    * `?case=telegram-refused-composer` — one message that failed twice — for
-   * both refusals (Telegram disconnected, and the grant withdrawn), at 390 and
+   * the three refusals (Telegram disconnected, the grant withdrawn, the
+   * account's own entry in the way), at 390 and
    * 1440 px in en and uk, at rest and expanded: the line and the chip carry the
    * short cause unclipped, the action is a wrapped sentence in the expanded
    * detail, and no line of the notice repeats another. Readings go to
@@ -645,7 +657,7 @@ describe("the composer's notice for a Telegram refusal fits a phone and says wha
     const readings: Record<string, unknown> = {};
     try {
       browser = await chromium.launch(LAUNCH);
-      for (const refusal of ["off", "withdrawn"] as const) for (const viewport of VIEWPORTS) {
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
         for (const lang of ["en", "uk"] as const) {
           const { context, page, pageErrors } = await openFixture(
             browser,
@@ -691,8 +703,8 @@ describe("the composer's notice for a Telegram refusal fits a phone and says wha
             await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
             readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
             expect(pageErrors).toEqual([]);
-            const cause = translate(lang, refusal === "off" ? "receipt.cause.telegramOff" : "receipt.cause.telegramWithdrawn");
-            const remedy = translate(lang, refusal === "off" ? "receipt.remedy.telegramOff" : "receipt.remedy.telegramWithdrawn");
+            const cause = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].cause);
+            const remedy = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].remedy);
             for (const reading of [closed, open]) {
               /* One line for two failed attempts, with the short cause whole. */
               expect(reading.line).toBe(`${translate(lang, "composer.deliveryFailed")} — ${cause}`);

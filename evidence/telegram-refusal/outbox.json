@@ -1,5 +1,5 @@
 {
-  "phone-390-en": {
+  "off-phone-390-en": {
     "closed": {
       "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
@@ -25,7 +25,7 @@
       "viewportWidth": 390
     }
   },
-  "phone-390-uk": {
+  "off-phone-390-uk": {
     "closed": {
       "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
@@ -51,7 +51,7 @@
       "viewportWidth": 390
     }
   },
-  "desktop-1440-en": {
+  "off-desktop-1440-en": {
     "closed": {
       "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
@@ -77,7 +77,7 @@
       "viewportWidth": 1440
     }
   },
-  "desktop-1440-uk": {
+  "off-desktop-1440-uk": {
     "closed": {
       "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
@@ -98,6 +98,214 @@
       "actions": 1,
       "reasonInsideViewport": true,
       "reasonWidth": 315,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "withdrawn-phone-390-en": {
+    "closed": {
+      "statusLabel": "This agent no longer has Telegram access — start a new agent to continue",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "This agent no longer has Telegram access — start a new agent to continue",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "withdrawn-phone-390-uk": {
+    "closed": {
+      "statusLabel": "Цей агент більше не має доступу до Telegram — запустіть нового агента, щоб продовжити",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "Цей агент більше не має доступу до Telegram — запустіть нового агента, щоб продовжити",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "withdrawn-desktop-1440-en": {
+    "closed": {
+      "statusLabel": "This agent no longer has Telegram access — start a new agent to continue",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 355,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "This agent no longer has Telegram access — start a new agent to continue",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 355,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "withdrawn-desktop-1440-uk": {
+    "closed": {
+      "statusLabel": "Цей агент більше не має доступу до Telegram — запустіть нового агента, щоб продовжити",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 450,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "Цей агент більше не має доступу до Telegram — запустіть нового агента, щоб продовжити",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 450,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "conflict-phone-390-en": {
+    "closed": {
+      "statusLabel": "A Codex setting blocks Telegram — remove the account's own telegram entry, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "A Codex setting blocks Telegram — remove the account's own telegram entry, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "conflict-phone-390-uk": {
+    "closed": {
+      "statusLabel": "Налаштування Codex блокує Telegram — приберіть власний запис telegram в акаунті й надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "Налаштування Codex блокує Telegram — приберіть власний запис telegram в акаунті й надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "conflict-desktop-1440-en": {
+    "closed": {
+      "statusLabel": "A Codex setting blocks Telegram — remove the account's own telegram entry, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 450,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "A Codex setting blocks Telegram — remove the account's own telegram entry, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 450,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "conflict-desktop-1440-uk": {
+    "closed": {
+      "statusLabel": "Налаштування Codex блокує Telegram — приберіть власний запис telegram в акаунті й надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 515,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "Налаштування Codex блокує Telegram — приберіть власний запис telegram в акаунті й надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 515,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 1440

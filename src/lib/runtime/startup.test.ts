@@ -38,6 +38,10 @@ import { didStructuredHostStartupFail, structuredStartupStatus } from "./startup
 import { adoptStructuredHostsAtStartup, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
+import { CodexAppServerHost } from "./codexAppServerHost";
+import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
+import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
@@ -5073,4 +5077,92 @@ test("a host raised at start reads its Telegram grant again before the token is 
   expect(() => check()).toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
   /* A host that holds no grant has nothing to re-read. */
   expect(startupTelegramGrantCheck(registry, { key, launchProfile: { mcpServers: ["viewer"] } } as never)).toBeUndefined();
+});
+
+for (const engine of ["claude", "codex"] as const) test(`a ${engine} host raised at start is refused when its Telegram grant is withdrawn while Telegram reconnects`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-telegram-"));
+  const previousStateDirectory = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registryPath = path.join(directory, "agent-registry.json");
+  const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const home = path.join(directory, "account");
+  const transcriptRoot = path.join(home, engine === "claude" ? "projects" : "sessions");
+  fs.mkdirSync(transcriptRoot, { recursive: true });
+  const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(transcriptRoot, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, JSON.stringify({ sessionId }) + "\n");
+  /* A seat the operator started: the grant on its row is a real one. */
+  const begun = beginLegacySpawnFixture(registry, { engine, cwd: directory, role: "orchestrator",
+    origin: { kind: "operator" }, launchProfile: { mcpServers: ["viewer", "telegram"] } });
+  if (begun.kind !== "created") throw new Error("seat reservation failed");
+  if (registry.settleSpawn(begun.receipt.launchId, { key: { engine, sessionId }, artifactPath, cwd: directory,
+    accountId: "account", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  }).kind !== "settled") throw new Error("seat settlement failed");
+  const entryId = `${engine}:${sessionId}`;
+  expect(registry.readOnlySnapshot().entries[entryId]?.launchProfile?.mcpServers).toEqual(["viewer", "telegram"]);
+  const withdraw = () => {
+    const file = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      entries: Record<string, { launchProfile: { mcpServers: string[] } }>;
+      conversations: Record<string, { generations: { launchProfile: { mcpServers: string[] } }[] }> };
+    file.entries[entryId]!.launchProfile.mcpServers = ["viewer"];
+    file.conversations[begun.receipt.conversationId]!.generations.at(-1)!.launchProfile.mcpServers = ["viewer"];
+    fs.writeFileSync(registryPath, JSON.stringify(file));
+  };
+  /* A credential is stored and the last health check failed. The check the
+     start waits for brings the connection back, and the grant is withdrawn
+     while it runs. */
+  const session = saveTelegramSession("placeholder-session-for-telegram-startup-test");
+  const record = (status: "connected" | "error") => writeTelegramConnection({ version: 1, status,
+    credentialRef: session.credentialRef, identity: null, lastHealthCheckAt: null,
+    errorCode: status === "error" ? "connector_failed" : null, identityIdUpgradedAt: null });
+  record("error");
+  const repair = { checks: 0 };
+  setTelegramLaunchRepairForTests({
+    healthCheck: async () => { repair.checks += 1; withdraw(); record("connected"); },
+    waitMs: 2_000,
+    cooldownMs: 0,
+  });
+  const reached = { engine: false, tokenPresent: false };
+  const spawnProcess = (_binary: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+    reached.engine = true;
+    reached.tokenPresent = Boolean(options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]);
+    throw new Error("synthetic engine stopped after launch capture");
+  };
+  let refusal = "";
+  /* The options are the ones the start builds for this row; only the engine
+     process behind the real host is synthetic. */
+  const raise = async (start: () => Promise<unknown>) => {
+    try { await start(); } catch (error) { refusal = error instanceof Error ? error.message : String(error); }
+    return [];
+  };
+  try {
+    await adoptStructuredHostsAtStartup({
+      registry,
+      client: null,
+      orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {},
+      resolveCodexOwner: () => ({ home, kind: "managed" }),
+      resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot, env: { NODE_ENV: "test", HOME: directory } }),
+      adopt: async (received, optionsFor) => engine !== "codex" ? [] : raise(() => CodexAppServerHost.adopt(sessionId, {
+        ...optionsFor(received.readOnlySnapshot().entries[`codex:${sessionId}`]!),
+        spawnProcess: spawnProcess as never,
+      })),
+      adoptClaude: async (received, optionsFor) => engine !== "claude" ? [] : raise(() => ClaudeStreamBrokerHost.adopt(sessionId, {
+        ...optionsFor(received.readOnlySnapshot().entries[`claude:${sessionId}`]!),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: spawnProcess as never,
+      })),
+    });
+  } finally {
+    setTelegramLaunchRepairForTests(null);
+    deleteTelegramSession();
+    clearTelegramConnection();
+    if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDirectory;
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  expect(repair.checks).toBe(1);
+  expect(refusal).toBe(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  expect(reached).toEqual({ engine: false, tokenPresent: false });
 });

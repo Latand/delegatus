@@ -909,7 +909,41 @@ for (const engine of ["claude", "codex"] as const) test(`revoking the seat befor
     expect(probe.evidence.telegramDefinition).toBeFalsy();
   }));
 
-test("Claude rechecks the seat grant after async auth and before token injection", async () => withRegistryMode("sqlite", async (sqlitePath) => {
+for (const engine of ["claude", "codex"] as const) test(`revoking the seat while a ${engine} launch waits for Telegram to reconnect refuses the launch`,
+  async () => withRegistryMode("sqlite", async (sqlitePath) => {
+    connected();
+    const seatId = seedSeat();
+    const token = signedInWith({ status: "error", errorCode: "connector_failed" });
+    /* The health check the launch waits for brings the connection back, and
+       the seat loses its grant while it runs. */
+    const repair = { checks: 0 };
+    setTelegramLaunchRepairForTests({
+      healthCheck: async () => {
+        repair.checks += 1;
+        rewriteSqliteRow(sqlitePath, "conversations", seatId, row => {
+          (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+        });
+        signedInWith({ status: "connected", errorCode: null });
+      },
+      waitMs: 2_000,
+      cooldownMs: 0,
+    });
+    const probe = deferredLaunch(engine, token);
+    const { response, receipt } = await launch(engine, seatId, ["telegram"], probe.overrides);
+    expect(response.status).toBe(202);
+    expect(receipt?.launchProfile.mcpServers).toContain("telegram");
+    await Promise.all(probe.work.map(work => work()));
+    expect(repair.checks).toBe(1);
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
+      state: "failed", error: TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH,
+    });
+    expect(probe.evidence.reachedEngine).toBe(false);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+    connected();
+  }));
+
+test("Claude rechecks the seat grant after async auth and before token injection",async () => withRegistryMode("sqlite", async (sqlitePath) => {
   const token = connected();
   const seatId = seedSeat();
   const probe = deferredLaunch("claude", token, undefined, () => {

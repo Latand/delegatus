@@ -962,7 +962,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "receipt.remedy.telegramOff": "Надішліть повідомлення ще раз. Розмова тепер запускається, навіть коли Telegram вимкнено.",
   "receipt.cause.telegramWithdrawn": "Telegram відкликано",
   "receipt.remedy.telegramWithdrawn": "Цей агент більше не має доступу до Telegram. Запустіть нового агента, щоб продовжити.",
-  "receipt.cause.telegramNameTaken": "Налаштування Codex блокує Telegram",
+  "receipt.cause.telegramNameTaken": "Codex блокує Telegram",
   "receipt.remedy.telegramNameTaken": "У налаштуваннях цього акаунта Codex є власний запис із назвою telegram, тому агент не може стартувати з інструментом Telegram. Видаліть або перейменуйте цей запис і надішліть повідомлення ще раз.",
 
   "draft.readPrompt": "Прочитай розмову агента у файлі {src} і продовж роботу звідти: ",

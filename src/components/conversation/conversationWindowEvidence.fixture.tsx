@@ -337,6 +337,15 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
 const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
+const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
+const TELEGRAM_CONFLICT = "structured host recovery failed: telegram MCP account definition conflicts with operator connector";
+
+/** `?cause=withdrawn` is the refusal that stays a refusal; `?cause=conflict`
+    is the account's own entry that blocks the tool. */
+function telegramRefusal(): string {
+  const cause = params.get("cause");
+  return cause === "withdrawn" ? TELEGRAM_WITHDRAWN : cause === "conflict" ? TELEGRAM_CONFLICT : TELEGRAM_REFUSAL;
+}
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -347,7 +356,7 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
   /* The sentence the queue recorded when a restart was refused for Telegram. */
-  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: TELEGRAM_REFUSAL } as OutboxEntry;
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: telegramRefusal() } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
 }
 
@@ -356,11 +365,8 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
  * twice, each attempt carrying the sentence behind a different wrapper, as the
  * send route and the queue's drain record it.
  */
-const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
-
 function TelegramComposerNoticeFixture() {
-  /* `?cause=withdrawn` is the refusal that stays a refusal. */
-  const refusal = params.get("cause") === "withdrawn" ? TELEGRAM_WITHDRAWN : TELEGRAM_REFUSAL;
+  const refusal = telegramRefusal();
   const attempt = (n: number, reason: string): RuntimeReceipt => ({
     operationId: `telegram-refused-${n}`, idempotencyKey: `telegram-refused-key-${n}`,
     conversationId: DEAD_CARD, kind: "send", status: "failed", text: DEAD_SENT,
