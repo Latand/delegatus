@@ -132,6 +132,18 @@
  * the viewer while a click on the picture or a pan that ends off it does not;
  * it renders the viewer mid-gallery at 1440 × 900 and 390 × 844.
  *
+ * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
+ * says when a creation did not land, on a signed-in home with no seat: the
+ * designation still waiting on its launch, a failure recorded with the account
+ * lock's own diagnostic, a launch that failed, a launch that timed out, and
+ * the seat once the read has put it on its launch. Each state is written
+ * through the Viewer's own seat module while the server runs, so the page
+ * reads it the way a reload would, at 1440 × 900 and 390 × 844 in en and uk.
+ * It requires the plain sentence and its instruction for the lock and the
+ * timeout, no pid and no engine name in either, the recorded text for a cause
+ * with no sentence of its own, one retry control inside the viewport, and no
+ * text cut or scrolled inside the failure block.
+ *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
  * real Control+wheel for the pinch path, real keyboard for the zoom keys, a
@@ -3742,6 +3754,206 @@ async function seatsMain(which: SeatCase): Promise<void> {
 }
 
 /* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=seat-creation: a creation that did not land            */
+/* ------------------------------------------------------------------------- */
+
+type SeatCreationState = "waiting" | "store-busy" | "launch-failed" | "launch-timeout" | "seated";
+
+/** Read inside the page: the pane (or the phone's sheet) and what it offers. */
+function readSeatCreation(root: string) {
+  const host = document.querySelector<HTMLElement>(root);
+  const box = (node: Element | null) => {
+    if (!node) return null;
+    const r = node.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  };
+  const error = host?.querySelector<HTMLElement>("[data-orchestrator-intent-error]") ?? null;
+  const text = host?.querySelector<HTMLElement>("[data-orchestrator-failure-text]") ?? null;
+  const hint = host?.querySelector<HTMLElement>("[data-orchestrator-failure-hint]") ?? null;
+  /* The phone sheet keeps its actions in a footer beside the body it marks. */
+  const scope = host?.closest<HTMLElement>('[role="dialog"]') ?? (host?.matches('[data-testid="mobile-orchestrator-sheet"]') ? document.body : host);
+  const buttons = [...(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+    .filter((node) => node.getBoundingClientRect().width > 0 && (node.textContent?.trim() ?? "") !== "")
+    .map((node) => ({ text: node.textContent!.trim(), box: box(node)!, disabled: node.disabled }));
+  return {
+    state: host?.getAttribute("data-orchestrator-state") ?? host?.getAttribute("data-orchestrator-sheet-state") ?? null,
+    status: [...(host?.querySelectorAll('[role="status"]') ?? [])].map((node) => node.textContent?.trim() ?? ""),
+    error: box(error),
+    errorTitle: error?.querySelector("p")?.textContent?.trim() ?? null,
+    failureText: text?.textContent?.trim() ?? null,
+    failureHint: hint?.textContent?.trim() ?? null,
+    /* The block's text is never cut sideways or left behind a scrollbar. */
+    textScrolls: text ? text.scrollHeight - text.clientHeight : 0,
+    errorOverflowX: error ? error.scrollWidth - error.clientWidth : 0,
+    errorWords: error?.textContent ?? "",
+    buttons,
+    host: box(host),
+    viewport: { w: innerWidth, h: innerHeight },
+    pageOverflowX: document.documentElement.scrollWidth - innerWidth,
+  };
+}
+
+async function seatCreationMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  /* A signed-in Claude, as on the machine the report came from: the draft's
+     button then reads «Try again», which is what the failure tells the
+     operator to press. */
+  fs.mkdirSync(BIN_DIR, { recursive: true });
+  fakeCli("claude", true);
+  claudeSignedIn(true);
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "seat-creation" };
+  const start = () => spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: repoRoot,
+    /* The stub under the seeded home is the only `claude` on the PATH. */
+    env: { ...buildEnvironment(port), PATH: `${BIN_DIR}:/usr/bin:/bin` },
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  try {
+    server = start();
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    process.env.HOME = HOME;
+    process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
+    process.env.LLV_STATE_DIR = STATE_DIR;
+    const seats = await import("@/lib/orchestrator/seats");
+    server = start();
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    await Bun.sleep(3_000);
+
+    /* Each state is the record one step further on, written while the server
+       runs: what a reload reads is what the page shows. */
+    const minute = 60_000;
+    const at = (minutesAgo: number) => new Date(Math.floor(Date.now() / minute) * minute - minutesAgo * minute).toISOString();
+    const begin = (clientRequestId: string, minutesAgo: number) => {
+      const begun = seats.beginOrchestratorSeatIntent({ project, mandate: "Run the board.", clientRequestId, mode: "spawn", engine: "claude", model: "opus", now: at(minutesAgo) });
+      if (begun.kind !== "begun") throw new Error(`the ${clientRequestId} designation did not begin: ${begun.kind}`);
+    };
+    const fail = (clientRequestId: string, error: string, minutesAgo: number) => {
+      if (!seats.failOrchestratorSeatIntent(project, clientRequestId, error, at(minutesAgo))) throw new Error(`the ${clientRequestId} designation was not pending`);
+    };
+    const LAUNCH_FAILED = "launch exited before a transcript materialized";
+    const steps: { state: SeatCreationState; apply: () => void }[] = [
+      { state: "waiting", apply: () => begin("req_creation_1", 9) },
+      { state: "store-busy", apply: () => fail("req_creation_1", "account mutation is busy; held by Codex login commit (pid 4242, age 2 ms); retry shortly", 8) },
+      { state: "launch-failed", apply: () => { begin("req_creation_2", 7); fail("req_creation_2", LAUNCH_FAILED, 6); } },
+      { state: "launch-timeout", apply: () => { begin("req_creation_3", 5); fail("req_creation_3", "structured spawn transport failed: runtime host request timed out", 4); } },
+      {
+        state: "seated",
+        apply: () => {
+          begin("req_creation_4", 3);
+          const id = seatSession(71);
+          const file = writeConversation(path.join(HOME, ".claude/projects", projectSlug(REPO_DIR)), id, "seat conversation", "Holding the seat. " + "Board notes. ".repeat(40), false, at(2));
+          const done = seats.completeOrchestratorSeatIntent({ project, clientRequestId: "req_creation_4", conversationId: id, path: file, engine: "claude", model: "opus", now: at(2) });
+          if (done.kind !== "activated") throw new Error(`the seat did not activate: ${done.kind}`);
+        },
+      },
+    ];
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+    for (const step of steps) {
+      step.apply();
+      for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
+        const tag = `seat-creation-${step.state}-${phone ? 390 : 1440}-${lang}`;
+        /* The operator's language is the server's setting; the page follows it. */
+        const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+        if (!localeWrite.ok) throw new Error(`the ${lang} locale was not stored: ${localeWrite.status}`);
+        const say = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const context = await browser.newContext(phone
+          ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" }
+          : { viewport: { width: 1440, height: 900 }, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(seedInit);
+        await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+        const page = await context.newPage();
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        let root: string;
+        /* The first-run notice is another surface's; it leaves before the read. */
+        const dismissNotice = () => page.locator("button", { hasText: say("telemetry.dismiss") }).first().click({ timeout: 3_000 }).catch(() => {});
+        if (phone) {
+          await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 120_000 });
+          await page.waitForTimeout(2_500);
+          await dismissNotice();
+          /* A seated card's own tap is the conversation; its ⚙ opens the sheet. */
+          await page.click(step.state === "seated" ? "[data-mobile2-seat-controls]" : "[data-mobile2-seat-open]");
+          root = '[data-testid="mobile-orchestrator-sheet"]';
+          await page.waitForSelector(root, { timeout: 30_000 });
+        } else {
+          await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
+          root = `[data-orchestrator-panel="${project}"]`;
+          if (!await page.waitForSelector(root, { timeout: 15_000 }).catch(() => null)) {
+            await page.click("[data-orchestrator-toggle]");
+            await page.waitForSelector(root, { timeout: 30_000 });
+          }
+        }
+        const settled = step.state === "waiting" ? "creating" : step.state === "seated" ? "live" : "intent-error";
+        if (!phone) await page.waitForSelector(`${root}[data-orchestrator-state="${settled}"]`, { timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(2_000);
+        if (!phone) await dismissNotice();
+        const reading = await page.evaluate(readSeatCreation, root);
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+        report[tag] = reading;
+
+        const inside = (box: { x: number; y: number; w: number; h: number } | null) => box !== null && box.x >= 0 && box.y >= 0 && box.x + box.w <= reading.viewport.w + 0.5 && box.y + box.h <= reading.viewport.h + 0.5;
+        const target = phone ? 44 : 32;
+        const button = (label: string) => reading.buttons.find((entry) => entry.text === label) ?? null;
+        must(reading.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${reading.pageOverflowX}px`);
+        if (!phone) must(reading.state === settled, `${tag}: the pane reads ${reading.state}, expected ${settled}`);
+
+        if (step.state === "waiting") {
+          must(reading.status.includes(say("orchPanel.creating")), `${tag}: no «${say("orchPanel.creating")}» status (${reading.status.join(" | ")})`);
+          const resume = button(say("orchPanel.creatingResume"));
+          must(resume !== null && inside(resume.box) && resume.box.h >= target && !resume.disabled, `${tag}: the way through is ${JSON.stringify(resume)}`);
+          must(reading.error === null, `${tag}: a failure block draws over a designation that is still waiting`);
+        } else if (step.state === "seated") {
+          must(reading.error === null, `${tag}: a failure block rides over the seated orchestrator («${reading.errorWords}»)`);
+          must(!reading.status.includes(say("orchPanel.creating")), `${tag}: the seated pane still reads «${say("orchPanel.creating")}»`);
+        } else {
+          const expected = step.state === "store-busy"
+            ? { text: say("orchPanel.failureStoreBusy"), hint: say("orchPanel.failureRetryHint") }
+            : step.state === "launch-timeout"
+              ? { text: say("orchPanel.failureLaunchTimeout"), hint: say("orchPanel.failureLaunchHint") }
+              : { text: LAUNCH_FAILED, hint: say("orchPanel.errorHint") };
+          must(reading.errorTitle === say("orchPanel.errorTitle"), `${tag}: the block is titled «${reading.errorTitle}»`);
+          must(reading.failureText === expected.text, `${tag}: the failure reads «${reading.failureText}»`);
+          must(reading.failureHint === expected.hint, `${tag}: the instruction reads «${reading.failureHint}»`);
+          must(!/pid|4242|Codex|mutation|held by/i.test(reading.errorWords) || step.state === "launch-failed", `${tag}: the block names the lock's holder («${reading.errorWords}»)`);
+          must(inside(reading.error), `${tag}: the failure block is at ${JSON.stringify(reading.error)}`);
+          must(reading.errorOverflowX <= 0 && reading.textScrolls <= 0, `${tag}: the failure text is cut (sideways ${reading.errorOverflowX}px, scrolls ${reading.textScrolls}px)`);
+          must(!reading.status.includes(say("orchPanel.creating")), `${tag}: a failed designation still reads «${say("orchPanel.creating")}»`);
+          const retry = button(say("orchPanel.confirmRetry"));
+          must(retry !== null && inside(retry.box) && retry.box.h >= target && !retry.disabled, `${tag}: the retry control is ${JSON.stringify(retry)}`);
+          must(reading.buttons.filter((entry) => entry.text === say("orchPanel.confirmRetry")).length === 1, `${tag}: ${reading.buttons.filter((entry) => entry.text === say("orchPanel.confirmRetry")).length} retry controls`);
+        }
+        await context.close();
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "seat-creation.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`seat-creation measurements: ${path.join(OUT_DIR, "seat-creation.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`seat-creation acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("seat-creation acceptance passed at 1440 × 900 and 390 × 844 (en, uk).");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
 /* Agent file links open in the preview: markdown, HTML report, :line        */
 /* ------------------------------------------------------------------------- */
 
@@ -6387,5 +6599,6 @@ else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
+else if (process.env.BOARD_CAPTURE_CASE === "seat-creation") await seatCreationMain();
 else if ((SEAT_CASES as readonly string[]).includes(process.env.BOARD_CAPTURE_CASE ?? "")) await seatsMain(process.env.BOARD_CAPTURE_CASE as SeatCase);
 else await main();

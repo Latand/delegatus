@@ -1877,6 +1877,8 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
         throw new Error(`unexpected gh ${args.join(" ")}`);
       },
     });
+    /* The fake `gh` above stands in for the App write seam as well: no token is minted. */
+    ports.write = (args) => ports.run(args);
     for (let poll = 0; poll < Math.ceil(MERGE_SETTLE_MS / MERGE_POLL_MS) + 3; poll += 1) {
       await sweepAutoMerge(ports);
       clock += MERGE_POLL_MS;

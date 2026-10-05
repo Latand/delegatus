@@ -111,6 +111,8 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
       throw new Error(`unexpected gh ${args.join(" ")}`);
     },
   });
+  /* The fake `gh` above stands in for the App write seam as well: no token is minted. */
+  ports.write = (args) => ports.run(args);
 
   await sweepAutoMerge(ports);
   const blocked = loadPipelines().find((pipeline) => pipeline.id === "pipe-merge")!;
