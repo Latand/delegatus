@@ -5,8 +5,8 @@
  * go to. Where a step lands and what the row costs the pane are measured in a
  * real browser by `conversationWindow.browser.test.tsx`.
  */
-import { afterEach, expect, spyOn, test } from "bun:test";
-import { Window } from "happy-dom";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { PropertySymbol, Window } from "happy-dom";
 import { act, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -14,6 +14,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { installActEnv } from "@/test-helpers/actEnv";
 
 const dom = new Window();
+/* Happy DOM 20.10 stores its mutation callback only in a WeakRef. Keep it
+   alive with the listener, as a browser does, so GC cannot silence the
+   feed's row-cache invalidation during these tests. */
+const observeMutations = dom.Node.prototype[PropertySymbol.observeMutations];
+const mutationCallbacks = new WeakMap<object, unknown>();
+dom.Node.prototype[PropertySymbol.observeMutations] = function (listener) {
+  mutationCallbacks.set(listener, listener.callback.deref());
+  observeMutations.call(this, listener);
+};
+afterAll(() => { dom.Node.prototype[PropertySymbol.observeMutations] = observeMutations; });
 installActEnv();
 class NoResizeObserver { observe() {} unobserve() {} disconnect() {} }
 Object.assign(globalThis, {
@@ -250,6 +260,9 @@ test("while a sender is still being read the count keeps the last settled number
 test("a conversation whose senders have never been read shows no row until they are", async () => {
   await render({ id: "a", own: 2, pending: true });
   expect(count("a")).toBeNull();
+  /* A collector cycle must preserve the observer of the current rows. */
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  Bun.gc(true);
   await render({ id: "a", own: 5 });
   expect(total("a")).toBe("5");
   /* Another conversation in the same pane starts from nothing held. */
