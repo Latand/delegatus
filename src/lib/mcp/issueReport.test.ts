@@ -6,7 +6,7 @@ import path from "node:path";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
-import { issueReportDigest, readIssueReportPreview } from "@/lib/issueReports/store";
+import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
 
 import { viewerMcpBindings, type CallerAttribution } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
@@ -245,6 +245,46 @@ test("plan data, token usage and a one-digit port are refused before a preview",
   expect(await h.call(REPORTER, {
     action: "preview", title: REPORT.title,
     body: "The usage meter never refreshed. The investigation plan is to check its update path. The listener refused a connection.",
+  })).toMatchObject({ ok: true, state: "preview" });
+});
+
+test("account observations, qualified token counts and bare endpoints never create a preview", async () => {
+  const h = harness();
+  const cases: [string, string][] = [
+    ["usage", "The account used 93%."],
+    ["usage", '{"usedPercent":93,"resetsAt":"2026-10-07T00:00:00Z"}'],
+    ["usage", "The account has ChatGPT Plus."],
+    ["usage", "The plan is Claude Max."],
+    ["usage", '{"planType":"pro"}'],
+    ["usage", "The session used 120000 input tokens."],
+    ["port", "The listener bound to :8898."],
+    ["port", "The launch ran on buildbox:8898."],
+    ["port", '{"port":8898}'],
+    ["port", "The listener port was 8898."],
+  ];
+  for (const [kind, body] of cases) for (const encode of [
+    (text: string) => text,
+    (text: string) => encodeURIComponent(text),
+    (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join(""),
+    (text: string) => `**${text}**`,
+  ]) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encode(body) });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  /* A preview admitted by an older detector is checked again on publication. */
+  for (const [, body] of cases) {
+    const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
+    const replies = await shown(h, digest);
+    h.operatorSays(replies.en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
+  }
+  expect(h.published).toEqual([]);
+  expect(await h.call(REPORTER, {
+    action: "preview", title: REPORT.title,
+    body: "The check ran at 12:30 and took 20 seconds. The usedPercent field failed to refresh. The investigation plan is to read the event stream.",
   })).toMatchObject({ ok: true, state: "preview" });
 });
 

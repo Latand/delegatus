@@ -174,13 +174,26 @@ const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
 /* Counts and plan facts also disclose usage without a percentage or price.
    Plain technical timing and a prose investigation plan remain readable. */
 const PLAN_TIER = "(?:free|paid|basic|starter|business|premium|max|pro|plus|team|enterprise)";
+const SUBSCRIPTION_PRODUCT = "(?:ChatGPT|Claude)";
+const USAGE_ACCOUNT = "(?:account|session|weekly|monthly|daily|subscription|billing)";
 const STRICT_USAGE = [
   new RegExp(`\\b${PLAN_TIER}[\\s-]+(?:plan|tier|subscription)\\b`, "i"),
-  new RegExp(`\\b(?:plan|tier|subscription)\\s*(?:is|was|:|=)\\s*${PLAN_TIER}\\b`, "i"),
-  /\b\d+(?:[.,]\d+)?\s*(?:tokens?|credits?)\b/i,
+  new RegExp(`\\b(?:plan|tier|subscription)\\s*(?:is|was|:|=)\\s*(?:${SUBSCRIPTION_PRODUCT}\\s+)?${PLAN_TIER}\\b`, "i"),
+  new RegExp(`\\b${SUBSCRIPTION_PRODUCT}\\s+${PLAN_TIER}\\b`, "i"),
+  /\b\d+(?:[.,]\d+)?\s*(?:(?:input|output|cached|cache|total|prompt|completion)[\s-]+)?(?:tokens?|credits?)\b/i,
   /\b(?:tokens?|credits?)\s*(?::|=|(?:used|remaining)\s*)?\s*\d+\b/i,
   new RegExp(`${LIMIT_WORD}[^.;\\n]{0,40}?\\d+(?:[.,]\\d+)?`, "iu"),
+  new RegExp(`\\b${USAGE_ACCOUNT}\\b[^;\\n]{0,80}?\\d+(?:[.,]\\d+)?\\s*%`, "i"),
+  new RegExp(`\\d+(?:[.,]\\d+)?\\s*%[^;\\n]{0,80}?\\b${USAGE_ACCOUNT}\\b`, "i"),
+  /* Numeric observations copied from account_limits or provider usage JSON.
+     Naming a field while describing a bug still carries no observation. */
+  /\b(?:used_?percent|remaining_?percent|resets_?at|window_?duration_?mins|(?:input|output|total|cached)_?tokens)["'`]?\s*[:=]\s*["'`]?\d/i,
+  /\b(?:plan(?:_?type)?|subscription(?:_?type)?|tier)["'`]?\s*[:=]\s*["'`]?\w/i,
 ];
+/* Host endpoints need no dot. A bare bind port also names private state.
+   Keep timestamps and ordinary prose colons readable. */
+const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\d{1,5}\b/u;
+const STRICT_PORT_FIELD = /\b(?:port|listen_?port|server_?port)["'`]?\s*(?:(?:is|was|number|:|=)\s*)?\d{1,5}\b/i;
 
 function topLevelDomain(ending: string): boolean {
   const lower = ending.toLowerCase();
@@ -245,6 +258,7 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (SLASH_OPENED_PATH.test(text) || NETWORK_ROOT_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
+    if (STRICT_PORT.test(text) || STRICT_PORT_FIELD.test(text)) found.add("port");
   }
   if (namesHit(text, deny.accounts, usable)) found.add("account");
   if (namesHit(text, deny.people, usable)) found.add("person");
