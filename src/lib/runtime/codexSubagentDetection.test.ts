@@ -123,7 +123,7 @@ test("a same-path grant retains denied history for scanner discovery and durable
   const profile = emptyLaunchProfile({ cwd: root, title: "Exercise granted resume", allowSubagents: true });
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: conversation.id,
     purpose: "resume-successor", transport: "tmux", expectedArtifactPath: parentPath,
-    origin: { kind: "resume-successor" }, launchProfile: profile });
+    origin: { kind: "successor" }, launchProfile: profile });
   if (begun.kind !== "created") throw new Error("expected resume receipt");
   registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId }, artifactPath: parentPath,
     cwd: root, accountId: null, launchProfile: profile, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
@@ -153,7 +153,7 @@ test.each([[false, "starting"], [false, "failed"], [true, "starting"], [true, "f
     const profile = emptyLaunchProfile({ cwd: root, title: "Exercise unactuated resume", allowSubagents: !allowed });
     const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: conversation.id,
       purpose: "resume-successor", transport: "tmux", expectedArtifactPath: parentPath,
-      origin: { kind: "resume-successor" }, launchProfile: profile });
+      origin: { kind: "successor" }, launchProfile: profile });
     if (begun.kind !== "created") throw new Error("expected resume intent");
     if (state === "failed") registry.failSpawn(begun.receipt.launchId, "fixture failure before actuation");
     expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]?.key).toBeNull();
