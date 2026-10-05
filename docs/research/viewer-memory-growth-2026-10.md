@@ -62,8 +62,8 @@ under ongoing work; four minutes cannot determine its long-term asymptote.
 The trace contains irregular spikes and a late large spike. It does not
 establish a regular 20-second oscillator.
 An isolated local build overlapped part of this observation. Incoming work and
-host pressure were uncontrolled, so this window supplies an observation rather
-than a before/after causal experiment.
+host pressure were uncontrolled. This window supplies a descriptive observation;
+causal before/after effects were not measured.
 
 Read-only context collection found a 32.75 MiB `state.sqlite`, zero-byte state
 WAL at that instant, and a 36.11 MiB registry database. The persisted completed
@@ -77,8 +77,8 @@ The persisted resource observation completed at **14:50:32.622**, generation
 343, status `complete`. Its worker build took 74.5 ms. The user service journal
 contained no `[resources]` failures in the matching recent window. Reads by
 the Viewer PID alone did not find forwarded messages; the service unit journal
-was checked as well. Thus the absence claim covers that journal, rather than
-every conceivable log sink. Neither a restart nor cleanup, account/pool change,
+was checked as well. The journal check establishes absence only in that
+journal. Neither a restart nor cleanup, account/pool change,
 heap snapshot, forced GC or debugger attach was performed on the live process.
 
 **Ownership and retained graphs in today's code.**
@@ -86,8 +86,8 @@ heap snapshot, forced GC or debugger attach was performed on the live process.
 | Owner | Retained data and lifetime | References |
 | --- | --- | --- |
 | Registry store | `rowCache` holds both `valueJson` and parsed objects per collection/key. `readOnlyCache` holds the latest assembled snapshot. Unchanged revisions reuse it; foreign changes reload it. | `src/lib/agent/sqliteRegistryStore.ts:392`, `:640`, `:1536` |
-| Registry title projection | Two WeakMaps key projections by snapshot identity. They do not independently pin an obsolete snapshot; another strong reference can keep its projection alive. Resource titles use this projection. | `src/lib/session/titleProjection.ts:32`, `:148`, `:247` |
-| File-scan coordinator | A global Map retains the completed snapshot; reader copies are made by `structuredClone`. Pinned snapshot/generation maps have an eight-entry limit. | `src/lib/scanner/scanCache.ts:97`, `:120`, `:642`, `:708`, `:772` |
+| Registry title projection | Two WeakMaps key projections by snapshot identity. They do not independently pin an obsolete snapshot; another strong reference can keep its projection alive. Resource titles use this projection. | `src/lib/session/titleProjection.ts:34`, `:148`, `:247` |
+| File-scan coordinator | A global Map retains the completed snapshot; reader copies are made by `structuredClone`. Pinned snapshot/generation maps have an eight-entry limit. | `src/lib/scanner/scanCache.ts:98`, `:120`, `:642`, `:708`, `:772` |
 | Scanner metadata | Named global Maps retain head/tail-derived metadata by path. The helper supplies no universal cardinality or byte cap. A fixed corpus can warm up; path churn needs separate measurement. | `src/lib/scanner/caches.ts:15`, `src/lib/scanner/describe.ts:104` |
 | Hot-state collection | One parsed collection cache, including serialized row data, parsed records and ordered views. Revision change-log replay updates it; `snapshot()` clones records for callers. | `src/lib/state/sqliteStateStore.ts:919`, `:947`, `:1143`, `:1517` |
 | Resource reader | One latest successful observation, bounded diagnostics and in-flight work. Its ten-minute success cache is bypassed when no success exists. | `src/lib/resourceCollector.ts`, `src/lib/resources.ts:51`, `:2406`, `:2494` |
@@ -98,7 +98,8 @@ Private synthetic heap snapshots confirmed strong edges from `GlobalObject` to
 `__llvFilesRouteScans` and `__llvCaches`, and collection objects to `readDb`
 proxies and collection caches. At the 2,048-file board checkpoint, snapshot
 shallow sizes included 17.33 MiB of code, 4.36 MiB of strings and 3.35 MiB of
-closures. These are shallow categories, not dominator retained sizes; string
+closures. These are shallow sizes; dominator retained sizes were not computed.
+String
 contents, native allocations and allocator capacity require their own counters.
 All four HTTP snapshots had 17 `Database` objects. The snapshots themselves
 remain private.
@@ -189,30 +190,47 @@ serialization follow. The 10,000-file and transport limits are checked after
 this preparatory work (`resources.ts:451`, `:1367`, `:1411`;
 `resourceWorkerRequest.ts:22`, `:97`). This is a supported allocation feeder.
 
-A separate isolated source probe used 80 sequential failing observations with
-an unchanged invented snapshot. The 512-entry malformed-input control and
-12,000-entry over-limit case both performed 80 handoffs. At 20/40/60/80 polls,
-the larger case's post-GC heap was 31.77/31.31/30.79/30.81 MiB, while RSS
-was 276.25/278.72/279.29/310.55 MiB. JSC heap capacity at the last point
-was 61.54 MiB. The payload graph stabilized in this probe, while resident
-memory stayed well above it.
+The exact failure-path snippet in the reproduction section was run via
+`bun run -` under Bun 1.4.0 at **20:44:44.129–20:44:49.587**. Each corpus ran
+in a fresh process. Its 512-entry control supplies a malformed host record;
+the 12,000-entry case exceeds the file limit. Both are rejected before spawn
+and perform 80 handoffs for 80 sequential failed reads. Full GC runs only in
+these fixture processes at each checkpoint.
 
-A 100-microsecond JSC stack profile of 30 handoff repetitions put
-17,123 of 17,280 samples in `structuredClone` for the large case. This is CPU
-stack sampling over the allocating operation. Bun's `--heap-prof-interval`
-does not provide JSC allocation sampling; the official documentation describes
-an exit snapshot instead. Allocation evidence here consists of the actual
-clone/projection path, heap/object/capacity counters, private snapshots and
-allocator statistics, without pretending to have per-allocation stack traces.
-[Bun profiling documentation](https://bun.sh/docs/project/benchmarking),
+| Polls | 512 entries: post-GC heap / RSS, MiB | 12,000 entries: post-GC heap / RSS, MiB |
+| --- | ---: | ---: |
+| 20 | 6.10 / 79.98 | 11.19 / 156.66 |
+| 40 | 6.26 / 78.98 | 11.23 / 163.55 |
+| 60 | 6.26 / 78.98 | 11.28 / 164.04 |
+| 80 | 6.26 / 78.98 | 11.28 / 164.43 |
+
+Final JSC heap capacities were 14.77 and 49.35 MiB respectively. The same
+snippet then profiles 30 additional handoffs at 100-microsecond intervals:
+152 of 173 CPU stack samples were in `structuredClone` for the control,
+and 6,931 of 7,081 for the large case. Sampling counts and RSS depend on
+execution speed and host pressure; they are measured results, with no exact
+cross-machine equality promised. The stable post-GC fixture graph supports
+bounded retention for this fixed corpus; RSS remains higher than that graph.
+
+The final `Bun.unsafe.mimallocDump()` in **that same snippet/process**, after
+80 reader handoffs plus 30 profiled handoffs, reported 1.0 GiB arena reservation
+for both cases and cumulative purging of 122.4 / 314.9 MiB (small / large).
+These replace the earlier unpublished-harness numbers (31 MiB post-GC heap,
+17,280 profile samples and 2.9 GiB purging), whose generating fixture could
+not be reproduced from the former snippet. No conclusion relies on those
+withdrawn numbers.
+
+This is CPU stack sampling over an allocating operation. Bun's
+`--heap-prof-interval` produces an exit snapshot; allocation evidence here
+consists of the clone/projection path, heap/object/capacity counters, private
+snapshots and allocator statistics. Per-allocation stack traces were not
+collected. [Bun profiling documentation](https://bun.sh/docs/project/benchmarking),
 [heap counter semantics](https://bun.sh/reference/bun/jsc/heapStats).
 
-A second isolated run also exercised `Bun.unsafe.mimallocDump()`. At 80 large
-handoffs it reported 1.0 GiB arena reservation and 2.9 GiB cumulative purging.
-Arena counters and RSS measure different things; those figures cannot be
-treated as resident live objects. The residual RSS is consistent with runtime
-and allocator capacity around transient work. Its exact native owners were
-not identified, and no SQLite-native or mimalloc allocation stacks were taken.
+Arena counters and RSS measure different things; reservation and cumulative
+purging cannot be treated as resident live objects. Runtime/allocator capacity
+is a possible contributor to residual RSS. Its exact native owners remain
+unidentified; no SQLite-native or mimalloc allocation stacks were collected.
 
 The footer schedules the next resource poll **30 seconds after completion**
 (`ResourcesFooter.tsx:15`, `:154`),
@@ -220,7 +238,7 @@ files and board fallback polls use **10 seconds** (`useFiles.ts:29`,
 `useBoardState.ts:15`), the active Telegram reports surface schedules its next
 poll **20 seconds after completion** (`useTelegramReports.ts:17`, `:80`),
 pipeline watchdog reconciliation uses **30
-seconds** (`pipelines/controller.ts:86`), and migration inventory uses **60
+seconds** (`pipelines/controller.ts:87`), and migration inventory uses **60
 seconds** (`accounts/migration/controller.ts:34`). Overlapping clients and
 background work can generate a different apparent cadence. No route timestamps
 were available to identify which of these drove the reported 20-second cycle.
@@ -229,8 +247,8 @@ repeated a failed collection in the observed window.
 
 **SQLite lifecycle.** `SqliteStateCollection` opens one read handle per
 instance in its constructor and keeps it for that instance's lifetime. It is
-an ordinary read/write-capable connection used for reads, rather than a
-`readonly:true` connection. There is no collection `close()` method. Most
+an ordinary read/write-capable connection used for reads; its constructor does
+not set `readonly:true`. There is no collection `close()` method. Most
 stores memoize collections by database path. The legitimate count depends on
 loaded store modules, independent bundle instances and dynamic scope keys:
 
@@ -241,8 +259,38 @@ loaded store modules, independent bundle instances and dynamic scope keys:
 | `bridge/store.ts:426` | One per `(database, collection)` pair, including separate report/channel collections. |
 | `accounts/migration/provider.ts:761` | One per `(database, migration root)` pair; multiple synthetic or real roots can share a state DB. |
 | `state/legacyDocumentStore.ts:97`, `:262` | One per database for each document-store object; attention, dismissals, suggestions and seat settings instantiate this wrapper. |
-| `monitor/seatTickAccounting.ts:235` | One per accounting object. Callers create these on reads/writes; these transient objects rely on GC for eventual connection release. |
+| `monitor/seatTickAccounting.ts:48`, `:228–239` | One per database filename in each module instance. The module Map memoizes the collection, checks file identity on reuse and shares it across all accounting wrappers. |
 | `agent/sqliteRegistryStore.ts:427` | One connection per registry store, normally to a separate `agent-registry.sqlite`; it has `close()`. |
+
+**Accounting connection measurement.** Under Bun 1.4.0 at
+20:42:52.594–20:42:52.710, one accounting wrapper and then 200 additional
+wrappers on the same private filename held DB/WAL/SHM descriptors at 1/1/1.
+All 200 additional wrappers had `collection === first.collection`. This
+measures one module instance and one filename; additional module instances or
+filenames retain their own collections. The shared collection remains owned by the module Map.
+Repeat this Linux probe via `rtk proxy bun run -` from the repository root
+under the private environment below:
+
+```ts
+import fs from "node:fs";
+import { SeatTickAccounting } from "./src/lib/monitor/seatTickAccounting";
+const filename = `${process.env.LLV_STATE_DIR}/state.sqlite`;
+function descriptors() {
+ const counts = {db: 0, wal: 0, shm: 0};
+ for (const fd of fs.readdirSync('/proc/self/fd')) {
+  let target; try { target=fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { continue; }
+  if (target === filename) counts.db++;
+  if (target === `${filename}-wal`) counts.wal++;
+  if (target === `${filename}-shm`) counts.shm++;
+ }
+ return counts;
+}
+const first = new SeatTickAccounting(filename, 'synthetic'); first.row();
+console.log(JSON.stringify({objects: 1, descriptors: descriptors()}));
+const wrappers = Array.from({length: 200}, () => new SeatTickAccounting(filename, 'synthetic'));
+for (const wrapper of wrappers) wrapper.row();
+console.log(JSON.stringify({objects: 201, shared: wrappers.every(w => w.collection === first.collection), descriptors: descriptors()}));
+```
 
 The production build contains the state collection implementation in three
 chunks, with distinct enclosing module IDs: 12002, 20624 and 13117. The deployed
@@ -281,9 +329,12 @@ so descriptor counts are not an exact connection census.
 [SQLite Unix VFS source](https://github.com/sqlite/sqlite/blob/master/src/os_unix.c).
 
 Neither connection pooling nor a 2 MiB default SQLite page-cache arithmetic
-establishes the web PID's native footprint. Stable handles rule out growth in
-the observed descriptor count. They leave native allocation growth inside an
-existing connection as a separate hypothesis.
+establishes the web PID's native footprint. Descriptor counts held within each
+short live window. Between windows the DB count changed from 31 to 32 while
+the endpoint WAL count stayed 29; physical descriptors are an imperfect
+connection census, so no connection-count change or owner is established.
+Native allocation growth inside an existing connection remains a separate
+hypothesis.
 
 **Related history checked before attribution.**
 
@@ -343,6 +394,7 @@ RESEARCH_ROOT=$(mktemp -d /var/tmp/delegatus-research.XXXXXX)
 mkdir -p "$RESEARCH_ROOT/home" "$RESEARCH_ROOT/tmp" "$RESEARCH_ROOT/state"
 export HOME="$RESEARCH_ROOT/home" TMPDIR="$RESEARCH_ROOT/tmp"
 export XDG_CONFIG_HOME="$RESEARCH_ROOT/home/.config"
+unset DELEGATUS_STATE_DIR DELEGATUS_VIEWER_CONTROL_URL
 export LLV_STATE_DIR="$RESEARCH_ROOT/state"
 export LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1
 export NEXT_TELEMETRY_DISABLED=1 DELEGATUS_TELEMETRY=0
@@ -356,13 +408,19 @@ rtk proxy bun scripts/profileBrowser.ts --registry-churn \
 
 The failure-path source probe is independently repeatable with this small
 isolated harness, using the same exported production handoff/reader functions.
-Run it under the environment above; `fullGC` and profiling affect this fixture
-process only. The intentionally over-limit case never spawns a collector.
+Run the block from the repository root through `rtk proxy bun run -`, using
+the private environment above. Set `RESEARCH_ENTRIES=512` for the control or
+`RESEARCH_ENTRIES=12000` for the over-limit case; use a new process per case.
+The control supplies a deliberately malformed host record, rejected by request
+validation; the large case exceeds the file limit. Both refuse before collector
+spawn. `fullGC` and profiling affect this fixture process only. The profile
+executes 30 additional handoffs after the 80 reader polls; the allocator dump
+therefore covers all 110 handoffs. Checkpoint fields are bytes.
 
 ```ts
 import { fullGC, heapStats, profile } from "bun:jsc";
 import { createResourcesReader, resourceWorkerFileHandoff } from "./src/lib/resources";
-const files = Array.from({ length: 12000 }, (_, index) => ({
+const files = Array.from({ length: Number(process.env.RESEARCH_ENTRIES ?? 12000) }, (_, index) => ({
   path: `${process.env.TMPDIR}/fixture/${index}.jsonl`, name: `${index}.jsonl`,
   parent: null, project: "synthetic", root: "claude-projects" as const,
   engine: "claude" as const, fmt: "claude" as const,
@@ -375,7 +433,7 @@ const reader = createResourcesReader(async () => { throw new Error("unused"); },
     readFiles: async () => {
       handoffs++;
       return resourceWorkerFileHandoff(structuredClone(files), () => {});
-    }, readHostRecords: async () => [], persist: () => true,
+    }, readHostRecords: async () => Number(process.env.RESEARCH_ENTRIES) === 512 ? [{} as never] : [], persist: () => true,
   });
 for (let poll = 1; poll <= 80; poll++) {
   await reader.read(false);
@@ -385,7 +443,10 @@ for (let poll = 1; poll <= 80; poll++) {
     console.log({ poll, handoffs, heapSize, heapCapacity, rss: process.memoryUsage().rss });
   }
 }
-console.log(profile(() => resourceWorkerFileHandoff(structuredClone(files), () => {}), 100).functions);
+console.log(profile(() => {
+  for (let repeat = 0; repeat < 30; repeat++)
+    resourceWorkerFileHandoff(structuredClone(files), () => {});
+}, 100).functions);
 Bun.unsafe.mimallocDump();
 ```
 
@@ -397,11 +458,13 @@ Bun.unsafe.mimallocDump();
 | 14:50–14:54 | `journalctl --user -u delegatus.service --no-pager -o json --since '10 minutes ago'` and PID-filtered queries; aggregate persisted resource observation and completed file-snapshot counts. |
 | 14:48–14:56 | Isolated `bun install --frozen-lockfile`; gate-slot production `bun --bun node_modules/.bin/next build --webpack`, exit 0. |
 | 14:56:15.886–15:03:47.722 | Private HTTP matrix described above, 128 and 2,048 synthetic files; private heap snapshots and 500 ms counters. |
-| 14:58–15:00 | Private source handoff/failed-collection loop, 80 polls per corpus, JSC full-GC checkpoints and 100-microsecond CPU stack profile; 200-iteration SQLite lifecycle probe. |
+| 14:58–15:00 | Earlier private handoff probe; its absolute metrics were withdrawn and superseded by the published-snippet measurements at 20:44. The separate 200-iteration SQLite lifecycle probe remains as described above. |
 | 15:07:26.414–15:10:29.840 | `bun scripts/profileBrowser.ts --server-memory --seconds 30 --corpus 2048 --out <private aggregate>`; exit 0; owned descendants checked absent. |
 | 15:12:43.022–15:12:44.012 | `bun scripts/profileBrowser.ts --registry-churn --out <private aggregate>`; exit 0, eight cycles, two real store connections. |
 | 15:13:24 | `git fetch origin main`; `git rev-parse origin/main`; relevant-source `git diff origin/main`; no source drift in the investigated paths. |
-| 15:15–15:17 | A second isolated handoff run with `Bun.unsafe.mimallocDump()`; exit 0. Native allocator counters were aggregated. |
+| 15:15–15:17 | Earlier private allocator run; its absolute counters were withdrawn and replaced by the published-snippet dump at 20:44. |
+| 20:42:52.594–20:42:52.710 | Accounting wrapper probe above, Bun 1.4.0, 201 wrappers, 1/1/1 descriptors, shared collection, exit 0. |
+| 20:44:44.129–20:44:49.587 | Exact published failure-path snippet via `bun run -`, separate 512/12,000-entry processes, 80 polls and 30 profiled handoffs each, exit 0. |
 | 15:34 | `git rev-parse origin/main`; `git diff ee19907eb..origin/main -- <investigated source paths> Dockerfile package.json`; the relevant implementation and runtime/version pins were unchanged. |
 
 TypeScript and changed-file ESLint were checked. Publication hooks check
@@ -464,7 +527,10 @@ RSS thirty-second lower-water marks were 2,101.84, 2,092.50, 2,094.84,
 larger burst near the end. A regular 20-second cycle was not established.
 Counters from `status` and `smaps_rollup` are sequential reads, so their maxima
 need not coincide. The descriptor-number sets were identical at the endpoints.
-The earlier window had 31 DB descriptors; the repeat had 32. Stability within
+The earlier window had 31 DB descriptors; the repeat had 32. The entire repeat
+window overlapped the isolated HTTP replay at 16:51:13–16:57:21 except its first
+five seconds. Shared-host pressure and ongoing work were uncontrolled.
+Stability within
 each short window cannot rule out intermittent additions across the unobserved
 gap, and the extra descriptor has no confirmed owner.
 
@@ -517,21 +583,46 @@ warm-up from the demonstrated historical-key leak; they cannot classify the
 live floor's native component. The controller has accepted this bounded result
 with that attribution gap. Production remained unchanged.
 
+**Correction verification and longer local observation, 20:42–20:48 UTC.**
+
+The published accounting and failure-path probes above correct the owner
+budget and tie heap, RSS, CPU-profile and allocator values to their generating
+code. Both snippets were also executed directly from the note via `bun run -`.
+All recorded probe PIDs exited on their own; no product source was changed.
+
+The operator recipe below was run for five minutes (151 samples; loop bound
+151 and final sleep condition 150), with the same web PID/start identity.
+The new read-only series at 20:43:31.080–20:48:31.132 (151 two-second samples, fixed PID/start identity, uptime 28.04 h) measured RSS 2,189.73–2,780.54 MiB, PSS 2,136.42–2,723.23 MiB, anonymous RSS 2,106.62–2,697.43 MiB and zero swap. DB/SHM descriptors stayed 32/1; WAL ranged 29–30. Sampled RSS minima increased 309.81 MiB between the first two windows and another 99.83 MiB by this window (409.64 MiB overall). Thirty-second minima varied during the new window; continuous monotonic growth and an hours-long plateau remain unestablished. Source probes shared the host during its first 79 seconds, and live requests were uncontrolled. No live request, signal, GC, snapshot or attach was used.
+
+Thirty-second RSS minima, MiB: 2,280.30, 2,282.46, 2,281.49, 2,189.73,
+2,236.09, 2,203.70, 2,225.77, 2,231.30, 2,208.38 and 2,241.09.
+The final sample is outside those ten complete 30-second bins. These are
+sampled window minima; unobserved intervals supply no continuous floor trace.
+The reviewer's 20:38 short-window minimum was about 2,201 MiB; the new minimum
+is slightly lower, which also prevents describing the floor as monotonic.
+The 20-second oscillator and native-memory owners remain unattributed.
+
+At 20:45–20:47, fetched main was `3a8822996c12b35d006a8df87502875ca67df118`.
+The accounting memoization, registry cache, state store, scan cache, title
+projection, handoff/request validation and polling inputs remain unchanged
+from the investigated source pin. Resource-worker cleanup/EPIPE changes
+already described above remain outside the allocation feeder. The related
+issue bodies were reread; #907 and #1816 remain open. The four historical fix
+commits again passed ancestry checks on this main and the observed release.
+
 **Accepted completion summary.**
 
-Accepted bounded investigation for #2512.
+Bounded investigation for #2512; the reported 12 GB footprint and approximately 20-second cycle remain **unattributed**, with the controller-accepted gap preserved.
 
-**Confirmed retention:** the isolated repeat at 16:51:09.530–16:51:10.104 UTC on 2026-10-05 (`bun scripts/profileBrowser.ts --registry-churn`) retained 1,600 externally deleted rows and 6,050,320 serialized bytes while the reader's current snapshot was empty. The complete collection reload (`src/lib/agent/sqliteRegistryStore.ts:1259`) adds current rows to the strong parsed-row Map (`:1536`) without pruning absent keys. Writer-local deletion (`:1590`) clears only the writer's cache. This is a supported retention cause; its contribution to the reported installation is unmeasured.
+**Confirmed retention.** The private `--registry-churn` repeat left 1,600 externally deleted rows and 6,050,320 serialized bytes cached while the reader's current snapshot was empty. Complete collection reload (`src/lib/agent/sqliteRegistryStore.ts:1259`) populates the strong parsed-row Map (`:1536`) without pruning absent keys; writer-local deletion (`:1590`) clears only its own cache. The defect's contribution to the affected installation remains unmeasured.
 
-**SQLite and bounded workloads:** 91 read-only `/proc` samples of one fixed web PID/start identity at 16:51:08.282–16:54:13.658 UTC measured RSS 2,089.90–2,909.24 MiB, zero swap and stable DB/WAL/SHM descriptors at 32/29/1. That observed installation used Bun 1.4.0, Next 16.3.6 and release `6af2bab08a52`. Isolated HTTP replay at 16:51:13.054–16:57:21.566 UTC covered idle, board closed/open routes, resource polling, transcript history and cooldown. The 2,048-file corpus ended at 39.78 MiB post-GC heap / 271.96 MiB RSS; descriptor counts warmed to 17/15/1 and held. Fixed-corpus warm-up, historical-key retention and transient allocation have separate evidence. The live native floor remains unclassified.
+**Corrected SQLite ownership.** `SeatTickAccounting` memoizes one collection per database filename within each module instance, checks file identity and shares it across wrappers (`seatTickAccounting.ts:48`, `:228–239`). The published private probe under Bun 1.4.0 measured 1/1/1 DB/WAL/SHM descriptors after one wrapper and after 200 additional wrappers; all additional wrappers shared the first collection. The former GC-release explanation was removed. Counts held within each live window; 31→32 DB descriptors between windows has no confirmed owner or connection-count attribution.
 
-**Attribution gap accepted:** the reported 12 GB and approximately 20-second cycle remain **unattributed**. The report came from another installation that cannot be inspected here; its affected-process identity and polling history will not be supplied to this stage. The controller accepted this gap. No live instrumentation is authorized. Successful resource collection in the observed windows prevents assigning the failed-collector allocation path to that report.
+**Reproducible allocation measurements.** At 20:44:44.129–20:44:49.587 UTC on 2026-10-05, the exact published snippet ran in separate Bun 1.4.0 processes for 512 malformed-host and 12,000 over-limit entries. Each performed 80 failed reads / 80 handoffs before collector spawn. At 20/40/60/80 polls, the large fixture's post-GC heap was 11.19/11.23/11.28/11.28 MiB and RSS 156.66/163.55/164.04/164.43 MiB; final heap capacity was 49.35 MiB. The 512-entry control ended at 6.26 MiB heap / 78.98 MiB RSS, capacity 14.77 MiB. Thirty additional profiled handoffs yielded 6,931/7,081 CPU samples in `structuredClone` for the large fixture (control 152/173). The same processes' dumps after all 110 handoffs reported 1.0 GiB arena reservation and 314.9 / 122.4 MiB cumulative purging (large / small). Earlier unpublished-harness absolute metrics were withdrawn. Sampling and allocator counters are execution-dependent; native ownership remains unclassified.
 
-**Operator evidence needed:** collect 15 minutes of two-second RSS/PSS/anonymous/swap, CPU/I/O and DB/WAL/SHM descriptor counters from the affected web PID, with fixed start identity, release, executable/runtime and installed Next version. Align these with existing same-window request start/end times, route templates, statuses, bytes and overlap across all clients. Existing heap/object, JSC capacity/extra-memory, registry cache and SQLite-native counters would distinguish reachable retention from native/allocator capacity. The note supplies read-only commands and explains which evidence remains unavailable when existing diagnostics/access logs are absent.
+**Live observation.** Bun 1.4.0, Next 16.3.6, release `6af2bab08a52`. Earlier lower-water RSS was 1,780.09 MiB at 14:48 and 2,089.90 MiB at 16:51. The 16:51:08–16:54:13 window overlaps the isolated 16:51:13–16:57:21 HTTP replay after its first five seconds. The new read-only series at 20:43:31.080–20:48:31.132 (151 two-second samples, fixed PID/start identity, uptime 28.04 h) measured RSS 2,189.73–2,780.54 MiB, PSS 2,136.42–2,723.23 MiB, anonymous RSS 2,106.62–2,697.43 MiB and zero swap. DB/SHM descriptors stayed 32/1; WAL ranged 29–30. Sampled RSS minima increased 309.81 MiB between the first two windows and another 99.83 MiB by this window (409.64 MiB overall). Thirty-second minima varied during the new window; continuous monotonic growth and an hours-long plateau remain unestablished. Source probes shared the host during its first 79 seconds, and live requests were uncontrolled. No live request, signal, GC, snapshot or attach was used.
 
-**Smallest proposed fix:** prune absent keys only after a successful complete registry collection reload. A private reader/independent-writer regression should fail on the investigated base and pass after the future fix; assert no stale keys/serialized bytes, and cover separate processes, unchanged-row reuse, grants, lazy/keyed reads, revision jumps and database replacement. No product fix was implemented.
-
-Related history (#907, #1814, #1816, #1805 and #568) was checked against current main and deployed ancestry. The note documents store/bundle/worker ownership, close/statement/error paths, ruled-out hypotheses and remaining limits. Private aggregates were rechecked; all 12 recorded HTTP fixture processes exited. Local publication checks passed; hosted CI was not awaited. Production remained unchanged.
+**Next step and limits.** Propose absent-key pruning only after successful complete registry reload, with a private independent-reader/writer base-red/head-green regression for cache cardinality/bytes, separate processes, unchanged-row reuse, grants, lazy/keyed reads, revision jumps and database replacement. Product implementation stays in a follow-up. Existing same-window route timings and heap/native counters from the affected PID are still needed to attribute its footprint and cycle; the note gives a safe 15-minute observation recipe. Related fixes #907/#1814/#1816/#1805/#568 were rechecked against today's main and deployed ancestry. Source references and prohibited contrast constructions were corrected. Production remained unchanged; hosted CI was not awaited.
 
 **Operator evidence recipe.** The unobserved change from 31 to 32 state DB
 descriptors between live windows remains unexplained. No exact owner mapping
@@ -582,7 +673,7 @@ with tempfile.TemporaryDirectory(prefix='delegatus-readonly-') as scratch:
     for name in ('home', 'tmp', 'state'):
         (private / name).mkdir()
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(('LLV_', 'GIT_', 'NEXT_', 'XDG_'))}
+           if not key.startswith(('LLV_', 'DELEGATUS_', 'GIT_', 'NEXT_', 'XDG_'))}
     env.update(HOME=str(private / 'home'), TMPDIR=str(private / 'tmp'),
                XDG_CONFIG_HOME=str(private / 'home/.config'),
                LLV_STATE_DIR=str(private / 'state'),
