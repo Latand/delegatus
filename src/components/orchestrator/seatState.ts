@@ -887,3 +887,36 @@ export function classifySeatFailure(
   if (status >= 400 && status < 500) return { kind: "terminal", error, clientRequestId };
   return { kind: "ambiguous", error, clientRequestId };
 }
+
+/**
+ * A designation failure the operator can be told about in their own words.
+ *
+ * The reason a failed designation carries is whatever the layer that failed
+ * wrote: a lock's own diagnostic, a socket timeout. One of them reached an
+ * operator as «account mutation is busy; held by Codex login commit (pid …)»
+ * over an orchestrator they had asked to run on Claude. The causes below are
+ * the ones with a plain sentence and one thing to press; anything else is
+ * shown as it was recorded. Matched on the recorded text because that text is
+ * what survives a reload, and records written before this carry the old
+ * wording.
+ */
+export type SeatFailureCause = "store-busy" | "launch-timeout" | "host-unavailable";
+
+export function seatFailureCauseOf(error: string): SeatFailureCause | null {
+  if (/account (mutation is|store stayed) busy/.test(error)) return "store-busy";
+  if (/runtime host (request )?timed out/.test(error)) return "launch-timeout";
+  if (error.includes("runtime host is unavailable")) return "host-unavailable";
+  return null;
+}
+
+/** The sentence and the instruction for a known cause; null leaves the caller
+    on the recorded text and its own hint. */
+export function seatFailureCopy(error: string, retry: "fresh" | "same"): { text: MessageKey; hint: MessageKey } | null {
+  const cause = seatFailureCauseOf(error);
+  if (cause === "store-busy") {
+    return { text: "orchPanel.failureStoreBusy", hint: retry === "same" ? "orchPanel.failureRetrySameHint" : "orchPanel.failureRetryHint" };
+  }
+  if (cause === "launch-timeout") return { text: "orchPanel.failureLaunchTimeout", hint: "orchPanel.failureLaunchHint" };
+  if (cause === "host-unavailable") return { text: "orchPanel.failureHostUnavailable", hint: "orchPanel.failureLaunchHint" };
+  return null;
+}
