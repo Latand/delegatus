@@ -6,7 +6,10 @@
  */
 
 /** Bounds a published set is refused past, with the reason for each in the design note. */
-export const FRAME_SET_MAX_FRAMES = 60;
+/* A capture driver writes variants x widths x languages x moments: this lane's
+   own directory holds 126 frames for four variants, so nine variants at the
+   same density are 216 and a few frames of no variant. */
+export const FRAME_SET_MAX_FRAMES = 240;
 export const FRAME_SET_MAX_VARIANTS = 9;
 export const FRAME_MAX_BYTES = 4 * 1024 * 1024;
 export const FRAME_SET_MAX_BYTES = 48 * 1024 * 1024;
@@ -135,20 +138,31 @@ export function chosenReply(set: FrameSet, variant: number, lang: "en" | "uk"): 
   return title ? `${word} ${variant} (${title}).` : `${word} ${variant}.`;
 }
 
+const plural = (count: number, lang: "en" | "uk", one: string, few: string, many: string) => {
+  if (lang === "en") return count === 1 ? one : many;
+  const tens = count % 100;
+  const units = count % 10;
+  if (units === 1 && tens !== 11) return one;
+  return units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? few : many;
+};
+
+/** "18 frames" in the language's plural form. */
+export function frameCount(count: number, lang: "en" | "uk"): string {
+  return `${count} ${lang === "uk" ? plural(count, lang, "кадр", "кадри", "кадрів") : plural(count, lang, "frame", "", "frames")}`;
+}
+
 /** "4 variants · 24 frames", the closed row's whole description of a set;
     `brief` keeps the frames alone, for a row too narrow for both. */
 export function setCounts(set: FrameSet, lang: "en" | "uk", brief = false): string {
-  const plural = (count: number, one: string, few: string, many: string) => {
-    if (lang === "en") return count === 1 ? one : many;
-    const tens = count % 100;
-    const units = count % 10;
-    if (units === 1 && tens !== 11) return one;
-    return units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? few : many;
-  };
-  const frames = `${set.frames.length} ${lang === "uk" ? plural(set.frames.length, "кадр", "кадри", "кадрів") : plural(set.frames.length, "frame", "", "frames")}`;
+  const frames = frameCount(set.frames.length, lang);
   if (set.variants.length === 0 || brief) return frames;
-  const variants = `${set.variants.length} ${lang === "uk" ? plural(set.variants.length, "варіант", "варіанти", "варіантів") : plural(set.variants.length, "variant", "", "variants")}`;
-  return `${variants} · ${frames}`;
+  const count = set.variants.length;
+  return `${count} ${lang === "uk" ? plural(count, lang, "варіант", "варіанти", "варіантів") : plural(count, lang, "variant", "", "variants")} · ${frames}`;
+}
+
+/** The frames of no variant (a baseline, a measurement), in the set's order. */
+export function framesOfNoVariant(set: FrameSet): Frame[] {
+  return set.frames.filter((frame) => frame.variant === null);
 }
 
 /* ── The short form of a publication: a directory read by its file names ── */
@@ -193,7 +207,10 @@ export function frameFromFileName(name: string): { variant: number | null; width
 }
 
 /** The frames of a directory in publication order: by variant, then by name
-    with numbers compared as numbers, frames of no variant last. */
+    with numbers compared as numbers, frames of no variant last. Inside a
+    variant the name is therefore the order, and a driver that wants its
+    moments in the order it took them numbers them (`…-en-1-closed`,
+    `…-en-2-open`): without the number they stand by the alphabet. */
 export function framesFromFileNames(names: readonly string[]): (ReturnType<typeof frameFromFileName> & { name: string })[] {
   return names
     .filter((name) => /\.(png|jpe?g|webp)$/i.test(name))
@@ -246,37 +263,81 @@ export interface TileRow {
 }
 
 /**
- * Frames at their own proportions in rows that fill `width`: a row takes
- * frames at `target` height until the next one would not fit, then grows to
- * fill the width, by at most `maxScale`. The last row grows the same way, so a
- * few frames never stretch into giants. `minTile` keeps a narrow frame wide
- * enough to press.
+ * A variant's frames in the collage's wide form: one row at their own
+ * proportions, whatever the variant holds, so the collage's height does not
+ * depend on the number of frames. The row takes every frame when they fit at
+ * `target` height, grown by at most `maxScale` to fill `width` or shrunk by at
+ * most `minScale`. When they do not fit, it takes the first frames that do
+ * beside a tile `more` px wide, and `hidden` says how many frames stand behind
+ * that tile. `minTile` keeps a narrow frame wide enough to press.
  */
-export function justifiedRows(aspects: readonly number[], width: number, options: { target: number; gap: number; minTile?: number; maxScale?: number }): TileRow[] {
-  const { target, gap, minTile = 0, maxScale = 1.25 } = options;
+export function collageRow(
+  aspects: readonly number[],
+  width: number,
+  options: { target: number; gap: number; more: number; minTile?: number; maxScale?: number; minScale?: number },
+): { row: TileRow; hidden: number } {
+  const { target, gap, more, minTile = 0, maxScale = 1.25, minScale = 0.85 } = options;
   const natural = (aspect: number) => Math.max(minTile, aspect * target);
-  const rows: TileRow[] = [];
-  let row: number[] = [];
-  const close = () => {
-    if (row.length === 0) return;
-    const sum = row.reduce((total, index) => total + natural(aspects[index]!), 0);
-    const scale = Math.max(1, Math.min(maxScale, (width - gap * (row.length - 1)) / sum));
+  /* The scale at which the first `count` frames fill the row beside `reserved` px. */
+  const fill = (count: number, reserved: number) =>
+    (width - reserved - gap * (count - 1)) / aspects.slice(0, count).reduce((total, aspect) => total + natural(aspect), 0);
+  if (aspects.length === 0) return { row: { height: target, tiles: [] }, hidden: 0 };
+  let shown = aspects.length;
+  let scale = fill(shown, 0);
+  if (scale < minScale) {
+    shown = 1;
+    while (shown + 1 < aspects.length && fill(shown + 1, more + gap) >= 1) shown += 1;
     /* A single frame wider than the row is drawn at the row's width. */
-    const fit = Math.min(scale, sum > width ? width / sum : scale);
-    rows.push({ height: Math.round(target * fit), tiles: row.map((index) => ({ index, width: Math.floor(natural(aspects[index]!) * fit) })) });
-    row = [];
+    scale = fill(shown, more + gap);
+  }
+  scale = Math.min(maxScale, scale);
+  return {
+    row: { height: Math.round(target * scale), tiles: aspects.slice(0, shown).map((aspect, index) => ({ index, width: Math.floor(natural(aspect) * scale) })) },
+    hidden: aspects.length - shown,
   };
-  aspects.forEach((aspect, index) => {
-    const taken = row.reduce((total, at) => total + natural(aspects[at]!), 0) + gap * row.length;
-    if (row.length > 0 && taken + natural(aspect) > width) close();
-    row.push(index);
-  });
-  close();
-  return rows;
 }
 
 /** One row at `height` that scrolls sideways past its edge: the collage in a
     narrow pane, where the height is what runs out. */
 export function stripTiles(aspects: readonly number[], height: number, minTile = 0): TileRow {
   return { height, tiles: aspects.map((aspect, index) => ({ index, width: Math.max(minTile, Math.round(aspect * height)) })) };
+}
+
+/* ── The frames this lane's own driver writes ───────────────────────────── */
+
+/** The panes the driver block "frame sets, design variants" captures, and the
+    moments it captures in each, in the order it takes them. */
+export const DRIVER_VIEWS = ["desktop-1440", "pane-440", "phone-390"] as const;
+export const DRIVER_MOMENTS = ["closed", "open", "frame", "chosen"] as const;
+/** The two moments of the pass over a set of a real lane's size (variant 4 only). */
+export const DRIVER_LANE_MOMENTS = ["lane-open", "lane-frame"] as const;
+export type DriverMoment = (typeof DRIVER_MOMENTS)[number] | (typeof DRIVER_LANE_MOMENTS)[number];
+
+/** One capture's file name. The moment carries its number, so the names of a
+    variant sort in the order the frames were taken. */
+export function driverFrameName(variant: number, view: string, lang: string, moment: DriverMoment): string {
+  const order = [...DRIVER_MOMENTS, ...DRIVER_LANE_MOMENTS].indexOf(moment) + 1;
+  return `variant-${variant}-${view}-${lang}-${order}-${moment}.png`;
+}
+
+/** The moment the answer arrives, for one place the row can stand. */
+export function driverArrivalName(place: "call" | "turn", view: string, lang: string): string {
+  return `arrival-${place}-${view}-${lang}.png`;
+}
+
+/**
+ * Every file the driver block writes into its output directory: four moments
+ * of four variants and the pane without the feature (variant 0, closed only)
+ * at three widths in two languages, the lane-sized set's two moments for
+ * variant 4, and the arrival of the answer for both places.
+ */
+export function driverFrameNames(): string[] {
+  const names: string[] = [];
+  for (const view of DRIVER_VIEWS) for (const lang of FRAME_NAME_LANGS) {
+    names.push(driverFrameName(0, view, lang, "closed"));
+    for (const variant of [1, 2, 3, 4]) for (const moment of DRIVER_MOMENTS) names.push(driverFrameName(variant, view, lang, moment));
+    for (const moment of DRIVER_LANE_MOMENTS) names.push(driverFrameName(4, view, lang, moment));
+    for (const place of ["call", "turn"] as const) names.push(driverArrivalName(place, view, lang));
+  }
+  return names;
 }

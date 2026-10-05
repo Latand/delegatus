@@ -1195,7 +1195,9 @@ function mountLongHistory(root: HTMLElement): void {
    way `?variant=` opens it (0 is the pane as it is today). */
 function mountFrameSets(root: HTMLElement): void {
   const lang = params.get("lang") === "uk" ? "uk" : "en";
-  const all = frameSetsTranscript(lang);
+  /* `set=lane` publishes a set of a real lane's size in place of six frames a variant. */
+  const lane = params.get("set") === "lane";
+  const all = frameSetsTranscript(lang, lane);
   /* `arrive=hold` keeps the last answer back until the driver delivers it, so
      the pane is measured at the moment the answer arrives. */
   let shown = params.get("arrive") === "hold" ? all.length - 1 : all.length;
@@ -1224,7 +1226,7 @@ function mountFrameSets(root: HTMLElement): void {
   const variant = Math.max(0, Math.min(4, Number(params.get("variant") ?? 0))) as FrameSetVariant;
   const pane = Number(params.get("pane") ?? 0);
   createRoot(root).render(
-    <FrameSetsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} place={params.get("place") === "call" ? "call" : "turn"} />,
+    <FrameSetsPrototype file={file} variant={variant} paneWidth={pane > 0 ? pane : undefined} place={params.get("place") === "call" ? "call" : "turn"} lane={lane} />,
   );
 }
 

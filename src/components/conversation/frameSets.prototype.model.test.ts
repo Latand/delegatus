@@ -4,17 +4,20 @@ import { admittedAs } from "@/lib/artifact/localFile";
 
 import {
   chosenReply,
+  collageRow,
   coverFrames,
+  driverFrameNames,
   frameAtView,
+  frameCount,
   frameFromFileName,
   framesFromFileNames,
   frameSetInputDefects,
   frameSourceRefusal,
   frameSourceRoot,
+  framesOfNoVariant,
   framesOfVariant,
   FRAME_MAX_BYTES,
   FRAME_SET_MAX_FRAMES,
-  justifiedRows,
   setCounts,
   stepIndex,
   stripTiles,
@@ -133,27 +136,77 @@ describe("frame set prototype model", () => {
     );
   });
 
-  test("the collage fills a row with frames at their own proportions", () => {
-    /* Two desktop frames, two pane frames, two phone frames: the fixture's variant. */
-    const aspects = [1.6, 1.6, 0.55, 0.55, 0.462, 0.462];
-    const [row, ...more] = justifiedRows(aspects, 663, { target: 120, gap: 6 });
-    expect(more).toEqual([]);
-    expect(row!.tiles).toHaveLength(6);
-    expect(row!.height).toBeGreaterThanOrEqual(120);
-    expect(row!.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 5).toBeLessThanOrEqual(663);
-    expect(row!.tiles[0]!.width).toBeGreaterThanOrEqual(190);
-    /* Too narrow for six: the row wraps, and every row still fits. */
-    const wrapped = justifiedRows(aspects, 360, { target: 120, gap: 6 });
-    expect(wrapped.length).toBeGreaterThan(1);
-    for (const each of wrapped) expect(each.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * (each.tiles.length - 1)).toBeLessThanOrEqual(360);
-    expect(wrapped.flatMap((each) => each.tiles.map((tile) => tile.index))).toEqual([0, 1, 2, 3, 4, 5]);
-    /* A few frames never stretch into giants. */
-    expect(justifiedRows([1.6], 1300, { target: 120, gap: 6 })[0]!.height).toBeLessThanOrEqual(150);
+  test("this lane's own capture directory is one short-form publication", () => {
+    /* Every file the driver block "frame sets, design variants" writes; the
+       driver fails its run when what it wrote is another list. */
+    const names = driverFrameNames();
+    expect(names).toHaveLength(126);
+    const dir = "/work/home/work/lane/.artifacts/frame-sets";
+    const titles = ["Expands in place", "Full-screen viewer", "Two side by side", "Collage that zooms"];
+    const read = framesFromFileNames(names);
+    /* The short form as the note describes it: a title, the directory, the variants' titles. */
+    const input = {
+      title: "Show an agent's frames from the conversation",
+      variants: titles.map((title, index) => ({ number: index + 1, title })),
+      frames: read.map((entry) => ({ path: `${dir}/${entry.name}`, variant: entry.variant ?? undefined, caption: entry.caption, width: entry.width ?? undefined, lang: entry.lang ?? undefined })),
+    };
+    expect(frameSetInputDefects(input)).toEqual([]);
+    expect(read.every((entry) => entry.width !== null && entry.lang !== null)).toBe(true);
+    const of = (variant: number | null) => read.filter((entry) => entry.variant === variant);
+    expect([1, 2, 3, 4].map((variant) => of(variant).length)).toEqual([24, 24, 24, 36]);
+    expect(of(null)).toHaveLength(18);
+    /* Variants in order, the frames of no variant last. */
+    expect(read.map((entry) => entry.variant ?? 0).join("").replace(/(.)\1*/g, "$1")).toBe("12340");
+    /* Inside a variant: by pane, then by language, then the moments in the
+       order they were taken, because each moment's name carries its number. */
+    expect(of(3).slice(0, 5).map((entry) => entry.name)).toEqual([
+      "variant-3-desktop-1440-en-1-closed.png", "variant-3-desktop-1440-en-2-open.png", "variant-3-desktop-1440-en-3-frame.png",
+      "variant-3-desktop-1440-en-4-chosen.png", "variant-3-desktop-1440-uk-1-closed.png",
+    ]);
+    expect(of(3).map((entry) => `${entry.width}:${entry.lang}`).filter((view, at, all) => all.indexOf(view) === at)).toEqual(["1440:en", "1440:uk", "440:en", "440:uk", "390:en", "390:uk"]);
+    expect(of(4).slice(0, 6).map((entry) => entry.caption)).toEqual(["desktop 1 closed", "desktop 2 open", "desktop 3 frame", "desktop 4 chosen", "desktop 5 lane open", "desktop 6 lane frame"]);
+    /* Without the number the moments stand by the alphabet, which is no order anyone took them in. */
+    expect(framesFromFileNames(["closed", "open", "frame", "chosen"].map((moment) => `variant-1-desktop-1440-en-${moment}.png`)).map((entry) => entry.caption))
+      .toEqual(["desktop chosen", "desktop closed", "desktop frame", "desktop open"]);
+    /* The frames of no variant: the pane as it is today, then the arrivals. */
+    expect(of(null)[0]!.name).toBe("arrival-call-desktop-1440-en.png");
+    expect(of(null).filter((entry) => entry.name.startsWith("variant-0-"))).toHaveLength(6);
+    expect(frameFromFileName("arrival-turn-phone-390-uk.png")).toEqual({ variant: null, width: 390, lang: "uk", caption: "arrival turn phone" });
+  });
+
+  test("a variant is one row of tiles, whatever it holds", () => {
+    /* Two desktop frames, two pane frames, two phone frames: the six-frame fixture's variant. */
+    const six = [1.6, 1.6, 0.55, 0.55, 0.462, 0.462];
+    const all = collageRow(six, 663, { target: 120, gap: 6, more: 56 });
+    expect(all.hidden).toBe(0);
+    expect(all.row.tiles).toHaveLength(6);
+    expect(all.row.height).toBeGreaterThanOrEqual(120);
+    expect(all.row.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 5).toBeLessThanOrEqual(663);
+    expect(all.row.tiles[0]!.width).toBeGreaterThanOrEqual(190);
+    /* A few pixels short: the row shrinks a little and still shows every frame. */
+    const tight = collageRow(six, 640, { target: 120, gap: 6, more: 56 });
+    expect(tight.hidden).toBe(0);
+    expect(tight.row.height).toBeLessThan(120);
+    expect(tight.row.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 5).toBeLessThanOrEqual(640);
+    /* A lane's variant, twenty-four frames in the order they were taken: the
+       first that fit, and one tile for the rest. Still one row. */
+    const lane = [...Array(8).fill(1.6), ...Array(8).fill(1.25), ...Array(8).fill(0.462)] as number[];
+    const capped = collageRow(lane, 662, { target: 120, gap: 6, more: 56 });
+    expect(capped.row.tiles.map((tile) => tile.index)).toEqual([0, 1, 2]);
+    expect(capped.hidden).toBe(21);
+    expect(capped.row.height).toBeGreaterThanOrEqual(120);
+    expect(capped.row.tiles.reduce((total, tile) => total + tile.width, 0) + 6 * 3 + 56).toBeLessThanOrEqual(662);
+    /* A few frames never stretch into giants, and one frame wider than the row is drawn at its width. */
+    expect(collageRow([1.6], 1300, { target: 120, gap: 6, more: 56 }).row.height).toBeLessThanOrEqual(150);
+    expect(collageRow([4, 4], 300, { target: 120, gap: 6, more: 56 })).toEqual({ row: { height: 60, tiles: [{ index: 0, width: 238 }] }, hidden: 1 });
+    expect(collageRow([], 300, { target: 120, gap: 6, more: 56 })).toEqual({ row: { height: 120, tiles: [] }, hidden: 0 });
   });
 
   test("a narrow pane gets one row at a fixed height, wide enough to press", () => {
     const strip = stripTiles([1.6, 0.462], 76, 44);
     expect(strip).toEqual({ height: 76, tiles: [{ index: 0, width: 122 }, { index: 1, width: 44 }] });
     expect(setCounts(set, "en", true)).toBe("5 frames");
+    expect([1, 3, 18, 21, 114].map((count) => frameCount(count, "uk"))).toEqual(["1 кадр", "3 кадри", "18 кадрів", "21 кадр", "114 кадрів"]);
+    expect(framesOfNoVariant(set).map((entry) => entry.src)).toEqual(["/f/4"]);
   });
 });

@@ -16,7 +16,9 @@
  * entry in the call's own row, for the measurement that compares the two.
  *
  * Every frame is drawn on a canvas when the page loads. Nothing here reads a
- * file, and every name and sentence is invented.
+ * file, and every name and sentence is invented. There are two sets: six
+ * frames a variant (the default), and with `set=lane` a set of a real lane's
+ * size, which is this lane's own capture directory read by its file names.
  */
 
 import { Images } from "lucide-react";
@@ -38,9 +40,13 @@ import type { FileEntry } from "@/lib/types";
 
 import {
   chosenReply,
+  collageRow,
+  driverFrameNames,
   frameAtView,
+  frameCount,
+  framesFromFileNames,
+  framesOfNoVariant,
   framesOfVariant,
-  justifiedRows,
   setCounts,
   stepIndex,
   stripTiles,
@@ -74,6 +80,10 @@ const COPY = {
     views: { 1440: "desktop 1440", 440: "board pane 440", 390: "phone 390" } as Record<number, string>,
     setTitle: "Step between my own messages",
     variantTitles: ["In the header", "A row above the message field", "In the message field's own row", "Keys and menu rows"],
+    laneVariantTitles: ["In the header, beside the conversation's title", "A row above the message field", "In the message field's own row, left of the attach button", "Keys and two rows in the conversation menu"],
+    more: (count: number, n: number) => `${frameCount(count, "en")} more of variant ${n}`,
+    other: "Without a variant",
+    otherAria: (count: string) => `Show the ${count} without a variant`,
   },
   uk: {
     variants: ["Сьогоднішня панель: рядок інструмента як є", "Розгортається на місці", "Повноекранний перегляд", "Два поруч", "Колаж зі збільшенням"],
@@ -93,6 +103,10 @@ const COPY = {
     views: { 1440: "десктоп 1440", 440: "панель дошки 440", 390: "телефон 390" } as Record<number, string>,
     setTitle: "Кроки між моїми повідомленнями",
     variantTitles: ["У шапці", "Рядок над полем повідомлення", "У рядку самого поля повідомлення", "Клавіші та рядки меню"],
+    laneVariantTitles: ["У шапці, поруч із назвою розмови", "Рядок над полем повідомлення", "У рядку самого поля повідомлення, ліворуч від вкладення", "Клавіші та два рядки в меню розмови"],
+    more: (count: number, n: number) => `Ще ${frameCount(count, "uk")} варіанта ${n}`,
+    other: "Без варіанта",
+    otherAria: (count: string) => `Показати ${count} без варіанта`,
   },
 } as const;
 type Copy = (typeof COPY)[Lang];
@@ -200,6 +214,39 @@ export function fixtureFrameSet(lang: Lang): FrameSet {
     source: { conversationId: "conversation_fixture_design_lane", pipelineId: "pipeline_fixture", stageId: "design", commit: "0000000" },
     createdAt: "2026-10-05T09:40:00.000Z",
     variants: copy.variantTitles.map((title, index) => ({ number: index + 1, title })),
+    frames,
+  };
+}
+
+/* What the driver's three panes capture: the window, whatever the pane in it. */
+const LANE_CAPTURE: Record<number, { w: number; h: number }> = { 1440: { w: 1440, h: 900 }, 440: { w: 1000, h: 800 }, 390: { w: 390, h: 844 } };
+
+/**
+ * A set of a real lane's size: this lane's own capture directory as the short
+ * form of a publication reads it. The names are the ones the driver block
+ * writes (`driverFrameNames`), each frame's variant, width, language and
+ * caption come from its name by the publication's own rule, and the order is
+ * the publication's. Twenty-four frames for variants 1 to 3, thirty-six for
+ * variant 4, eighteen of no variant. The pictures are drawn, as above.
+ */
+export function laneFrameSet(lang: Lang): FrameSet {
+  const copy = COPY[lang];
+  const frames = framesFromFileNames(driverFrameNames()).map((entry): Frame => {
+    const size = LANE_CAPTURE[entry.width ?? 1440]!;
+    /* The caption is printed on the frame, so no two pictures are the same:
+       the viewer finds the frame it was opened on by its picture. */
+    const src = drawFrame(entry.variant ?? 0, size.w, size.h, `${entry.caption} · ${entry.width} px · ${entry.lang}`);
+    return {
+      id: `lane-${entry.name.replace(/\.png$/, "")}`, variant: entry.variant, caption: `${entry.caption} · ${entry.width} · ${entry.lang}`,
+      width: entry.width, lang: entry.lang, w: size.w, h: size.h, bytes: Math.round((src.length * 3) / 4), src,
+    };
+  });
+  return {
+    id: "fs_fixture_own_steps_lane",
+    title: copy.setTitle,
+    source: { conversationId: "conversation_fixture_design_lane", pipelineId: "pipeline_fixture", stageId: "design", commit: "0000000" },
+    createdAt: "2026-10-05T09:40:00.000Z",
+    variants: copy.laneVariantTitles.map((title, index) => ({ number: index + 1, title })),
     frames,
   };
 }
@@ -536,15 +583,28 @@ function ComparePanel({ presenter, onClose, onState }: { presenter: Presenter; o
 
 /* Under this width the height is what runs out, so each variant gets one row
    of tiles that scrolls sideways; from the second width up two variants stand
-   side by side and their frames fill the row. */
+   side by side. In both forms a variant is one row of tiles, so the collage is
+   as tall with twenty-four frames a variant as with six. In the wide form the
+   frames that do not fit stand behind a last tile, "+N", which opens the
+   viewer on the first of them. */
 const COLLAGE_STRIP_BELOW = 560;
 const COLLAGE_TWO_COLUMNS_FROM = 960;
 const COLLAGE_ROW_HEIGHT = 120;
+/* A strip is this tall when the feed has the room, and gives up height down
+   to the least before the collage would be taller than the feed. */
 const COLLAGE_STRIP_HEIGHT = 60;
 const COLLAGE_STRIP_HEIGHT_TOUCH = 72;
+const COLLAGE_STRIP_HEIGHT_LEAST = 48;
 const COLLAGE_GAP = 6;
+const COLLAGE_MORE_WIDTH = 56;
 
-function CollagePanel({ presenter, width, onZoomed }: { presenter: Presenter; width: number; onZoomed: (index: number | null) => void }) {
+function CollagePanel({ presenter, width, room: tall, onZoomed }: {
+  presenter: Presenter;
+  width: number;
+  /** The height the feed has for the panel under its row, read when the row was pressed. */
+  room: number | null;
+  onZoomed: (index: number | null) => void;
+}) {
   const [zoom, setZoom] = useState<number | null>(null);
   const open = (index: number | null) => { setZoom(index); onZoomed(index); };
   const strip = width < COLLAGE_STRIP_BELOW;
@@ -552,58 +612,96 @@ function CollagePanel({ presenter, width, onZoomed }: { presenter: Presenter; wi
   /* The panel's border and padding, then the gap between two columns. */
   const room = Math.max(120, Math.floor((width - 18 - (columns - 1) * 12) / columns));
   const minTile = presenter.phone ? 44 : 0;
+  const other = framesOfNoVariant(presenter.set);
+  /* What the narrow form is made of besides its strips: the panel's border
+     and padding, a header and a gap for each variant, the gaps between them,
+     and the row of the frames of no variant. */
+  const count = presenter.set.variants.length;
+  const control = presenter.phone ? 44 : 32;
+  const fixed = 18 + count * (control + 4) + (count - 1) * 6 + (other.length > 0 ? (presenter.phone ? 44 : 28) + 6 : 0);
+  const most = presenter.phone ? COLLAGE_STRIP_HEIGHT_TOUCH : COLLAGE_STRIP_HEIGHT;
+  const stripHeight = tall === null || count === 0 ? most : Math.max(COLLAGE_STRIP_HEIGHT_LEAST, Math.min(most, Math.floor((tall - fixed) / count)));
   return (
     <div
       data-frame-panel="collage"
       data-frame-collage-form={strip ? "strip" : `rows-${columns}`}
-      className="mt-1.5 grid min-w-0 gap-x-3 gap-y-2 rounded-surface border border-border bg-card p-2"
+      className={`mt-1.5 grid min-w-0 gap-x-3 rounded-surface border border-border bg-card p-2 ${strip ? "gap-y-1.5" : "gap-y-2"}`}
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
     >
       {presenter.set.variants.map((variant) => {
         const own = presenter.set.frames.map((frame, index) => ({ frame, index })).filter((entry) => entry.frame.variant === variant.number);
         const aspects = own.map((entry) => entry.frame.w / entry.frame.h);
-        const rows = strip
-          ? [stripTiles(aspects, presenter.phone ? COLLAGE_STRIP_HEIGHT_TOUCH : COLLAGE_STRIP_HEIGHT, minTile)]
-          : justifiedRows(aspects, room, { target: COLLAGE_ROW_HEIGHT, gap: COLLAGE_GAP, minTile });
+        const { row, hidden } = strip
+          ? { row: stripTiles(aspects, stripHeight, minTile), hidden: 0 }
+          : collageRow(aspects, room, { target: COLLAGE_ROW_HEIGHT, gap: COLLAGE_GAP, more: COLLAGE_MORE_WIDTH, minTile });
+        const next = own[row.tiles.length];
         return (
-          <section key={variant.number} data-frame-collage-variant={variant.number} className="flex min-w-0 flex-col gap-1.5">
+          <section key={variant.number} data-frame-collage-variant={variant.number} className={`flex min-w-0 flex-col ${strip ? "gap-1" : "gap-1.5"}`}>
             <div className="flex min-w-0 items-center gap-2">
               <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-control bg-accent/15 px-1 text-ui font-bold tabular-nums text-accent">{variant.number}</span>
               {/* Whole at every width: the title is what tells the variants apart before "Choose N", so it wraps and is never cut. */}
               <span data-frame-variant-title={variant.number} className="min-w-0 flex-1 text-ui font-semibold leading-tight text-primary [overflow-wrap:anywhere]">{variant.title}</span>
               <ChooseButton presenter={presenter} variant={variant.number} name={`choose-${variant.number}`} />
             </div>
-            {rows.map((row, at) => (
-              <div
-                key={at}
-                data-frame-collage-row
-                className={`flex min-w-0 ${strip ? "touch-pan-x overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : ""}`}
-                style={{ gap: COLLAGE_GAP }}
-              >
-                {row.tiles.map((tile) => {
-                  const { frame, index } = own[tile.index]!;
-                  return (
-                    <button
-                      key={frame.id}
-                      type="button"
-                      data-frame-control={`tile-${index}`}
-                      data-frame-tile-of={frame.width ?? undefined}
-                      aria-label={frameCaption(presenter, frame)}
-                      title={frameCaption(presenter, frame)}
-                      onClick={() => open(index)}
-                      style={{ width: tile.width, height: row.height }}
-                      className={`flex shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-control border border-border bg-sunken ${FOCUS}`}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element -- a frame drawn in the page */}
-                      <img src={frame.src} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+            <div
+              data-frame-collage-row
+              className={`flex min-w-0 ${strip ? "touch-pan-x overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : ""}`}
+              style={{ gap: COLLAGE_GAP }}
+            >
+              {row.tiles.map((tile) => {
+                const { frame, index } = own[tile.index]!;
+                return (
+                  <button
+                    key={frame.id}
+                    type="button"
+                    data-frame-control={`tile-${index}`}
+                    data-frame-tile-of={frame.width ?? undefined}
+                    aria-label={frameCaption(presenter, frame)}
+                    title={frameCaption(presenter, frame)}
+                    onClick={() => open(index)}
+                    style={{ width: tile.width, height: row.height }}
+                    className={`flex shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-control border border-border bg-sunken ${FOCUS}`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- a frame drawn in the page */}
+                    <img src={frame.src} alt="" draggable={false} className="max-h-full max-w-full object-contain" />
+                  </button>
+                );
+              })}
+              {hidden > 0 && next ? (
+                <button
+                  type="button"
+                  data-frame-control={`more-${variant.number}`}
+                  aria-label={presenter.copy.more(hidden, variant.number)}
+                  title={presenter.copy.more(hidden, variant.number)}
+                  onClick={() => open(next.index)}
+                  style={{ width: COLLAGE_MORE_WIDTH, height: row.height }}
+                  className={`flex shrink-0 cursor-zoom-in items-center justify-center rounded-control border border-border bg-sunken text-ui font-semibold tabular-nums text-secondary hover:border-accent/45 hover:text-accent ${FOCUS}`}
+                >
+                  +{hidden}
+                </button>
+              ) : null}
+            </div>
           </section>
         );
       })}
+      {/* The frames of no variant (the pane as it is today, a measurement) are
+          no choice, so they get one row under the variants and no tiles: it
+          opens the viewer on the first of them. */}
+      {other.length > 0 ? (
+        <button
+          type="button"
+          data-frame-control="other"
+          aria-label={presenter.copy.otherAria(frameCount(other.length, presenter.lang))}
+          title={presenter.copy.otherAria(frameCount(other.length, presenter.lang))}
+          onClick={() => open(presenter.set.frames.indexOf(other[0]!))}
+          style={{ gridColumn: "1 / -1" }}
+          className={`flex h-7 min-w-0 items-center gap-2 rounded-control border border-border px-2 text-left text-label text-secondary hover:border-accent/45 hover:text-accent pointer-coarse:h-11 ${FOCUS}`}
+        >
+          <span className="min-w-0 truncate font-semibold">{presenter.copy.other}</span>{" "}
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-muted">{frameCount(other.length, presenter.lang)}</span>
+          <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+        </button>
+      ) : null}
       {zoom !== null ? <Zoom presenter={presenter} frames={presenter.set.frames} start={zoom} onClose={() => open(null)} /> : null}
     </div>
   );
@@ -629,6 +727,20 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
     return () => observer.disconnect();
   }, []);
   const narrow = width > 0 && width < COLLAGE_STRIP_BELOW;
+  /* The height the feed has for a panel under this row: the feed's own, less
+     the row, less what the feed lays out under it (its bottom padding at the
+     end of the last turn), less the margins the move below keeps. */
+  const [room, setRoom] = useState<number | null>(null);
+  const toggle = () => {
+    const row = entry.current;
+    const scroller = row?.closest<HTMLElement>("[data-log-feed-scroller]");
+    const whole = row?.closest<HTMLElement>("[data-frame-set]");
+    if (!open && row && scroller && whole) {
+      const under = scroller.scrollHeight - scroller.scrollTop - (whole.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top);
+      setRoom(Math.floor(scroller.clientHeight - 8 - row.getBoundingClientRect().height - Math.max(0, under) - 12));
+    }
+    setOpen((current) => !current);
+  };
   const close = useCallback(() => { setOpen(false); entry.current?.focus(); }, []);
   /* A full-screen surface gets out of the way of the reply it just wrote. */
   useEffect(() => {
@@ -647,10 +759,15 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
     if (!open || !inPlace) return;
     const scroller = entry.current?.closest<HTMLElement>("[data-log-feed-scroller]");
     if (!scroller) return;
+    /* The feed estimates the height of rows that are off screen, so one move
+       can land a few pixels short of the tail; a move that meant the tail
+       holds it through the next frames. */
+    let onTail = false;
     const move = () => {
       const row = entry.current;
       const whole = row?.closest<HTMLElement>("[data-frame-set]");
       if (!row || !whole) return;
+      if (onTail) { scroller.scrollTop = scroller.scrollHeight; return; }
       const box = scroller.getBoundingClientRect();
       const above = box.top + 8 - row.getBoundingClientRect().top;
       const below = whole.getBoundingClientRect().bottom + 8 - box.bottom;
@@ -661,12 +778,14 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
         const tail = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
         const by = Math.min(below, -above);
         /* The last thing in the feed: the feed stays on its tail. */
-        scroller.scrollTop += tail - by <= 32 ? Math.min(tail, -above) : by;
+        onTail = tail - by <= 32 && tail <= -above;
+        if (!onTail) scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true }));
+        scroller.scrollTop += onTail ? tail : tail - by <= 32 ? -above : by;
       }
     };
     const frame = requestAnimationFrame(move);
-    const timer = window.setTimeout(move, 160);
-    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+    const timers = [160, 320].map((after) => window.setTimeout(move, after));
+    return () => { cancelAnimationFrame(frame); for (const timer of timers) window.clearTimeout(timer); };
   }, [open, inPlace]);
   const compareState = useCallback((state: { left: number; right: number; view: number }) => setExtra(state), []);
   const zoomed = useCallback((index: number | null) => setExtra({ zoomed: index }), []);
@@ -680,7 +799,7 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
         aria-expanded={open}
         aria-label={presenter.copy.open(presenter.set.title)}
         title={presenter.copy.open(presenter.set.title)}
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggle}
         className={`flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-2.5 text-left text-ui hover:border-accent/45 pointer-coarse:h-11 ${FOCUS}`}
       >
         <Images className="h-4 w-4 shrink-0 text-muted" aria-hidden />
@@ -691,7 +810,7 @@ function Entry({ presenter, variant, onState }: { presenter: Presenter; variant:
       {open && variant === 1 ? <InlinePanel presenter={presenter} position={position} setPosition={setPosition} /> : null}
       {open && variant === 2 ? <ViewerPanel presenter={presenter} position={position} setPosition={setPosition} onClose={close} /> : null}
       {open && variant === 3 ? <ComparePanel presenter={presenter} onClose={close} onState={compareState} /> : null}
-      {open && variant === 4 ? <CollagePanel presenter={presenter} width={width} onZoomed={zoomed} /> : null}
+      {open && variant === 4 ? <CollagePanel presenter={presenter} width={width} room={room} onZoomed={zoomed} /> : null}
     </div>
   );
 }
@@ -733,9 +852,11 @@ function useRowHost(pane: HTMLElement | null, enabled: boolean, place: FrameSetP
       if (node.parentElement === anchor && anchor.lastElementChild === node) return;
       /* The entry starts where the row it stands in starts its own content:
          the answer's text at the end of the turn, the call's card in the
-         call's place. A tool row is inset further than an answer, and on the
-         phone that inset is a tenth of the pane. */
-      const lead = Array.from(anchor.children).find((child) => child !== node && child.getBoundingClientRect().width > 0)?.getBoundingClientRect();
+         call's place. On the desktop an answer's row begins with the avatar's
+         gutter and its text column starts 36 px in, where the tool cards
+         start too; on the phone there is no gutter. */
+      const lead = (anchor.matches("[data-tts-message]") ? anchor : anchor.querySelector("[data-tts-message]")
+        ?? Array.from(anchor.children).find((child) => child !== node && child.getBoundingClientRect().width > 0))?.getBoundingClientRect();
       if (lead) node.style.paddingLeft = `${Math.max(0, Math.round(lead.left - anchor.getBoundingClientRect().left))}px`;
       call.dataset.frameSetRow = "";
       /* The feed pinned its tail before this move; a pane that was on its tail is put back on it. */
@@ -771,10 +892,12 @@ interface ProtoControls {
   chosen: () => number[];
 }
 
-export function FrameSetsPrototype({ file, variant, paneWidth, place = "turn" }: {
+export function FrameSetsPrototype({ file, variant, paneWidth, place = "turn", lane = false }: {
   file: FileEntry;
   variant: FrameSetVariant;
   place?: FrameSetPlace;
+  /** The set of a real lane's size in place of six frames a variant. */
+  lane?: boolean;
   /** A board-node-sized pane; absent, the pane fills the window. */
   paneWidth?: number;
 }) {
@@ -783,7 +906,7 @@ export function FrameSetsPrototype({ file, variant, paneWidth, place = "turn" }:
   const lang: Lang = (locale as Locale) === "uk" ? "uk" : "en";
   const copy: Copy = COPY[lang];
   const [pane, setPane] = useState<HTMLElement | null>(null);
-  const set = useMemo(() => fixtureFrameSet(lang), [lang]);
+  const set = useMemo(() => lane ? laneFrameSet(lang) : fixtureFrameSet(lang), [lang, lane]);
   const state = useRef<Record<string, unknown>>({ open: false });
   const chosen = useRef<number[]>([]);
   const cardId = conversationIdentity(file);
@@ -803,6 +926,48 @@ export function FrameSetsPrototype({ file, variant, paneWidth, place = "turn" }:
     controls.frameSets = { ...controls.frameSets, state: () => state.current, chosen: () => chosen.current };
   }, []);
   const host = useRowHost(pane, variant !== 0, place);
+  /* A reply of two lines makes the message field taller and the feed shorter,
+     and the feed then puts itself back where it was, which leaves the set's
+     row at the end of the turn half under the feed's edge. A feed that was on
+     its tail stays on it here, whatever moved it, unless the reader did. The
+     feed does not do this today; in the build it is the feed's own. */
+  useEffect(() => {
+    const scroller = host?.closest<HTMLElement>("[data-log-feed-scroller]");
+    if (!scroller) return;
+    const tail = () => scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 16;
+    let onTail = tail();
+    let height = scroller.clientHeight;
+    let reader = false;
+    const timers: number[] = [];
+    const pin = () => { scroller.scrollTop = scroller.scrollHeight; };
+    /* The feed estimates the height of rows that are off screen, so one move
+       can land short; the tail is held through the next frames. */
+    const hold = () => {
+      pin();
+      requestAnimationFrame(pin);
+      for (const after of [120, 300]) timers.push(window.setTimeout(pin, after));
+    };
+    const byReader = () => { reader = true; };
+    const onScroll = () => {
+      if (scroller.clientHeight !== height) return;
+      if (reader) { reader = false; onTail = tail(); } else if (onTail && !tail()) pin();
+    };
+    const observer = new ResizeObserver(() => {
+      const shorter = scroller.clientHeight < height;
+      height = scroller.clientHeight;
+      if (shorter && onTail) hold();
+      else onTail = tail();
+    });
+    for (const input of ["wheel", "touchmove", "keydown"] as const) scroller.addEventListener(input, byReader, { passive: true });
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    observer.observe(scroller);
+    return () => {
+      for (const input of ["wheel", "touchmove", "keydown"] as const) scroller.removeEventListener(input, byReader);
+      scroller.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [host]);
   const portal: ReactNode = host && variant !== 0 ? createPortal(<Entry presenter={presenter} variant={variant} onState={onState} />, host) : null;
 
   if (phone) {
@@ -879,9 +1044,11 @@ const TEXT = {
  * feed, so every one of them is a row. The publishing call carries the set's
  * id and counts and no bytes. All text is invented.
  */
-export function frameSetsTranscript(lang: Lang): string[] {
+export function frameSetsTranscript(lang: Lang, lane = false): string[] {
   const text = TEXT[lang];
   const copy = COPY[lang];
+  const frames = lane ? driverFrameNames().length : FRAME_SET_FIXTURE_FRAMES;
+  const counted = (reply: string) => lane ? reply.replace("twenty-four frames", `${frames} frames`).replace("двадцять чотири кадри", frameCount(frames, "uk")) : reply;
   const lines: string[] = [];
   let clock = Date.parse("2026-10-05T06:00:00.000Z");
   const at = (minutes: number) => new Date(clock += minutes * 60_000).toISOString();
@@ -912,11 +1079,11 @@ export function frameSetsTranscript(lang: Lang): string[] {
       delegatus("get_pipeline", { pipelineId: "pipeline_fixture", stageId: "design" }, { verdict: "pass", findings: 0, frameSets: ["fs_fixture_own_steps"] });
       delegatus("get_task", { id: "task_fixture" }, { id: "task_fixture", status: "in_progress" });
       delegatus("list_tasks", { openOnly: true }, { items: 2 });
-      delegatus(TOOL_NAME, { setId: "fs_fixture_own_steps" }, { setId: "fs_fixture_own_steps", title: copy.setTitle, variants: FRAME_SET_FIXTURE_VARIANTS, frames: FRAME_SET_FIXTURE_FRAMES });
+      delegatus(TOOL_NAME, { setId: "fs_fixture_own_steps" }, { setId: "fs_fixture_own_steps", title: copy.setTitle, variants: FRAME_SET_FIXTURE_VARIANTS, frames });
       delegatus("update_task", { id: "task_fixture", status: "needs_review" }, { changedFields: ["status"], revision: 7 });
       delegatus("request_attention", { taskId: "task_fixture", text: text.card }, { requested: true });
     }
-    agent(text.replies[index]!);
+    agent(counted(text.replies[index]!));
   });
   return lines;
 }

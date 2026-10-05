@@ -7,6 +7,8 @@ import { chromium, type Browser, type LaunchOptions } from "playwright-core";
 import { translate } from "@/lib/i18n";
 import { openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 
+import { driverArrivalName, driverFrameName, driverFrameNames, framesFromFileNames, type DriverMoment } from "./frameSets.prototype.model";
+
 /*
  * The one rendered-evidence driver for the conversation window. Every case
  * here runs the production conversation components over
@@ -1892,12 +1894,18 @@ describe("frame sets, design variants", () => {
    * whether its target was on screen and how far it had to be scrolled to,
    * because a press the driver makes scrolls its target into view by itself.
    * It steps by key and by swipe and reads the reply out of the message
-   * field. A last pass holds the turn's answer back, delivers it, and reads
-   * whether the entry is on screen at that moment, for both places the entry
-   * can stand.
+   * field. The six-frames-a-variant fixture hid what a real lane's set does
+   * to the collage, so a second pass opens variant 4 over a set of this lane's
+   * own size (`set=lane`: twenty-four frames and more a variant, and frames of
+   * no variant) and fails the run when a "Choose" is past the feed's edge or
+   * the collage is taller than the feed. A last pass holds the turn's answer
+   * back, delivers it, and reads whether the entry is on screen at that
+   * moment, for both places the entry can stand.
    *
    * Frames go to `LLV_FRAME_SETS_OUT` (default `.artifacts/frame-sets/`, not
-   * committed); the measurements to `evidence/frame-sets/measurements.json`.
+   * committed), under the names `driverFrameNames` lists, which is the list
+   * the model test publishes by the short form; the measurements go to
+   * `evidence/frame-sets/measurements.json`.
    */
   const OUT = path.resolve(process.env.LLV_FRAME_SETS_OUT ?? ".artifacts/frame-sets");
   const EVIDENCE = path.resolve("evidence/frame-sets");
@@ -1911,6 +1919,23 @@ describe("frame sets, design variants", () => {
   /* The frame the walk goes to: variant 3, its fifth frame (the phone, en). */
   const TARGET = { variant: 3, index: 4, id: "fixture-3-390-en", before: "fixture-3-440-uk", after: "fixture-3-390-uk", inSet: 16, frames: 24 };
   const REPLY = { en: "Variant 3 (In the message field's own row).", uk: "Варіант 3 (У рядку самого поля повідомлення)." };
+  /* The lane-sized set is this lane's own directory in publication order; the
+     walk goes to the same place in it, variant 3's fifth frame. */
+  const LANE = (() => {
+    const frames = framesFromFileNames(driverFrameNames());
+    const third = frames.map((frame, index) => ({ frame, index })).filter((entry) => entry.frame.variant === TARGET.variant);
+    return {
+      frames: frames.length,
+      target: third[TARGET.index]!.index,
+      firstOther: frames.findIndex((frame) => frame.variant === null),
+      others: frames.filter((frame) => frame.variant === null).length,
+      perVariant: [1, 2, 3, 4].map((variant) => frames.filter((frame) => frame.variant === variant).length),
+    };
+  })();
+  const LANE_REPLY = {
+    en: "Variant 3 (In the message field's own row, left of the attach button).",
+    uk: "Варіант 3 (У рядку самого поля повідомлення, ліворуч від вкладення).",
+  };
 
   type Box = [x: number, y: number, width: number, height: number];
   interface ControlReading {
@@ -2119,15 +2144,37 @@ describe("frame sets, design variants", () => {
           cut: title.scrollWidth > title.clientWidth + 1 || title.scrollHeight > title.clientHeight + 1 || getComputedStyle(title).textOverflow === "ellipsis"
             || rect.left < within.left - 1 || rect.right > within.right + 1 || !tall(rect) };
       }),
-      /* How far the collage's left edge is from the answer's text above it. */
-      leftOfAnswer: (() => {
-        const host = document.querySelector<HTMLElement>("[data-frame-set-host]")!;
-        const answer = Array.from(host.parentElement!.children).find((child) => child !== host && child.getBoundingClientRect().width > 0);
-        return answer ? Math.round(document.querySelector('[data-frame-control="entry"]')!.getBoundingClientRect().left - answer.getBoundingClientRect().left) : null;
+      /* Per variant: the tile that stands for the frames the row has no room for. */
+      more: sections.map((section) => section.querySelector('[data-frame-control^="more-"]')?.textContent ?? null),
+      /* The row of the frames of no variant. */
+      other: (() => {
+        const row = panel.querySelector('[data-frame-control="other"]');
+        return row ? { text: (row.textContent ?? "").replace(/\s+/g, " ").trim(), onScreen: tall(row.getBoundingClientRect()) } : null;
       })(),
-
+      stripHeight: panel.dataset.frameCollageForm === "strip" ? Math.round(panel.querySelector("[data-frame-collage-row] > button")!.getBoundingClientRect().height) : null,
       tileOf: Object.fromEntries([1440, 440, 390].map((width) => [width, size(panel.querySelector(`[data-frame-tile-of="${width}"]`))])),
     };
+  });
+
+  /** How far the set's row starts from the answer's text above it: the left
+      edge of the answer's first glyph, which is where the feed's tool cards
+      start too. The row of an answer is wider than its text on the desktop
+      (the avatar's gutter), so the row's box says nothing about this. */
+  const leftOfAnswer = (page: import("playwright-core").Page) => page.evaluate(() => {
+    const host = document.querySelector<HTMLElement>("[data-frame-set-host]")!;
+    const body = host.parentElement!.querySelector("[data-tts-body]");
+    if (!body) return null;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = (node.textContent ?? "").search(/\S/);
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 1);
+      const glyph = range.getClientRects()[0];
+      if (glyph) return Math.round(document.querySelector('[data-frame-control="entry"]')!.getBoundingClientRect().left - glyph.left);
+    }
+    return null;
   });
 
   browserTest("the closed entry covers nothing, and every variant reaches a frame and a chosen reply", async () => {
@@ -2138,6 +2185,7 @@ describe("frame sets, design variants", () => {
     const failures: string[] = [];
     const evidence: Record<string, Record<string, unknown>> = {};
     const baselines = new Map<string, Reading>();
+    const written = new Set<string>();
     try {
       browser = await chromium.launch(LAUNCH);
       for (const viewport of VIEWPORTS) for (const lang of LANGS) for (const variant of [0, 1, 2, 3, 4] as const) {
@@ -2175,7 +2223,11 @@ describe("frame sets, design variants", () => {
           }
           if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
         };
-        const shot = (moment: string) => page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+        const shot = (moment: DriverMoment) => {
+          const name = driverFrameName(variant, viewport.name, lang, moment);
+          written.add(name);
+          return page.screenshot({ path: path.join(OUT, name) });
+        };
         const key = `${viewport.name}-${lang}`;
         try {
           await ready();
@@ -2198,8 +2250,10 @@ describe("frame sets, design variants", () => {
           for (const change of closedChanges) fail("closed", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
           expect(closed.controls.map((control) => control.name)).toEqual(["entry"]);
           const title = await page.locator("[data-frame-title]").evaluate((element) => ({ shown: Math.round(element.getBoundingClientRect().width), needs: element.scrollWidth, text: element.textContent ?? "" }));
+          const offset = await leftOfAnswer(page);
+          if (offset !== 0) fail("closed", `the set's row starts ${offset} px from the answer's text`);
           record.closed = {
-            entry: closed.controls[0], rowHeight: closed.entryRow![3], toolRowHeightToday: baseline.callRow![3],
+            entry: closed.controls[0], leftOfAnswer: offset, rowHeight: closed.entryRow![3], toolRowHeightToday: baseline.callRow![3],
             feedGrowsBy: closed.feed.scrollHeight - baseline.feed.scrollHeight,
             title: { ...title, cut: title.needs > title.shown + 1 },
             counts: await page.locator("[data-frame-counts]").textContent(),
@@ -2237,7 +2291,7 @@ describe("frame sets, design variants", () => {
             /* A variant's title is what the operator tells the variants apart by before "Choose N". */
             for (const title of laid.titles.filter((entry) => entry.cut)) fail("open", `a variant's title is cut: ${JSON.stringify(title)}`);
             if (laid.titles.length !== 4) fail("open", `${laid.titles.length} variant titles, wanted 4`);
-            if (laid.leftOfAnswer !== 0) fail("open", `the set's row starts ${laid.leftOfAnswer} px from the answer's text`);
+            if (laid.tiles.some((entry) => entry.rows !== 1)) fail("open", `a variant has more than one row of tiles: ${JSON.stringify(laid.tiles)}`);
             if (!viewport.phone && !viewport.pane && (laid.tileOf[1440]?.[0] ?? 0) < 180) fail("open", `a desktop frame's tile is ${JSON.stringify(laid.tileOf[1440])} on the desktop`);
           }
 
@@ -2316,8 +2370,126 @@ describe("frame sets, design variants", () => {
           if (!edited.draft.startsWith(REPLY[lang]) || edited.draft === REPLY[lang]) fail("choose", `the draft did not take typing: ${JSON.stringify(edited.draft)}`);
           const sent = await page.locator('[data-feed-kind="user"]').count();
           if (sent !== 3) fail("choose", `${sent} own messages in the feed, wanted the three it started with`);
+          /* The reply made the field taller. With the surface gone (2 and 3)
+             the closed row is the feed's last thing and has to be whole. */
+          const rowAfter = await reach(page, "entry");
+          if ((variant === 2 || variant === 3) && !rowAfter.onScreen) fail("choose", `the set's row is ${rowAfter.scrollY} px under the feed's edge once the reply is in the field`);
           await shot("chosen");
-          record.choose = { ...walked(), draft: chosen.draft, fieldFocused: chosen.composerFocused, afterTyping: edited.draft, sent: sent - 3 };
+          record.choose = { ...walked(), draft: chosen.draft, fieldFocused: chosen.composerFocused, afterTyping: edited.draft, sent: sent - 3, entryWholeAfter: rowAfter.onScreen };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+      /* A set of a real lane's size, in the recommended variant. Six frames a
+         variant fit one row at every width; twenty-four do not, and a collage
+         that wraps them is taller than the feed. After opening, every
+         "Choose" is on screen and the collage is inside the feed, or the run
+         fails. Then the same walk: variant 3's fifth frame, the frames of no
+         variant, and a chosen reply. */
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) {
+        const where = `variant-4-${viewport.name}-${lang}-lane-set`;
+        const url = `${served.base}?case=frame-sets&variant=4&set=lane&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: viewport.width, height: viewport.height }, "dark", lang, "reduce", viewport.phone);
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const ready = async () => {
+          await page.locator('[data-frame-proto="4"]').waitFor();
+          await page.locator('[data-frame-control="entry"]').waitFor();
+          await page.waitForTimeout(350);
+        };
+        const presses: Press[] = [];
+        const press = async (control: string) => {
+          const before = await reach(page, control);
+          await page.locator(`[data-frame-control="${control}"]`).click();
+          presses.push({ control, ...before });
+          await page.waitForTimeout(200);
+        };
+        const walked = () => ({
+          presses: presses.map((entry) => ({ ...entry })),
+          count: presses.length,
+          scrolled: { down: presses.reduce((sum, entry) => sum + entry.scrollY, 0), sideways: presses.reduce((sum, entry) => sum + entry.scrollX, 0) },
+        });
+        const check = (moment: string, reading: Reading) => {
+          for (const control of reading.controls) {
+            if (!control.hit) fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+            if (control.overlaps.length) fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`);
+            if (control.overRows.length) fail(moment, `${control.name} lies over ${control.overRows.join(", ")}`);
+            if (!control.insideWindow) fail(moment, `${control.name} leaves the window`);
+            if (viewport.phone && (control.size[0] < 44 || control.size[1] < 44)) fail(moment, `${control.name} is ${control.size[0]} x ${control.size[1]}, under 44 px`);
+          }
+          if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+        };
+        const shot = (moment: DriverMoment) => {
+          const name = driverFrameName(4, viewport.name, lang, moment);
+          written.add(name);
+          return page.screenshot({ path: path.join(OUT, name) });
+        };
+        const position = async () => (await measure(page)).lightbox;
+        try {
+          await ready();
+          const baseline = baselines.get(`${viewport.name}-${lang}`)!;
+          const closed = await measure(page);
+          check("closed", closed);
+          const closedChanges = moved(baseline, closed);
+          for (const change of closedChanges) fail("closed", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
+          expect(closed.controls.map((control) => control.name)).toEqual(["entry"]);
+          const offset = await leftOfAnswer(page);
+          if (offset !== 0) fail("closed", `the set's row starts ${offset} px from the answer's text`);
+
+          await press("entry");
+          await page.locator("[data-frame-panel]").waitFor();
+          await page.waitForTimeout(350);
+          const open = await measure(page);
+          await shot("lane-open");
+          check("open", open);
+          const openChanges = moved(baseline, open);
+          for (const change of openChanges.filter((entry) => !/^(feed|jump-strip new)$/.test(entry.probe))) fail("open", `"${change.probe}" changed by ${JSON.stringify(change.delta)} against the pane without the feature`);
+          const laid = await collage(page);
+          if (!laid.entryOnScreen) fail("open", "the row that was pressed left the screen");
+          if (!laid.panelInsideFeed) fail("open", `the collage is ${laid.panel[1]} px tall in a feed of ${laid.feedHeight} px`);
+          if (laid.chooseOnScreen.length !== 4 || laid.chooseOnScreen.includes(false)) fail("open", `"Choose" is past the feed's edge: ${JSON.stringify(laid.chooseOnScreen)}`);
+          if (laid.tiles.some((entry) => entry.rows !== 1 || !entry.rowsInsideFeed || entry.onScreen === 0)) fail("open", `a variant's tiles need a scroll: ${JSON.stringify(laid.tiles)}`);
+          for (const title of laid.titles.filter((entry) => entry.cut)) fail("open", `a variant's title is cut: ${JSON.stringify(title)}`);
+          if (!laid.other?.onScreen) fail("open", `the row of the frames of no variant: ${JSON.stringify(laid.other)}`);
+
+          /* To variant 3's fifth frame: its tile when the row holds it, else
+             the "+N" tile and steps in the viewer. */
+          const tile = await page.locator(`[data-frame-control="tile-${LANE.target}"]`).count();
+          let stepsInViewer = 0;
+          await press(tile ? `tile-${LANE.target}` : `more-${TARGET.variant}`);
+          await page.locator("[data-lightbox-position]").waitFor();
+          const there = `${LANE.target + 1} / ${LANE.frames}`;
+          for (; stepsInViewer < 8 && await position() !== there; stepsInViewer += 1) { await page.keyboard.press("ArrowRight"); await page.waitForTimeout(150); }
+          if (await position() !== there) fail("frame", `shows ${await position()}, wanted ${there}`);
+          await shot("lane-frame");
+          const toFrame = { ...walked(), stepsInViewer, shows: await position() };
+          await page.keyboard.press("Escape");
+          await page.locator("[data-lightbox-position]").waitFor({ state: "detached" });
+
+          /* The frames of no variant: one press from the open collage. */
+          await press("other");
+          await page.locator("[data-lightbox-position]").waitFor();
+          const firstOther = await position();
+          if (firstOther !== `${LANE.firstOther + 1} / ${LANE.frames}`) fail("other", `shows ${firstOther}, wanted ${LANE.firstOther + 1} / ${LANE.frames}`);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-lightbox-position]").waitFor({ state: "detached" });
+
+          await page.reload();
+          await ready();
+          presses.length = 0;
+          await press("entry");
+          await press(`choose-${TARGET.variant}`);
+          await page.waitForTimeout(350);
+          const chosen = await measure(page);
+          if (chosen.draft !== LANE_REPLY[lang]) fail("choose", `the field holds ${JSON.stringify(chosen.draft)}`);
+          evidence[where] = {
+            set: { frames: LANE.frames, perVariant: LANE.perVariant, ofNoVariant: LANE.others },
+            closed: { entry: closed.controls[0], leftOfAnswer: offset, counts: await page.locator("[data-frame-counts]").textContent(), changedAgainstNoFeature: closedChanges },
+            open: { panel: open.panel, controls: open.controls.length, feedFromTail: open.feed.fromTail, changedAgainstNoFeature: openChanges, collage: laid },
+            toFrame,
+            toFramesOfNoVariant: { presses: 2, shows: firstOther },
+            choose: { ...walked(), draft: chosen.draft, fieldFocused: chosen.composerFocused },
+          };
           expect(pageErrors).toEqual([]);
         } finally {
           await context.close();
@@ -2348,7 +2520,8 @@ describe("frame sets, design variants", () => {
             return { delegatusCalls: rows.slice(last + 1).filter((row) => row.dataset.feedKind === "tool").length + document.querySelectorAll("[data-frame-set-row]").length
               - rows.slice(last + 1).filter((row) => row.dataset.frameSetRow !== undefined).length, answerHeight: Math.round(answer.getBoundingClientRect().height) };
           });
-          await page.screenshot({ path: path.join(OUT, `${where}.png`) });
+          written.add(driverArrivalName(place, viewport.name, lang));
+          await page.screenshot({ path: path.join(OUT, driverArrivalName(place, viewport.name, lang)) });
           evidence[where] = {
             turn: { ...turn, feedHeight: arrived.feed.clientHeight, answerInFeeds: Math.round((turn.answerHeight / arrived.feed.clientHeight) * 10) / 10 },
             beforeTheAnswer: { entryOnScreen: (await Promise.resolve(held.controls.some((control) => control.name === "entry"))) },
@@ -2373,6 +2546,8 @@ describe("frame sets, design variants", () => {
           Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
         }\n  }`).join(",\n")}\n}\n`,
       );
+      /* The list the model test publishes by the short form is the list written here. */
+      expect([...written].sort()).toEqual(driverFrameNames().sort());
       expect(failures).toEqual([]);
     } finally {
       await browser?.close();
