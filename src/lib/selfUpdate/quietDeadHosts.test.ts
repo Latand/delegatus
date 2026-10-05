@@ -230,7 +230,7 @@ test("a review stage still bound to the ended previous reviewer is held by its f
 });
 
 /** A journal that holds `rows` as open sessions, read back as the runtime host serves them. */
-function journalOf(name: string, rows: { conversationId: string; sessionKey: unknown }[]): RuntimeJournal {
+function journalOf<T extends { conversationId: string; sessionKey: unknown }>(name: string, rows: T[]): RuntimeJournal {
   const journal = new RuntimeJournal(join(directory, `${name}.sqlite`), { structuredHosts: true });
   for (const row of rows) {
     journal.append({ scope: { type: "session", id: row.conversationId }, kind: "session-status",
@@ -569,3 +569,128 @@ for (const unproven of [false, true]) {
     } finally { saveFlows([]); fixture.journal.close(); child.kill(); await child.exited; }
   });
 }
+
+test("review attack: a review stage remains owned by its live fixing implementer after the reviewer died", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = ended("open");
+  const implementer = hosted("open", identity);
+  // #2507: a continuation can grow the transcript while the host remains idle.
+  registry.upsert({...registry.readOnlySnapshot().entries[`codex:${implementer.key.sessionId}`]!, status: "idle"});
+  const at = new Date().toISOString();
+  const flowId = "flow_fixing_owner";
+  reviewFlow(flowId, implementer.artifactPath, "relaying", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity,
+    verdict: "REQUEST_CHANGES", reviewedAt: at, relayedAt: at,
+    relayDelivery: { path: implementer.artifactPath, deliveredAt: at },
+  });
+  const flow = loadFlows()[0]!;
+  flow.implementerConversationId = implementer.conversation.id;
+  saveFlows([flow]);
+  // The journal still has the idle projection from before legacy relay.
+  const journal = journalOf("fixing-owner", [
+    {...row(reviewer, "hosted"), sessionKey: reviewer.key},
+    {...row(implementer, "hosted", "idle"), sessionKey: implementer.key, activeTurnId: null},
+  ]);
+  const p = {...ports([], [lane("lane_fixing", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot()};
+  try {
+    const {tickFlows} = await import("@/lib/flows/engine");
+    // The actual relay transition, followed by idle-host background work.
+    await tickFlows([{path: implementer.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture"} as never]);
+    expect(loadFlows()[0]!.state).toBe("fixing");
+    expect(await agentActivity(implementer.conversation.id)).toMatchObject([
+      {turnState: "busy", host: {state: "alive"}}
+    ]);
+    const result = await probeQuiet(snapshot, p, Date.now(), true);
+    expect(result).toMatchObject({quiet: false, blockers: {stages: 1}});
+    // The same continuation remains owned across parked flow projections and
+    // for legacy flows that bind only the implementer's transcript path.
+    for (const state of ["fixing", "paused", "needs_decision"] as const) {
+      const active = loadFlows()[0]!;
+      active.state = state;
+      active.pausedState = state === "paused" ? "fixing" : null;
+      active.implementerConversationId = null;
+      saveFlows([active]);
+      expect(await probeQuiet(snapshot, p, Date.now(), true))
+        .toMatchObject({quiet: false, blockers: {stages: 1}});
+    }
+    child.kill();
+    await child.exited;
+    expect(await agentActivity(implementer.conversation.id)).toMatchObject([{host: {state: "gone"}}]);
+    expect(await probeQuiet(snapshot, p, Date.now(), true))
+      .toMatchObject({quiet: true, blockers: {stages: 0}});
+  } finally { saveFlows([]); journal.close(); child.kill(); await child.exited; }
+});
+
+test("review attack: accepted structured relay still holds its stage before the implementer turn starts", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = ended("open");
+  const implementer = hosted("settled", identity);
+  const flowId = "flow_relay_owner";
+  const findingsPath = join(directory, "relay-findings.md");
+  writeFileSync(findingsPath, "VERDICT: REQUEST_CHANGES\n\nComplete the requested work.\n");
+  reviewFlow(flowId, implementer.artifactPath, "relaying", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity,
+    findingsPath, verdict: "REQUEST_CHANGES", findingsCount: 1,
+    relayedAt: null, reviewedAt: new Date().toISOString(),
+  });
+  const flow = loadFlows()[0]!;
+  flow.implementerConversationId = implementer.conversation.id;
+  saveFlows([flow]);
+  const journal = journalOf("relay-owner", [
+    {...row(reviewer, "hosted"), sessionKey: reviewer.key},
+    {...row(implementer, "hosted", "idle"), sessionKey: implementer.key, hostKind: "codex-app-server", activeTurnId: null, capabilities: {steer: true, structuredAttention: true}},
+  ]);
+  const {tickFlows, setRelayDeliveryForTest, sendToImplementer} = await import("@/lib/flows/engine");
+  const {enqueueStructuredMessage} = await import("@/lib/runtime/structuredMessageDelivery");
+  const client = {
+    snapshot: async () => journal.snapshot(),
+    readSession: async (ref: Parameters<RuntimeJournal["readSession"]>[0]) => journal.readSession(ref),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => { const receipt = journal.executeOperation(command); return journal.operationResult(receipt.operationId)!; },
+  } as never;
+  const restore = setRelayDeliveryForTest((active, entries, text, options) => sendToImplementer(active, entries, text, {
+    ...options,
+    recover: async () => ({target: null, path: implementer.artifactPath, conversationId: implementer.conversation.id, spawned: false}),
+    enqueueStructured: (request) => enqueueStructuredMessage(request, {
+      enabled: () => true, client: () => client, registry: () => registry, kick: () => {},
+    }),
+  }));
+  const p = {...ports([], [lane("lane_relay", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot()};
+  const {drainFile, writeDrain, releaseDrain} = await import("./drain");
+  const holdId = randomUUID();
+  try {
+    await tickFlows([{path: implementer.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture"} as never]);
+    expect(loadFlows()[0]).toMatchObject({
+      state: "relaying", rounds: [{relayStartedAt: expect.any(String), relayPendingSettlement: {path: implementer.artifactPath}, relayedAt: null}],
+    });
+    // Take real custody only after the relay operation has been admitted.
+    writeDrain(drainFile(), {id: holdId, target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true});
+    const result = await probeQuiet(snapshot, p, Date.now(), true);
+    expect(result).toMatchObject({quiet: false, blockers: {stages: 1}});
+    child.kill();
+    await child.exited;
+    const now = Date.now();
+    // An accepted operation has custody even if both processes have gone,
+    // including after a settled transcript owner's five-minute bound.
+    expect(await probeQuiet(snapshot, p, now, true))
+      .toMatchObject({quiet: false, blockers: {stages: 1}});
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true))
+      .toMatchObject({quiet: false, blockers: {stages: 1}});
+    // The real controller's bounded timeout refuses this attempt and holds
+    // its retry for fresh admission. Once custody is cleared it can drain.
+    const pending = loadFlows()[0]!;
+    pending.rounds.at(-1)!.relayPendingSettlement!.since = new Date(now - FIVE_MINUTES).toISOString();
+    saveFlows([pending]);
+    await tickFlows([{path: implementer.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture"} as never]);
+    expect(loadFlows()[0]!.rounds.at(-1)).toMatchObject({relayPendingSettlement: null, relayStartedAt: null, relayRetryRequiresIdempotency: true});
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true))
+      .toMatchObject({quiet: true, blockers: {stages: 0}});
+  } finally { releaseDrain(drainFile(), holdId); restore(); saveFlows([]); journal.close(); child.kill(); await child.exited; }
+});

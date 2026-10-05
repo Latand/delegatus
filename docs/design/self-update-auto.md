@@ -373,6 +373,17 @@ Two consequences shape the rule:
    nothing and keeps the stage counted.
    Process ownership follows the recorded reviewer across `needs_decision`
    and `paused`, including when the attempt still names the previous round.
+   The review attempt remains bound to its reviewer during findings relay and
+   fixing. The stage also reads its implementer through the same liveness
+   evidence, including legacy flows that only name a transcript path and parked
+   fixing continuations. A live implementer keeps the stage protected after
+   the reviewer dies; proven absence releases it, with the existing five-minute
+   bound for settled or unresolved owners. An accepted relay keeps custody
+   before any implementer turn starts, until the flow controller records
+   settlement or clears the attempt through its bounded delivery retry path.
+   The admission fence includes implementer binding and relay settlement so
+   either changing during an awaited probe invalidates that probe.
+
    The same headless process verdict is projected into `agent_activity` and
    used when a transcript cannot be read. A bound reviewer's proven death or
    replaced start identity releases its turn and stage immediately, even with

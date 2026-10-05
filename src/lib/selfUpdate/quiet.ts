@@ -238,21 +238,37 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (pipeline.state !== "running" || !cursor || !["spawning", "running", "reviewing", "committing"].includes(cursor.state)) continue;
       const attempt = pipeline.runs?.find((run) => run.stageId === cursor.stageId)?.attempts.findLast((attempt) => !attempt.historical);
       const conversationId = attempt?.conversationId ?? null;
-      if (draining && cursor.state === "reviewing" && attempt?.flowId
-        && flows.some((flow) => flow.id === attempt.flowId && flowAwaitingAdmission(flow))) continue;
+      const flow = cursor.state === "reviewing" && attempt?.flowId
+        ? flows.find((flow) => flow.id === attempt.flowId) : undefined;
+      if (draining && flow && flowAwaitingAdmission(flow)) continue;
       // Reserved custody has no engine yet. The drain holds it before claiming
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
       if (["running", "reviewing"].includes(cursor.state)) {
         const owners = conversationId ? [{ conversationId, artifactPath: attempt?.agentPath ?? null }] : [];
-        const round = cursor.state === "reviewing" && attempt?.flowId
-          ? currentReviewRound(flows.find((flow) => flow.id === attempt.flowId), conversationId, ports.reviewerProcess) : null;
+        const round = currentReviewRound(flow, conversationId, ports.reviewerProcess);
         if (round && round !== "dispatching" && round !== "gone") owners.push(round);
+        // The attempt remains bound to its reviewer while the flow relays and
+        // fixes. That reviewer's death says nothing about the implementer.
+        const phase = flow?.pausedState ?? flow?.state;
+        const review = flow?.rounds.at(-1);
+        const fixingDecision = phase === "needs_decision" && review?.verdict === "REQUEST_CHANGES" && review.relayedAt;
+        if (flow && (flow.implementerConversationId || flow.implementerPath)
+          && (["waiting_ready", "fixing", "relaying"].includes(phase ?? "") || fixingDecision)) {
+          // Legacy flows may only name a transcript. The evidence reader falls
+          // back to that path; the flow key gives unresolved evidence its bound.
+          owners.push({ conversationId: flow.implementerConversationId ?? `flow:${flow.id}:implementer`, artifactPath: flow.implementerPath });
+        }
+        // Accepted delivery owns work before a host starts its turn. The flow
+        // controller clears this custody on settlement or a refused/timed-out
+        // delivery; process liveness cannot settle an accepted operation.
+        const relayInFlight = Boolean(review?.relayPendingSettlement
+          || (phase === "relaying" && review?.relayStartedAt && !review.relayedAt));
         // Every owner is asked, so each unresolved one starts its bound now.
         // The first review attempt may have no binding yet. A proven-gone
         // round releases it; absence of any owner evidence proves nothing.
-        let released = round !== "dispatching" && (owners.length > 0 || round === "gone");
+        let released = !relayInFlight && round !== "dispatching" && (owners.length > 0 || round === "gone");
         for (const owner of owners) {
           const reading = await evidence(owner);
           const verdict = reading ? judgeStageOwner(reading) : "blocks";
@@ -320,7 +336,9 @@ export function quietDispatchVersion(ports: QuietPorts | undefined, now: number)
     });
     const rounds = ports.flows?.().map((flow) => {
       const round = flow.rounds?.at(-1);
-      return [flow.id, flow.state, flow.rounds?.length, round?.launchId, round?.sessionId, round?.spawnStartedAt, round?.relayStartedAt];
+      return [flow.id, flow.state, flow.pausedState, flow.implementerConversationId, flow.implementerPath,
+        flow.rounds?.length, round?.launchId, round?.sessionId, round?.spawnStartedAt,
+        round?.relayStartedAt, round?.relayPendingSettlement, round?.relayedAt];
     });
     return JSON.stringify([ports.dispatchVersion?.(), stages, rounds, ports.presence(now).map((session) => [session.viewSessionId, session.lastInteractionAt])]);
   } catch { return null; }
