@@ -5984,7 +5984,9 @@ async function selfUpdateInstallMain(): Promise<void> {
             const range = document.createRange(); range.selectNodeContents(node);
             return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right }));
           });
-          return { overflow: element.scrollWidth - element.clientWidth, text: element.textContent,
+          // The text as it is laid out, one block to a line. Run together, a sentence
+          // that ends in `@latest.` reads on into the next block like an address.
+          return { overflow: element.scrollWidth - element.clientWidth, text: (element as HTMLElement).innerText,
             update: element.getAttribute("data-update"),
             action: !!element.querySelector('[data-action="install-action"]'), buttons,
             clippedText: textBounds.some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1),
