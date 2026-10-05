@@ -313,7 +313,10 @@ Two consequences shape the rule:
    hostless (`settleHostlessSessions` in
    `src/lib/runtime/structuredDeliveryController.ts`). The sweep runs in the
    Viewer, which is the only process that publishes projections, and stays out
-   of startup: each ended row costs one keyed session read, once.
+   of startup: each ended row costs one keyed session read. A sweep makes at
+   most 64 reads. Rows not read yet go first, and what is left of the batch
+   reads again the rows read longest ago, so a session row that a late write
+   reopens after its first reading is closed on a later sweep.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -323,7 +326,14 @@ Two consequences shape the rule:
    stale `running` attempts left on closed pipelines (five on this host) never
    block. A `running` or `reviewing` stage whose conversation has an open turn
    under a host that is gone does not count either: nothing is left to finish
-   it, and the engine replaces the attempt after the restart.
+   it, and the engine replaces the attempt after the restart. The stage is
+   judged on the same evidence as a turn: a registry row that proves the host
+   gone releases it when the transcript cannot be read, and a conversation
+   nothing resolves holds it for the same five minutes
+   (`blockers.unresolved`). A `reviewing` stage also asks about the reviewer
+   of its flow's newest round, because the attempt takes that round's binding
+   only on the pipeline's next pass: a live reviewer there, or a launch that
+   has started and names no conversation yet, keeps the stage counted.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.
