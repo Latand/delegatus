@@ -303,28 +303,41 @@ export class ManagedCodexRuntime {
       if (read.failed || !read.value) throw new Error("account read failed");
       if (isSupportedChatGptAccount(read.value)) {
         if (active) this.settle(active, "completed", null, true);
-        else if (stored) this.record(home, { ...stored, state: "completed", updatedAt: this.now(), reason: null });
+        else if (stored) this.recordTransition(home, stored, "completed", null);
         return { state: "authenticated", attemptState: "completed", deviceAuth: null };
       }
       if (active?.state === "pending" && active.verificationUrl && active.userCode) {
         return { state: "pending", attemptState: "pending", deviceAuth: { url: active.verificationUrl, code: active.userCode } };
       }
       if (stored?.state === "pending") {
-        const stale = { ...stored, state: "stale" as const, updatedAt: this.now(), reason: "viewer-restarted" as const };
-        this.record(home, stale);
+        this.recordTransition(home, stored, "stale", "viewer-restarted");
         return { state: "stale", attemptState: "stale", deviceAuth: null };
       }
       return stored ? { state: stored.state, attemptState: stored.state, deviceAuth: null } : { state: "idle", attemptState: null, deviceAuth: null };
     } catch {
-      const base = stored ?? active;
-      if (base) {
-        const stale = { ...base, state: "stale" as const, updatedAt: this.now(), reason: "account-read-failed" as const };
-        this.settle(active ?? null, "stale", "account-read-failed", true);
-        if (!active) this.record(home, stale);
-        return { state: "stale", attemptState: "stale", deviceAuth: null };
-      }
+      if (active) this.settle(active, "stale", "account-read-failed", true);
+      else if (stored) this.recordTransition(home, stored, "stale", "account-read-failed");
       return { state: "stale", attemptState: "stale", deviceAuth: null };
     }
+  }
+
+  /** Records a stored attempt's new state only when it is one. The controller
+   * observes every unsettled login each minute, and a rewrite that changes
+   * nothing but `updatedAt` still advances the accounts revision, which fails
+   * whatever launch admitted its account before the write. */
+  private recordTransition(home: string, stored: PersistedAttempt, state: PersistedAttemptState, reason: AttemptReason | null): void {
+    if (stored.state === state && stored.reason === reason) return;
+    this.record(home, { ...stored, state, updatedAt: this.now(), reason });
+  }
+
+  /** Whether the background controller still has an attempt to settle here. A
+   * completed sign-in has no transition left until a new one starts, so it
+   * costs no app-server child and takes no account lock. */
+  loginUnsettled(account: CodexAccount): boolean {
+    const home = canonicalHome(account.home);
+    if (this.active.has(home)) return true;
+    const stored = readStoredAttempts(this.stateFile).get(home);
+    return stored !== undefined && stored.state !== "completed";
   }
 
   /** Request-safe in-memory projection. Authentication probes and persisted
