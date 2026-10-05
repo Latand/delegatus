@@ -106,17 +106,6 @@ export class MemoryIndex {
         );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
       `);
-      // Preserve activity recorded by the earlier per-event schema.
-      if (this.db.query<{ name: string }, []>("PRAGMA table_info(memory_injection_activity)").all().some(column => column.name === "id")) {
-        this.db.transaction(() => {
-          this.db!.exec(`ALTER TABLE memory_injection_activity RENAME TO memory_activity_legacy;
-            CREATE TABLE memory_injection_activity (
-              month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
-            );
-            INSERT INTO memory_injection_activity SELECT month, event, COUNT(*) FROM memory_activity_legacy GROUP BY month, event;
-            DROP TABLE memory_activity_legacy;`);
-        })();
-      }
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
         // can abandon a contended first open and retry on a later prompt.

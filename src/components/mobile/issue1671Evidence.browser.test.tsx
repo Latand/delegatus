@@ -138,10 +138,13 @@ describe("shared memory settings", () => {
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.PORT;
     const out = path.resolve(".artifacts/shared-memory-settings"); fs.mkdirSync(out, { recursive: true });
+    let failKeyWrite = false;
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
       "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
-      "/api/asks-you/key": (request: Request) => request.method === "PUT" ? keyRoute.PUT(new NextRequest(request)) : keyRoute.GET(),
+      "/api/asks-you/key": (request: Request) => request.method === "PUT"
+        ? failKeyWrite ? Response.json({ error: "write_failed" }, { status: 500 }) : keyRoute.PUT(new NextRequest(request))
+        : keyRoute.GET(),
       "/api/asks-you": () => Response.json(asksYouSettingView()),
     });
     // Record the owned browser PID and close precisely this launch through its server.
@@ -181,7 +184,8 @@ describe("shared memory settings", () => {
               return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
                 overflow: node.scrollWidth - node.clientWidth, scrollHeight: node.scrollHeight, height: node.clientHeight, rows, controls,
                 status: node.querySelector("[data-memory-status]")?.textContent,
-                counts: node.querySelector("[data-memory-counts]")?.textContent };
+                counts: node.querySelector("[data-memory-counts]")?.textContent,
+                keyError: node.querySelector("[data-provider-key] [role=alert]")?.textContent };
             });
             expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
             expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
@@ -197,6 +201,21 @@ describe("shared memory settings", () => {
           expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.notOwner"));
           expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.noKey"));
           await measure("missing-key");
+          const invalid = "fixture\u200Bkey";
+          await page.locator("[data-provider-key] input").fill(invalid);
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.invalid"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          expect(await dialog.textContent()).not.toContain(invalid);
+          await measure("invalid-key");
+          failKeyWrite = true;
+          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.failed"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          expect(await dialog.textContent()).not.toContain("fixture-browser-key");
+          await measure("write-failed");
+          failKeyWrite = false;
           // No file key is seeded; the only secret sent is this fake fixture.
           await page.locator("[data-provider-key] input").fill("fixture-browser-key");
           await page.locator("[data-provider-key] button").click();

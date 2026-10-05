@@ -11,25 +11,29 @@ export function OpenRouterKeySetting() {
   const input = useRef<HTMLInputElement>(null);
   const [hasKey, setHasKey] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<"providerKey.failed" | "providerKey.invalid" | null>(null);
   const [saved, setSaved] = useState(false);
   useEffect(() => {
     const abort = new AbortController();
     fetch("/api/asks-you/key", { signal: abort.signal, cache: "no-store" })
       .then(r => { if (!r.ok) throw Error(); return r.json(); }).then(setView)
-      .catch(() => { if (!abort.signal.aborted) setError(true); });
+      .catch(() => { if (!abort.signal.aborted) setError("providerKey.failed"); });
     return () => abort.abort();
   }, []);
   const save = async () => {
     const submitted = input.current?.value ?? "";
     if (input.current) input.current.value = "";
-    setHasKey(false); setBusy(true); setError(false); setSaved(false);
+    setHasKey(false); setBusy(true); setError(null); setSaved(false);
     try {
       const response = await fetch("/api/asks-you/key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: submitted }) });
-      if (!response.ok) throw Error();
+      if (!response.ok) {
+        const body = await response.json();
+        setError(response.status === 400 && body.error === "invalid_key" ? "providerKey.invalid" : "providerKey.failed");
+        return;
+      }
       setView(await response.json()); setSaved(true);
       window.dispatchEvent(new Event("delegatus:provider-key-changed"));
-    } catch { setError(true); }
+    } catch { setError("providerKey.failed"); }
     finally { setBusy(false); }
   };
   return <div data-provider-key className="mt-5 border-t border-border pt-4">
@@ -43,6 +47,6 @@ export function OpenRouterKeySetting() {
       <button type="submit" disabled={!view || busy || !hasKey} className="min-h-11 rounded border border-border px-3 text-sm">{t("providerKey.save")}</button>
     </form>}
     {saved && <p role="status" className="mt-2 text-[13px]">{t("providerKey.saved")}</p>}
-    {error && <p role="alert" className="mt-2 text-[13px]">{t("providerKey.failed")}</p>}
+    {error && <p role="alert" className="mt-2 text-[13px]">{t(error)}</p>}
   </div>;
 }

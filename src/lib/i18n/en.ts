@@ -6,7 +6,7 @@ import type { Dictionary } from "./core";
 export const en = {
   "memory.status.projectOff": "Injection is off for this project. Turn on the switch to allow it.",
   "memory.status.noKey": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below.",
-  "memory.status.capped": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month or raise the Asks-you cap.",
+  "memory.status.capped": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
   "memory.status.notOwner": "This release does not own traffic. Open Settings on the active release to check injection.",
   "memory.status.ready": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
   "memory.status.failed": "Could not read injection status. Reopen Settings to retry.",
@@ -19,6 +19,7 @@ export const en = {
   "providerKey.shared": "Asks-you and shared memory use this key. Keys saved here go in an owner-only file. A key is sent only to the provider when making a call.",
   "providerKey.save": "Save key",
   "providerKey.saved": "Key saved.",
+  "providerKey.invalid": "The key contains spaces or characters outside printable ASCII. Paste the key again without them.",
   "providerKey.failed": "Could not save or read the key. Reopen Settings to check the source and retry.",
   "memory.label": "Shared memory for this project",
   "memory.explanation": "Jev selects relevant memory for each of your messages and shares it with the agent; redacted context is sent to Jev.",

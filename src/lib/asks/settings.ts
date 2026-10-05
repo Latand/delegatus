@@ -111,7 +111,7 @@ export function openRouterKeySource(env: Readonly<Record<string, string | undefi
   return readOpenRouterApiKey({}) ? "file" : null;
 }
 
-/** Replace atomically: a linked old file is replaced, never followed or truncated. */
+/** Atomic replacement leaves a linked old file's target untouched. */
 export function writeOpenRouterApiKey(key: string): boolean {
   const filename = openRouterKeyPath();
   const temporary = filename + "." + crypto.randomUUID() + ".tmp";

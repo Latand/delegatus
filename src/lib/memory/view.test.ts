@@ -66,7 +66,7 @@ test("current month ledger counts decisions separately from confirmed turns, wit
   expect(text).not.toContain(entries[0].title);
   expect(text).not.toContain(process.env.OPENROUTER_API_KEY!);
 });
-test("unreadable spend reports status unavailable rather than a false ready answer", async () => {
+test("unreadable spend reports status unavailable", async () => {
   fs.writeFileSync(path.join(root, "operator-asks.json"), "broken");
   expect((await GET(new NextRequest("http://localhost/api/memory/settings?project=fixture-project"))).status).toBe(503);
 });
@@ -94,18 +94,6 @@ test("ten thousand events use one row per month and event", () => {
   expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM memory_injection_activity").get()?.count).toBe(6);
   db.close();
   expect(fs.existsSync(path.join(root, "memory-activity-pending"))).toBe(false);
-});
-
-test("the earlier activity schema is aggregated once without losing counts", () => {
-  const db = new Database(path.join(root, "memory-index.sqlite"), { create: true });
-  db.exec("CREATE TABLE memory_injection_activity (id TEXT PRIMARY KEY, month TEXT, event TEXT)");
-  const write = db.query("INSERT INTO memory_injection_activity VALUES (?, ?, ?)");
-  write.run("one", "2026-10", "decisions"); write.run("two", "2026-10", "decisions"); write.run("three", "2026-09", "failed");
-  db.close();
-  expect(memoryIndex().injectionActivity(now).decisions).toBe(2);
-  memoryIndex().close();
-  expect(memoryIndex().injectionActivity(now).decisions).toBe(2);
-  expect(memoryIndex().injectionActivity(new Date("2026-09-30")).failed).toBe(1);
 });
 
 test("unauthenticated malformed or oversized envelopes do not count operator turns", async () => {
