@@ -1905,7 +1905,16 @@ function knownReset(...candidates: Array<number | null | undefined>): number | n
 function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string): void {
   const wait = attempt.providerWait!;
   const now = unixMs(ports.now());
-  const reset = wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000 : 0;
+  const stage = pipeline.stages.find(item => item.id === pipeline.cursor?.stageId);
+  const pinned = stage && attemptStage(stage, attempt).account?.trim();
+  let allowed: string[] | null | undefined;
+  try { allowed = ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine); }
+  catch { /* Keep the current cut's reset when authorization cannot be read. */ }
+  const resetCandidates = [wait.resetsAt, ...usageLimitsOn(attempt, attempt.effectiveRole.engine)
+    .filter(item => (!pinned || item.accountId === pinned) && (!allowed || allowed.includes(item.accountId)))
+    .map(item => item.resetsAt)];
+  const resetsAt = knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
+  const reset = resetsAt !== null ? resetsAt * 1_000 + 60_000 : 0;
   const fallback = reset <= now;
   if (fallback && (attempt.providerFallbackRetries ?? 0) >= 1) {
     wait.retryCancelled = true;
@@ -1941,6 +1950,31 @@ function usageLimitsOn(attempt: PipelineStageAttempt, engine: FlowEngine): NonNu
 function providerTriedAccountsOn(attempt: PipelineStageAttempt, engine: FlowEngine): string[] {
   const budget = attempt.providerRecoveryBudget;
   return (budget?.engine ?? attempt.effectiveRole.engine) === engine ? budget?.triedAccounts ?? [] : [];
+}
+
+/** A tried account gets one new launch window only when its recorded reset
+    crossed after its latest cut. Repeated cuts naming an already elapsed
+    reset keep the chain fence, even when a cached observation says recovered. */
+function providerAccountHasNewWindow(pipeline: Pipeline, attempt: PipelineStageAttempt, engine: FlowEngine, accountId: string, ports: PipelinePorts): boolean {
+  const limited = usageLimitsOn(attempt, engine).find(item => item.accountId === accountId);
+  return Boolean(limited && limited.limitedAt != null && limited.resetsAt !== null
+    && limited.resetsAt * 1_000 > limited.limitedAt
+    && limited.resetsAt * 1_000 + 60_000 <= unixMs(ports.now())
+    && providerAccountRecovered(pipeline, attempt, accountId, limited.limitedAt, limited.resetsAt, ports));
+}
+
+function providerSpentAccountsOn(pipeline: Pipeline, attempt: PipelineStageAttempt, engine: FlowEngine, ports: PipelinePorts): string[] {
+  return providerTriedAccountsOn(attempt, engine)
+    .filter(id => !providerAccountHasNewWindow(pipeline, attempt, engine, id, ports));
+}
+
+/** A relaunch without a failover target may use its recovered source. Actual
+    quota limits remain exclusions, and a target keeps the chain's fence. */
+function providerPendingSpentAccountsOn(pipeline: Pipeline, attempt: PipelineStageAttempt, engine: FlowEngine, ports: PipelinePorts): string[] {
+  const target = providerTargetAccountOn(attempt, engine);
+  const source = attempt.accountId;
+  return providerSpentAccountsOn(pipeline, attempt, engine, ports)
+    .filter(id => id !== target && (target !== undefined || id !== source));
 }
 
 function providerTargetAccountOn(attempt: PipelineStageAttempt, engine: FlowEngine): string | undefined {
@@ -2077,7 +2111,7 @@ async function recoverProviderCut(
   if (!wait.actionAt && condition.kind === "usage_limit" && engine === "claude" && wait.accountId) {
     refreshReset(ports.claudeAccountReset?.(wait.accountId, attempt.effectiveRole.model));
   }
-  const triedAccounts = providerTriedAccountsOn(attempt, engine);
+  const triedAccounts = providerSpentAccountsOn(pipeline, attempt, engine, ports);
   // A failed migration is evidence against this target for the current cut chain.
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
@@ -2126,9 +2160,11 @@ async function recoverProviderCut(
       }
     } catch { /* The ordinary bounded recovery below still applies. */ }
   }
-  // A previously untried spare receives one fresh launch. It can never
-  // reopen continuations or revisit an account already spent by this chain.
-  const finalSpare = condition.kind === "usage_limit" && target && wait.tries <= 3 && triedAccounts.length <= 1;
+  // A new spare keeps the chain restart budget. A reset crossed since the
+  // target's cut opens one fresh launch, fenced again by its next cut.
+  const finalSpare = condition.kind === "usage_limit" && target
+    && (wait.tries <= 3 && triedAccounts.length <= 1
+      || providerAccountHasNewWindow(pipeline, attempt, engine, target, ports));
   if (bounded && !finalSpare
     || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
     parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
@@ -2264,7 +2300,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
         resumeAt: now,
         ...(target ? { switchedAccountId: target } : {}) };
     }
-    if (target) retry.accountId = target;
+    retry.accountId = target ?? attempt.accountId;
   }
   pipeline.state = "running";
   pipeline.stateDetail = `relaunching after ${condition.label}; keeping uncommitted work`;
@@ -4932,8 +4968,7 @@ async function tickRunStage(
     if (usageLimitedAccounts.length > 0) {
       const unavailableIds = usageLimitedAccounts
         .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
-        .map((limited) => limited.accountId).concat(providerTriedAccountsOn(attempt, engine)
-          .filter(id => id !== providerTargetAccountOn(attempt, engine)));
+        .map((limited) => limited.accountId).concat(providerPendingSpentAccountsOn(pipeline, attempt, engine, ports));
       const latestLimited = usageLimitedAccounts.at(-1)!;
       const accountLabel = ports.accountLabel?.(engine, latestLimited.accountId) ?? latestLimited.accountId;
       let resolution: ReturnType<typeof accountManager.resolveProjectSpawn>;
@@ -5055,8 +5090,7 @@ async function tickRunStage(
           .map((limited) => limited.accountId).concat(((attempt.providerRecoveryBudget?.engine ?? attempt.effectiveRole.engine) === attempt.effectiveRole.engine
             ? attempt.providerWait?.failedAccounts ?? [] : [])
             .filter(id => id !== providerTargetAccountOn(attempt, attempt.effectiveRole.engine)),
-            providerTriedAccountsOn(attempt, attempt.effectiveRole.engine)
-              .filter(id => id !== providerTargetAccountOn(attempt, attempt.effectiveRole.engine))))],
+            providerPendingSpentAccountsOn(pipeline, attempt, attempt.effectiveRole.engine, ports)))],
         title: pipelineStageTitle(pipeline.task, stage.id),
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
@@ -6523,7 +6557,18 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
   const next = newAttempt(pipeline, stage);
-  if (next) next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + ((retry.fallback ?? (wait.resetsAt === null)) ? 1 : 0);
+  if (next) {
+    const fallback = retry.fallback ?? (wait.resetsAt === null);
+    next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + (fallback ? 1 : 0);
+    if (!fallback) {
+      // A new reset replenishes the stage retry budget. Keep account-window
+      // evidence so another account's future reset and an already spent
+      // window remain fenced when this fresh attempt is admitted.
+      next.usageLimitedAccounts = attempt.usageLimitedAccounts;
+      next.providerRecoveryBudget = { tries: 0, startedAt: ports.now(), engine: attempt.effectiveRole.engine,
+        triedAccounts: [...providerTriedAccountsOn(attempt, attempt.effectiveRole.engine)] };
+    }
+  }
   clearEngineTaskNote(pipeline);
   persist();
   ports.scheduleTick?.(0);

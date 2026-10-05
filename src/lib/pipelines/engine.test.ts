@@ -10739,7 +10739,7 @@ test("a waiting Claude stage continues its original conversation after that acco
   expect(cohorts).toEqual([attempt.startedAt!]);
 });
 
-test("a previously limited Claude account stays excluded within the same native cut chain", async () => {
+test("a Claude account without a known new reset stays excluded within the native cut chain", async () => {
   const h = harness();
   await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -10826,7 +10826,7 @@ test("separate Claude limit turns on one account receive separate registry deliv
 
 test("an explicitly pinned Claude stage waits despite another free account and resumes on its own", async () => {
   const h = harness();
-  const pipeline = await create(h.ports, [{ ...usageLimitStage(LIMITED_ACCOUNT)[0], engine: "claude", model: "fable" }] as never);
+  await create(h.ports, [{ ...usageLimitStage(LIMITED_ACCOUNT)[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const running = loadPipelines()[0]!;
@@ -19023,6 +19023,108 @@ async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: s
   return { h, sends, cut, now: () => now, advance: (ms: number) => { now += ms; }, resetsAt };
 }
 
+// A reset crossed after the cut opens one new account window in the chain.
+for (const engine of ["claude", "codex"] as const) {
+  test.each([
+    [15_000, 6 * 24 * 60 * 60_000],
+    [2 * 60 * 60_000, 6 * 24 * 60 * 60_000],
+    [15_000, -120_000],
+  ])(`${engine} reset recovery chooses the source window (cut delay %i ms, spare reset %i ms)`, async (spareCutDelay, spareResetDelay) => {
+    const errorClass = engine === "claude" ? "rate_limit" : "usage_limit_exceeded";
+    const f = await providerRecoveryHarness(engine, errorClass, "You've hit your session limit", 60 * 60_000);
+    const sourceResume = f.resetsAt! * 1_000 + 60_000;
+    f.h.ports.claudeAccountReset = id => id === LIMITED_ACCOUNT ? f.resetsAt : null;
+    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+    f.h.ports.resolveProjectSpawn = (_engine, input) => {
+      const target = [SPARE_ACCOUNT, LIMITED_ACCOUNT].find(id => !input.unavailableIds?.includes(id));
+      return target ? { kind: "available", account: { engine, accountId: target, kind: "managed",
+        home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] };
+    };
+    const baseSpawn = f.h.ports.spawnAgent;
+    f.h.ports.spawnAgent = async (input, reserved) => ({ ...await baseSpawn(input, reserved), paneId: null });
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+    f.advance(spareCutDelay);
+    const cutAt = f.now();
+    const spare = loadPipelines()[0]!.runs[0]!.attempts[1]!;
+    f.h.durableTurns.set(spare.agentPath!, { turn: "terminal", message: null,
+      terminalProviderMessage: { text: "You've hit your session limit", errorClass, ts: cutAt,
+        usageLimit: { resetsAt: Math.floor((cutAt + spareResetDelay) / 1_000) } } });
+    f.h.setConversationActive(false);
+    await tickPipelines([], f.h.ports);
+    if (cutAt < sourceResume) {
+      const waiting = loadPipelines()[0]!;
+      expect(waiting.state).toBe("needs_decision");
+      expect(waiting.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
+        resumeAt: new Date(sourceResume).toISOString(), stageRetry: { fallback: false },
+      });
+    }
+    const deadline = Math.max(sourceResume, cutAt) + 2 * 60_000;
+    while (f.now() <= deadline && f.h.spawnInputs.length < 3) {
+      f.advance(60_000);
+      await tickPipelines([], f.h.ports);
+    }
+    expect(f.h.spawnInputs).toHaveLength(3);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(LIMITED_ACCOUNT);
+    expect(f.now()).toBeLessThanOrEqual(deadline);
+    // A repeated cut naming the same elapsed reset cannot reopen this window.
+    f.advance(1_000);
+    const recovered = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+    f.h.durableTurns.set(recovered.agentPath!, { turn: "terminal", message: null,
+      terminalProviderMessage: { text: "You've hit your session limit", errorClass, ts: f.now(),
+        usageLimit: { resetsAt: f.resetsAt } } });
+    f.h.setConversationActive(false);
+    for (let minute = 0; minute < 20; minute++) {
+      await tickPipelines([], f.h.ports);
+      f.advance(60_000);
+    }
+    expect(f.h.spawnInputs).toHaveLength(3);
+  });
+
+  for (const pinned of [false, true]) {
+    test.each(["pane", "host-death"] as const)(`${engine} source reset relaunches %s with pinned=${pinned} without capacity probes`, async path => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+        "You've hit your session limit", 120_000, pinned);
+      f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+      f.h.ports.resolveProjectSpawn = (_engine, input) => {
+        const selection = selectProjectAccount({ engine, project: loadPipelines()[0]!.project,
+          bindings: [{ project: loadPipelines()[0]!.project, engine, accountId: LIMITED_ACCOUNT, createdAt: f.h.ports.now() }],
+          accounts: [{ id: LIMITED_ACCOUNT, authPresent: true }], observations: [], now: f.now(),
+          requestedId: input.requestedId, unavailableIds: input.unavailableIds });
+        return selection.kind === "available" ? { kind: "available", account: { engine, accountId: selection.accountId!,
+          kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } }
+          : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+      };
+      if (path === "pane") {
+        const lane = loadPipelines()[0]!;
+        lane.runs[0]!.attempts[0]!.paneId = "%1";
+        savePipelines([lane]);
+        f.h.setPaneAlive(false);
+      }
+      for (let minute = 0; minute < 8 && f.h.spawnInputs.length < 2; minute++) {
+        await tickPipelines([], f.h.ports);
+        if (path === "host-death" && f.sends.length) {
+          f.h.durableTurns.delete("/codex/stage-1.jsonl");
+          f.h.ports.conversationTurnInterrupted = async () => "dead";
+          f.h.setConversationActive(false);
+        }
+        f.advance(60_000);
+      }
+      expect(f.h.spawnInputs).toHaveLength(2);
+      expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 60_000 + (path === "pane" ? 2 : 4) * 60_000);
+      if (pinned) expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+      expect(f.h.spawnInputs[1]!.unavailableAccountIds).not.toContain(LIMITED_ACCOUNT);
+      const retry = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+      expect(retry.providerWait?.capacityProbes ?? 0).toBe(0);
+      expect(retry.providerFallbackRetries ?? 0).toBe(0);
+      if (path === "host-death") expect(f.sends).toHaveLength(1);
+    });
+  }
+}
+
 // Recovery regressions exercise durable controller ticks without provider calls.
 test.each(["claude", "codex"] as const)("limit recovery probes each allowed %s account once despite elapsed resets", async engine => {
   const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", engine === "claude" ? 2 * 60 * 60_000 : -120_000);
@@ -19184,7 +19286,7 @@ test("an exhausted provider limit retries the stage after its native reset acros
   await tickPipelines([], restarted);
   const retried = loadPipelines()[0]!;
   expect(retried.runs[0]!.attempts).toHaveLength(2);
-  expect(retried.runs[0]!.attempts[1]!.providerRecoveryBudget).toBeUndefined();
+  expect(retried.runs[0]!.attempts[1]!.providerRecoveryBudget).toMatchObject({ tries: 0, triedAccounts: [LIMITED_ACCOUNT] });
   expect(retried.runs[0]!.attempts[1]!.input).toBe(lane.runs[0]!.attempts[0]!.input);
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
@@ -19904,7 +20006,7 @@ test("Codex auth failover launches the selected allowed account and excludes fai
 });
 
 
-test("a pending Codex failover holds its fresh target after the source reset", async () => {
+test("a pending Codex failover returns to the recovered source when its target is unavailable", async () => {
   const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
     engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
@@ -19916,8 +20018,9 @@ test("a pending Codex failover holds its fresh target after the source reset", a
   expect(f.h.spawnInputs).toHaveLength(1);
   f.advance(180_000);
   await tickPipelines([], f.h.ports);
-  expect(f.h.spawnInputs).toHaveLength(1);
-  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+  expect(loadPipelines()[0]!.cursor?.state).toBe("running");
   expect(loadPipelines()[0]!.state).toBe("running");
 });
 
@@ -20056,8 +20159,9 @@ test("a legacy parked hostless failover returns to pending capacity recovery", a
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
     engine: "codex", accountId: LIMITED_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
   await tickPipelines([], f.h.ports);
-  expect(f.h.spawnInputs).toHaveLength(1);
-  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+  expect(loadPipelines()[0]!.cursor?.state).toBe("running");
 });
 
 test("a failover account lookup failure retains its named park and original timestamp", async () => {
