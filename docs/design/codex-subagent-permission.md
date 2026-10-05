@@ -144,8 +144,12 @@ when no child materializes. Unchanged tails are cached; one tick reads at most
 8 MiB across parents, continuing other candidates on subsequent ticks. Child
 headers and the durable app-server ledger cover activity outside that tail.
 Function calls are classified by the separate `namespace` and `name` fields:
-v2 uses `collaboration` or a configured `features.multi_agent_v2.tool_namespace`,
-and v1 uses unnamespaced native names. An unnamespaced legacy `wait` must have
+v1 uses `multi_agent_v1` with `spawn_agent`, `send_input`, `resume_agent`,
+`wait_agent` and `close_agent`; unnamespaced v1 names remain supported for legacy
+rollouts. v2 uses `collaboration` or a configured
+`features.multi_agent_v2.tool_namespace`, and its six native names also appear
+without a namespace for providers without `namespace_tools` support.
+An unnamespaced legacy `wait` must have
 agent `ids` and no `cell_id`. Code Mode `wait` and all `mcp__*` namespaces stay
 clear. Successful child observations are cached too, so unchanged inventories
 take no journal lock. A scanner observation failure logs a fixed diagnostic
@@ -175,6 +179,10 @@ This policy disables both automatically. No existing feature row or app-server
 method-name set changed. The model-selected v2 precedence and the six native
 v2 collaboration tools remain present; upgrading alone does not close the gap.
 The installed CLI was not updated.
+
+[0.160.1](https://github.com/openai/codex/releases/tag/rust-v0.160.1) was published
+on 2026-10-05 at 18:29:37 UTC, after the preceding reviewed commit. Its feature
+inventory and v2 selection precedence match 0.160.0; the same denial applies.
 
 Primary implementation evidence:
 
@@ -240,6 +248,14 @@ no `x-openai-subagent` request. The controller regression runs through
 then records one child event after repair. A steady-state check proves no
 journal append is attempted for already-observed children or tails.
 The 13 exact-path suites passed with 371 tests after these corrections.
+
+The native rollout regression covers all five names in `multi_agent_v1` and
+all six bare v2 names through `observeCodexSubagentTranscripts`, without a child
+transcript. Each denied call records one violation across repeated scans and a
+fresh registry; granted calls, Viewer MCP calls and Code Mode `wait` stay clear.
+On the preceding reviewed code, all five namespaced v1 cases and four bare v2
+cases failed with zero recorded events; the corresponding corrected cases pass.
+The classifier check also rejects method/namespace mismatches and MCP names.
 
 Heavy commands use `scripts/gate-slot.sh`. Type checking and changed-file lint
 are also run. Publication uses the repository's local pre-commit and pre-push

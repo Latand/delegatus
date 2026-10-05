@@ -22,9 +22,11 @@ export function nativeCodexFunctionCallMethod(payload: Record<string, unknown>, 
   const namespace = payload.namespace;
   if (namespace != null) {
     if (typeof namespace !== "string" || namespace.startsWith("mcp__")) return null;
+    if (namespace === "multi_agent_v1") return v1Methods.has(name) ? name : null;
     return toolNamespaces.has(namespace) && v2Methods.has(name) ? name : null;
   }
-  if (!v1Methods.has(name)) return null;
+  // Legacy v1 and providers without namespace_tools expose bare native names.
+  if (!v1Methods.has(name) && !v2Methods.has(name)) return null;
   if (name === "wait") {
     try {
       const args = typeof payload.arguments === "string" ? JSON.parse(payload.arguments) : payload.arguments;
@@ -170,7 +172,7 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
       if (!payload || typeof payload !== "object") continue;
       let method: string | null = null;
       if (row.type === "response_item" && payload.type === "function_call" && typeof payload.name === "string") {
-        if (typeof payload.namespace === "string" && payload.namespace !== "collaboration"
+        if (typeof payload.namespace === "string" && payload.namespace !== "collaboration" && payload.namespace !== "multi_agent_v1"
           && !payload.namespace.startsWith("mcp__") && v2Methods.has(payload.name)) namespaces ??= configuredToolNamespaces(entry);
         method = nativeCodexFunctionCallMethod(payload, namespaces);
       } else if (row.type === "event_msg") method = nativeCodexActivityMethod(payload);

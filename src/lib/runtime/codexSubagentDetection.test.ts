@@ -140,6 +140,39 @@ test("native transcript calls alert without a child while prose, MCP calls and p
   expect(JSON.stringify(events)).not.toContain("PRIVATE");
 });
 
+test.each([
+  ...["spawn_agent", "send_input", "resume_agent", "wait_agent", "close_agent"]
+    .map((name) => ({ name, namespace: "multi_agent_v1" })),
+  ...["spawn_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]
+    .map((name) => ({ name, namespace: undefined })),
+])("native rollout call %j alerts once without a child only when denied", (method) => {
+  for (const allowSubagents of [false, true]) {
+    const { registry, parentPath, conversation } = launched(allowSubagents);
+    const timestamp = new Date().toISOString();
+    // Codex 0.159.3 writes v1's namespace separately, including a refused
+    // spawn with {} arguments. Providers without namespace_tools flatten v2.
+    const rows = [
+      { timestamp, type: "response_item", payload: { type: "function_call", ...method, call_id: "native-rollout-fixture", arguments: "{}" } },
+      { timestamp, type: "response_item", payload: { type: "function_call", ...method, namespace: "mcp__viewer", call_id: "mcp-rollout-fixture", arguments: "{}" } },
+      { timestamp, type: "response_item", payload: { type: "function_call", name: "wait", call_id: "code-mode-rollout-fixture", arguments: JSON.stringify({ cell_id: "1", ids: ["fixture"] }) } },
+      { timestamp, type: "response_item", payload: { type: "function_call_output", call_id: "native-rollout-fixture", output: "PRIVATE TOOL RESULT" } },
+    ];
+    fs.appendFileSync(parentPath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+    const entry = { engine: "codex", path: parentPath, size: fs.statSync(parentPath).size,
+      mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
+    observeCodexSubagentTranscripts(registry, [entry]);
+    observeCodexSubagentTranscripts(registry, [entry]);
+    // A fresh observer must retain journal deduplication too.
+    const restarted = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    observeCodexSubagentTranscripts(restarted, [entry]);
+    const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+    expect(events).toHaveLength(allowSubagents ? 0 : 1);
+    if (!allowSubagents) expect(events[0]).toMatchObject({ type: "subagent_policy_violation",
+      summary: `Native Codex sub-agent activity observed with sub-agents disabled: ${method.name}.` });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  }
+});
+
 test("failed transcript writes retry children and tails, and settled children never reacquire the journal lock", () => {
   const { registry, parentPath, sessionId, conversation } = launched();
   const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
@@ -175,8 +208,19 @@ test("function-call classification distinguishes native v1, v2, Code Mode and MC
     { name: "spawn_agent", namespace: "mcp__viewer" },
     { name: "send_message", namespace: "mcp__viewer" },
     { name: "spawn_agent", namespace: "unconfigured" },
-    { name: "send_message" }, { name: "collaboration.spawn_agent" },
+    { name: "followup_task", namespace: "multi_agent_v1" },
+    { name: "send_input", namespace: "collaboration" },
+    { name: "wait", namespace: "functions", arguments: JSON.stringify({ cell_id: "1" }) },
+    { name: "collaboration.spawn_agent" }, { name: "mcp__viewer__spawn_agent" },
   ]) expect(nativeCodexFunctionCallMethod(payload)).toBeNull();
+  for (const name of ["spawn_agent", "send_input", "resume_agent", "wait_agent", "close_agent"]) {
+    expect(nativeCodexFunctionCallMethod({ name, namespace: "multi_agent_v1" })).toBe(name);
+    expect(nativeCodexFunctionCallMethod({ name })).toBe(name);
+  }
+  for (const name of ["spawn_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents"]) {
+    expect(nativeCodexFunctionCallMethod({ name })).toBe(name);
+    expect(nativeCodexFunctionCallMethod({ name, namespace: "collaboration" })).toBe(name);
+  }
   expect(nativeCodexFunctionCallMethod({ name: "wait", arguments: JSON.stringify({ ids: ["fixture"], timeout_ms: 1000 }) })).toBe("wait");
   expect(nativeCodexFunctionCallMethod({ name: "spawn_agent" })).toBe("spawn_agent");
   expect(nativeCodexFunctionCallMethod({ name: "spawn_agent", namespace: "collaboration" })).toBe("spawn_agent");
