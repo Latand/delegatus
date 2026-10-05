@@ -1,0 +1,106 @@
+{
+  "phone-390-en": {
+    "closed": {
+      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 280,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 280,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "phone-390-uk": {
+    "closed": {
+      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 278,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 390
+    },
+    "open": {
+      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 278,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 390
+    }
+  },
+  "desktop-1440-en": {
+    "closed": {
+      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 280,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 280,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  },
+  "desktop-1440-uk": {
+    "closed": {
+      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 278,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    },
+    "open": {
+      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "timesSaid": 1,
+      "runtimeWords": false,
+      "rawLines": 0,
+      "actions": 1,
+      "reasonInsideViewport": true,
+      "reasonWidth": 278,
+      "reasonHeight": 15,
+      "overflowX": 0,
+      "viewportWidth": 1440
+    }
+  }
+}

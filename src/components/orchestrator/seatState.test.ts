@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { translate } from "@/lib/i18n";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
@@ -14,6 +15,7 @@ import {
   seatConversationsOf,
   resolveSeatFile,
   ROTATION_CONTEXT_PERCENT,
+  rotationBannerLines,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatDeputyPaths,
@@ -21,6 +23,7 @@ import {
   seatRequestSettled,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
+  type RotationHint,
 } from "./seatState";
 
 function seat(overrides: Partial<OrchestratorSeat> = {}): OrchestratorSeat {
@@ -291,34 +294,74 @@ describe("the server's own rotation recommendation is what the panel says (#978)
     liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 },
     context: { tokens: 620_000, limit: 1_000_000, percent: 62, estimated: false, basis: "provider-reported usage" },
     transcriptFacts: { bytes: 1024, messageCount: 10, toolCount: 4, compactionCount: 0 },
-    rotation: { recommended: false, level: "none", reasons: [], thresholdUnknown: false },
+    rotation: { recommended: false, level: "none", reasons: [], causes: [], thresholdUnknown: false },
     ...overrides,
   });
   const live = (over: Partial<Parameters<typeof deriveOrchestratorPanelState>[0]>) =>
     deriveOrchestratorPanelState({ ...base, status: status({ seat: seat() }), file: file(), surface: "live-root", ...over });
 
-  test("its reasons ride along verbatim, with the percentage it measured", () => {
+  const contextCause = { kind: "context" as const, tokens: 620_000, estimated: false, thresholdTokens: 500_000, windowTokens: 1_000_000 };
+
+  test("its causes ride along as data, with the percentage it measured", () => {
     const state = live({
       incumbent: incumbent({
         rotation: {
           recommended: true,
           level: "strongly_recommend",
           reasons: ["context usage 620,000 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)"],
+          causes: [contextCause],
           thresholdUnknown: false,
         },
       }),
     });
     expect(state).toMatchObject({
       kind: "live",
-      rotation: { level: "strongly_recommend", contextPercent: 62, reasons: ["context"], source: "server" },
+      rotation: { level: "strongly_recommend", contextPercent: 62, reasons: ["context"], causes: [contextCause], source: "server" },
     });
-    expect((state as { rotation: { notes?: readonly string[] } }).rotation.notes?.[0]).toContain("rotation threshold");
   });
 
-  test("a recommendation the coded reasons cannot express still shows, carried by the server's words", () => {
+  test("the banner says each cause once, in the interface language, with what to do and no tool name", () => {
+    const hint: RotationHint = {
+      level: "strongly_recommend",
+      contextPercent: 62,
+      /* The client's own two readings name the same causes the server did. */
+      reasons: ["context", "dead"],
+      causes: [contextCause, { kind: "compactions", count: 3, threshold: 2 }, { kind: "transcript", megabytes: 9.4, thresholdMegabytes: 8 }, { kind: "host_gone" }],
+      source: "server",
+    };
+    for (const lang of ["en", "uk"] as const) {
+      const lines = rotationBannerLines((key, params) => translate(lang, key, params), lang, hint);
+      expect(lines).toHaveLength(4);
+      expect(new Set(lines).size).toBe(4);
+      expect(lines.at(-1)).toBe(translate(lang, "orchPanel.rotationDead"));
+      for (const line of lines) expect(line).not.toMatch(/send_message|rotate_orchestrator|_to_|designated conversation/);
+    }
+    const uk = rotationBannerLines((key, params) => translate("uk", key, params), "uk", hint);
+    expect(uk.join(" ")).not.toMatch(/[a-z]{4,}/);
+    expect(uk[0]).toContain("620\u00a0000");
+    const en = rotationBannerLines((key, params) => translate("en", key, params), "en", hint);
+    expect(en[0]).toContain("620,000");
+    expect(en[0]).toContain("500,000");
+  });
+
+  test("an estimate is said to be one, and a client reading fills in only what the server did not name", () => {
+    const en = (hint: RotationHint) => rotationBannerLines((key, params) => translate("en", key, params), "en", hint);
+    expect(en({ level: "recommend", contextPercent: 62, reasons: [], causes: [{ ...contextCause, estimated: true }], source: "server" }))
+      .toEqual([translate("en", "orchPanel.rotationContextTokensEstimated", { tokens: "620,000", threshold: "500,000" })]);
+    /* The board saw a gone host the server's reading had not caught up with. */
+    expect(en({ level: "recommend", contextPercent: null, reasons: ["dead"], causes: [], source: "server" }))
+      .toEqual([translate("en", "orchPanel.rotationDead")]);
+    expect(en({ level: "strongly_recommend", contextPercent: 71, reasons: ["context", "dead"], source: "client" }))
+      .toEqual([translate("en", "orchPanel.rotationContext", { percent: "71" }), translate("en", "orchPanel.rotationDead")]);
+  });
+
+  test("a recommendation the coded reasons cannot express still shows, carried by the server's cause", () => {
     const state = live({
       incumbent: incumbent({
-        rotation: { recommended: true, level: "recommend", reasons: ["3 compaction(s) recorded in the transcript, threshold 2"], thresholdUnknown: false },
+        rotation: {
+          recommended: true, level: "recommend", reasons: ["3 compaction(s) recorded in the transcript, threshold 2"],
+          causes: [{ kind: "compactions", count: 3, threshold: 2 }], thresholdUnknown: false,
+        },
       }),
     });
     expect(state).toMatchObject({ kind: "live", rotation: { level: "recommend", reasons: [], source: "server" } });

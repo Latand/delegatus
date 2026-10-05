@@ -520,6 +520,98 @@ describe("composer stays usable with a dead host", () => {
   }, 240_000);
 });
 
+describe("a restart refused for Telegram reads as one line with what to do", () => {
+  /*
+   * A conversation that holds the Telegram tool used to refuse every message
+   * while Telegram was disconnected, and the operator read the runtime's
+   * sentence about it twice inside a Ukrainian interface. The restart is no
+   * longer refused for that; journals still carry the sentence, and a
+   * withdrawn grant still refuses, so the row has to say it well.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "refused for Telegram"
+   *
+   * The failed row over `?case=dead-host-telegram-refused`, at 390 and 1440 px
+   * in en and uk: the reason is one sentence in the interface language with its
+   * action, it appears once, and the disclosure behind it prints no raw
+   * sentence. Readings go to `evidence/telegram-refusal/outbox.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, said once in the interface language", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=dead-host-telegram-refused&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="dead-host-telegram-refused"]');
+            await page.waitForSelector("[data-outbox-reason]");
+            const read = () => page.evaluate((sentence: string) => {
+              const failure = document.querySelector("[data-outbox-failure]");
+              const reason = document.querySelector<HTMLElement>("[data-outbox-reason]");
+              const box = reason?.getBoundingClientRect();
+              const text = document.body.innerText;
+              return {
+                statusLabel: document.querySelector("[data-outbox-status]")?.textContent?.trim() ?? null,
+                timesSaid: text.split(sentence).length - 1,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(text),
+                rawLines: document.querySelectorAll("[data-outbox-raw], [data-outbox-transport]").length,
+                actions: [...(failure?.querySelectorAll("button") ?? [])].filter((button) => !button.hasAttribute("data-outbox-reason")).length,
+                reasonInsideViewport: box ? box.left >= 0 && box.right <= window.innerWidth : false,
+                reasonWidth: box ? Math.round(box.width) : 0,
+                reasonHeight: box ? Math.round(box.height) : 0,
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            }, translate(lang, "outbox.failure.telegramOff"));
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-outbox-reason]").first().click();
+            await page.waitForSelector("[data-outbox-detail]");
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            for (const reading of [closed, open]) {
+              expect(reading.statusLabel).toBe(translate(lang, "outbox.failure.telegramOff"));
+              expect(reading.timesSaid).toBe(1);
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.rawLines).toBe(0);
+              expect(reading.actions).toBe(1);
+              expect(reading.reasonInsideViewport).toBe(true);
+              expect(reading.overflowX).toBe(0);
+            }
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "outbox.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
 describe("send latency slice 3: one message, one row", () => {
   /*
    * Rendered evidence for the operator's complaint that a sent message passes

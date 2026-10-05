@@ -280,6 +280,10 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* The same seat with its agent not running and its context past the rotation
+   line: the status read reports both causes, as data, beside the sentences it
+   writes for an agent. */
+const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") === "gone";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -3042,6 +3046,18 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       transcriptFacts: null,
       rotation: FM_SEAT
         ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
+        : SEAT_GONE
+        ? {
+          recommended: true, level: "strongly_recommend", thresholdUnknown: false,
+          reasons: [
+            "context usage 520,825 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)",
+            "the designated conversation's host is gone; rotate, or resume it with send_message_to_orchestrator",
+          ],
+          causes: [
+            { kind: "context", tokens: 520_825, estimated: false, thresholdTokens: 500_000, windowTokens: 1_000_000 },
+            { kind: "host_gone" },
+          ],
+        }
         : { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
     });
   }

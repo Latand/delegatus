@@ -80,5 +80,32 @@ test("an unrecognised engine or level degrades instead of leaking through", () =
   })!;
   expect(incumbent.engine).toBeNull();
   /* The server's own boolean still stands; only the wording softens. */
-  expect(incumbent.rotation).toEqual({ recommended: true, level: "none", reasons: ["a reason"], thresholdUnknown: true });
+  expect(incumbent.rotation).toEqual({ recommended: true, level: "none", reasons: ["a reason"], causes: [], thresholdUnknown: true });
+});
+
+test("the server's causes are read as data, and a malformed one is dropped", () => {
+  const incumbent = parseIncumbent({
+    ...body,
+    rotation: {
+      recommended: true,
+      level: "recommend",
+      reasons: [],
+      causes: [
+        { kind: "host_gone" },
+        { kind: "context", tokens: 620_000, estimated: true, thresholdTokens: 500_000, windowTokens: 1_000_000 },
+        { kind: "context", tokens: "many" },
+        { kind: "compactions", count: 3, threshold: 2 },
+        { kind: "transcript", megabytes: 9.4, thresholdMegabytes: 8 },
+        { kind: "mood" },
+        "host_gone",
+      ],
+      thresholdUnknown: false,
+    },
+  })!;
+  expect(incumbent.rotation?.causes).toEqual([
+    { kind: "host_gone" },
+    { kind: "context", tokens: 620_000, estimated: true, thresholdTokens: 500_000, windowTokens: 1_000_000 },
+    { kind: "compactions", count: 3, threshold: 2 },
+    { kind: "transcript", megabytes: 9.4, thresholdMegabytes: 8 },
+  ]);
 });

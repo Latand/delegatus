@@ -37,7 +37,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
+import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
   streamingVoiceDelivery,
@@ -194,6 +194,9 @@ export interface CodexAppServerHostOptions {
   allowSubagents?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
+  /** A relaunch of a conversation that already holds the Telegram grant: it
+      starts without the tool while the connector is disconnected. */
+  telegramOptional?: boolean;
   /** Codex plugins granted to this session (issue #687). Empty or absent
       denies the plugin subsystem, which is the default for every session. */
   plugins?: readonly string[];
@@ -1448,9 +1451,9 @@ export class CodexAppServerHost implements EngineHost {
       "realtime_conversation",
     ];
     const granted = grantedPlugins(options.plugins);
-    let childEnv: NodeJS.ProcessEnv;
+    let telegram: TelegramLaunchGrant;
     try {
-      childEnv = withTelegramConnectorGrant(
+      telegram = resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
           options.codexHome,
@@ -1458,12 +1461,13 @@ export class CodexAppServerHost implements EngineHost {
           options.forwardGitHubConfig === true,
         ),
         options.mcpServers,
-        options.validateTelegramGrant,
+        { validateGrant: options.validateTelegramGrant, relaunch: options.telegramOptional },
       );
     } catch (error) {
       options.releaseCleanup?.();
       throw error;
     }
+    const childEnv = telegram.env;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
@@ -1501,11 +1505,11 @@ export class CodexAppServerHost implements EngineHost {
         provisional.imageInputSupport = "unknown";
       }
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
-      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown } };
+      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
-        options.mcpServers,
+        telegram.mcpServers,
         granted,
         /* The app-server reads the capability header's value from its own
            environment, so only a thread whose app-server holds one goes
@@ -1532,11 +1536,22 @@ export class CodexAppServerHost implements EngineHost {
           : { sandbox: options.sandbox ?? "read-only" }),
         approvalPolicy: options.approvalPolicy ?? "never",
       };
+      /* The thread parameter replaces the account's own developer
+         instructions, so the notice is added to them. */
+      const runNotice = telegram.unavailable
+        ? {
+          developerInstructions: [
+            typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
+            TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE,
+          ].filter(Boolean).join("\n\n"),
+        }
+        : {};
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         })
         : await provisional.rpc("thread/start", {
@@ -1544,6 +1559,7 @@ export class CodexAppServerHost implements EngineHost {
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");

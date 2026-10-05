@@ -7361,6 +7361,110 @@ describe("the orchestrator seat's header keeps every element readable and clicka
   }, 600_000);
 });
 
+describe("the rotation banner says each cause once, in the interface language", () => {
+  /*
+   * The seat's banner over `?scenario=seat-head&seat=gone`: the status read
+   * recommends rotation for two causes, a context past the threshold and an
+   * agent that is not running. The banner used to print the second one twice,
+   * once in its own words and once as the sentence the server writes for an
+   * agent, in English and naming an agent tool.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "rotation banner says"
+   *
+   * At 390 and 1440 px in en and uk: the banner's lines are exactly the two
+   * causes worded for the operator, none repeats, nothing of the agent's
+   * sentence is drawn, and no line is cut or pushed outside the banner. At
+   * 390 px the phone shell replaces the board, so the lines are read from the
+   * seat's sheet, under its context meter.
+   * `SEAT_ROTATION_PNG_DIR` collects frames (never committed); the readings go
+   * to `evidence/seat-rotation-banner/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-rotation-banner");
+  const EVIDENCE = path.resolve("evidence/seat-rotation-banner");
+
+  browserTest("at 390 and 1440 px in en and uk", async () => {
+    const pngDir = process.env.SEAT_ROTATION_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [390, 1440] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          const phone = width < 640;
+          const label = `${width}-${lang}`;
+          const number = (value: number) => value.toLocaleString(lang === "uk" ? "uk-UA" : "en-US");
+          const expected = [
+            translate(lang, "orchPanel.rotationContextTokens", { tokens: number(520_825), threshold: number(500_000) }),
+            translate(lang, "orchPanel.rotationDead"),
+          ];
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+          try {
+            const banner = phone ? "[data-mobile2-sheet='seat'] [data-orchestrator-rotation]" : "[data-kanban-seat] [data-orchestrator-rotation]";
+            if (phone) {
+              await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+              await page.locator("[data-mobile2-open=seat]").first().click();
+            }
+            await page.waitForSelector(`${banner} [data-orchestrator-rotation-cause]`, { timeout: 20_000 });
+            await page.waitForTimeout(600);
+            const reading = await page.evaluate((selector) => {
+              const root = document.querySelector<HTMLElement>(selector)!;
+              const box = root.getBoundingClientRect();
+              const lines = [...root.querySelectorAll<HTMLElement>("[data-orchestrator-rotation-cause]")].map((line) => {
+                const rect = line.getBoundingClientRect();
+                return {
+                  text: line.textContent ?? "",
+                  inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5,
+                  cut: line.scrollWidth > line.clientWidth + 1,
+                  height: Math.round(rect.height),
+                };
+              });
+              return {
+                level: root.getAttribute("data-orchestrator-rotation"),
+                title: root.querySelector("p")?.textContent ?? "",
+                text: root.innerText,
+                lines,
+                width: Math.round(box.width),
+                height: Math.round(box.height),
+                insideViewport: box.left >= 0 && box.right <= window.innerWidth + 0.5,
+                pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+              };
+            }, banner);
+            frames[label] = reading;
+            if (pngDir) await page.locator(banner).first().screenshot({ path: path.join(pngDir, `rotation-banner-${label}.png`) });
+            const said = reading.lines.map((line) => line.text);
+            if (JSON.stringify(said) !== JSON.stringify(expected)) failures.push(`${label}: the banner reads ${JSON.stringify(said)}; expected ${JSON.stringify(expected)}`);
+            if (new Set(said).size !== said.length) failures.push(`${label}: a cause is said twice`);
+            /* The phone's sheet states the causes under its context meter, with no title of its own. */
+            if (!phone && reading.title !== translate(lang, "orchPanel.rotationStrong")) failures.push(`${label}: the title reads "${reading.title}"`);
+            if (/send_message|designated conversation|host is gone|rotation threshold/i.test(reading.text)) failures.push(`${label}: the agent's sentence is drawn: ${reading.text}`);
+            for (const line of reading.lines) {
+              if (!line.inside) failures.push(`${label}: «${line.text}» is drawn outside the banner`);
+              if (line.cut) failures.push(`${label}: «${line.text}» is cut`);
+            }
+            if (!reading.insideViewport) failures.push(`${label}: the banner leaves the viewport`);
+            if (reading.pageOverflow) failures.push(`${label}: the page scrolls sideways`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 /* PR and issue chips (#2059) over `issue1695Evidence.fixture.tsx?scenario=work-links`:
    the card whose five pipelines carry an open PR with two issues, a lane with
    no PR, a PR two lanes share, a closed attempt and a merged fix, and the

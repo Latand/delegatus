@@ -29,6 +29,28 @@ const CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/\btimed out\b/i, "receipt.cause.timedOut"],
 ];
 
+/**
+ * Causes recognised anywhere in the sentence. The wrapper in front of them
+ * varies with the path that reported the failure ("structured host recovery
+ * failed: …", "conversation host was reclaimed; …: …"), and read by its first
+ * clause one cause became two rows. Each has a complete sentence in the
+ * operator's language, with what to do, so nothing raw is shown beside it.
+ */
+const SENTENCE_CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
+  [/\btelegram\b[\s\S]{0,120}\b(revoked|withdrawn|no longer active)\b/i, "receipt.cause.telegramWithdrawn"],
+  [/\btelegram\b[\s\S]{0,120}\bnot connected\b/i, "receipt.cause.telegramOff"],
+];
+
+/** The self-explaining cause a failure sentence names, or null. */
+export function sentenceCauseKey(reason: string | null | undefined): MessageKey | null {
+  const trimmed = reason?.trim();
+  if (!trimmed) return null;
+  for (const [pattern, key] of SENTENCE_CAUSE_PATTERNS) {
+    if (pattern.test(trimmed)) return key;
+  }
+  return null;
+}
+
 function splitClauses(reason: string): { head: string; rest: string | null } {
   const index = reason.indexOf(";");
   if (index < 0) return { head: reason.trim(), rest: null };
@@ -54,6 +76,8 @@ export function failureCauseKey(reason: string | null | undefined): string {
   if (!trimmed) return "";
   const known = humanReceiptReasonKey(trimmed);
   if (known) return `key:${known}`;
+  const sentence = sentenceCauseKey(trimmed);
+  if (sentence) return `key:${sentence}`;
   const { head } = splitClauses(trimmed);
   return `verbatim:${patternKey(head) ?? head.replace(/\s+/g, " ").toLowerCase()}`;
 }
@@ -81,6 +105,11 @@ export function describeReceiptFailure(t: TFunction, reason: string | null | und
   const known = humanReceiptReasonKey(trimmed);
   if (known) {
     const sentence = t(known);
+    return { cause: sentence, full: sentence, detail: null };
+  }
+  const sentenceCause = sentenceCauseKey(trimmed);
+  if (sentenceCause) {
+    const sentence = t(sentenceCause);
     return { cause: sentence, full: sentence, detail: null };
   }
   const { head, rest } = splitClauses(trimmed);

@@ -49,7 +49,7 @@ import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { pendingPermissionFrom, type PendingPermissionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
-import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
+import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   STRUCTURED_IMAGE_CAPABILITY,
   normalizeStructuredImageMime,
@@ -244,6 +244,9 @@ export interface ClaudeStreamBrokerHostOptions {
   allowSubagents?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
+  /** A relaunch of a conversation that already holds the Telegram grant: it
+      starts without the tool while the connector is disconnected. */
+  telegramOptional?: boolean;
   mcpStatePath?: string;
   readOnly?: boolean;
   /** Confine tools and network to Claude's engine-owned restricted boundary. */
@@ -810,6 +813,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         env.ANTHROPIC_AUTH_TOKEN = relay.alias;
       } catch (error) { options.releaseCleanup?.(); throw error; }
     }
+    let telegram: TelegramLaunchGrant;
+    try {
+      telegram = resolveTelegramLaunchGrant(env, options.mcpServers, {
+        validateGrant: options.validateTelegramGrant,
+        relaunch: options.telegramOptional,
+      });
+    } catch (error) { relay?.close(); options.releaseCleanup?.(); throw error; }
     const args = [
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", "--replay-user-messages",
@@ -834,7 +844,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           memoryQueuePath: options.memoryQueuePath,
           profileId,
           cwd: options.cwd,
-          mcpServers: options.mcpServers,
+          mcpServers: telegram.mcpServers,
           mcpStatePath: options.mcpStatePath,
           viewerTransport: viewerMcpTransportForLaunch(env),
         });
@@ -850,6 +860,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.model) args.push("--model", options.model);
     if (options.effort) args.push("--effort", options.effort);
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
+    if (telegram.unavailable) args.push("--append-system-prompt", TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
     if (options.tools) args.push("--tools", options.tools.join(","));
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
       spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
@@ -857,7 +868,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     try {
       child = spawnProcess(binary, args, {
         cwd: options.cwd,
-        env: withTelegramConnectorGrant(env, options.mcpServers, options.validateTelegramGrant),
+        env: telegram.env,
         detached: true,
       });
     } catch (error) {

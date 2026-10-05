@@ -89,6 +89,7 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
+  | "dead-host-telegram-refused"
   | "agent-images";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -330,9 +331,11 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+  "dead-host-telegram-refused": { host: "unhosted", turn: "unknown" },
 };
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -342,6 +345,8 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
      over, which is what separates this chip from the resuming one above. */
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  /* The sentence the queue recorded when a restart was refused for Telegram. */
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: TELEGRAM_REFUSAL } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
 }
 

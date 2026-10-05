@@ -14,7 +14,10 @@ import { executeSpawnRequest, type SpawnCommandDependencies } from "./spawnComma
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { defaultStartHost, spawnStructuredConversation, type StructuredSpawnInput } from "@/lib/runtime/structuredSpawn";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_LAUNCH_UNAVAILABLE, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { defaultModelFor } from "@/lib/agent/models";
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
@@ -195,13 +198,15 @@ function endedDeputyCapability(seatId: string): string {
   return registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
 }
 
-type LaunchEvidence = { tokenPresent: boolean; tokenMatches: boolean; telegramDefinition: unknown; reachedEngine: boolean };
+type LaunchEvidence = { tokenPresent: boolean; tokenMatches: boolean; telegramDefinition: unknown; reachedEngine: boolean;
+  /** What the engine was told about this run, beyond the conversation itself. */
+  runNotice: string | null };
 
 /** Only the external engine protocol is synthetic; admission, deferral,
     structured startup, and both host configuration builders stay real. */
 function deferredLaunch(engine: "claude" | "codex", token: string | null, codexServers?: Record<string, unknown>, beforeClaudeAuth?: () => void) {
   const work: Array<() => Promise<void>> = [];
-  const evidence: LaunchEvidence = { tokenPresent: false, tokenMatches: false, telegramDefinition: null, reachedEngine: false };
+  const evidence: LaunchEvidence = { tokenPresent: false, tokenMatches: false, telegramDefinition: null, reachedEngine: false, runNotice: null };
   const client = {
     command: async () => ({}),
     transitionOperation: async () => ({}),
@@ -216,6 +221,8 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
             evidence.reachedEngine = true;
             evidence.tokenPresent = Boolean(options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]);
             evidence.tokenMatches = token !== null && options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV] === token;
+            const noticeAt = args.indexOf("--append-system-prompt");
+            evidence.runNotice = noticeAt >= 0 ? args[noticeAt + 1] ?? null : null;
             const configPath = args[args.indexOf("--mcp-config") + 1];
             evidence.telegramDefinition = configPath
               ? (JSON.parse(fs.readFileSync(configPath, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.telegram
@@ -228,7 +235,10 @@ function deferredLaunch(engine: "claude" | "codex", token: string | null, codexS
             evidence.reachedEngine = true;
             evidence.tokenPresent = Boolean(options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]);
             evidence.tokenMatches = token !== null && options.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV] === token;
-            return new CodexProtocolCapture((definition) => { evidence.telegramDefinition = definition; }, codexServers) as never;
+            return new CodexProtocolCapture((definition, notice) => {
+              evidence.telegramDefinition = definition;
+              evidence.runNotice = notice;
+            }, codexServers) as never;
           },
         },
       });
@@ -248,7 +258,7 @@ class CodexProtocolCapture extends EventEmitter {
   private pending = "";
 
   constructor(
-    private readonly capture: (definition: unknown) => void,
+    private readonly capture: (definition: unknown, notice: string | null) => void,
     private readonly configuredServers: Record<string, unknown> = { viewer: { command: "viewer-mcp" } },
   ) {
     super();
@@ -259,7 +269,10 @@ class CodexProtocolCapture extends EventEmitter {
         this.pending = this.pending.slice(newline + 1);
         if (typeof message.id !== "number") continue;
         if (message.method === "thread/start" || message.method === "thread/resume") {
-          this.capture((message.params?.config as { mcp_servers?: Record<string, unknown> })?.mcp_servers?.telegram);
+          this.capture(
+            (message.params?.config as { mcp_servers?: Record<string, unknown> })?.mcp_servers?.telegram,
+            typeof message.params?.developerInstructions === "string" ? message.params.developerInstructions : null,
+          );
           this.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "synthetic Codex protocol stopped after launch capture" } }) + "\n");
           continue;
         }
@@ -428,7 +441,7 @@ test("an explicit seat-child Telegram request refuses a disconnected connector b
   clearTelegramConnection();
   const { response, receipt } = await launch("claude", seatId, ["telegram"]);
   expect(response.status).toBe(400);
-  expect(await response.json()).toMatchObject({ error: "telegram MCP connector is not connected" });
+  expect(await response.json()).toMatchObject({ error: TELEGRAM_LAUNCH_UNAVAILABLE });
   expect(receipt).toBeNull();
 });
 
@@ -580,6 +593,108 @@ for (const mode of ["off", "sqlite"] as const) test(`the ${mode} ungranted child
   }
 }));
 
+/** A conversation that holds the Telegram grant durably and whose host is
+    gone: reserved through real admission while the connector was connected. */
+async function grantedConversationWithoutHost(engine: "claude" | "codex") {
+  connected();
+  const seatId = seedSeat();
+  const { response, receipt } = await launch(engine, seatId, ["telegram"]);
+  expect(response.status).toBe(202);
+  const sid = crypto.randomUUID();
+  const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+  fs.writeFileSync(artifactPath, "{}\n");
+  const settled = registry.settleSpawn(receipt!.launchId, { key: { engine, sessionId: sid },
+    artifactPath, cwd, accountId: `${engine}-test`, status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  expect(settled.kind).toBe("settled");
+  return { conversationId: receipt!.conversationId, artifactPath, seatId };
+}
+
+/** The operator's send, through the production admission and recovery: only
+    the engine process behind the launch is synthetic. */
+async function sendToGoneHost(engine: "claude" | "codex", target: { conversationId: string; artifactPath: string },
+  probe: ReturnType<typeof deferredLaunch>) {
+  const refusals: string[] = [];
+  /* The runtime host holds no session for this conversation: its host is gone. */
+  const client = { ...probe.client, readSession: async () => null } as RuntimeHostClient;
+  const result = await enqueueStructuredMessage({
+    path: target.artifactPath, conversationId: target.conversationId,
+    clientMessageId: `telegram_send_${crypto.randomUUID()}`, text: "are you there?", origin: { kind: "operator" },
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    kick: () => {},
+    requestMigrationTick: () => {},
+    recover: async (request, recoveryDependencies) => {
+      try {
+        return await recoverDeadStructuredConversation(request, {
+          ...recoveryDependencies,
+          transport: () => "structured",
+          resolveAccount: () => launchAccount(engine),
+          requestDeliveryDrain: () => {},
+          spawn: (input) => spawnStructuredConversation(input, { startHost: probe.startHost }),
+        });
+      } catch (error) {
+        refusals.push(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    },
+  });
+  return { result, refusals };
+}
+
+for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine} conversation whose host is gone relaunches it without Telegram while the connector is disconnected`,
+  async () => withRegistryMode("sqlite", async () => {
+    const target = await grantedConversationWithoutHost(engine);
+    clearTelegramConnection();
+    const probe = deferredLaunch(engine, null);
+    const { refusals } = await sendToGoneHost(engine, target, probe);
+    /* The relaunch reaches the engine. The synthetic protocol stops it there,
+       so the only refusal recovery may report is that stop. */
+    expect(refusals.join(" | ")).not.toContain("elegram");
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+    expect(probe.evidence.runNotice).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+    expect(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE.split("\n")).toHaveLength(1);
+    /* The grant is durable: this run went without the tool, the record did not. */
+    expect(registry.conversation(target.conversationId as `conversation_${string}`)?.generations.at(-1)?.launchProfile.mcpServers)
+      .toEqual(["viewer", "telegram"]);
+    /* Reconnected, the next start of the same conversation carries the tool again. */
+    const token = connected();
+    const reconnected = deferredLaunch(engine, token);
+    await sendToGoneHost(engine, target, reconnected);
+    expect(reconnected.evidence.reachedEngine).toBe(true);
+    expect(reconnected.evidence.tokenMatches).toBe(true);
+    expect(reconnected.evidence.telegramDefinition).toBeTruthy();
+    expect(reconnected.evidence.runNotice).toBeNull();
+  }));
+
+for (const engine of ["claude", "codex"] as const) test(`a ${engine} relaunch whose Telegram grant was revoked stays refused while the connector is disconnected`,
+  async () => withRegistryMode("sqlite", async (sqlitePath) => {
+    const target = await grantedConversationWithoutHost(engine);
+    const granted = registry.conversation(target.conversationId as `conversation_${string}`)!.generations.at(-1)!.launchProfile;
+    expect(granted.mcpServers).toContain("telegram");
+    rewriteSqliteRow(sqlitePath, "conversations", target.seatId, row => {
+      (row.generations as { launchProfile: { mcpServers: string[] } }[]).at(-1)!.launchProfile.mcpServers = ["viewer"];
+    });
+    clearTelegramConnection();
+    const revoked = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured",
+      accountId: `${engine}-test`, conversationId: target.conversationId as `conversation_${string}`,
+      purpose: "resume-successor", origin: { kind: "successor" }, expectedArtifactPath: target.artifactPath,
+      launchProfile: granted });
+    if (revoked.kind !== "created") throw new Error("resume reservation was unavailable");
+    expect(revoked.receipt.launchProfile.mcpServers).toEqual(["viewer"]);
+    const probe = deferredLaunch(engine, null);
+    await expect(probe.startHost({ engine, receipt: revoked.receipt,
+      spec: { command: engine, cwd, windowName: "resume", engine, transcript: target.artifactPath, launchProfile: granted },
+      account: launchAccount(engine), prompt: "", registry, client: probe.client,
+    }, "test-capability")).rejects.toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+    expect(probe.evidence.reachedEngine).toBe(false);
+    connected();
+  }));
+
 test("disconnect between admission and deferred host start terminalizes a granted child", async () => {
   const token = connected();
   const seatId = seedSeat();
@@ -592,7 +707,7 @@ test("disconnect between admission and deferred host start terminalizes a grante
     expect(probe.evidence.reachedEngine).toBe(false);
     expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
       state: "failed",
-      error: "telegram MCP connector is not connected at launch",
+      error: TELEGRAM_LAUNCH_UNAVAILABLE,
     });
     connected();
   }

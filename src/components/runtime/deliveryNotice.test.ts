@@ -111,3 +111,27 @@ test("#1426 every single-clause verbatim reason remains available on expand", ()
     });
   }
 });
+
+test("a Telegram refusal is one cause whatever wrapper carried it, said once in the interface language", () => {
+  /* The send route and the queue's own drain wrap the same refusal
+     differently. Read by first clause they were two causes, and the operator
+     saw the same line twice. */
+  const fromQueue = "structured host recovery failed: telegram MCP connector is not connected at launch";
+  const fromSend = "conversation host was reclaimed; automatic resume did not establish a deliverable host: telegram MCP connector is not connected at launch";
+  expect(failureCauseKey(fromQueue)).toBe(failureCauseKey(fromSend));
+  const run = deliveryNoticeRun(deliveryAttemptGroups([
+    receipt({ operationId: "op-t2", text: "second ask", reason: fromQueue, at: "2026-08-31T10:00:03.000Z" }),
+    receipt({ operationId: "op-t1", text: "first ask", reason: fromSend, at: "2026-08-31T10:00:02.000Z" }),
+  ]), []);
+  expect(run!.attempts.map((attempt) => attempt.operationId)).toEqual(["op-t2", "op-t1"]);
+  for (const lang of ["en", "uk"] as const) {
+    const say = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+    const sentence = translate(lang, "receipt.cause.telegramOff");
+    expect(describeReceiptFailure(say, fromQueue)).toEqual({ cause: sentence, full: sentence, detail: null });
+    expect(describeReceiptFailure(say, fromSend)).toEqual({ cause: sentence, full: sentence, detail: null });
+    expect(describeReceiptFailure(say, "structured host recovery failed: telegram MCP grant was revoked before launch").cause)
+      .toBe(translate(lang, "receipt.cause.telegramWithdrawn"));
+    expect(sentence).not.toMatch(/MCP|connector|_/i);
+  }
+  expect(failureCauseKey(fromQueue)).not.toBe(failureCauseKey("structured host recovery failed: telegram MCP grant was revoked before launch"));
+});

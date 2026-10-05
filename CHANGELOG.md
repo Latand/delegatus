@@ -18,6 +18,17 @@ guarantees for the 1.x series.
   let go in place for the card menu. The card now follows the pointer by transform
   alone, and the board's live animations pause while it is held.
 
+### Fixed
+- **A disconnected Telegram connection no longer makes a conversation
+  unreachable.** A conversation that holds the Telegram tool and whose agent is
+  not running used to refuse every message while Telegram was disconnected,
+  because the restart itself was refused. It now starts without the tool, tells
+  the agent so in one line, and gets the tool back on the next start after
+  Telegram is reconnected. A new agent that asks for Telegram while it is
+  disconnected is still refused, in plain words. The rotation banner and the
+  "not delivered" reasons on this path read in the interface language, one line
+  per cause, each with what to do.
+
 ## [1.9.0] — 2026-10-01
 
 ### Added

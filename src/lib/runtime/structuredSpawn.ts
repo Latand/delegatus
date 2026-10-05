@@ -1653,6 +1653,7 @@ export function claudeStructuredHostOptions(
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
   validateTelegramGrant?: () => void,
+  telegramOptional = false,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   return {
@@ -1663,6 +1664,7 @@ export function claudeStructuredHostOptions(
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
+    telegramOptional,
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: input.account.claudeProvider
@@ -1698,6 +1700,11 @@ export async function defaultStartHost(
   const validateTelegramGrant = profile.mcpServers.includes("telegram")
     ? () => { admittedStructuredLaunchInput(input); }
     : undefined;
+  /* A successor relaunches a conversation that already exists, most often to
+     deliver a message to it. Its Telegram grant is durable and the tool is
+     optional, so with the connector disconnected it starts without the tool
+     for this run. A new launch that asked for the tool is still refused. */
+  const telegramOptional = input.receipt.purpose !== "launch";
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: input.engine, sessionId: resumeSessionId })]?.structuredHost?.eventCursor
@@ -1719,6 +1726,7 @@ export async function defaultStartHost(
       allowSubagents: profile.allowSubagents,
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
+      telegramOptional,
       /* Plugin grant from the durable profile (issue #687): present only for
          an operator-launched root session that did not opt out. */
       plugins: profile.plugins,
@@ -1736,7 +1744,7 @@ export async function defaultStartHost(
   }
   const form = structuredClaudeLaunchForm(input);
   const options = {
-    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant),
+    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, telegramOptional),
     ...engineProcess.claude,
     ...(memoryCell ? { memoryCell } : {}),
   };
