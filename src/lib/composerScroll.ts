@@ -152,6 +152,39 @@ const CARD_CONVERSATION_FLOOR_PX = 240;
 export function cardComposerBudget(boxHeight: number): number {
   return Math.min(Math.round(boxHeight * CARD_COMPOSER_MAX_SHARE), boxHeight - CARD_CONVERSATION_FLOOR_PX);
 }
+/* THE ORCHESTRATOR SEAT'S OWN BUDGET (#1734). The seat on top of the board is a
+   box the operator sizes with a grip, down to 160 px, and the card budget above
+   keeps 240 px of transcript: more than the whole conversation of a compact
+   seat. The budget went negative there, the field stopped at two rows however
+   long the draft was, and at the grip's lower stop the form was a 9 px slit.
+
+   So the seat has two things the card does not. Its transcript yields down to
+   a minimum of about four lines and no further, and once the transcript is at
+   that minimum the seat itself grows by what the draft still needs, up to the
+   height its grip stops at. The stylesheet carries both bounds (`min-height`
+   on the transcript, `max-height` on the seat); the functions below are the
+   same arithmetic for the code that sizes the field and the seat. */
+export const SEAT_TRANSCRIPT_FLOOR_PX = 72;
+
+/** How tall the seat's composer may render: the conversation as tall as the
+    seat can still make it (`room` is what is left between the seat's height
+    now and the height its grip stops at), less the rows that never yield (the
+    control strip) and the transcript's minimum. */
+export function seatComposerBudget({ boxHeight, room, rows }: { boxHeight: number; room: number; rows: number }): number {
+  return boxHeight + Math.max(0, room) - Math.max(0, rows) - SEAT_TRANSCRIPT_FLOOR_PX;
+}
+
+/** How many px past its set height the seat has to be, from what is rendered:
+    `grown` is what it has now, `transcriptHeight` the transcript's, `overflow`
+    what the form cannot show of its own content, and `room` the most the seat
+    may add. A transcript above its minimum gives the growth back first, so a
+    shortened draft shrinks the seat again; a roomy seat never grows at all.
+    Rounded up, so a fractional layout never asks for less than it needs and
+    never trades one px back and forth. */
+export function seatGrowth({ grown, transcriptHeight, overflow, room }: { grown: number; transcriptHeight: number; overflow: number; room: number }): number {
+  const wanted = Math.ceil(grown + SEAT_TRANSCRIPT_FLOOR_PX - transcriptHeight + Math.max(0, overflow));
+  return Math.max(0, Math.min(Math.floor(Math.max(0, room)), wanted));
+}
 /* The card composer's chrome around the field, measured on the rendered card:
    the form's own padding and top border (py-2 + 1px = 17px), the input box's
    padding and borders (py-1 + two 1px edges = 10px), the quiet secondary row
@@ -172,12 +205,15 @@ const CARD_COMPOSER_CHROME_PX = 65;
     `boxHeight` of zero is a composer whose conversation has not been measured,
     or one laid out in a box with no definite height of its own — where the
     form's percentage budget does not resolve either. The fixed cap is the
-    bound there, exactly as it was before this rule existed. */
-export function cardComposerCeiling(boxHeight: number, surfaces: number): number {
+    bound there, exactly as it was before this rule existed.
+
+    `budget` is the seat's (`seatComposerBudget`), where the box is one that
+    grows; without it the box is a card and the card's share applies. */
+export function cardComposerCeiling(boxHeight: number, surfaces: number, budget: number | null = null): number {
   if (!(boxHeight > 0)) return COMPOSER_MAX_PX;
-  const budget = cardComposerBudget(boxHeight);
-  const reserve = accessoryReserve(surfaces, budget);
-  return Math.max(COMPOSER_CEILING_FLOOR_PX, Math.min(COMPOSER_MAX_PX, budget - CARD_COMPOSER_CHROME_PX - reserve));
+  const within = budget ?? cardComposerBudget(boxHeight);
+  const reserve = accessoryReserve(surfaces, within);
+  return Math.max(COMPOSER_CEILING_FLOOR_PX, Math.min(COMPOSER_MAX_PX, within - CARD_COMPOSER_CHROME_PX - reserve));
 }
 
 /** The phone grow ceiling, from the VISIBLE viewport the operator can see

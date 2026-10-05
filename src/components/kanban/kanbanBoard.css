@@ -907,6 +907,16 @@
    live" control still appears once the feed is scrolled up); the composer keeps 240 px of transcript
    above it in a tall pane and a smaller strip here, never squeezed shut. */
 .kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 72px); }
+/* The seat on top takes whatever height the grip left it, down to 160 px, and
+   the share above left its composer two rows there and a 9 px slit at the
+   grip's lower stop (#1734). Here the transcript is what yields, down to 72 px
+   and no further, and the form shrinks only past that. What it cannot show
+   then is what `KanbanSeat` adds to the seat as --seat-grow, until the seat is
+   as tall as its grip can make it; the field's own ceiling stops there too
+   (`seatComposerBudget`), so a draft alone never makes the form scroll. */
+.kb .seat:not(.side):not(.folded) { min-height: calc(var(--seat-h, var(--seat-default-h)) + var(--seat-grow)); max-height: max(var(--seat-h, var(--seat-default-h)), var(--seat-default-h)); }
+.kb .seat:not(.side) [data-orchestrator-conversation] > [data-composer-yields] { min-height: 72px; }
+.kb .seat:not(.side) [data-orchestrator-conversation] form { max-height: none; flex-shrink: 1; min-height: 0; }
 .kb .seat [data-orchestrator-conversation] :is([data-turn-status], [data-live-tail-pill]) { display: none; }
 .kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; }
 .kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }

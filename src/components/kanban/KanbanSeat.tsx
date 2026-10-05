@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
+import { seatGrowth } from "@/lib/composerScroll";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -76,6 +77,55 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     if (section.parentElement) observer.observe(section.parentElement);
     return () => observer.disconnect();
   }, [side, seat.collapsed]);
+
+  /* The seat on top grows with its composer (#1734). Its transcript yields to
+     a growing draft down to its minimum (the stylesheet holds it there), and
+     from then on the form is what runs short: it scrolls its own content. That
+     overflow is what the seat adds to its height, up to the stop its grip has,
+     and a transcript back above its minimum is what it gives back. One step
+     settles it either way, because a px added to the seat is a px the form
+     gets. It runs on every change inside the seat and before the frame is
+     painted, so the form is never drawn cut. The side seat is the full height
+     of the page and a folded one draws no conversation. */
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    if (side || seat.collapsed || !section || typeof MutationObserver === "undefined") return;
+    let grown = 0;
+    const measure = () => {
+      const conversation = section.querySelector<HTMLElement>("[data-orchestrator-conversation]");
+      const form = conversation?.querySelector<HTMLElement>("form");
+      const transcript = conversation?.querySelector<HTMLElement>("[data-composer-yields]");
+      let next = 0;
+      if (form && transcript) {
+        const limit = parseFloat(getComputedStyle(section).maxHeight);
+        next = seatGrowth({
+          grown,
+          transcriptHeight: transcript.getBoundingClientRect().height,
+          overflow: form.scrollHeight - form.clientHeight,
+          room: Number.isFinite(limit) ? limit - (section.getBoundingClientRect().height - grown) : 0,
+        });
+      }
+      if (next === grown) return;
+      grown = next;
+      if (next > 0) section.style.setProperty("--seat-grow", `${next}px`);
+      else section.style.removeProperty("--seat-grow");
+    };
+    measure();
+    /* A transcript that streams changes nothing here: its row is held at its
+       minimum whatever is in it, so its own mutations are not measured. */
+    const observer = new MutationObserver((records) => {
+      const transcript = section.querySelector("[data-composer-yields]");
+      if (transcript && records.every((record) => transcript.contains(record.target))) return;
+      measure();
+    });
+    observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+      section.style.removeProperty("--seat-grow");
+    };
+  }, [side, seat.collapsed, height, topWidth]);
 
   /* The header toggle's dot reads the seat's state from here. */
   const onSeatSignal = useCallback((signal: SeatSignal) => publishSeatSignal(project, signal), [project]);
@@ -230,6 +280,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
         data-placement={seat.placement}
         data-role-host="seat"
         data-role="orchestrator"
+        {...(side || seat.collapsed ? {} : { "data-composer-grows": "" })}
         style={style}
       >
         <OrchestratorPanel

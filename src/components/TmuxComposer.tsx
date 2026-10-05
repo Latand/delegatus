@@ -1813,6 +1813,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        field has always done there. */
     accessorySurfaces,
     boxHeight: composerBox.height,
+    boxBudget: composerBox.budget,
     viewActive,
   });
   /* Pulls the bridge inbox once, at the start of a turn, and only for the voice
