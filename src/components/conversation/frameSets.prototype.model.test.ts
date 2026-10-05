@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import { admittedAs } from "@/lib/artifact/localFile";
+
 import {
   chosenReply,
   coverFrames,
@@ -7,6 +9,8 @@ import {
   frameFromFileName,
   framesFromFileNames,
   frameSetInputDefects,
+  frameSourceRefusal,
+  frameSourceRoot,
   framesOfVariant,
   FRAME_MAX_BYTES,
   FRAME_SET_MAX_FRAMES,
@@ -78,6 +82,8 @@ describe("frame set prototype model", () => {
       "frame 1 names variant 2, which the set does not list",
     ]);
     expect(frameSetInputDefects({ title: "Set", variants, frames: paths(1) }, [FRAME_MAX_BYTES + 1])).toEqual(["frame 1 is larger than 4 MB"]);
+    /* A variant's title stands whole beside its button, so it has a bound of its own. */
+    expect(frameSetInputDefects({ title: "Set", variants: [{ number: 1, title: "x".repeat(61) }], frames: paths(1) })).toEqual(["variant 1 has a title longer than 60 characters"]);
   });
 
   test("a file name says the variant, the width and the language of its frame", () => {
@@ -88,6 +94,11 @@ describe("frame set prototype model", () => {
     expect(frameFromFileName("variant-0-phone-390-uk-closed.png").variant).toBeNull();
     /* A name outside the convention is a plain captioned frame; a small number is no width. */
     expect(frameFromFileName("board-after-12.jpg")).toEqual({ variant: null, width: null, lang: null, caption: "board after 12" });
+    /* A number before the variant is no width, whatever its size: a pull request's number stays in the caption. */
+    expect(frameFromFileName("pr-2521-variant-2-390-en.png")).toEqual({ variant: 2, width: 390, lang: "en", caption: "pr 2521" });
+    /* A viewport written as width by height gives its width. */
+    expect(frameFromFileName("variant-3-desktop-1440x900-uk.png")).toEqual({ variant: 3, width: 1440, lang: "uk", caption: "desktop" });
+    expect(frameFromFileName("board-1440x900.png")).toEqual({ variant: null, width: 1440, lang: null, caption: "board" });
   });
 
   test("a directory is published by variant, then by name, numbers as numbers", () => {
@@ -95,6 +106,31 @@ describe("frame set prototype model", () => {
       "variant-2-desktop-1440-en-10.png", "variant-2-desktop-1440-en-9.png", "notes.md", "variant-0-desktop-1440-en.png", "variant-1-phone-390-uk.png",
     ]).map((entry) => entry.name);
     expect(ordered).toEqual(["variant-1-phone-390-uk.png", "variant-2-desktop-1440-en-9.png", "variant-2-desktop-1440-en-10.png", "variant-0-desktop-1440-en.png"]);
+  });
+
+  test("a frame is read from where the image route reads, and a refusal says where to put it", () => {
+    const roots = { home: "/work/home", evidence: ["/var/tmp"] };
+    /* The four places a lane's frames usually are. */
+    const places = {
+      worktree: "/work/home/work/lane/.artifacts/frame-sets/variant-4-pane-440-en-open.png",
+      stage: "/work/home/.config/delegatus/state/scratch/llv-stage-abc/tmp/out/variant-4-pane-440-en-open.png",
+      evidence: "/var/tmp/lane/variant-4-pane-440-en-open.png",
+      temp: "/tmp/fs-lane/out/variant-4-pane-440-en-open.png",
+    };
+    expect(Object.fromEntries(Object.entries(places).map(([place, path]) => [place, frameSourceRoot(path, roots)]))).toEqual({ worktree: "home", stage: "home", evidence: "evidence", temp: null });
+    /* The same answer the image route gives each of them. */
+    for (const path of Object.values(places)) expect(frameSourceRoot(path, roots)).toBe(admittedAs(path, roots));
+    expect(frameSourceRoot("/work/home-other/a.png", roots)).toBeNull();
+    for (const path of [places.worktree, places.stage, places.evidence, "/work/home/work/lane/.artifacts/frame-sets"]) expect(frameSourceRefusal(path, roots)).toBeNull();
+    /* The short form names a directory, the full form a file: both get the same copy. */
+    const refusal = "is outside what Delegatus reads. Frames are read from: your worktree (the capture drivers write to .artifacts/ in it); the stage's own directory ($TMPDIR); /var/tmp."
+      + " Nothing was published. Copy the frames and call again with the copy: cp -r /tmp/fs-lane/out /var/tmp/frames-fs-lane-out";
+    expect(frameSourceRefusal("/tmp/fs-lane/out", roots)).toBe(`/tmp/fs-lane/out ${refusal}`);
+    expect(frameSourceRefusal(places.temp, roots)).toBe(`${places.temp} ${refusal}`);
+    /* An installation with no evidence root has nowhere to copy to, and says only where it reads. */
+    expect(frameSourceRefusal("/tmp/fs-lane/out", { home: "/work/home", evidence: [] })).toBe(
+      "/tmp/fs-lane/out is outside what Delegatus reads. Frames are read from: your worktree (the capture drivers write to .artifacts/ in it); the stage's own directory ($TMPDIR). Nothing was published.",
+    );
   });
 
   test("the collage fills a row with frames at their own proportions", () => {

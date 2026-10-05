@@ -2110,7 +2110,22 @@ describe("frame sets, design variants", () => {
         return { onScreen: tiles.filter(whole).length, of: tiles.length, rows: section.querySelectorAll("[data-frame-collage-row]").length,
           rowsInsideFeed: Array.from(section.querySelectorAll("[data-frame-collage-row]")).every((row) => tall(row.getBoundingClientRect())) };
       }),
-      /* A tile of a frame taken at each width, in px. */
+      /* Per variant: the title as shown, and whether any of it is cut (by an ellipsis, by a clipping box, or by the feed's edge). */
+      titles: sections.map((section) => {
+        const title = section.querySelector<HTMLElement>("[data-frame-variant-title]")!;
+        const rect = title.getBoundingClientRect();
+        const within = section.getBoundingClientRect();
+        return { text: title.textContent ?? "", box: [Math.round(rect.width), Math.round(rect.height)],
+          cut: title.scrollWidth > title.clientWidth + 1 || title.scrollHeight > title.clientHeight + 1 || getComputedStyle(title).textOverflow === "ellipsis"
+            || rect.left < within.left - 1 || rect.right > within.right + 1 || !tall(rect) };
+      }),
+      /* How far the collage's left edge is from the answer's text above it. */
+      leftOfAnswer: (() => {
+        const host = document.querySelector<HTMLElement>("[data-frame-set-host]")!;
+        const answer = Array.from(host.parentElement!.children).find((child) => child !== host && child.getBoundingClientRect().width > 0);
+        return answer ? Math.round(document.querySelector('[data-frame-control="entry"]')!.getBoundingClientRect().left - answer.getBoundingClientRect().left) : null;
+      })(),
+
       tileOf: Object.fromEntries([1440, 440, 390].map((width) => [width, size(panel.querySelector(`[data-frame-tile-of="${width}"]`))])),
     };
   });
@@ -2219,6 +2234,10 @@ describe("frame sets, design variants", () => {
             if (!laid.panelInsideFeed) fail("open", `the collage is ${laid.panel[1]} px tall in a feed of ${laid.feedHeight} px`);
             if (laid.chooseOnScreen.includes(false)) fail("open", `"Choose" needs a scroll: ${JSON.stringify(laid.chooseOnScreen)}`);
             if (laid.tiles.some((entry) => !entry.rowsInsideFeed || entry.onScreen === 0)) fail("open", `a variant's tiles need a scroll: ${JSON.stringify(laid.tiles)}`);
+            /* A variant's title is what the operator tells the variants apart by before "Choose N". */
+            for (const title of laid.titles.filter((entry) => entry.cut)) fail("open", `a variant's title is cut: ${JSON.stringify(title)}`);
+            if (laid.titles.length !== 4) fail("open", `${laid.titles.length} variant titles, wanted 4`);
+            if (laid.leftOfAnswer !== 0) fail("open", `the set's row starts ${laid.leftOfAnswer} px from the answer's text`);
             if (!viewport.phone && !viewport.pane && (laid.tileOf[1440]?.[0] ?? 0) < 180) fail("open", `a desktop frame's tile is ${JSON.stringify(laid.tileOf[1440])} on the desktop`);
           }
 

@@ -217,8 +217,10 @@ interface Presenter {
   choose: (variant: number) => void;
 }
 
+/* The width and the language come before the variant's title: a caption cut
+   by a narrow header still says which frame this is. */
 const frameCaption = (presenter: Presenter, frame: Frame) =>
-  frame.variant === null ? frame.caption : `${frame.variant} · ${presenter.set.variants.find((entry) => entry.number === frame.variant)?.title ?? ""} · ${frame.caption}`;
+  frame.variant === null ? frame.caption : `${frame.variant} · ${frame.caption} · ${presenter.set.variants.find((entry) => entry.number === frame.variant)?.title ?? ""}`;
 
 /** A sideways swipe over an element steps; the click that ends it is swallowed. */
 function useSwipe(onStep: (direction: -1 | 1) => void) {
@@ -567,8 +569,8 @@ function CollagePanel({ presenter, width, onZoomed }: { presenter: Presenter; wi
           <section key={variant.number} data-frame-collage-variant={variant.number} className="flex min-w-0 flex-col gap-1.5">
             <div className="flex min-w-0 items-center gap-2">
               <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-control bg-accent/15 px-1 text-ui font-bold tabular-nums text-accent">{variant.number}</span>
-              <span className="min-w-0 truncate text-ui font-semibold text-primary">{variant.title}</span>
-              <span className="ml-auto" />
+              {/* Whole at every width: the title is what tells the variants apart before "Choose N", so it wraps and is never cut. */}
+              <span data-frame-variant-title={variant.number} className="min-w-0 flex-1 text-ui font-semibold leading-tight text-primary [overflow-wrap:anywhere]">{variant.title}</span>
               <ChooseButton presenter={presenter} variant={variant.number} name={`choose-${variant.number}`} />
             </div>
             {rows.map((row, at) => (
@@ -713,7 +715,6 @@ function useRowHost(pane: HTMLElement | null, enabled: boolean, place: FrameSetP
     style.textContent = "[data-frame-set-row] > :not([data-frame-set-host]) { display: none !important; }"
       + " [data-frame-set-row]:not(:has([data-frame-set-host])) { display: none !important; }";
     document.head.append(style);
-    let inset: number | null = null;
     const put = () => {
       const rows = Array.from(pane.querySelectorAll<HTMLElement>("[data-log-feed-scroller] [data-feed-kind]"));
       const call = rows.find((candidate) => candidate.dataset.frameSetRow !== undefined)
@@ -730,12 +731,12 @@ function useRowHost(pane: HTMLElement | null, enabled: boolean, place: FrameSetP
         }
       }
       if (node.parentElement === anchor && anchor.lastElementChild === node) return;
-      /* The entry starts where the call's own card started. */
-      const card = call.firstElementChild?.getBoundingClientRect();
-      if (inset === null && card && card.width > 0) {
-        inset = Math.max(0, Math.round(card.left - call.getBoundingClientRect().left));
-        node.style.paddingLeft = `${inset}px`;
-      }
+      /* The entry starts where the row it stands in starts its own content:
+         the answer's text at the end of the turn, the call's card in the
+         call's place. A tool row is inset further than an answer, and on the
+         phone that inset is a tenth of the pane. */
+      const lead = Array.from(anchor.children).find((child) => child !== node && child.getBoundingClientRect().width > 0)?.getBoundingClientRect();
+      if (lead) node.style.paddingLeft = `${Math.max(0, Math.round(lead.left - anchor.getBoundingClientRect().left))}px`;
       call.dataset.frameSetRow = "";
       /* The feed pinned its tail before this move; a pane that was on its tail is put back on it. */
       const scroller = anchor.closest<HTMLElement>("[data-log-feed-scroller]");
