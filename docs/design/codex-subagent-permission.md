@@ -161,7 +161,12 @@ A violation requires the exact parent generation to deny sub-agents and an
 explicit denied Delegatus launch receipt for its artifact. Imported standalone
 sessions with a default false profile produce no false alert. The most recent
 receipt at the activity's timestamp must deny delegation; child history from a
-permission-enabled interval stays clear. A violation appends
+permission-enabled interval stays clear. Live native app-server items persist
+their original observation time, including while startup buffers notifications.
+Adopted history and older ledger items with no time join their native item id to
+the bounded authoritative transcript tail. History with no timestamp evidence
+is left to the scanner's transcript and child checks, preserving the permission
+interval instead of assigning old activity to the adoption time. A violation appends
 `subagent_policy_violation` to the existing durable lifecycle journal, visible
 through `lifecycle_events` query and its immediate high-signal digest. Stable
 native-item/child keys deduplicate replay and survive restarts. Summaries contain
@@ -256,6 +261,13 @@ fresh registry; granted calls, Viewer MCP calls and Code Mode `wait` stay clear.
 On the preceding reviewed code, all five namespaced v1 cases and four bare v2
 cases failed with zero recorded events; the corresponding corrected cases pass.
 The classifier check also rejects method/namespace mismatches and MCP names.
+
+An adoption regression uses the real app-server host and file event ledger with
+synthetic protocol replies. Pre-admission history, allowed-interval history,
+timestamped allowed ledger items and history without timing evidence stay clear;
+denied historical and live items alert. Replaying the live item remains
+deduplicated. The preceding implementation recorded five historical violations
+where one was expected; the corrected regression passes.
 
 Heavy commands use `scripts/gate-slot.sh`. Type checking and changed-file lint
 are also run. Publication uses the repository's local pre-commit and pre-push

@@ -39,7 +39,7 @@ export function nativeCodexFunctionCallMethod(payload: Record<string, unknown>, 
 
 /** Read only the namespace setting for an unusual tool namespace. Session
  * roots identify their account home without opening mutable account stores. */
-function configuredToolNamespaces(entry: FileEntry): Set<string> {
+function configuredToolNamespaces(entry: Pick<FileEntry, "path" | "cwd">): Set<string> {
   const namespaces = new Set(["collaboration"]);
   const sessionRoot = entry.path.lastIndexOf(`${path.sep}sessions${path.sep}`);
   const configs = [
@@ -107,7 +107,29 @@ export function observeCodexSubagentEvent(registry: AgentRegistry, parentPath: s
   if (!method) return;
   const item = event.item as Record<string, unknown>;
   const key = typeof item.id === "string" ? item.id : `event-${event.seq}`;
-  recordCodexSubagentViolation(registry, parentPath, `item:${key}`, method);
+  const activityAt = event.activityAt === null ? transcriptActivityAt(registry, parentPath, key) : event.activityAt;
+  // History with no authoritative time cannot be assigned to a launch receipt.
+  // The scanner still checks native transcript calls and child headers.
+  if (activityAt === null || (activityAt !== undefined && !Number.isFinite(Date.parse(activityAt)))) return;
+  recordCodexSubagentViolation(registry, parentPath, `item:${key}`, method, undefined, undefined, undefined, activityAt);
+}
+
+function transcriptActivityAt(registry: AgentRegistry, parentPath: string, id: string): string | null {
+  let stat: fs.Stats;
+  try { stat = fs.statSync(parentPath); } catch { return null; }
+  const tail = tailRecordsResult(parentPath, stat.size, stat.mtimeMs);
+  if (!tail.complete) return null;
+  const cwd = registry.conversationForPath(parentPath)?.generations.find((generation) => generation.path === parentPath)?.launchProfile.cwd;
+  const namespaces = configuredToolNamespaces({ path: parentPath, cwd });
+  for (const row of tail.records) {
+    const payload = row.payload as Record<string, unknown> | undefined;
+    if (!payload || (payload.call_id ?? payload.id) !== id || typeof row.timestamp !== "string") continue;
+    const native = row.type === "response_item" && payload.type === "function_call"
+      ? nativeCodexFunctionCallMethod(payload, namespaces)
+      : row.type === "event_msg" ? nativeCodexActivityMethod(payload) : null;
+    if (native && Number.isFinite(Date.parse(row.timestamp))) return row.timestamp;
+  }
+  return null;
 }
 
 /** Covers terminal CLI and headless exec as well as a child whose live parent

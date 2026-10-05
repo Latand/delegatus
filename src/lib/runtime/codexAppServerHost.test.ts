@@ -1,7 +1,7 @@
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +28,8 @@ import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
+import { observeCodexSubagentEvent } from "./codexSubagentDetection";
+import { lifecycleEventId, queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
 import type { NativeQueuedSubmission } from "./nativeCodexQueue";
@@ -188,6 +190,66 @@ test("native Guardian review notifications enter the durable ledger without acti
     ]);
     expect(JSON.stringify(items)).not.toContain("PRIVATE GUARDIAN ACTION");
   } finally { await host.release(); }
+});
+
+test("adopted native history respects pre-admission and allowed times while denied activity alerts", async () => {
+  const threadId = randomUUID();
+  const artifactPath = path.join(metadataState, `rollout-${threadId}.jsonl`);
+  const registry = new AgentRegistry(path.join(metadataState, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  function admit(allowSubagents: boolean) {
+    const launchProfile = emptyLaunchProfile({ cwd: metadataState, title: "Exercise native history admission", allowSubagents });
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: metadataState, origin: { kind: "operator" }, launchProfile });
+    if (begun.kind !== "created") throw new Error("expected launch receipt");
+    const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: threadId },
+      artifactPath, cwd: metadataState, accountId: null, launchProfile, status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    if (settled.kind !== "settled") throw new Error("expected settled launch");
+    return settled.conversation;
+  }
+  admit(true);
+  const allowedAt = new Date().toISOString();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const conversation = admit(false);
+  const deniedAt = new Date().toISOString();
+  const history = [
+    { id: "pre-admission", at: "2000-01-01T00:00:00.000Z" },
+    { id: "allowed-history", at: allowedAt },
+    { id: "denied-history", at: deniedAt },
+  ];
+  fs.writeFileSync(artifactPath, history.map(({ id, at }) => JSON.stringify({ timestamp: at, type: "response_item",
+    payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: id, arguments: "{}" } })).join("\n") + "\n");
+  const native = (id: string) => ({ type: "collabAgentToolCall", id, tool: "spawnAgent", prompt: "PRIVATE NATIVE CONTENT" });
+  const store = new FileRuntimeEventStore(path.join(metadataState, "events"));
+  // Older durable ledgers had no activity timestamp.
+  store.append(threadId, { kind: "item", turnId: "history-turn", item: native("pre-admission"), phase: "completed", seq: 1 });
+  // Timestamped durable items must retain their original permission interval.
+  store.append(threadId, { kind: "item", turnId: "history-turn", item: native("allowed-ledger"), phase: "completed", seq: 2,
+    activityAt: allowedAt });
+  const server = new FakeAppServer(threadId, threadId, false, [{ id: "history-turn", status: "completed",
+    items: [...history.map(({ id }) => native(id)), native("unknown-history")] }], { type: "idle" });
+  const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, allowSubagents: false,
+    eventStore: store, spawnProcess: fakeSpawn(server) });
+  const reader = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    for (let remaining = store.load(threadId).length; remaining > 0; remaining--) {
+      const next = await reader.next();
+      if (!next.done) observeCodexSubagentEvent(registry, artifactPath, next.value);
+    }
+    const replayed = queryLifecycleEvents({ conversationId: conversation.id }).events;
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.id).toBe(lifecycleEventId(`codex-subagent-policy:${conversation.id}:item:denied-history`));
+    server.notify("item/completed", { threadId, turnId: "current-turn", item: native("current-denied") });
+    const current = await reader.next();
+    expect(current.done).toBeFalse();
+    if (!current.done) {
+      observeCodexSubagentEvent(registry, artifactPath, current.value);
+      observeCodexSubagentEvent(registry, artifactPath, current.value);
+      expect(current.value).toMatchObject({ kind: "item", activityAt: expect.any(String), item: { id: "current-denied", type: "collabAgentToolCall" } });
+    }
+    const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+    expect(events).toHaveLength(2);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  } finally { await reader.return?.(); await host.release(); }
 });
 
 class FailingEventStore implements RuntimeEventStore {

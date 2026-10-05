@@ -26,6 +26,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -3116,6 +3117,9 @@ export class CodexAppServerHost implements EngineHost {
 
   private emit(event: UnsequencedEvent): void {
     if (this.ledgerFailed) return;
+    if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
+      event = { ...event, activityAt: new Date().toISOString() };
+    }
     /* Recorded here rather than at each call site, so every path that ends a
        turn — a terminal notification, a resume that finds it already over, an
        error that terminalizes it — leaves the same evidence for the voice
@@ -3172,7 +3176,9 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId);
+    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+      event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
+        ? { ...event, activityAt: null } : event);
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
@@ -3324,7 +3330,8 @@ export class CodexAppServerHost implements EngineHost {
           completedItems.set(key, recorded - 1);
           continue;
         }
-        this.emit({ kind: "item", turnId, item, phase: "completed" });
+        this.emit({ kind: "item", turnId, item, phase: "completed",
+          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) });
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
