@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -12,7 +12,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { RuntimeHostClient } from "./client";
 import { FakeEngineHost, createFakeDeliveryLedger, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
-import { handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
+import { admissionInFlight, handleRuntimeAdmissionQuery, handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 
@@ -371,4 +371,35 @@ test("an injection is refused rather than held when the runtime host is unreacha
   expect(link.ledger.injections).toEqual([]);
   expect(link.ledger.writes).toEqual([]);
   link.journal.close();
+});
+
+
+test("a lost injection response is resolved through its original admission key without reinjecting", async () => {
+  const link = chain("lookup");
+  const key = "inject-lost-response";
+  const lookup = () => handleRuntimeAdmissionQuery(new NextRequest(
+    `http://127.0.0.1/api/runtime/send?conversationId=${link.conversationId}&clientMessageId=${key}`,
+    { headers: { host: "127.0.0.1" } },
+  ), {
+    enabled: () => true,
+    registry: () => link.registry,
+    sendInFlight: admissionInFlight,
+    query: async operationId => NextResponse.json(link.journal.operationResult(operationId)),
+  });
+  expect(await (await lookup()).json()).toMatchObject({ outcome: "not-executed" });
+  let duringAdmission: unknown;
+  const enqueue = link.dependencies.enqueue!;
+  // The production route's claim must cover injection admission as well as send.
+  await handleRuntimeCommand(request({ conversationId: link.conversationId, text: "read these notes", idempotencyKey: key }), "inject", {
+    ...link.dependencies,
+    enqueue: async (...args) => {
+      duringAdmission = await (await lookup()).json();
+      return enqueue(...args);
+    },
+  });
+  expect(duringAdmission).toMatchObject({ outcome: "unknown" });
+  expect(await (await lookup()).json()).toMatchObject({ outcome: "admitted", receipt: { kind: "inject", idempotencyKey: key } });
+  await link.drain();
+  expect(await (await lookup()).json()).toMatchObject({ outcome: "admitted", receipt: { kind: "inject", status: "delivered" } });
+  expect(link.ledger.injections).toHaveLength(1);
 });
