@@ -614,20 +614,22 @@ export async function executeSpawnRequest(
       agentRole: role.value?.role ?? null,
     });
     const implicitRootTelegram = requestedMcpServers === null && sessionOrigin === "operator-root";
-    if (requestedTelegram && engine === "copilot") {
-      return refuse("telegram MCP is unsupported by the Copilot engine");
-    }
-    /* The grant follows whether Telegram is set up on this installation, never
-       whether its connection is up this minute: a connection that is down is
-       repaired by the launch, or the host starts without the tool and gets it
-       back on a later start. Where Telegram is not set up the request is left
-       out and the launch goes on: nothing is granted that could never work. A
-       replayed attempt keeps what its receipt recorded. */
+    /* Whether Telegram is set up on this installation decides the grant. A
+       connection that is down this minute changes nothing here: the launch
+       repairs it, or the host starts without the tool and gets it back on a
+       later start. Where Telegram is not set up the request is left out and
+       the launch goes on. That is settled before the checks on who may hold
+       the grant, because nothing is granted there and nothing is left to
+       refuse. A replayed attempt keeps what its receipt recorded. */
     const telegramAvailable = (requestedTelegram || implicitRootTelegram) && telegramSetUp();
     const telegramLeftOut = requestedTelegram && (existingAttempt
       ? !existingAttempt.launchProfile.mcpServers.includes("telegram")
       : !telegramAvailable);
-    if (requestedTelegram) {
+    const telegramWanted = requestedTelegram && !telegramLeftOut;
+    if (telegramWanted && engine === "copilot") {
+      return refuse("telegram MCP is unsupported by the Copilot engine");
+    }
+    if (telegramWanted) {
       if (!existingAttempt && !seatLaunch && !seatParent && sessionOriginFor({
         origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
         parentConversationId, agentRole: role.value?.role ?? null,
@@ -635,7 +637,7 @@ export async function executeSpawnRequest(
     }
     const requestedSeatGrant = requestedTelegram && seatParent;
     const telegramSeatGrant = requestedSeatGrant && !telegramLeftOut;
-    if (requestedSeatGrant && authenticatedCaller?.kind === "agent"
+    if (telegramSeatGrant && authenticatedCaller?.kind === "agent"
       && authenticatedCaller.conversationId !== parentConversationId) {
       return refuse("telegram MCP requires the orchestrator seat's own spawn capability");
     }
@@ -669,7 +671,7 @@ export async function executeSpawnRequest(
        keep the Viewer baseline. This is the request as it was asked, which is
        what an attempt is matched by when it is replayed; the launch itself
        takes {@link grantedServers}. */
-    const requestedServers = existingAttempt && requestedTelegram
+    const requestedServers = requestedTelegram && (existingAttempt || (telegramLeftOut && !reportClassGrant))
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers

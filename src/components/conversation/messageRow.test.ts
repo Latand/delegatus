@@ -80,7 +80,15 @@ test("a Telegram refusal reads as one sentence with its action, whatever wrapper
       });
     }
   }
-  for (const key of ["outbox.failure.telegramOff", "outbox.failure.telegramWithdrawn"] as const) {
+  for (const lang of ["en", "uk"] as const) {
+    expect(messageRowModel(t(lang), entry({ state: "failed",
+      error: "structured host recovery failed: telegram MCP account definition conflicts with operator connector" }), { nowMs: AT }).failure).toMatchObject({
+      reason: translate(lang, "outbox.failure.telegramNameTaken"),
+      detail: null,
+      selfExplaining: true,
+    });
+  }
+  for (const key of ["outbox.failure.telegramOff", "outbox.failure.telegramWithdrawn", "outbox.failure.telegramNameTaken"] as const) {
     for (const lang of ["en", "uk"] as const) expect(translate(lang, key)).not.toMatch(/MCP|connector|send_message|_/i);
   }
 });

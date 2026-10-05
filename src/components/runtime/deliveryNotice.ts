@@ -40,6 +40,7 @@ const CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
 const SENTENCE_CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey, MessageKey]> = [
   [/\btelegram\b[\s\S]{0,120}\b(revoked|withdrawn|no longer active)\b/i, "receipt.cause.telegramWithdrawn", "receipt.remedy.telegramWithdrawn"],
   [/\btelegram\b[\s\S]{0,120}\bnot connected\b/i, "receipt.cause.telegramOff", "receipt.remedy.telegramOff"],
+  [/\btelegram\b[\s\S]{0,120}\bconflicts\b/i, "receipt.cause.telegramNameTaken", "receipt.remedy.telegramNameTaken"],
 ];
 
 function sentenceCause(reason: string | null | undefined): { cause: MessageKey; remedy: MessageKey } | null {

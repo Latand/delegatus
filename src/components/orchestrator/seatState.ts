@@ -385,6 +385,7 @@ export function rotationBannerLines(t: TFunction, locale: Locale, rotation: Rota
 export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction | null | undefined): string | null {
   if (action === "sign_in") return t("orchPanel.telegramSignIn");
   if (action === "check") return t("orchPanel.telegramCheck");
+  if (action === "restart") return t("orchPanel.telegramRestart");
   return null;
 }
 

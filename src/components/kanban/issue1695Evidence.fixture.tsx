@@ -285,7 +285,7 @@ const SEAT_HEAD = SCENARIO === "seat-head";
    writes for an agent. */
 const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") === "gone";
 /* The seat holds the Telegram tool and Telegram waits on the operator: the
-   status read names the action, `sign_in` or `check`. */
+   status read names the action: `sign_in`, `check` or `restart`. */
 const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a

@@ -18,6 +18,8 @@ import { defaultStartHost, spawnStructuredConversation, type StructuredSpawnInpu
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
+import { stopTelegramConnector } from "@/lib/telegram/connector";
+import { asRelease, endConnectorProcess, releaseTakeover, startConnectorFromRelease } from "@/lib/telegram/fixtures/releaseConnector";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { defaultModelFor } from "@/lib/agent/models";
@@ -524,6 +526,75 @@ test("a request left out where Telegram is not set up replays its receipt after 
   expect(replay.receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
 }));
 
+/** An ordinary agent: no seat, no grant, a parent like any other. */
+function seedWorker(): string {
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, role: "builder",
+    origin: { kind: "operator" }, launchProfile: { mcpServers: ["viewer"] } });
+  if (begun.kind !== "created") throw new Error("worker reservation failed");
+  const sid = crypto.randomUUID();
+  const artifactPath = path.join(sandbox, `${sid}.jsonl`);
+  fs.writeFileSync(artifactPath, "{}\n");
+  const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "claude", sessionId: sid },
+    artifactPath, cwd, accountId: "worker-account", status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  if (settled.kind !== "settled") throw new Error("worker settlement failed");
+  return settled.conversation.id;
+}
+
+type TelegramAsker = { name: string; engine: "claude" | "codex" | "copilot"; parent: () => string; refusal: string };
+const UNGRANTED_ASKERS: TelegramAsker[] = [
+  { name: "a child of a seat that holds no grant", engine: "claude", parent: () => seedSeat(false),
+    refusal: "telegram MCP requires an operator-owned orchestrator seat parent" },
+  { name: "an ordinary delegated agent", engine: "claude", parent: () => seedWorker(),
+    refusal: "telegram MCP requires an operator-owned orchestrator seat parent" },
+  { name: "a Copilot agent", engine: "copilot", parent: () => seedSeat(false),
+    refusal: "telegram MCP is unsupported by the Copilot engine" },
+];
+
+for (const asker of UNGRANTED_ASKERS) test(`where Telegram is not set up, ${asker.name} that asks for it is admitted without it`,
+  async () => withRegistryMode("sqlite", async () => {
+    notSetUp();
+    /* Admission only asks that a Copilot CLI is named; none is started here. */
+    process.env.LLV_COPILOT_BIN = codexBinary;
+    const parent = asker.parent();
+    const attempt = `not_set_up_${crypto.randomUUID()}`;
+    const first = await launch(asker.engine as "claude", parent, ["telegram"], {}, attempt);
+    expect(first.response.status).toBe(202);
+    expect(first.receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+    expect(first.receipt?.telegramSeatGrant).not.toBe(true);
+    /* The same request sent again after the operator connects Telegram is the
+       same launch: its receipt, and still nothing granted. */
+    connected();
+    const replay = await launch(asker.engine as "claude", parent, ["telegram"], {}, attempt);
+    expect(replay.response.status).not.toBe(400);
+    expect(replay.response.status).not.toBe(409);
+    expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
+    expect(replay.receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+    /* Where Telegram is set up, a new request from the same caller is refused
+       as before. */
+    const refused = await launch(asker.engine as "claude", parent, ["telegram"]);
+    expect(refused.response.status).toBe(400);
+    expect(await refused.response.json()).toMatchObject({ error: asker.refusal });
+    expect(refused.receipt).toBeNull();
+    delete process.env.LLV_COPILOT_BIN;
+  }));
+
+test("where Telegram is not set up, the child of an ungranted seat reaches its host with no token and no server", async () => {
+  notSetUp();
+  const seatId = seedSeat(false);
+  const repair = repairPort(true);
+  const probe = deferredLaunch("claude", null);
+  const { response, receipt } = await launch("claude", seatId, ["telegram"], probe.overrides);
+  expect(response.status).toBe(202);
+  expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+  await Promise.all(probe.work.map((work) => work()));
+  expect(probe.evidence.reachedEngine).toBe(true);
+  expect(probe.evidence.tokenPresent).toBe(false);
+  expect(probe.evidence.telegramDefinition).toBeFalsy();
+  expect(repair.checks).toBe(0);
+  connected();
+});
+
 test("an ungranted seat cannot grant Telegram to a child", async () => {
   connected();
   const seatId = seedSeat(false);
@@ -946,6 +1017,38 @@ for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine
     expect(repair.checks).toBe(1);
     expect(again.evidence.tokenMatches).toBe(true);
   }));
+
+for (const engine of ["claude", "codex"] as const) test(`after a self-update a ${engine} relaunch takes over the previous release's connector and starts with the tool`,
+  async () => withRegistryMode("sqlite", async () => {
+    const target = await grantedConversationWithoutHost(engine);
+    /* The observed state: the connector started by the previous release runs
+       on, the new release kept refusing it, and every check ended in this
+       error. */
+    const token = signedInWith({ status: "error", errorCode: "bridge_failed" });
+    const earlier = startConnectorFromRelease(path.join(sandbox, `release-a-${engine}`));
+    try {
+      await asRelease(path.join(sandbox, `release-b-${engine}`), async () => {
+        const { service, calls } = releaseTakeover(token);
+        /* The production health check, over the production supervisor. */
+        setTelegramLaunchRepairForTests({ healthCheck: async () => { await service.checkHealth(); }, waitMs: 5_000 });
+        const probe = deferredLaunch(engine, token, undefined, undefined, true);
+        const { refusals } = await sendToGoneHost(engine, target, probe);
+        expect(refusals.join(" | ")).not.toContain("elegram");
+        expect(probe.evidence.reachedEngine).toBe(true);
+        expect(probe.evidence.tokenMatches).toBe(true);
+        expect(probe.evidence.telegramDefinition).toBeTruthy();
+        expect(probe.evidence.runNotice).toBeNull();
+        /* One connector: the one that was already running. */
+        expect(calls.spawns).toBe(0);
+        expect(() => process.kill(earlier.pid, 0)).not.toThrow();
+        expect(telegramOperatorAction()).toBeNull();
+        await stopTelegramConnector();
+      });
+    } finally {
+      endConnectorProcess(earlier.pid);
+      connected();
+    }
+  }), 30_000);
 
 for (const engine of ["claude", "codex"] as const) test(`a ${engine} relaunch where Telegram is not set up leaves the server out and asks nobody`,
   async () => withRegistryMode("sqlite", async () => {

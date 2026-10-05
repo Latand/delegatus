@@ -84,7 +84,7 @@ export interface OrchestratorIncumbent {
   telegram?: IncumbentTelegramAction | null;
 }
 
-export type IncumbentTelegramAction = "sign_in" | "check";
+export type IncumbentTelegramAction = "sign_in" | "check" | "restart";
 
 const str = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -112,7 +112,7 @@ export function parseIncumbent(body: unknown): OrchestratorIncumbent | null {
     context: contextOf(raw.context),
     transcriptFacts: transcriptOf(raw.transcriptFacts),
     rotation: rotationOf(raw.rotation),
-    telegram: raw.telegram === "sign_in" || raw.telegram === "check" ? raw.telegram : null,
+    telegram: raw.telegram === "sign_in" || raw.telegram === "check" || raw.telegram === "restart" ? raw.telegram : null,
   };
 }
 

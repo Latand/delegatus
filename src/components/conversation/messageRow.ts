@@ -148,6 +148,7 @@ const FAILURE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
 const SENTENCE_CAUSE_REASONS: Partial<Record<MessageKey, MessageKey>> = {
   "receipt.cause.telegramOff": "outbox.failure.telegramOff",
   "receipt.cause.telegramWithdrawn": "outbox.failure.telegramWithdrawn",
+  "receipt.cause.telegramNameTaken": "outbox.failure.telegramNameTaken",
 };
 
 /** The row's reason for a failure whose sentence names a cause that needs no

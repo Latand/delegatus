@@ -137,6 +137,14 @@ test("a Telegram refusal is one cause whatever wrapper carried it, said once in 
       cause: translate(lang, "receipt.cause.telegramWithdrawn"),
       detail: { sentence: translate(lang, "receipt.remedy.telegramWithdrawn"), remediation: null },
     });
+    /* A Codex account whose own settings define a server under the same name:
+       the launch is refused, and the reason is said in the operator's words. */
+    const taken = describeReceiptFailure(say, "structured host recovery failed: telegram MCP account definition conflicts with operator connector");
+    expect(taken).toMatchObject({
+      cause: translate(lang, "receipt.cause.telegramNameTaken"),
+      detail: { sentence: translate(lang, "receipt.remedy.telegramNameTaken"), remediation: null },
+    });
+    expect(`${taken.cause} ${taken.detail?.sentence}`).not.toMatch(/MCP|connector|_/i);
     /* The action is said once, in the detail: the row and the chip carry none. */
     expect(`${translate(lang, "composer.deliveryFailed")} — ${cause}`).not.toMatch(/again|ще раз|знову/i);
     expect(`${cause} ${remedy}`).not.toMatch(/MCP|connector|_/i);

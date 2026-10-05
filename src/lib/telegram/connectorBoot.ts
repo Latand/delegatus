@@ -1,3 +1,4 @@
+import { runSharedTelegramHealthCheck } from "./launchReadiness";
 import { readTelegramConnection, readTelegramSession } from "./sessionStore";
 
 /**
@@ -64,10 +65,9 @@ export const productionTelegramConnectorBootPorts: TelegramConnectorBootPorts = 
       return false;
     }
   },
-  provision: async () => {
-    const { telegramService } = await import("./service");
-    await telegramService().checkHealth();
-  },
+  /* The check a launch joins: a host raised while the Viewer starts waits for
+     this one to confirm the record before it reads it. */
+  provision: () => runSharedTelegramHealthCheck(),
   connected: () => {
     try {
       return readTelegramConnection().status === "connected";

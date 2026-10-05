@@ -760,8 +760,10 @@ test("the seat's Telegram line says what happened and what to do, once, in the i
     const check = telegramActionLine(t, "check")!;
     expect(signIn).toBe(translate(lang, "orchPanel.telegramSignIn"));
     expect(check).toBe(translate(lang, "orchPanel.telegramCheck"));
-    expect(signIn).not.toBe(check);
-    for (const line of [signIn, check]) {
+    const restart = telegramActionLine(t, "restart")!;
+    expect(restart).toBe(translate(lang, "orchPanel.telegramRestart"));
+    expect(new Set([signIn, check, restart]).size).toBe(3);
+    for (const line of [signIn, check, restart]) {
       expect(line.split("\n")).toHaveLength(1);
       expect(line).not.toMatch(/MCP|connector|launch|grant|mcp__|_to_/i);
     }
@@ -770,4 +772,5 @@ test("the seat's Telegram line says what happened and what to do, once, in the i
   }
   expect(translate("uk", "orchPanel.telegramSignIn").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
   expect(translate("uk", "orchPanel.telegramCheck").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
+  expect(translate("uk", "orchPanel.telegramRestart").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
 });

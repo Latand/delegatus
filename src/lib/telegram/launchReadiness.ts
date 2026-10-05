@@ -1,6 +1,6 @@
 import { testEnvironment } from "@/lib/stateOwnership";
 
-import { telegramConnectorRecordedGone } from "./connector";
+import { telegramConnectorRecordedGone, telegramConnectorUnverified } from "./connector";
 import { readTelegramConnection, readTelegramSession, type StoredTelegramConnection, type StoredTelegramSession } from "./sessionStore";
 
 /**
@@ -17,9 +17,11 @@ import { readTelegramConnection, readTelegramSession, type StoredTelegramConnect
  *    was never connected here, or the operator signed out. The server is left
  *    out and nobody is asked for anything;
  *  - `recoverable`: a credential is stored and the ordinary health check can
- *    bring the connection back with no login: the connector process died with
- *    the Viewer that started it, a health check failed once, a login was
- *    interrupted between saving the credential and publishing the record;
+ *    bring the connection back with no login: the connector process ended with
+ *    the machine or the container that ran it, a health check failed once, a
+ *    connector started by the previous release was refused by this one, a
+ *    login was interrupted between saving the credential and publishing the
+ *    record;
  *  - `needs_operator`: only the operator can fix it, and `action` says how.
  *
  * Nothing here reads the session string or logs a value.
@@ -28,7 +30,10 @@ export type TelegramOperatorAction =
   /** Telegram ended the session or the credential is gone: sign in again. */
   | "sign_in"
   /** The connection is in an error the Telegram panel explains. */
-  | "check";
+  | "check"
+  /** A process holds the connection and cannot be confirmed as the packaged
+      connector, so nothing here may stop it: it ends with a restart. */
+  | "restart";
 
 export type TelegramLaunchState =
   | { kind: "ready"; token: string }
@@ -54,6 +59,15 @@ export function readTelegramLaunchState(): TelegramLaunchState {
   }
   const current = connection.credentialRef === session.credentialRef;
   if (current && connection.status === "expired") return { kind: "needs_operator", action: "sign_in" };
+  /* A health check cannot replace a process it may not stop, and reaches the
+     same error every time. A launch does not wait for it. */
+  let unverified: boolean;
+  try {
+    unverified = telegramConnectorUnverified();
+  } catch {
+    unverified = false;
+  }
+  if (unverified) return { kind: "needs_operator", action: "restart" };
   let processGone: boolean;
   try {
     processGone = telegramConnectorRecordedGone(session);
@@ -77,19 +91,15 @@ export function telegramSetUp(): boolean {
 
 /**
  * What the operator has to do before the tool works again, or null when there
- * is nothing to ask of them. A stored credential behind an error record means a
- * health check already failed, so it is said now rather than after the next
- * launch has tried the same repair.
+ * is nothing to ask of them. A connection the health check can restore asks
+ * for nothing until a check in this process has ended without restoring it:
+ * before that the next start repairs it by itself.
  */
 export function telegramOperatorAction(): TelegramOperatorAction | null {
   const state = readTelegramLaunchState();
   if (state.kind === "needs_operator") return state.action;
   if (state.kind !== "recoverable") return null;
-  try {
-    return readTelegramConnection().status === "error" ? "check" : null;
-  } catch {
-    return "check";
-  }
+  return repairHolder().failedAt !== null ? "check" : null;
 }
 
 /** How long a launch waits for the repair. A resumed host has sixty seconds to
@@ -123,52 +133,123 @@ const productionRepairPorts: TelegramLaunchRepairPorts = {
   cooldownMs: REPAIR_COOLDOWN_MS,
 };
 
-/* One repair per process, across route bundles. */
+/* One repair per process, across route bundles. `running` holds every health
+   check under way, whoever started it: a launch, the start of the Viewer, the
+   Telegram panel, a report run. */
 const REPAIR_KEY = "__llvTelegramLaunchRepair" as const;
-type RepairHolder = { ports: TelegramLaunchRepairPorts; inFlight: Promise<void> | null; failedAt: number | null };
+type RepairHolder = {
+  ports: TelegramLaunchRepairPorts;
+  running: Set<Promise<void>>;
+  shared: Promise<void> | null;
+  failedAt: number | null;
+};
 
 function repairHolder(): RepairHolder {
   const holder = globalThis as typeof globalThis & { [REPAIR_KEY]?: RepairHolder };
-  holder[REPAIR_KEY] ??= { ports: productionRepairPorts, inFlight: null, failedAt: null };
+  holder[REPAIR_KEY] ??= { ports: productionRepairPorts, running: new Set(), shared: null, failedAt: null };
   return holder[REPAIR_KEY];
 }
 
 export function setTelegramLaunchRepairForTests(ports: Partial<TelegramLaunchRepairPorts> | null): void {
   const holder = repairHolder();
   holder.ports = ports ? { ...productionRepairPorts, ...ports } : productionRepairPorts;
-  holder.inFlight = null;
+  holder.running = new Set();
+  holder.shared = null;
   holder.failedAt = null;
+}
+
+/**
+ * Registers a health check as one every launch waits for.
+ *
+ * A check replaces a dead connector in steps: it removes the stale process
+ * record, records the new process, and only then verifies it. Between those
+ * steps the record still reads `connected` over a process that is running and
+ * unverified, so `ready` is trusted only while no check is under way. When the
+ * check ends, the state it left decides whether the next launches try again.
+ */
+export function trackTelegramHealthCheck<T>(check: Promise<T>): Promise<T> {
+  const holder = repairHolder();
+  const settled: Promise<void> = check.then(() => undefined, () => undefined).then(() => {
+    holder.running.delete(settled);
+    let restored = false;
+    try { restored = readTelegramLaunchState().kind === "ready"; } catch { /* unreadable reads as unrestored */ }
+    holder.failedAt = restored ? null : holder.ports.now();
+  });
+  holder.running.add(settled);
+  return check;
+}
+
+/**
+ * The one health check a launch and the start of the Viewer share: a caller
+ * that arrives while it runs joins it, so one check runs at a time.
+ */
+export function runSharedTelegramHealthCheck(): Promise<void> {
+  const holder = repairHolder();
+  if (!holder.shared) {
+    const shared: Promise<void> = trackTelegramHealthCheck(
+      (async () => { await holder.ports.healthCheck(); })(),
+    ).finally(() => { if (holder.shared === shared) holder.shared = null; });
+    holder.shared = shared;
+  }
+  return holder.shared;
+}
+
+/** Waits until no health check is under way, or until the launch's wait ends. */
+async function healthChecksSettled(holder: RepairHolder, expired: Promise<"expired">): Promise<boolean> {
+  while (holder.running.size > 0) {
+    const outcome = await Promise.race([
+      Promise.all([...holder.running]).then(() => "settled" as const),
+      expired,
+    ]);
+    if (outcome === "expired") return false;
+  }
+  return true;
+}
+
+/** What a launch acts on while a check is still under way: a record that
+    reads `ready` is unconfirmed, so the launch goes on without the tool. */
+function unconfirmed(state: TelegramLaunchState): TelegramLaunchState {
+  return state.kind === "ready" ? { kind: "recoverable" } : state;
 }
 
 /**
  * Brings a recoverable connection back, with no login, and returns the state a
  * launch should act on.
  *
- * Bounded: the caller waits at most `waitMs`, and a health check that outlives
- * the wait keeps running for the next caller. Idempotent: concurrent launches
- * share one check, a state that is not recoverable is returned untouched, and
- * after a repair that failed the launches of the next `cooldownMs` go on
- * without the tool instead of each waiting out the same failure.
+ * Bounded: the caller waits at most `waitMs` in total, and a health check that
+ * outlives the wait keeps running for the next caller. Idempotent: concurrent
+ * launches share one check with each other and with the start of the Viewer,
+ * a state that is not recoverable is returned untouched, and after a repair
+ * that failed the launches of the next `cooldownMs` go on without the tool,
+ * so no launch waits out the same failure again.
  */
 export async function repairTelegramConnection(): Promise<TelegramLaunchState> {
-  const before = readTelegramLaunchState();
-  if (before.kind !== "recoverable") return before;
   const holder = repairHolder();
   const { ports } = holder;
-  if (holder.failedAt !== null && ports.now() - holder.failedAt < ports.cooldownMs) return before;
-  holder.inFlight ??= ports.healthCheck()
-    .catch(() => undefined)
-    .finally(() => { holder.inFlight = null; });
+  const coolingDown = () => holder.failedAt !== null && ports.now() - holder.failedAt < ports.cooldownMs;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  await Promise.race([
-    holder.inFlight,
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, ports.waitMs);
-      timer.unref?.();
-    }),
-  ]);
-  if (timer) clearTimeout(timer);
-  const after = readTelegramLaunchState();
-  holder.failedAt = after.kind === "ready" ? null : ports.now();
-  return after;
+  const expired = new Promise<"expired">((resolve) => {
+    timer = setTimeout(() => resolve("expired"), ports.waitMs);
+    timer.unref?.();
+  });
+  try {
+    if (holder.running.size > 0) {
+      /* An earlier launch already waited this check out. */
+      if (coolingDown()) return unconfirmed(readTelegramLaunchState());
+      if (!await healthChecksSettled(holder, expired)) {
+        holder.failedAt = ports.now();
+        return unconfirmed(readTelegramLaunchState());
+      }
+    }
+    const before = readTelegramLaunchState();
+    if (before.kind !== "recoverable" || coolingDown()) return before;
+    void runSharedTelegramHealthCheck().catch(() => undefined);
+    if (!await healthChecksSettled(holder, expired)) {
+      holder.failedAt = ports.now();
+      return unconfirmed(readTelegramLaunchState());
+    }
+    return readTelegramLaunchState();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

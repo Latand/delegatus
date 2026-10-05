@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
@@ -253,10 +254,24 @@ function readConnectorRecord(): ConnectorRecord | null {
   }
 }
 
+/**
+ * Whether the recorded process is the packaged connector its record describes.
+ *
+ * The record is an owner-only file written by the Viewer that spawned the
+ * process, together with the kernel identity of that process. A process that
+ * still carries that identity and still runs the recorded interpreter on the
+ * recorded entry is that connector, whichever release started it. The entry
+ * lives inside a release directory, a self-update moves the release, and the
+ * detached connector outlives both. The release that owns traffic has to
+ * adopt or stop that process, so the entry is compared by its file name, the
+ * same in every release; the interpreter lives in the state directory and is
+ * compared whole.
+ */
 function connectorArgvMatches(record: ConnectorRecord): boolean {
   const argv = procBackend.readArgv(record.pid);
   return argv[0] === record.command && argv[1] === record.entrypoint
-    && record.command === telegramVenvPython() && record.entrypoint === telegramMcpServerPath();
+    && record.command === telegramVenvPython()
+    && path.basename(record.entrypoint) === path.basename(telegramMcpServerPath());
 }
 
 /**
@@ -303,13 +318,25 @@ export function telegramConnectorOwnsSession(session: ConnectorBinding): boolean
 /**
  * Whether a connector was recorded for this installation and that process no
  * longer serves this credential generation: the pid is gone or recycled, or
- * the record belongs to an earlier credential. A restart of the Viewer leaves
- * exactly this, because the connector is its child and the record is a file.
+ * the record belongs to an earlier credential. A restart of the machine or of
+ * the Viewer's container leaves exactly this, because the process ends there
+ * and the record is a file.
  * No record at all answers false: an orderly stop removes the record together
  * with the status that claimed a connection.
  */
 export function telegramConnectorRecordedGone(binding: ConnectorBinding): boolean {
   return readConnectorRecord() !== null && !ownsRecordedConnector(binding);
+}
+
+/**
+ * Whether the recorded process is alive and cannot be shown to be the packaged
+ * connector: its identity still matches the record and its command line does
+ * not. Nothing here may signal such a process, so every health check stops at
+ * it and reaches the same error until the process itself has ended.
+ */
+export function telegramConnectorUnverified(): boolean {
+  const record = readConnectorRecord();
+  return Boolean(record && targetIsAlive(record) && !connectorArgvMatches(record));
 }
 
 function terminateChildImmediately(child: ConnectorChild): void {
@@ -472,7 +499,8 @@ async function verifiedProbe(
  * once its read-only surface is verified. A process already listening on the
  * shared port (a previous Viewer generation's connector, still recorded in
  * the pid file) is adopted, not duplicated — that keeps the process count at
- * one across Viewer restarts. Launch metadata controls which feed coverage the
+ * one across Viewer restarts and across a self-update, where the listener was
+ * started from the previous release's directory. Launch metadata controls which feed coverage the
  * report may trust; it never turns a healthy current-credential process into
  * a restart candidate during a fresh health check.
  */

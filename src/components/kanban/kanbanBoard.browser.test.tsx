@@ -7477,7 +7477,7 @@ describe("the seat says in one line what Telegram needs from the operator", () =
    *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "what Telegram needs"
    *
-   * For both actions, at 390 and 1440 px in en and uk: the line is exactly the
+   * For each action, at 390 and 1440 px in en and uk: the line is exactly the
    * one worded for that action, it is drawn once, whole and inside the seat,
    * and it names no internal tool. At 390 px the phone shell replaces the
    * board, so the line is read from the seat's sheet.
@@ -7487,7 +7487,7 @@ describe("the seat says in one line what Telegram needs from the operator", () =
   const OUT = path.resolve(".artifacts/seat-telegram-line");
   const EVIDENCE = path.resolve("evidence/seat-telegram-line");
 
-  browserTest("for both actions at 390 and 1440 px in en and uk", async () => {
+  browserTest("for each action at 390 and 1440 px in en and uk", async () => {
     const pngDir = process.env.SEAT_TELEGRAM_PNG_DIR ?? null;
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -7497,12 +7497,12 @@ describe("the seat says in one line what Telegram needs from the operator", () =
     const frames: Record<string, unknown> = {};
     const failures: string[] = [];
     try {
-      for (const action of ["sign_in", "check"] as const) {
+      for (const action of ["sign_in", "check", "restart"] as const) {
         for (const width of [390, 1440] as const) {
           for (const lang of ["en", "uk"] as const) {
             const phone = width < 640;
             const label = `${action}-${width}-${lang}`;
-            const expected = translate(lang, action === "sign_in" ? "orchPanel.telegramSignIn" : "orchPanel.telegramCheck");
+            const expected = translate(lang, action === "sign_in" ? "orchPanel.telegramSignIn" : action === "check" ? "orchPanel.telegramCheck" : "orchPanel.telegramRestart");
             const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone&telegram=${action}`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
             try {
               const seat = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]";

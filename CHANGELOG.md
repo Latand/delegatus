@@ -33,7 +33,11 @@ guarantees for the 1.x series.
   seat shows one line with what to do. The tool returns on the next start after
   you reconnect. Access you withdrew still refuses the start. After a restart
   the connection now comes back on its own even with daily reports switched
-  off. The rotation banner and the "not delivered" reasons on this path read in
+  off. After an update, the new version takes over the Telegram process the
+  previous version left running; it used to refuse that process on every check,
+  so Telegram stayed in an error until the machine was restarted and signing out
+  failed too. A start that arrives while the connection is being checked waits
+  for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
   the interface language, one line per cause, each with what to do.
 
 ## [1.9.0] — 2026-10-01

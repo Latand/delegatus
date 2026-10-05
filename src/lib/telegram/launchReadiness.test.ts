@@ -8,6 +8,10 @@ const previousState = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 
 const { readTelegramLaunchState, repairTelegramConnection, setTelegramLaunchRepairForTests, telegramOperatorAction, telegramSetUp } = await import("./launchReadiness");
+const { resolveTelegramLaunchGrant } = await import("@/lib/runtime/telegramConnectorEnv");
+const { productionTelegramConnectorBootPorts, provisionTelegramConnectorAtStartup } = await import("./connectorBoot");
+const { procBackend } = await import("@/lib/proc");
+const { TELEGRAM_CONNECTOR_TOKEN_ENV } = await import("./sessionStore");
 const { clearTelegramConnection, deleteTelegramSession, ensureTelegramStateDir, saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath, writeTelegramConnection } = await import("./sessionStore");
 type StoredTelegramConnection = import("./sessionStore").StoredTelegramConnection;
 
@@ -91,11 +95,32 @@ test("a stored credential with no published record is recoverable", () => {
   expect(telegramOperatorAction()).toBeNull();
 });
 
-test("a failed health check over a stored credential is recoverable, and the operator is told meanwhile", () => {
+test("a failed health check over a stored credential is recoverable, and the operator is told once a repair here has failed", async () => {
   const session = signIn();
   record("error", session.credentialRef, "connector_failed");
   expect(readTelegramLaunchState()).toEqual({ kind: "recoverable" });
+  /* The next start repairs it by itself, so nothing is asked yet. */
+  expect(telegramOperatorAction()).toBeNull();
+  setTelegramLaunchRepairForTests({ healthCheck: async () => {} });
+  await repairTelegramConnection();
   expect(telegramOperatorAction()).toBe("check");
+});
+
+test("a live process the record cannot vouch for needs a restart, and no launch waits for a check", async () => {
+  const session = signIn();
+  record("error", session.credentialRef, "bridge_failed");
+  const directory = ensureTelegramStateDir(true)!;
+  fs.writeFileSync(path.join(directory, "connector.json"), JSON.stringify({
+    version: 1, pid: process.pid, identity: procBackend.processIdentity(process.pid), credentialRef: session.credentialRef,
+    connectorTokenSha256: "0".repeat(64), command: "python", entrypoint: "telegram-mcp-server.py",
+  }), { mode: 0o600 });
+  let checks = 0;
+  setTelegramLaunchRepairForTests({ healthCheck: async () => { checks += 1; } });
+  const restart = { kind: "needs_operator" as const, action: "restart" as const };
+  expect(readTelegramLaunchState()).toEqual(restart);
+  await expect(repairTelegramConnection()).resolves.toEqual(restart);
+  expect(checks).toBe(0);
+  expect(telegramOperatorAction()).toBe("restart");
 });
 
 test("a session Telegram ended needs the operator to sign in", () => {
@@ -186,4 +211,104 @@ test("a health check that throws is contained and the launch goes on", async () 
   record("error", session.credentialRef, "connector_failed");
   setTelegramLaunchRepairForTests({ healthCheck: async () => { throw new Error("connector spawn failed"); } });
   await expect(repairTelegramConnection()).resolves.toEqual({ kind: "recoverable" });
+});
+
+/* ── `ready` while a health check is under way ─────────────────────────────── */
+
+/** State 12 as a health check finds it and as it leaves it half-way: the
+    record reads connected, the stale process record is already removed and the
+    replacement is not verified yet. `finish` ends the check. */
+function replacingConnector(session: { credentialRef: string }, outcome: "connected" | "error") {
+  const check = { checks: 0, finished: false, finish: () => {} };
+  record("connected", session.credentialRef);
+  recordGoneConnector(session.credentialRef);
+  const healthCheck = async () => {
+    check.checks += 1;
+    fs.rmSync(path.join(ensureTelegramStateDir(true)!, "connector.json"));
+    await new Promise<void>((resolve) => { check.finish = resolve; });
+    if (outcome === "error") record("error", session.credentialRef, "connector_failed");
+    check.finished = true;
+  };
+  return { check, healthCheck };
+}
+
+test("a launch that arrives while a check replaces the connector waits for it and starts with the tool", async () => {
+  const session = signIn();
+  const { check, healthCheck } = replacingConnector(session, "connected");
+  setTelegramLaunchRepairForTests({ healthCheck, waitMs: 2_000 });
+  const first = repairTelegramConnection();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  /* The record reads connected and names no dead process: on its own it would
+     pass for ready. */
+  expect(readTelegramLaunchState().kind).toBe("ready");
+  let secondSettled = false;
+  const second = repairTelegramConnection().then((state) => { secondSettled = true; return state; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(secondSettled).toBe(false);
+  check.finish();
+  const ready = { kind: "ready" as const, token: session.connectorToken };
+  await expect(second).resolves.toEqual(ready);
+  await expect(first).resolves.toEqual(ready);
+  expect(check.finished).toBe(true);
+  expect(check.checks).toBe(1);
+});
+
+test("when that check ends in an error the waiting launch starts without the tool and the agent is told", async () => {
+  const session = signIn();
+  const { check, healthCheck } = replacingConnector(session, "error");
+  setTelegramLaunchRepairForTests({ healthCheck, waitMs: 2_000 });
+  const first = repairTelegramConnection();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = resolveTelegramLaunchGrant({ NODE_ENV: "test" }, ["viewer", "telegram"]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  check.finish();
+  const grant = await second;
+  await first;
+  expect(grant.unavailable).toBe(true);
+  expect(grant.mcpServers).toEqual(["viewer"]);
+  expect(grant.env[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBeUndefined();
+  /* The failure is the first launch's; the second does not repeat it. */
+  expect(check.checks).toBe(1);
+  expect(telegramOperatorAction()).toBe("check");
+});
+
+test("a launch joins the check the start of the Viewer began", async () => {
+  const session = signIn();
+  const { check, healthCheck } = replacingConnector(session, "connected");
+  setTelegramLaunchRepairForTests({ healthCheck, waitMs: 2_000 });
+  const boot = provisionTelegramConnectorAtStartup({ ...productionTelegramConnectorBootPorts, log: () => {} });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  let launched = false;
+  const launch = resolveTelegramLaunchGrant({ NODE_ENV: "test" }, ["viewer", "telegram"]).then((grant) => { launched = true; return grant; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(launched).toBe(false);
+  check.finish();
+  const grant = await launch;
+  expect(check.finished).toBe(true);
+  expect(grant.unavailable).toBe(false);
+  expect(grant.env[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session.connectorToken);
+  await expect(boot).resolves.toBe("provisioned");
+  expect(check.checks).toBe(1);
+});
+
+test("a check that outlives the launch's wait is not waited out, and its unconfirmed record carries no token", async () => {
+  const session = signIn();
+  const { check, healthCheck } = replacingConnector(session, "connected");
+  setTelegramLaunchRepairForTests({ healthCheck, waitMs: 40 });
+  const first = repairTelegramConnection();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const started = performance.now();
+  const grant = await resolveTelegramLaunchGrant({ NODE_ENV: "test" }, ["viewer", "telegram"]);
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(check.finished).toBe(false);
+  expect(grant.unavailable).toBe(true);
+  expect(grant.env[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBeUndefined();
+  await expect(first).resolves.toEqual({ kind: "recoverable" });
+  /* The launches that follow do not wait for the same check again. */
+  const again = performance.now();
+  await expect(repairTelegramConnection()).resolves.toEqual({ kind: "recoverable" });
+  expect(performance.now() - again).toBeLessThan(30);
+  check.finish();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await expect(repairTelegramConnection()).resolves.toEqual({ kind: "ready", token: session.connectorToken });
 });

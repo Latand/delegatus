@@ -1,25 +1,25 @@
 {
   "phone-390-en": {
     "closed": {
-      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 280,
+      "reasonWidth": 268,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 390
     },
     "open": {
-      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 280,
+      "reasonWidth": 268,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 390
@@ -27,51 +27,51 @@
   },
   "phone-390-uk": {
     "closed": {
-      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 278,
-      "reasonHeight": 15,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
       "overflowX": 0,
       "viewportWidth": 390
     },
     "open": {
-      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 278,
-      "reasonHeight": 15,
+      "reasonWidth": 308,
+      "reasonHeight": 30,
       "overflowX": 0,
       "viewportWidth": 390
     }
   },
   "desktop-1440-en": {
     "closed": {
-      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 280,
+      "reasonWidth": 268,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 1440
     },
     "open": {
-      "statusLabel": "Telegram is not connected — reconnect it, then send again",
+      "statusLabel": "Telegram was not connected — send the message again",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 280,
+      "reasonWidth": 268,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 1440
@@ -79,25 +79,25 @@
   },
   "desktop-1440-uk": {
     "closed": {
-      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 278,
+      "reasonWidth": 315,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 1440
     },
     "open": {
-      "statusLabel": "Telegram не підключено — підключіть і надішліть знову",
+      "statusLabel": "Telegram не було підключено — надішліть повідомлення знову",
       "timesSaid": 1,
       "runtimeWords": false,
       "rawLines": 0,
       "actions": 1,
       "reasonInsideViewport": true,
-      "reasonWidth": 278,
+      "reasonWidth": 315,
       "reasonHeight": 15,
       "overflowX": 0,
       "viewportWidth": 1440

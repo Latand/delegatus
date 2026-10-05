@@ -35,7 +35,8 @@ import {
 } from "./registry";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { didStructuredHostStartupFail, structuredStartupStatus } from "./startupStatus";
-import { adoptStructuredHostsAtStartup, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
+import { adoptStructuredHostsAtStartup, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 
 function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
@@ -5056,4 +5057,20 @@ test("a host deferred during reconciliation is retained while startup reaches re
     journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a host raised at start reads its Telegram grant again before the token is handed over", () => {
+  const key = { engine: "claude" as const, sessionId: "telegram-grant-recheck" };
+  const granted = { key, launchProfile: { mcpServers: ["viewer", "telegram"] } } as never as Parameters<typeof startupTelegramGrantCheck>[1];
+  let current: unknown = granted;
+  const registry = { readOnlySnapshot: () => ({ entries: current ? { [`${key.engine}:${key.sessionId}`]: current } : {} }) } as never as Parameters<typeof startupTelegramGrantCheck>[0];
+  const check = startupTelegramGrantCheck(registry, granted)!;
+  expect(() => check()).not.toThrow();
+  /* Withdrawn while the launch waited for the connection. */
+  current = { key, launchProfile: { mcpServers: ["viewer"] } };
+  expect(() => check()).toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  current = null;
+  expect(() => check()).toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  /* A host that holds no grant has nothing to re-read. */
+  expect(startupTelegramGrantCheck(registry, { key, launchProfile: { mcpServers: ["viewer"] } } as never)).toBeUndefined();
 });
