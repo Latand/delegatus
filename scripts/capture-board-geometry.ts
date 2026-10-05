@@ -5877,6 +5877,8 @@ async function selfUpdateInstallMain(): Promise<void> {
   states["install-package"] = { ...states["install-available"]!, mode: "package",
     installed: revision(old), available: { ...revision(next), version: "1.6.2" },
     update: idleUpdate(["fetch", "install", "ready"]), auto: { ...idleAuto, availability: "packaged" } };
+  // A published package that names no revision: it is named and left to its package manager.
+  states["install-package-manual"] = { ...states["install-package"]!, available: { sha: "", short: "", version: "1.6.2", date: "" } };
   states["install-available-auto"] = { ...states["install-available"]!, auto: { ...idleAuto, enabled: true } };
   states["install-package-auto"] = { ...states["install-package"]!, auto: { ...idleAuto, enabled: true, availability: "packaged" } };
   // Commands contain invented install context and exercise wrapping at phone width.
@@ -5983,6 +5985,7 @@ async function selfUpdateInstallMain(): Promise<void> {
             return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right }));
           });
           return { overflow: element.scrollWidth - element.clientWidth, text: element.textContent,
+            update: element.getAttribute("data-update"),
             action: !!element.querySelector('[data-action="install-action"]'), buttons,
             clippedText: textBounds.some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1),
             untranslated: /selfUpdate\.[A-Za-z]/.test(element.textContent ?? "") };
@@ -5993,14 +5996,21 @@ async function selfUpdateInstallMain(): Promise<void> {
           || installation.buttons.some(button => !button.inside || width === 390 && (button.width < 44 || button.height < 44))) report.failures.push(`${tag}: install surface or control is unreadable`);
         if (snapshot.action) {
           const key = snapshot.action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${snapshot.action.id}` as const;
-          const instruction = messages[lang][key];
-          if (typeof instruction !== "string" || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
+          // The card names the unit it restarts or starts inside the sentence.
+          const template = messages[lang][key];
+          const instruction = typeof template === "string" ? template.replaceAll("{unit}", snapshot.action.unit ?? "") : null;
+          if (!instruction || instruction.includes("{") || !installation.text?.includes(instruction)) report.failures.push(`${tag}: missing localized prerequisite instruction`);
           if (snapshot.action.command && !installation.text?.includes(snapshot.action.command)) report.failures.push(`${tag}: incomplete terminal command`);
         }
         if (name === "install-available" || name === "install-available-auto" || name === "install-package" || name === "install-package-auto") {
           const instruction = messages[lang]["selfUpdate.update.noteApply"];
           if (typeof instruction !== "string" || !installation.text?.includes(instruction)
             || /Nothing restarts|next quiet moment|Нічого не перезапускається|найближчу тиху хвилину/.test(installation.text ?? "")) report.failures.push(`${tag}: confirmed update copy contradicts immediate apply`);
+        }
+        if (name === "install-package-manual") {
+          const instruction = messages[lang]["selfUpdate.update.packageManual"];
+          if (installation.update !== "package-manual" || typeof instruction !== "string" || !installation.text?.includes(instruction)
+            || !installation.text.includes(snapshot.available!.version) || installation.buttons.length) report.failures.push(`${tag}: a package without a revision is not left to its package manager`);
         }
         if (/^install-(restart-service|restart-terminal|windows-terminal)-ready$/.test(name)) {
           const partial = await page.locator('[data-section="header"], [data-outcome="done"]').allTextContents();
