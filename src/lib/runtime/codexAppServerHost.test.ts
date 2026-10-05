@@ -41,7 +41,7 @@ const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", co
 let metadataState: string;
 let previousMetadataState: string | undefined;
 let restoreFeatures: () => void;
-const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.plugins=false"];
+const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.plugins=false"];
 beforeEach(() => {
   restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
   previousMetadataState = process.env.LLV_STATE_DIR;
@@ -138,9 +138,17 @@ test("fresh and adopted app-server hosts enforce native delegation at process an
     const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
     try {
       expect(captured.args).toContain(`agents.enabled=${allowed}`);
+      expect(captured.args?.includes('approvals_reviewer="user"')).toBe(!allowed);
       const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
       const config = params?.config;
       expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed } });
+      if (!allowed) {
+        expect(config).toMatchObject({ approvals_reviewer: "user" });
+        expect(params).toMatchObject({ approvalsReviewer: "user" });
+      } else {
+        expect(config).not.toHaveProperty("approvals_reviewer");
+        expect(params).not.toHaveProperty("approvalsReviewer");
+      }
       for (const feature of ["multi_agent_v2", "future_worker"]) {
         expect(captured.args?.includes(`features.${feature}=false`)).toBe(!allowed);
         if (!allowed) expect(config).toMatchObject({ features: { [feature]: false } });
@@ -158,6 +166,26 @@ test("failed app-server feature discovery releases scratch and never starts a ho
     expect(launches).toBe(0);
     expect(releases).toBe(1);
   } finally { restore(); }
+});
+
+test("native Guardian review notifications enter the durable ledger without action contents", async () => {
+  const server = new FakeAppServer("guardian-policy-thread");
+  const eventStore = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  try {
+    for (const threadId of ["another-thread", "guardian-policy-thread"]) {
+      for (const phase of ["started", "completed"]) server.notify(`item/autoApprovalReview/${phase}`, {
+        threadId, turnId: "guardian-policy-turn", reviewId: "guardian-review-fixture",
+        action: "PRIVATE GUARDIAN ACTION", review: { status: "inProgress" }, startedAtMs: 0,
+      });
+    }
+    const items = eventStore.load("guardian-policy-thread").filter((event) => event.kind === "item");
+    expect(items).toMatchObject([
+      { phase: "started", item: { type: "autoApprovalReview", id: "guardian-review-fixture" } },
+      { phase: "completed", item: { type: "autoApprovalReview", id: "guardian-review-fixture" } },
+    ]);
+    expect(JSON.stringify(items)).not.toContain("PRIVATE GUARDIAN ACTION");
+  } finally { await host.release(); }
 });
 
 class FailingEventStore implements RuntimeEventStore {

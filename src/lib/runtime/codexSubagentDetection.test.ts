@@ -60,15 +60,18 @@ test("denied native items persist once and appear immediately in the existing li
   expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
 });
 
-test("v2 activity is detected while permission-enabled and unrelated items stay clear", () => {
+test("v2 and Guardian activity are detected while permission-enabled and unrelated items stay clear", () => {
   for (const allowSubagents of [false, true]) {
     const { registry, parentPath, conversation } = launched(allowSubagents);
-    for (const [seq, item] of [{ type: "subAgentActivity", id: "v2-fixture", content: "PRIVATE CHILD RESULT" }, { type: "agentMessage", id: "message-fixture" }].entries()) {
+    for (const [seq, item] of [{ type: "subAgentActivity", id: "v2-fixture", content: "PRIVATE CHILD RESULT" },
+      { type: "autoApprovalReview", id: "guardian-fixture", action: "PRIVATE GUARDIAN ACTION" },
+      { type: "agentMessage", id: "message-fixture" }].entries()) {
       observeCodexSubagentEvent(registry, parentPath, { kind: "item", item, turnId: null, phase: "completed", seq });
     }
     const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-    expect(events).toHaveLength(allowSubagents ? 0 : 1);
+    expect(events).toHaveLength(allowSubagents ? 0 : 2);
     expect(JSON.stringify(events)).not.toContain("PRIVATE CHILD RESULT");
+    expect(JSON.stringify(events)).not.toContain("PRIVATE GUARDIAN ACTION");
   }
 });
 
@@ -119,14 +122,16 @@ test("native transcript calls alert without a child while prose, MCP calls and p
     { timestamp, type: "response_item", payload: { type: "function_call", name: "mcp__viewer__spawn_agent", call_id: "tracked-fixture" } },
     { timestamp: "2000-01-01T00:00:00.000Z", type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "historical-fixture" } },
     { timestamp, type: "response_item", payload: { type: "function_call", name: "collaboration.spawn_agent", call_id: "native-fixture", arguments: "PRIVATE TASK" } },
+    { timestamp, type: "event_msg", payload: { type: "guardian_assessment", id: "native-guardian-fixture", action: "PRIVATE GUARDIAN ACTION" } },
   ];
   fs.appendFileSync(parentPath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
   const entry = { engine: "codex", path: parentPath, size: fs.statSync(parentPath).size, mtime: fs.statSync(parentPath).mtimeMs / 1000 } as FileEntry;
   observeCodexSubagentTranscripts(registry, [entry]);
   observeCodexSubagentTranscripts(registry, [entry]);
   const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
-  expect(events).toHaveLength(1);
-  expect(events[0]?.summary).toContain("spawn_agent");
+  expect(events).toHaveLength(2);
+  expect(events.some((event) => event.summary.includes("spawn_agent"))).toBe(true);
+  expect(events.some((event) => event.summary.includes("autoApprovalReview"))).toBe(true);
   expect(JSON.stringify(events)).not.toContain("PRIVATE");
 });
 

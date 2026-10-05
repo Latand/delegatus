@@ -38,6 +38,7 @@ test("fresh and resumed terminal launches deny all native agent routes and futur
     for (const spec of [freshSpecFor("codex", SANDBOX, { codexHome: home, allowSubagents: allowed }), resumeSpecFor("codex-sessions", transcript, { allowSubagents: allowed })]) {
       expect(spec?.command).toContain("--no-daemon");
       expect(spec?.command).toContain(`agents.enabled=${allowed}`);
+      expect(spec?.command.includes('approvals_reviewer="user"')).toBe(!allowed);
       for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
         const normalized = spec?.command.replace(/'/g, "");
         expect(normalized?.includes(`--disable ${feature}`)).toBe(!allowed);

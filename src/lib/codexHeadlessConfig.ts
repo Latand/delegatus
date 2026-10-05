@@ -154,6 +154,7 @@ export function headlessCodexThreadConfig(
       realtime_conversation: true,
     },
     agents: { enabled: allowSubagents },
+    ...(!allowSubagents ? { approvals_reviewer: "user" } : {}),
     ...(granted.length > 0 ? { plugins: pluginTable(config, granted) } : {}),
     include_apps_instructions: false,
   };

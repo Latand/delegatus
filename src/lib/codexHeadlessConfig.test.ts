@@ -5,9 +5,9 @@ import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessC
 import { telegramMcpUrl } from "./telegram/packaging";
 
 test("denied Codex threads override model-default delegation and unknown features", () => {
-  const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, agents: { enabled: true }, features: { multi_agent: true, multi_agent_v2: true, future_worker: true } } }, false,
+  const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, approvals_reviewer: "auto_review", agents: { enabled: true }, features: { multi_agent: true, multi_agent_v2: true, future_worker: true } } }, false,
     undefined, undefined, "stdio", [{ name: "future_worker", stage: "stable", enabled: true }]);
-  expect(config).toMatchObject({ agents: { enabled: false }, features: { multi_agent: false, multi_agent_v2: false, future_worker: false } });
+  expect(config).toMatchObject({ approvals_reviewer: "user", agents: { enabled: false }, features: { multi_agent: false, multi_agent_v2: false, future_worker: false } });
 });
 
 test("stdio Viewer forwards the current launch capability without embedding it in thread config", () => {
@@ -64,6 +64,7 @@ test("headless Codex threads allow only the registered Viewer MCP server", () =>
     },
     features: { plugins: false, apps: false, multi_agent: false, multi_agent_v2: false, realtime_conversation: true },
     agents: { enabled: false },
+    approvals_reviewer: "user",
     include_apps_instructions: false,
   });
 });
@@ -76,6 +77,7 @@ test("configurations without Viewer add the packaged server and disable every un
     },
     features: { plugins: false, apps: false, multi_agent: false, multi_agent_v2: false, realtime_conversation: true },
     agents: { enabled: false },
+    approvals_reviewer: "user",
     include_apps_instructions: false,
   });
 });

@@ -29,6 +29,7 @@ afterAll(() => {
 test("headless exec denies model-selected v2 delegation and unknown features", () => {
   const built = reviewerCommand({ engine: "codex", model: null, effort: null }, "Review", "review.txt", process.env.LLV_STATE_DIR!);
   expect(built.args).toContain("agents.enabled=false");
+  expect(built.args).toContain('approvals_reviewer="user"');
   for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
     expect(built.args[built.args.indexOf(feature) - 1]).toBe("--disable");
   }

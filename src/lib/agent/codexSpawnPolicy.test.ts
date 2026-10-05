@@ -4,6 +4,7 @@ import zlib from "node:zlib";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { CODEX_SINGLE_AGENT_FEATURES, codexDeniedFeatures, codexSubagentArgs, parseCodexFeatures, readCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 
 test("every agent-spawning feature of the installed CLI is classified by the policy", () => {
@@ -30,6 +31,7 @@ test("unknown features default off regardless of their spelling or default", () 
   try {
     const args = codexSubagentArgs("fixture");
     expect(args).toContain("agents.enabled=false");
+    expect(args).toContain('approvals_reviewer="user"');
     for (const name of ["multi_agent", "multi_agent_v2", "future_worker", "future_branch"]) {
       expect(args[args.indexOf(name) - 1]).toBe("--disable");
     }
@@ -37,6 +39,53 @@ test("unknown features default off regardless of their spelling or default", () 
     expect(codexSubagentArgs("fixture", true)).toEqual(["-c", "agents.enabled=true"]);
   } finally { restore(); }
 });
+
+test("an explicit synchronous Guardian reviewer is overridden only for denied launches", async () => {
+  const binary = process.env.LLV_CODEX_BINARY ?? "codex";
+  for (const allowed of [false, true]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-reviewer-policy-test-"));
+    const home = path.join(root, "home");
+    const codexHome = path.join(home, ".codex");
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.mkdirSync(path.join(root, "tmp"));
+    fs.writeFileSync(path.join(codexHome, "config.toml"), 'approvals_reviewer="auto_review"\n[features]\nguardian_approval=false\nguardianv2=false\napps=false\nplugins=false\n[analytics]\nenabled=false\n');
+    const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, HOME: home, CODEX_HOME: codexHome,
+      XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"),
+      LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+    const child = spawn(binary, [...codexSubagentArgs(binary, allowed, env), "app-server"], { env, stdio: ["pipe", "pipe", "pipe"] });
+    const pid = child.pid;
+    const lines = createInterface({ input: child.stdout });
+    let reaped = false;
+    const done = new Promise<void>((resolve) => { child.once("close", () => { reaped = true; resolve(); }); });
+    const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
+    child.stderr.resume();
+    let observed = false;
+    try {
+      child.stdin.write(JSON.stringify({ id: 1, method: "initialize", params: { clientInfo: { name: "policy-fixture", version: "1" }, capabilities: { experimentalApi: true } } }) + "\n");
+      for await (const line of lines) {
+        const response = JSON.parse(line);
+        if (response.id === 1) {
+          expect(response.error).toBeUndefined();
+          child.stdin.write(JSON.stringify({ id: 2, method: "config/read", params: { includeLayers: false } }) + "\n");
+        }
+        if (response.id === 2) {
+          expect(response.error).toBeUndefined();
+          expect(response.result.config.approvals_reviewer).toBe(allowed ? "auto_review" : "user");
+          observed = true;
+          break;
+        }
+      }
+      expect(observed).toBe(true);
+    } finally {
+      lines.close();
+      child.stdin.end();
+      if (!reaped && pid) { try { process.kill(pid, "SIGTERM"); } catch { /* already exited */ } }
+      await done;
+      clearTimeout(timer);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+}, 30_000);
 
 test("feature discovery refuses empty, malformed, duplicate and failed inventories", () => {
   for (const text of ["", "multi_agent stable unknown", "multi_agent stable true\nunparsed row", "multi_agent stable true\nmulti_agent stable false"]) {

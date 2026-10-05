@@ -94,7 +94,7 @@ export function codexSubagentArgs(binary: string, allowSubagents = false, env: N
   // Older supported interpreters reject --disable for a feature they do not
   // know. Their reported inventory still determines every emitted CLI flag.
   const reported = new Set(features.map((feature) => feature.name));
-  return [...isolation, "-c", "agents.enabled=false", ...codexDeniedFeatures(features).filter((name) => reported.has(name))
+  return [...isolation, "-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', ...codexDeniedFeatures(features).filter((name) => reported.has(name))
     .flatMap((feature) => ["--disable", feature])];
 }
 

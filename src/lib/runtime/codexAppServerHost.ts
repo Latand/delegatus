@@ -1445,6 +1445,7 @@ export class CodexAppServerHost implements EngineHost {
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
+      ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
@@ -1541,6 +1542,7 @@ export class CodexAppServerHost implements EngineHost {
           ? { permissions: options.permissionProfile }
           : { sandbox: options.sandbox ?? "read-only" }),
         approvalPolicy: options.approvalPolicy ?? "never",
+        ...(options.allowSubagents === true ? {} : { approvalsReviewer: "user" }),
       };
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
@@ -3955,6 +3957,15 @@ export class CodexAppServerHost implements EngineHost {
        it — or refusing only its `serverRequest/resolved` and stranding the
        attention it opened — would strand work the parent delegated. */
     if (this.foreignThreadNotification(params)) return;
+    if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+      const reviewId = stringField(params, "reviewId");
+      if (reviewId) this.emit({
+        kind: "item", turnId: turnId ?? this.activeTurnId,
+        item: { type: "autoApprovalReview", id: reviewId },
+        phase: method.endsWith("/started") ? "started" : "completed",
+      });
+      return;
+    }
     if (method === "turn/started" && turnId) {
       if (reconcileBufferedLifecycle) {
         const historicalStart = this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId);

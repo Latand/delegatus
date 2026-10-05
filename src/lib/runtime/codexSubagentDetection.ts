@@ -14,6 +14,7 @@ const transcriptObservations = new WeakMap<AgentRegistry, Map<string, string>>()
 export function nativeCodexActivityMethod(item: unknown): string | null {
   if (!item || typeof item !== "object") return null;
   const source = item as Record<string, unknown>;
+  if (source.type === "autoApprovalReview" || source.type === "guardian_assessment") return "autoApprovalReview";
   if (source.type === "subAgentActivity") return "subAgentActivity";
   if (source.type !== "collabAgentToolCall") return null;
   return typeof source.tool === "string" && nativeMethods.has(source.tool) ? source.tool : "collabAgentToolCall";

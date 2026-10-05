@@ -16,6 +16,16 @@ even a false `multi_agent_v2` flag does not prohibit model-selected v2. Both
 0.159.3 and 0.160.0 have this precedence. Denial requires **both feature flags
 off and `agents.enabled=false`**.
 
+An explicit `approvals_reviewer="auto_review"` is another route: the
+synchronous Guardian router selects its reviewer for on-request/granular
+approvals independently of `guardian_approval` and `guardianv2`. A native
+`config/read` regression confirmed that disabling those features alone retained
+`auto_review`. Denied launches therefore also select `approvals_reviewer="user"`
+at process and thread boundaries. A grant preserves the configured reviewer.
+A follow-up read-only search across 868 available denied parent artifacts found
+zero native `guardian_assessment` events and zero malformed rows. The reviewer
+route is configuration/source evidence; it supplied no observed activity count.
+
 | UTC date | Native `spawn_agent` calls | Matching child headers |
 |---|---:|---:|
 | 2026-10-01 | 129 | 129 |
@@ -63,7 +73,7 @@ audited interpreter, with identical sets.
 | Native v1 model tools | `spawn_agent` creates; `resume_agent`, `send_input`, `wait_agent`, `close_agent` manage children | Feature-selected v1 disabled | `agents.enabled=false`, `multi_agent=false`, `multi_agent_v2=false` |
 | Native v2 model tools | `collaboration.spawn_agent` creates; `followup_task` can restart work; `send_message`, `wait_agent`, `interrupt_agent`, `list_agents` operate on children | Explicit or model-selected v2 remained available | Same three-part denial removes the entire collaboration tool family |
 | Code Mode and deferred model tools | Alternate packaging and discovery of the same native collaboration tools | Inherited the v2 gap | Tool construction receives the denied multi-agent version regardless of packaging |
-| Guardian review agents | Approval review sessions controlled by `guardian_approval`, `guardianv2`, and associated `guardian_*` flags | No enforced denial for these flags | All active Guardian flags default off |
+| Guardian review agents | `guardianv2` controls asynchronous reviews; explicit `approvals_reviewer="auto_review"` routes synchronous approvals independently of feature flags | Both routes remained configurable | All active Guardian flags default off and the reviewer is explicitly `user` |
 | Memory background agents | `memories` enables internal memory work; `external_agent_memory_import` is associated support | User configuration could enable them | Both default off |
 | Agent coordination and worktree support | `agent_message_board`, `defer_mailbox_preemption`, `use_agent_identity`, `worktrees` support agent workflows | Unclassified | Default off |
 | Removed compatibility flags | `enable_fanout`, `multi_agent_mode`, `collaboration_modes`, `send_async_message` | No active tool route found | Explicitly classified as removed/inert by the CLI inventory |
@@ -95,9 +105,9 @@ configuration directory on the shared mount.
 
 | Launch path | Process policy | Thread policy and permission-enabled behavior |
 |---|---|---|
-| Terminal CLI, fresh and resume | `-c agents.enabled=false`, `--disable` for every reported unapproved feature, and `--no-daemon` where supported | A grant sets `agents.enabled=true`, keeps configured native features, and uses its own daemon |
+| Terminal CLI, fresh and resume | `-c agents.enabled=false`, `-c approvals_reviewer="user"`, `--disable` for every reported unapproved feature, and `--no-daemon` where supported | A grant sets `agents.enabled=true`, keeps configured native features/reviewer, and uses its own daemon |
 | Headless `exec` reviewer | Same discovered denial before `exec --ignore-user-config` | This reviewer surface always denies native delegation |
-| App-server host, fresh and adopted | `-c agents.enabled=false` and `-c features.<name>=false` for every unapproved feature before `app-server` starts | Both `thread/start` and `thread/resume` receive `agents.enabled=false` and the complete discovered false feature map; a grant sets `agents.enabled=true` and `multi_agent=true`, preserving configured v2 |
+| App-server host, fresh and adopted | `-c agents.enabled=false`, `-c approvals_reviewer="user"`, and `-c features.<name>=false` for every unapproved feature before `app-server` starts | Both `thread/start` and `thread/resume` receive the denied settings, the complete discovered false feature map, and explicit `approvalsReviewer: "user"`; a grant sets `agents.enabled=true` and `multi_agent=true`, preserving configured v2/reviewer |
 
 The per-thread feature table can replace the process table. Applying the entire
 denial at both levels prevents that replacement from reopening a background
@@ -112,6 +122,9 @@ granted. Browser-agent integrations and local-automation features remain off.
 
 Native `collabAgentToolCall` and `subAgentActivity` items in the app-server
 durable event ledger are checked before the runtime producer cursor advances.
+Native `item/autoApprovalReview/*` notifications are projected into that same
+ledger using their review identifier and a fixed type, discarding the action
+contents. Native `guardian_assessment` transcript events also feed detection.
 Journal contention retries the same item. Scanner controller ticks also inspect
 authoritative native child headers, covering terminal CLI, headless exec, and
 missed live parent events. A fork-only header provides no child evidence.
@@ -153,6 +166,8 @@ Primary implementation evidence:
 - [0.160.0 feature inventory](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/features/src/lib.rs)
 - [0.160.0 CLI entrypoints](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/cli/src/lib.rs)
 - [0.160.0 cloud tasks](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/cloud-tasks/src/lib.rs)
+- [0.159.3 synchronous Guardian routing](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/ext/guardian-reviewer/src/routing.rs)
+- [0.160.0 synchronous Guardian routing](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/ext/guardian-reviewer/src/routing.rs)
 
 ## Verification
 
@@ -162,6 +177,11 @@ one final message and executes no tools. In both 0.159.3 and 0.160.0, the old
 policy exposed all six collaboration tools, the denied policy exposed zero,
 and the grant exposed all six. Ordinary `exec_command` remained available.
 There were **zero real sub-agent probes on operator accounts**.
+The native configuration regression calls only `initialize` and `config/read`
+under an isolated home. With Guardian feature flags false and an explicit
+`auto_review` account setting, the pre-fix interpreter configuration retained
+that reviewer. Denial now resolves it to `user`; a grant retains `auto_review`.
+This check creates no thread, executes no tools, and runs on both interpreters.
 
 A separate base regression ran the actual pre-change headless configuration
 function and failed its three-part denial assertion. The corresponding head
