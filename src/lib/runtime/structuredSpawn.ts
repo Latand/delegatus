@@ -2259,6 +2259,26 @@ export async function spawnStructuredConversation(
         && current.state !== "conflicted"
         && entry?.structuredHostOperationId === input.receipt.launchId);
     };
+    /* The registration awaits the host and the journal after the check above,
+       so it asks the account fence again at each of its own boundaries. A
+       refusal there leaves the host unregistered and is raised once the
+       registration returns, into the same failure path as any other. */
+    const publishAuthorized = async (): Promise<() => Promise<void>> => {
+      let refusal: { error: unknown } | null = null;
+      const unregister = await publishHost(key!, host!, async () => {
+        if (refusal || !await ownsLaunch()) return false;
+        try {
+          await input.authorize?.();
+        } catch (error) {
+          refusal = { error };
+          return false;
+        }
+        return true;
+      });
+      const refused = refusal as { error: unknown } | null;
+      if (refused) throw refused.error;
+      return unregister;
+    };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
     writeStagedRecovery(input.registry, operationId, recovery);
     const continuation: StagedContinuation = {
@@ -2266,7 +2286,7 @@ export async function spawnStructuredConversation(
       owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
       publish: async () => {
         await input.authorize?.();
-        binding.unregister = await publishHost(key!, host!, ownsLaunch);
+        binding.unregister = await publishAuthorized();
         forgetUnpublishedHost();
       },
       deliver: () => deliverFirst(input, identity.path),
@@ -2279,7 +2299,7 @@ export async function spawnStructuredConversation(
         await cleanupHost(host, binding);
       },
     });
-    binding.unregister = await withinDurableSetup(publishHost(key, host, ownsLaunch));
+    binding.unregister = await withinDurableSetup(publishAuthorized());
     forgetUnpublishedHost();
     if (!await ownsLaunch()) throw new Error("staged launch was released before publication completed");
     writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "uncertain", reason: "first-message acknowledgement pending" });

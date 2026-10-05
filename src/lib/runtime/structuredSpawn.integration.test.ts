@@ -6544,7 +6544,8 @@ test("default host launch carries the exact tier on fresh and resumed profiles",
    answer is read again before the host starts and before it is published. */
 async function fencedResumeRecovery(
   engine: "codex" | "claude",
-  revokeAt: "never" | "admission" | "setup" | "staged-publication",
+  revokeAt: "never" | "admission" | "setup" | "staged-publication" | "publication" | "staged-probe-publication",
+  publication: "stub" | "controller" = "stub",
 ) {
   const sessionId = crypto.randomUUID();
   const cwd = path.join(sandbox, `fenced-resume-${engine}-${revokeAt}-${sessionId}`);
@@ -6570,6 +6571,8 @@ async function fencedResumeRecovery(
     pendingAction: null,
   });
   let allowed = true;
+  let publishing = false;
+  let busy = false;
   const counts = { start: 0, publish: 0 };
   const inner = runtimeClient(journal);
   const client = {
@@ -6579,7 +6582,15 @@ async function fencedResumeRecovery(
       if (command.kind === "spawn" && revokeAt === "admission") allowed = false;
       return result;
     },
+    /* The registration's own journal read: the account is withdrawn while the
+       controller is between its awaits, after every check the launch made. */
+    producerCursor: async (producerKind, eventKeyPrefix) => {
+      const cursor = await inner.producerCursor(producerKind, eventKeyPrefix);
+      if (publishing && (revokeAt === "publication" || (revokeAt === "staged-probe-publication" && busy))) allowed = false;
+      return cursor;
+    },
   } as RuntimeHostClient;
+  if (publication === "controller") await bindStructuredDeliveryQueue([], { registry, client });
   const host = new RoundTripHost(engine, artifactPath, sessionId);
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
   const hostKind = engine === "codex" ? "codex-app-server" as const : "claude-broker" as const;
@@ -6618,12 +6629,26 @@ async function fencedResumeRecovery(
         }, "idle", claimOwner, claimEpoch);
         return () => {};
       },
-      publishHost: async (targetKey, runningHost) => {
+      publishHost: async (targetKey, runningHost, ownsOperation) => {
         if (revokeAt === "staged-publication" && counts.publish === 0 && allowed) {
           /* The first publication meets a busy runtime host and stages the
              launch; the account is withdrawn before the probe retries it. */
           allowed = false;
           throw Object.assign(new Error("runtime host is busy"), { code: "HOST_BUSY" });
+        }
+        if (publication === "controller") {
+          if (revokeAt === "staged-probe-publication" && !busy) {
+            busy = true;
+            throw Object.assign(new Error("runtime host is busy"), { code: "HOST_BUSY" });
+          }
+          publishing = true;
+          try {
+            const unregister = await publishStructuredDeliveryHost({ key: targetKey, host: runningHost }, ownsOperation);
+            if (hasStructuredDeliveryHost(targetKey)) counts.publish += 1;
+            return unregister;
+          } finally {
+            publishing = false;
+          }
         }
         counts.publish += 1;
         await bindStructuredDeliveryQueue([{ key: targetKey, host: runningHost }], { registry, client });
@@ -6670,6 +6695,27 @@ for (const engine of ["claude", "codex"] as const) {
     const run = await fencedResumeRecovery(engine, "never");
     await expect(run.recovering).resolves.toMatchObject({ conversationId: run.conversation.id, path: run.artifactPath, spawned: true });
     expect(run.counts).toEqual({ start: 1, publish: 1 });
+    expect(run.host.releaseCount).toBe(0);
+    expect(run.receipt()).toMatchObject({ state: "completed" });
+  });
+
+  for (const revokeAt of ["publication", "staged-probe-publication"] as const) {
+    test(`a ${engine} resume is not registered when its account is withdrawn inside the ${revokeAt === "publication" ? "host publication" : "staged probe's publication"}`, async () => {
+      const run = await fencedResumeRecovery(engine, revokeAt, "controller");
+      await expect(run.recovering).rejects.toThrow("no longer allowed on this project");
+      expect(run.counts).toEqual({ start: 1, publish: 0 });
+      expect(hasStructuredDeliveryHost(run.key)).toBe(false);
+      expect(run.host.releaseCount).toBe(1);
+      expect(run.receipt()).toMatchObject({ state: "failed", error: expect.stringContaining("no longer allowed") });
+      expect(run.journal.snapshot().sessions.find((session) => session.conversationId === run.conversation.id)?.host).not.toBe("hosted");
+    });
+  }
+
+  test(`a ${engine} resume whose account stays allowed is registered once by the delivery controller`, async () => {
+    const run = await fencedResumeRecovery(engine, "never", "controller");
+    await expect(run.recovering).resolves.toMatchObject({ conversationId: run.conversation.id, path: run.artifactPath, spawned: true });
+    expect(run.counts).toEqual({ start: 1, publish: 1 });
+    expect(hasStructuredDeliveryHost(run.key)).toBe(true);
     expect(run.host.releaseCount).toBe(0);
     expect(run.receipt()).toMatchObject({ state: "completed" });
   });
