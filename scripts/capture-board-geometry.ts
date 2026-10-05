@@ -3770,7 +3770,9 @@ function readSeatCreation(root: string) {
   const error = host?.querySelector<HTMLElement>("[data-orchestrator-intent-error]") ?? null;
   const text = host?.querySelector<HTMLElement>("[data-orchestrator-failure-text]") ?? null;
   const hint = host?.querySelector<HTMLElement>("[data-orchestrator-failure-hint]") ?? null;
-  const buttons = [...(host?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+  /* The phone sheet keeps its actions in a footer beside the body it marks. */
+  const scope = host?.closest<HTMLElement>('[role="dialog"]') ?? (host?.matches('[data-testid="mobile-orchestrator-sheet"]') ? document.body : host);
+  const buttons = [...(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
     .filter((node) => node.getBoundingClientRect().width > 0 && (node.textContent?.trim() ?? "") !== "")
     .map((node) => ({ text: node.textContent!.trim(), box: box(node)!, disabled: node.disabled }));
   return {
@@ -3864,6 +3866,9 @@ async function seatCreationMain(): Promise<void> {
       step.apply();
       for (const lang of ["en", "uk"] as const) for (const phone of [false, true]) {
         const tag = `seat-creation-${step.state}-${phone ? 390 : 1440}-${lang}`;
+        /* The operator's language is the server's setting; the page follows it. */
+        const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+        if (!localeWrite.ok) throw new Error(`the ${lang} locale was not stored: ${localeWrite.status}`);
         const say = (key: Parameters<typeof translate>[1]) => translate(lang, key);
         const context = await browser.newContext(phone
           ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" }
@@ -3873,9 +3878,12 @@ async function seatCreationMain(): Promise<void> {
         const page = await context.newPage();
         await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
         let root: string;
+        /* The first-run notice is another surface's; it leaves before the read. */
+        const dismissNotice = () => page.locator("button", { hasText: say("telemetry.dismiss") }).first().click({ timeout: 3_000 }).catch(() => {});
         if (phone) {
           await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 120_000 });
           await page.waitForTimeout(2_500);
+          await dismissNotice();
           /* A seated card's own tap is the conversation; its ⚙ opens the sheet. */
           await page.click(step.state === "seated" ? "[data-mobile2-seat-controls]" : "[data-mobile2-seat-open]");
           root = '[data-testid="mobile-orchestrator-sheet"]';
@@ -3891,6 +3899,7 @@ async function seatCreationMain(): Promise<void> {
         const settled = step.state === "waiting" ? "creating" : step.state === "seated" ? "live" : "intent-error";
         if (!phone) await page.waitForSelector(`${root}[data-orchestrator-state="${settled}"]`, { timeout: 30_000 }).catch(() => {});
         await page.waitForTimeout(2_000);
+        if (!phone) await dismissNotice();
         const reading = await page.evaluate(readSeatCreation, root);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
         report[tag] = reading;

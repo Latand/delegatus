@@ -1,0 +1,1269 @@
+{
+  "commit": "20b58d9e0d826bfdaf006e38add7811dfab3814b",
+  "case": "seat-creation",
+  "seat-creation-waiting-1440-en": {
+    "state": "creating",
+    "status": [
+      "Creating the orchestrator…"
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Fold",
+        "box": {
+          "x": 1282,
+          "y": 70,
+          "w": 69,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Finish this designation",
+        "box": {
+          "x": 766,
+          "y": 475,
+          "w": 157,
+          "h": 32
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 673
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-waiting-390-en": {
+    "state": "creating",
+    "status": [
+      "Creating the orchestrator…"
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Finish this designation",
+        "box": {
+          "x": 16,
+          "y": 794,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 581,
+      "w": 390,
+      "h": 200
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-waiting-1440-uk": {
+    "state": "creating",
+    "status": [
+      "Створюю оркестратора…"
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Згорнути",
+        "box": {
+          "x": 1255,
+          "y": 70,
+          "w": 96,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Завершити призначення",
+        "box": {
+          "x": 758,
+          "y": 483,
+          "w": 172,
+          "h": 32
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 673
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-waiting-390-uk": {
+    "state": "creating",
+    "status": [
+      "Створюю оркестратора…"
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Завершити призначення",
+        "box": {
+          "x": 16,
+          "y": 794,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 581,
+      "w": 390,
+      "h": 200
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-store-busy-1440-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "Delegatus was saving account settings at that same moment, so this request did not get its turn. Nothing is broken and nothing needs fixing.",
+    "failureHint": "Press «Try again».",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedDelegatus was saving account settings at that same moment, so this request did not get its turn. Nothing is broken and nothing needs fixing.Press «Try again».",
+    "buttons": [
+      {
+        "text": "Fold",
+        "box": {
+          "x": 1282,
+          "y": 70,
+          "w": 69,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Change",
+        "box": {
+          "x": 679,
+          "y": 270,
+          "w": 44,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 337,
+          "y": 364,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 351
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-store-busy-390-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 111
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "Delegatus was saving account settings at that same moment, so this request did not get its turn. Nothing is broken and nothing needs fixing.",
+    "failureHint": "Press «Try again».",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedDelegatus was saving account settings at that same moment, so this request did not get its turn. Nothing is broken and nothing needs fixing.Press «Try again».",
+    "buttons": [
+      {
+        "text": "Change",
+        "box": {
+          "x": 25,
+          "y": 362,
+          "w": 44,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Its instructions (v39) (edit)",
+        "box": {
+          "x": 12,
+          "y": 427,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Cancel",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 65,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 85,
+          "y": 788,
+          "w": 293,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-store-busy-1440-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "Саме в цю мить Delegatus зберігав налаштування акаунтів, тому запит не дочекався своєї черги. Нічого не зламалося й виправляти нічого не треба.",
+    "failureHint": "Натисніть «Спробувати ще раз».",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноСаме в цю мить Delegatus зберігав налаштування акаунтів, тому запит не дочекався своєї черги. Нічого не зламалося й виправляти нічого не треба.Натисніть «Спробувати ще раз».",
+    "buttons": [
+      {
+        "text": "Згорнути",
+        "box": {
+          "x": 1255,
+          "y": 70,
+          "w": 96,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 706,
+          "y": 289,
+          "w": 48,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 337,
+          "y": 382,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 369
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-store-busy-390-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 111
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "Саме в цю мить Delegatus зберігав налаштування акаунтів, тому запит не дочекався своєї черги. Нічого не зламалося й виправляти нічого не треба.",
+    "failureHint": "Натисніть «Спробувати ще раз».",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноСаме в цю мить Delegatus зберігав налаштування акаунтів, тому запит не дочекався своєї черги. Нічого не зламалося й виправляти нічого не треба.Натисніть «Спробувати ще раз».",
+    "buttons": [
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 25,
+          "y": 362,
+          "w": 48,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Його інструкції (v39) (редагувати)",
+        "box": {
+          "x": 12,
+          "y": 427,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Скасувати",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 88,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 108,
+          "y": 788,
+          "w": 270,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-failed-1440-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "launch exited before a transcript materialized",
+    "failureHint": "Nothing is running. Fix the mandate or the parameters and try again.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedlaunch exited before a transcript materializedNothing is running. Fix the mandate or the parameters and try again.",
+    "buttons": [
+      {
+        "text": "Fold",
+        "box": {
+          "x": 1282,
+          "y": 70,
+          "w": 69,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Change",
+        "box": {
+          "x": 679,
+          "y": 270,
+          "w": 44,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 337,
+          "y": 364,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 351
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-failed-390-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 79
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "launch exited before a transcript materialized",
+    "failureHint": "Nothing is running. Fix the mandate or the parameters and try again.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedlaunch exited before a transcript materializedNothing is running. Fix the mandate or the parameters and try again.",
+    "buttons": [
+      {
+        "text": "Change",
+        "box": {
+          "x": 25,
+          "y": 330,
+          "w": 44,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Its instructions (v39) (edit)",
+        "box": {
+          "x": 12,
+          "y": 395,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Cancel",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 65,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 85,
+          "y": 788,
+          "w": 293,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-failed-1440-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "launch exited before a transcript materialized",
+    "failureHint": "Нічого не запущено. Виправте мандат або параметри й спробуйте ще раз.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноlaunch exited before a transcript materializedНічого не запущено. Виправте мандат або параметри й спробуйте ще раз.",
+    "buttons": [
+      {
+        "text": "Згорнути",
+        "box": {
+          "x": 1255,
+          "y": 70,
+          "w": 96,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 706,
+          "y": 289,
+          "w": 48,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 337,
+          "y": 382,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 369
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-failed-390-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 94
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "launch exited before a transcript materialized",
+    "failureHint": "Нічого не запущено. Виправте мандат або параметри й спробуйте ще раз.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноlaunch exited before a transcript materializedНічого не запущено. Виправте мандат або параметри й спробуйте ще раз.",
+    "buttons": [
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 25,
+          "y": 345,
+          "w": 48,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Його інструкції (v39) (редагувати)",
+        "box": {
+          "x": 12,
+          "y": 410,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Скасувати",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 88,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 108,
+          "y": 788,
+          "w": 270,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-timeout-1440-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "The new orchestrator's process did not start in time.",
+    "failureHint": "Press «Try again» to launch it once more. If it fails a second time, restart Delegatus.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedThe new orchestrator's process did not start in time.Press «Try again» to launch it once more. If it fails a second time, restart Delegatus.",
+    "buttons": [
+      {
+        "text": "Fold",
+        "box": {
+          "x": 1282,
+          "y": 70,
+          "w": 69,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Change",
+        "box": {
+          "x": 679,
+          "y": 270,
+          "w": 44,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 337,
+          "y": 364,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 351
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-timeout-390-en": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 94
+    },
+    "errorTitle": "The orchestrator wasn't designated",
+    "failureText": "The new orchestrator's process did not start in time.",
+    "failureHint": "Press «Try again» to launch it once more. If it fails a second time, restart Delegatus.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "The orchestrator wasn't designatedThe new orchestrator's process did not start in time.Press «Try again» to launch it once more. If it fails a second time, restart Delegatus.",
+    "buttons": [
+      {
+        "text": "Change",
+        "box": {
+          "x": 25,
+          "y": 345,
+          "w": 44,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Its instructions (v39) (edit)",
+        "box": {
+          "x": 12,
+          "y": 410,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Cancel",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 65,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Try again",
+        "box": {
+          "x": 85,
+          "y": 788,
+          "w": 293,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-timeout-1440-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 337,
+      "y": 119,
+      "w": 1014,
+      "h": 78
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "Процес нового оркестратора не встиг запуститися.",
+    "failureHint": "Натисніть «Спробувати ще раз», щоб запустити його знову. Якщо не вийде вдруге, перезапустіть Delegatus.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноПроцес нового оркестратора не встиг запуститися.Натисніть «Спробувати ще раз», щоб запустити його знову. Якщо не вийде вдруге, перезапустіть Delegatus.",
+    "buttons": [
+      {
+        "text": "Згорнути",
+        "box": {
+          "x": 1255,
+          "y": 70,
+          "w": 96,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 706,
+          "y": 289,
+          "w": 48,
+          "h": 17
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 337,
+          "y": 382,
+          "w": 1014,
+          "h": 36
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 369
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-launch-timeout-390-uk": {
+    "state": "intent-error",
+    "status": [],
+    "error": {
+      "x": 12,
+      "y": 69,
+      "w": 366,
+      "h": 94
+    },
+    "errorTitle": "Оркестратора не призначено",
+    "failureText": "Процес нового оркестратора не встиг запуститися.",
+    "failureHint": "Натисніть «Спробувати ще раз», щоб запустити його знову. Якщо не вийде вдруге, перезапустіть Delegatus.",
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "Оркестратора не призначеноПроцес нового оркестратора не встиг запуститися.Натисніть «Спробувати ще раз», щоб запустити його знову. Якщо не вийде вдруге, перезапустіть Delegatus.",
+    "buttons": [
+      {
+        "text": "Змінити",
+        "box": {
+          "x": 25,
+          "y": 345,
+          "w": 48,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Його інструкції (v39) (редагувати)",
+        "box": {
+          "x": 12,
+          "y": 410,
+          "w": 366,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Скасувати",
+        "box": {
+          "x": 12,
+          "y": 788,
+          "w": 88,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Спробувати ще раз",
+        "box": {
+          "x": 108,
+          "y": 788,
+          "w": 270,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-seated-1440-en": {
+    "state": "live",
+    "status": [
+      "",
+      "This orchestrator has finished its run. Send it a message to resume this same conversation.",
+      "",
+      "",
+      ""
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Reports·Log",
+        "box": {
+          "x": 1087,
+          "y": 103,
+          "w": 100,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "hourly",
+        "box": {
+          "x": 1195,
+          "y": 103,
+          "w": 75,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "Rotate",
+        "box": {
+          "x": 1278,
+          "y": 103,
+          "w": 65,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "Fold",
+        "box": {
+          "x": 1282,
+          "y": 67,
+          "w": 69,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Sonnet · Light",
+        "box": {
+          "x": 337,
+          "y": 700,
+          "w": 120,
+          "h": 28
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 673
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-seated-390-en": {
+    "state": "resumable",
+    "status": [
+      "This orchestrator has finished its run. Send it a message to resume this same conversation."
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Seat tickevery 60 min · last check 2m ago",
+        "box": {
+          "x": 16,
+          "y": 456,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "ReportsLog",
+        "box": {
+          "x": 16,
+          "y": 512,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Run the board.",
+        "box": {
+          "x": 16,
+          "y": 652,
+          "w": 358,
+          "h": 36
+        },
+        "disabled": false
+      },
+      {
+        "text": "Edit the mandatereplaces the orchestrator",
+        "box": {
+          "x": 16,
+          "y": 700,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Rotate",
+        "box": {
+          "x": 16,
+          "y": 794,
+          "w": 88,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Open conversation",
+        "box": {
+          "x": 112,
+          "y": 794,
+          "w": 262,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 359,
+      "w": 390,
+      "h": 422
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-seated-1440-uk": {
+    "state": "live",
+    "status": [
+      "",
+      "Оркестратор завершив роботу. Надішліть повідомлення, щоб продовжити цю саму розмову.",
+      "",
+      "",
+      ""
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Звіти·Журнал",
+        "box": {
+          "x": 1047,
+          "y": 103,
+          "w": 108,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "щогодини",
+        "box": {
+          "x": 1163,
+          "y": 103,
+          "w": 93,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "Замінити",
+        "box": {
+          "x": 1264,
+          "y": 103,
+          "w": 79,
+          "h": 24
+        },
+        "disabled": false
+      },
+      {
+        "text": "Згорнути",
+        "box": {
+          "x": 1255,
+          "y": 67,
+          "w": 96,
+          "h": 28
+        },
+        "disabled": false
+      },
+      {
+        "text": "Sonnet · Легкі",
+        "box": {
+          "x": 337,
+          "y": 700,
+          "w": 120,
+          "h": 28
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 325,
+      "y": 61,
+      "w": 1038,
+      "h": 673
+    },
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "pageOverflowX": 0
+  },
+  "seat-creation-seated-390-uk": {
+    "state": "resumable",
+    "status": [
+      "Оркестратор завершив роботу. Надішліть повідомлення, щоб продовжити цю саму розмову."
+    ],
+    "error": null,
+    "errorTitle": null,
+    "failureText": null,
+    "failureHint": null,
+    "textScrolls": 0,
+    "errorOverflowX": 0,
+    "errorWords": "",
+    "buttons": [
+      {
+        "text": "Тікер оркестраторакожні 60 хв · остання перевірка 2 хв тому",
+        "box": {
+          "x": 16,
+          "y": 456,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "ЗвітиЖурнал",
+        "box": {
+          "x": 16,
+          "y": 512,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Run the board.",
+        "box": {
+          "x": 16,
+          "y": 652,
+          "w": 358,
+          "h": 36
+        },
+        "disabled": false
+      },
+      {
+        "text": "Редагувати мандатзамінює оркестратора",
+        "box": {
+          "x": 16,
+          "y": 700,
+          "w": 358,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Замінити",
+        "box": {
+          "x": 16,
+          "y": 794,
+          "w": 107,
+          "h": 44
+        },
+        "disabled": false
+      },
+      {
+        "text": "Відкрити розмову",
+        "box": {
+          "x": 131,
+          "y": 794,
+          "w": 243,
+          "h": 44
+        },
+        "disabled": false
+      }
+    ],
+    "host": {
+      "x": 0,
+      "y": 359,
+      "w": 390,
+      "h": 422
+    },
+    "viewport": {
+      "w": 390,
+      "h": 844
+    },
+    "pageOverflowX": 0
+  },
+  "failures": []
+}
