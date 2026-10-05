@@ -6,6 +6,12 @@ also the freshly fetched main at 15:13:24 UTC. The observed installation ran
 `6af2bab08a5213955e900fb4cc5e76e11f0ee1de`. All times below are UTC;
 MiB means bytes divided by 1,048,576.
 
+At publication, main had advanced to
+`dd6e3d32a0a4a36f8875e1844cf284d970c76a23`. A 15:34 UTC comparison found
+no change to the investigated registry, state-store, scanner, resources,
+title-projection or MCP server implementations, or the Docker runtime pin.
+The updated package manifest still pins Next to 16.3.6.
+
 **Result.** There is a reproducible registry retention defect: a reader's
 parsed-row cache retains rows deleted through another connection. Ordinary
 fixed-corpus HTTP polling showed modest route warm-up and stable connection
@@ -391,6 +397,7 @@ Bun.unsafe.mimallocDump();
 | 15:12:43.022–15:12:44.012 | `bun scripts/profileBrowser.ts --registry-churn --out <private aggregate>`; exit 0, eight cycles, two real store connections. |
 | 15:13:24 | `git fetch origin main`; `git rev-parse origin/main`; relevant-source `git diff origin/main`; no source drift in the investigated paths. |
 | 15:15–15:17 | A second isolated handoff run with `Bun.unsafe.mimallocDump()`; exit 0. Native allocator counters were aggregated. |
+| 15:34 | `git rev-parse origin/main`; `git diff ee19907eb..origin/main -- <investigated source paths> Dockerfile package.json`; the relevant implementation and runtime/version pins were unchanged. |
 
 TypeScript and changed-file ESLint were checked. Publication hooks check
 privacy, commit attribution, types and changed-file lint in isolation. Hosted
