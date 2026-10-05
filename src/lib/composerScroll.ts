@@ -180,7 +180,10 @@ export function seatComposerBudget({ boxHeight, room, rows }: { boxHeight: numbe
     may add. A transcript above its minimum gives the growth back first, so a
     shortened draft shrinks the seat again; a roomy seat never grows at all.
     Rounded up, so a fractional layout never asks for less than it needs and
-    never trades one px back and forth. */
+    never trades one px back and forth. `overflow` is at most the form's whole
+    content, and a seat too short for the rows above the form lacks more than
+    that, so the caller repeats the step on the layout it produced until it
+    returns `grown`. */
 export function seatGrowth({ grown, transcriptHeight, overflow, room }: { grown: number; transcriptHeight: number; overflow: number; room: number }): number {
   const wanted = Math.ceil(grown + SEAT_TRANSCRIPT_FLOOR_PX - transcriptHeight + Math.max(0, overflow));
   return Math.max(0, Math.min(Math.floor(Math.max(0, room)), wanted));

@@ -15,6 +15,9 @@ import {
   SEAT_TOP_MIN_WIDTH, expandKanbanSeat, useKanbanSeat,
 } from "./kanbanSeatStore";
 
+/* The most steps one measurement of the seat's growth takes (#1734). */
+const SEAT_GROWTH_PASSES = 8;
+
 /** The board's room for the seat on top: its container less the board's edge on each side (`--kb-edge`). */
 function seatRoom(section: HTMLElement | null): number {
   const parent = section?.parentElement;
@@ -83,15 +86,17 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
      from then on the form is what runs short: it scrolls its own content. That
      overflow is what the seat adds to its height, up to the stop its grip has,
      and a transcript back above its minimum is what it gives back. One step
-     settles it either way, because a px added to the seat is a px the form
-     gets. It runs on every change inside the seat and before the frame is
+     is not always the whole of it: a seat dragged to the grip's lower stop is
+     too short for the transcript's minimum and the control strip alone, and
+     the form cannot report more overflow than its own content, so the step
+     repeats until it changes nothing. It runs on every change inside the seat and before the frame is
      painted, so the form is never drawn cut. The side seat is the full height
      of the page and a folded one draws no conversation. */
   useLayoutEffect(() => {
     const section = sectionRef.current;
     if (side || seat.collapsed || !section || typeof MutationObserver === "undefined") return;
     let grown = 0;
-    const measure = () => {
+    const step = () => {
       const conversation = section.querySelector<HTMLElement>("[data-orchestrator-conversation]");
       const form = conversation?.querySelector<HTMLElement>("form");
       const transcript = conversation?.querySelector<HTMLElement>("[data-composer-yields]");
@@ -105,10 +110,17 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
           room: Number.isFinite(limit) ? limit - (section.getBoundingClientRect().height - grown) : 0,
         });
       }
-      if (next === grown) return;
+      if (next === grown) return false;
       grown = next;
       if (next > 0) section.style.setProperty("--seat-grow", `${next}px`);
       else section.style.removeProperty("--seat-grow");
+      return true;
+    };
+    /* Each step reads the layout the one before it wrote; the seat at its
+       lower stop settles in two, and the bound is there for a layout that
+       never does. */
+    const measure = () => {
+      for (let pass = 0; pass < SEAT_GROWTH_PASSES && step(); pass += 1);
     };
     measure();
     /* A transcript that streams changes nothing here: its row is held at its

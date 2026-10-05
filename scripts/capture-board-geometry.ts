@@ -144,7 +144,12 @@
  * and clear of the field, a seat that grows only once the transcript is at
  * its minimum and never past the stop its grip has, a default seat and the
  * board under it standing still, and everything back where it was once the
- * draft is emptied.
+ * draft is emptied. It then drags the grip by pointer from a roomy seat to
+ * its lower stop at the three desktop sizes and requires, on the frame after
+ * the release, a whole composer and the height a page loading there draws.
+ * Every surface must be drawn in its own language: the server's choice is
+ * set before each one, and the document's language and the dictation
+ * button's name are checked.
  *
  * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
  * says when a creation did not land, on a signed-in home with no seat: the
@@ -181,7 +186,7 @@ import { chromium, type Browser, type Page } from "playwright-core";
 
 import { OPEN_LINKED_SETTINGS_EVENT } from "../src/components/links/openLinkedSettings";
 import { translate } from "../src/lib/i18n";
-import { SEAT_HEIGHT_VERSION, SEAT_MIN_HEIGHT, SEAT_STORAGE_KEY, seatMaxHeight } from "../src/components/kanban/kanbanSeatStore";
+import { clampSeatHeight, SEAT_HEIGHT_VERSION, SEAT_MIN_HEIGHT, SEAT_STORAGE_KEY, seatMaxHeight } from "../src/components/kanban/kanbanSeatStore";
 import { SEAT_TRANSCRIPT_FLOOR_PX } from "../src/lib/composerScroll";
 import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
@@ -3780,6 +3785,9 @@ const SEAT_COMPOSER_VIEWPORTS = [{ width: 1440, height: 900 }, { width: 1000, he
    (`clamp(160px, 30vh, 360px)`, which the grip still reaches), and the grip's
    own lower stop. */
 const SEAT_COMPOSER_SIZES = ["default", "compact", "minimum"] as const;
+/* The grip drag: from a roomy seat, further up than the grip's lower stop is. */
+const SEAT_DRAG_FROM = 465;
+const SEAT_DRAG_TRAVEL = 400;
 const compactSeatHeight = (windowHeight: number) => Math.min(360, Math.max(SEAT_MIN_HEIGHT, Math.round(windowHeight * 0.3)));
 const seatDraft = (lang: "en" | "uk", lines: number) => Array.from({ length: lines }, (_, index) => (lang === "uk" ? `Рядок чернетки ${index + 1} із ${lines}.` : `Draft line ${index + 1} of ${lines}.`)).join("\n");
 
@@ -3867,6 +3875,21 @@ async function seatComposerMain(): Promise<void> {
       field.dispatchEvent(new Event("input", { bubbles: true }));
     }, { selector, value });
 
+    /* The server's language is the one a page adopts after it mounts (`syncOperatorLocale`), so it is chosen there before every surface; the browser's own storage alone left every uk surface drawn in English. */
+    const chooseLanguage = async (lang: "en" | "uk") => {
+      const written = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!written.ok) throw new Error(`choosing ${lang} answered ${written.status}`);
+    };
+    /** The surface is drawn in its own language: the document says so and the dictation button is named in it. */
+    const requireLanguage = async (page: Page, tag: string, selector: string, lang: "en" | "uk") => {
+      const shown = await page.evaluate((selector) => ({
+        lang: document.documentElement.lang,
+        names: [...document.querySelectorAll<HTMLElement>(`${selector} button`)].map((node) => node.getAttribute("aria-label") ?? ""),
+      }), selector);
+      must(shown.lang === lang, `${tag}: the document is in «${shown.lang}», the surface is ${lang}`);
+      must(shown.names.includes(translate(lang, "mic.dictate")), `${tag}: no «${translate(lang, "mic.dictate")}» among the composer's buttons (${shown.names.filter(Boolean).join(", ")})`);
+    };
+
     type Reading = NonNullable<ReturnType<typeof readSeatComposer>>;
     /** Drive one composer through every draft length and back to empty; the checks every surface shares. */
     const drive = async (page: Page, tag: string, selector: string, lang: "en" | "uk") => {
@@ -3875,6 +3898,7 @@ async function seatComposerMain(): Promise<void> {
         if (!reading) throw new Error(`${tag}: no composer at ${selector}`);
         return reading;
       };
+      await requireLanguage(page, tag, selector, lang);
       const empty = await read();
       const drafts: Record<string, Reading> = {};
       for (const lines of SEAT_DRAFT_LINES) {
@@ -3946,8 +3970,11 @@ async function seatComposerMain(): Promise<void> {
     };
 
     const SEAT_FORM = "[data-kanban-seat] [data-orchestrator-conversation] form";
+    /* How tall the seat is on a page that loads with it stored at the grip's lower stop, per window and language. */
+    const loadedAtStop = new Map<string, number>();
     for (const viewport of SEAT_COMPOSER_VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const size of SEAT_COMPOSER_SIZES) {
       const tag = `seat-composer-${viewport.width}x${viewport.height}-${lang}-${size}`;
+      await chooseLanguage(lang);
       const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       /* The seat as this browser would have kept it: open (a window under 800 px starts it folded) and at the size under test. */
@@ -3967,6 +3994,7 @@ async function seatComposerMain(): Promise<void> {
         report[tag] = entry;
         const { drafts } = entry;
         (entry as Record<string, unknown>).setHeight = height;
+        if (size === "minimum" && entry.seat !== null) loadedAtStop.set(`${viewport.width}x${viewport.height}-${lang}`, entry.seat);
         /* The seat is the height under test, or what an empty composer under the transcript's minimum needs where that is more. */
         must(height === null ? near(entry.seat ?? 0, seatMaxHeight(viewport.height), 1) : (entry.seat ?? 0) >= height - 0.5, `${tag}: the seat is ${entry.seat}px, set to ${height ?? "its default"}`);
         if (size === "default") must(SEAT_DRAFT_LINES.every((lines) => drafts[lines]!.seat === entry.seat && drafts[lines]!.board === entry.empty.board), `${tag}: a default seat or the board under it moved (${SEAT_DRAFT_LINES.map((lines) => `${drafts[lines]!.seat}/${drafts[lines]!.board}`).join(", ")})`);
@@ -3981,10 +4009,70 @@ async function seatComposerMain(): Promise<void> {
       }
     }
 
+    /* The grip, dragged by pointer from a roomy seat to its lower stop: the usual way a seat becomes compact. Read on the
+       frame after the release, with nothing typed and nothing else touched: the composer is whole and the seat is as tall
+       as a page that loads at that height draws it. */
+    for (const viewport of SEAT_COMPOSER_VIEWPORTS) for (const lang of ["en", "uk"] as const) {
+      const tag = `seat-composer-${viewport.width}x${viewport.height}-${lang}-dragged`;
+      await chooseLanguage(lang);
+      const roomy = clampSeatHeight(SEAT_DRAG_FROM, viewport.height);
+      const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript(({ lang, key, record }) => {
+        localStorage.setItem("llv_lang", lang);
+        localStorage.setItem(key, record);
+      }, { lang, key: SEAT_STORAGE_KEY, record: JSON.stringify({ height: roomy, heightV: SEAT_HEIGHT_VERSION, collapsed: { [project]: false }, placement: "top" }) });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      try {
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector(`${SEAT_FORM} textarea`, { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        await requireLanguage(page, tag, SEAT_FORM, lang);
+        const read = async (): Promise<Reading> => {
+          const reading = await page.evaluate(readSeatComposer, SEAT_FORM);
+          if (!reading) throw new Error(`${tag}: no composer`);
+          return reading;
+        };
+        const before = await read();
+        const grip = await page.locator('[data-seat-grip=""]').boundingBox();
+        if (!grip) throw new Error("the seat has no height grip");
+        const from = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x, from.y - SEAT_DRAG_TRAVEL, { steps: 20 });
+        await page.mouse.up();
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        const released = await read();
+        const set = await page.evaluate(() => document.querySelector<HTMLElement>("[data-kanban-seat]")?.style.getPropertyValue("--seat-h") ?? "");
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}.png`) });
+        /* The page that loaded with the seat stored at that stop, measured above. */
+        const loaded = loadedAtStop.get(`${viewport.width}x${viewport.height}-${lang}`) ?? null;
+        report[tag] = { from: before.seat?.h ?? null, setHeight: set, loadedSeat: loaded, released };
+        const bottom = (r: Rect) => r.y + r.h;
+        must(near(before.seat?.h ?? 0, roomy, 1), `${tag}: the seat started at ${before.seat?.h}px, set to ${roomy}`);
+        must(set === `${SEAT_MIN_HEIGHT}px`, `${tag}: the drag left the seat set to «${set}», not its ${SEAT_MIN_HEIGHT}px stop`);
+        must(released.formScroll <= released.formClient + 1, `${tag}: after the release the form scrolls its own content (${released.formScroll} in ${released.formClient})`);
+        must(bottom(released.field) <= bottom(released.form) + 0.5, `${tag}: after the release the field leaves the form`);
+        must(released.controls.length > 0, `${tag}: the composer shows no controls after the release`);
+        for (const control of released.controls) must(control.rect.y >= released.form.y - 0.5 && bottom(control.rect) <= bottom(released.form) + 0.5, `${tag}: after the release «${control.name}» leaves the form`);
+        must((released.transcript?.h ?? 0) >= SEAT_TRANSCRIPT_FLOOR_PX - 0.5, `${tag}: after the release the transcript is ${released.transcript?.h}px, under its ${SEAT_TRANSCRIPT_FLOOR_PX}px minimum`);
+        must(released.seat !== null && loaded !== null && near(released.seat.h, loaded, 0.5), `${tag}: the seat is ${released.seat?.h}px after the release and ${loaded}px on a page that loads at that height`);
+        if (released.seat && released.frame) must(bottom(released.seat) <= released.frame.y + 0.5, `${tag}: the seat ends at ${bottom(released.seat)}, over the board at ${released.frame.y}`);
+        must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+    }
+
     /* The phone: the seat's conversation is a full screen with its own composer box and ceiling. */
     const PHONE_FORM = '[data-testid="bounded-mobile-composer"]';
     for (const lang of ["en", "uk"] as const) {
       const tag = `seat-composer-390x844-${lang}`;
+      await chooseLanguage(lang);
       const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: "reduce" });
       await phone.addInitScript(seedInit);
       await phone.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
@@ -4018,7 +4106,7 @@ async function seatComposerMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`seat-composer acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("seat-composer acceptance passed at 1440 × 900, 1000 × 700, 1280 × 600 and 390 × 844 (en, uk; one, three, eight and twenty lines).");
+    console.log("seat-composer acceptance passed at 1440 × 900, 1000 × 700, 1280 × 600 and 390 × 844 (en, uk; one, three, eight and twenty lines; the grip dragged to its lower stop).");
   }
 }
 

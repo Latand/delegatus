@@ -337,6 +337,34 @@ describe("seatGrowth — how far past its set height the seat has to be (#1734)"
     expect(seatGrowth({ grown: 82, transcriptHeight: 73, overflow: 0, room: 405 })).toBe(81);
     expect(seatGrowth({ grown: 81, transcriptHeight: 72, overflow: 0, room: 405 })).toBe(81);
   });
+
+  test("repeated on the layout it produced, the step settles where the form shows everything", () => {
+    /* The seat dragged to the grip's lower stop, in the numbers measured at
+       1440 × 900: 105.4 px of header above the conversation, a 37 px control
+       strip, a form that needs 90.6 px. The conversation is 54.6 px, less than
+       the transcript's minimum and the strip, so the form has no height and
+       reports only its own content as overflow. */
+    const above = 105.4, strip = 37, needs = 90.6, set = 160, room = 515;
+    const layout = (grown: number) => {
+      const box = set + grown - above;
+      const form = Math.max(0, Math.min(needs, box - SEAT_TRANSCRIPT_FLOOR_PX - strip));
+      return { transcriptHeight: Math.max(SEAT_TRANSCRIPT_FLOOR_PX, box - strip - form), overflow: needs - form };
+    };
+    const first = seatGrowth({ grown: 0, ...layout(0), room });
+    expect(first).toBe(91);
+    expect(layout(first).overflow).toBeGreaterThan(50);
+    let grown = first;
+    let steps = 1;
+    for (; steps < 8; steps += 1) {
+      const next = seatGrowth({ grown, ...layout(grown), room });
+      if (next === grown) break;
+      grown = next;
+    }
+    expect(steps).toBe(2);
+    expect(set + grown).toBe(305);
+    expect(layout(grown).overflow).toBeLessThanOrEqual(0);
+    expect(layout(grown).transcriptHeight).toBeGreaterThanOrEqual(SEAT_TRANSCRIPT_FLOOR_PX);
+  });
 });
 
 describe("mobileComposerCeiling — the field leaves the region its room (#1629)", () => {
