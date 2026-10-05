@@ -525,10 +525,10 @@ The tools, by area:
   `rotate_orchestrator`, `send_message_to_orchestrator`,
   `seat_tick_settings`, `bridge_report` (files an entry in the Reports log),
   `bridge_directive`. Work for another project goes from seat to seat: a
-  seat's `create_task`, `create_pipeline` or `spawn_agent` on a project that
-  has its own orchestrator is refused with a pointer to
-  `send_message_to_orchestrator`, unless you asked for it and the seat quotes
-  your request in `crossProjectRequest`;
+  seat's `create_task`, `create_pipeline` or `spawn_agent` on another project
+  is refused with a pointer to `send_message_to_orchestrator`, which
+  designates that project's orchestrator first when it has none, unless you
+  asked for it and the seat quotes your request in `crossProjectRequest`;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **roles:** `role_presets` reads which engine, model and effort each role
@@ -546,7 +546,8 @@ The tools, by area:
   that carries a host, a path, an address, an id, a name this machine knows,
   somebody's quoted words or another private value is refused, in whatever
   encoding it is written. The orchestrator shows you the exact title and body
-  in chat and offers one reply that approves that text. Publication takes the
+  in chat and offers one reply, naming the preview's whole digest, that
+  approves that text. Publication takes the
   preview's digest and reads your reply in the conversation itself: nothing
   the orchestrator says about your answer counts, a reply for an earlier
   wording does not carry over, and one preview is filed once;
