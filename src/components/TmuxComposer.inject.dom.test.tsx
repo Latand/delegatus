@@ -563,7 +563,7 @@ test("injection refuses a still-reading document without sending a reduced paylo
   root.unmount();
 });
 
-test("an accepted injection removes only its own documents and preserves later intake", async () => {
+test("a delivered injection removes only its own documents and preserves later intake", async () => {
   holdInjection = true;
   const { host, root } = await mount();
   await type(host, "context");
@@ -572,11 +572,24 @@ test("an accepted injection removes only its own documents and preserves later i
   await settle(() => menuAction(host, "Add to context")!.click());
   await stageFile(host, "later.md", "later");
   await settle(() => releaseInjection?.());
+  expect(host.textContent).toContain("first.md");
+  await confirmInjection(root);
   expect(host.textContent).toContain("later.md");
   expect(host.textContent).not.toContain("first.md");
   expect(injections[0]!.files).toMatchObject([{ name: "first.md" }]);
   root.unmount();
 });
+
+function injectionReceipt(status: "queued" | "delivered" | "failed", revision = 2) {
+  const request = injections[0]!;
+  return { conversationId: CARD, idempotencyKey: String(request.idempotencyKey),
+    operationId: String(injectAnswer.operationId ?? "inject-1"), kind: "inject" as const,
+    status, revision, at: new Date().toISOString() };
+}
+async function confirmInjection(root: Root): Promise<void> {
+  durableReceipts = [injectionReceipt("delivered")];
+  await settle(() => root.render(<TmuxComposer file={{ ...file, ...observed }} />));
+}
 
 /** Every request any path made that carried a document of this name. */
 const carrying = (name: string) =>
@@ -609,7 +622,9 @@ test("a document already on its way into the context cannot be submitted again w
   expect(textarea(host).value).toBe("and answer me");
 
   await settle(() => releaseInjection?.());
-  /* Accepted: the document left with the injection, so the fence lifts and
+  expect(host.textContent).toContain("design-notes.md");
+  await confirmInjection(root);
+  /* Delivered: the document left with the injection, so the fence lifts and
      the typed message sends on its own. */
   expect(host.textContent).not.toContain("design-notes.md");
   await settle(() => press(textarea(host), "Enter"));
@@ -751,6 +766,10 @@ test.each([
     ? { ok: false, status: 503, delivery: "refused", error: "refused before admission" }
     : { ok: true, status: 202, operationId: "inject-accepted" };
   await settle(() => releaseInjection?.());
+  if (outcome === "accepted") {
+    expect(host.textContent).toContain("design-notes.md");
+    await confirmInjection(root);
+  }
   expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).toBeNull();
   expect(host.textContent).toContain("later.md");
   if (outcome === "accepted") {
@@ -818,9 +837,10 @@ test("the send menu's Queue for Codex refuses a document an unanswered Add to co
   expect(carrying("design-notes.md")).toHaveLength(1);
   expect(textarea(host).value).toBe("queue this for later");
 
-  /* Accepted: the document left with the injection, and the queued words go
+  /* Delivered: the document left with the injection, and the queued words go
      on their own. */
   await settle(() => releaseInjection?.());
+  await confirmInjection(root);
   expect(host.textContent).not.toContain("design-notes.md");
   await openSendMenu(host);
   await settle(() => menuAction(host, "Queue for Codex")!.click());
@@ -930,6 +950,7 @@ test("a refusal that lands after the composer moved to another conversation give
   expect(injections).toHaveLength(1);
 
   await settle(() => first.root.render(<TmuxComposer file={otherConversation()} />));
+  if (injectAnswer.ok) injectAnswer = { ...injectAnswer, receipt: injectionReceipt("delivered") };
   await settle(() => releaseInjection?.());
   expect(textarea(first.host).value).toBe("");
   expect(sessionStorage.getItem("llvDraft:conv-other")).toBeNull();
@@ -942,7 +963,7 @@ test("a refusal that lands after the composer moved to another conversation give
   again.root.unmount();
 });
 
-test("an acceptance that lands after the composer moved away takes its documents off the first conversation's tray", async () => {
+test("a delivered answer after the composer moved away takes its documents off the first conversation's tray", async () => {
   turn = "running";
   holdInjection = true;
   const first = await mount();
@@ -953,6 +974,7 @@ test("an acceptance that lands after the composer moved away takes its documents
   expect(sessionStorage.getItem(`llvDraftFiles:${CARD}`)).toContain("design-notes.md");
 
   await settle(() => first.root.render(<TmuxComposer file={otherConversation()} />));
+  if (injectAnswer.ok) injectAnswer = { ...injectAnswer, receipt: injectionReceipt("delivered") };
   await settle(() => releaseInjection?.());
   expect(first.host.textContent).not.toContain("design-notes.md");
   first.root.unmount();
@@ -1295,7 +1317,7 @@ test("a proven context refusal preserves words typed while the answer was pendin
 });
 
 
-test("an admission response after remount consumes the new composer's reattached document", async () => {
+test("a delivered response after remount consumes the new composer's reattached document", async () => {
   holdInjection = true;
   injectAnswer = { ok: true, status: 202, operationId: "inject-admitted" };
   const first = await mount();
@@ -1309,6 +1331,7 @@ test("an admission response after remount consumes the new composer's reattached
     second = await mount();
     await settle(() => second!.host.querySelector<HTMLButtonElement>('[aria-label="Remove design-notes.md"]')!.click());
     await stageFile(second.host, "renamed-notes.md", "# notes\n");
+    injectAnswer = { ...injectAnswer, receipt: injectionReceipt("delivered") };
     await settle(() => releaseInjection?.());
     expect(second.host.textContent).not.toContain("renamed-notes.md");
     await type(second.host, "plain follow-up");
@@ -1387,4 +1410,37 @@ test.each(["refusal", "not-executed", "failed"])("a %s context recovery retains 
     Object.assign(globalThis, { sessionStorage: originalStorage });
     await act(async () => root.unmount());
   }
+});
+
+
+test.each([
+  { recovered: false, resend: undefined }, { recovered: false, resend: "safe" },
+  { recovered: true, resend: undefined }, { recovered: true, resend: "safe" },
+])("a queued injection that later fails returns its original document with the edited words: %j", async ({ recovered, resend }) => {
+  holdInjection = true;
+  const { host, root } = await mount();
+  try {
+    await type(host, "read the notes");
+    await stageFile(host, "design-notes.md", "# notes\n");
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    const key = String(injections[0]!.idempotencyKey);
+    const queued = injectionReceipt("queued", 1);
+    if (recovered) injectAnswer = { ok: false, error: "network" };
+    else injectAnswer = { ok: true, status: 202, operationId: queued.operationId, receipt: queued };
+    await settle(() => releaseInjection?.());
+    if (recovered) {
+      admissionAnswer = { outcome: "admitted", operationId: queued.operationId, receipt: queued };
+      await settle(() => messageRowRecovery(CARD)!.check(key));
+    }
+    expect(host.textContent).toContain("design-notes.md");
+    expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).not.toBeNull();
+    durableReceipts = [{ ...queued, status: "failed", revision: 2, ...(resend ? { resend } : {}) }];
+    await settle(() => root.render(<TmuxComposer file={{ ...file }} />));
+    await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+    expect(textarea(host).value).toBe("read the notes");
+    await settleUntil(() => sends.length > 0, () => press(textarea(host), "Enter"));
+    expect(sends[0]!.files).toMatchObject([{ name: "design-notes.md", base64: Buffer.from("# notes\n").toString("base64") }]);
+    expect(injections).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); }
 });

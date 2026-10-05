@@ -1991,7 +1991,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      anything in it now belongs to the next message. */
   const outboxKeys = useRef<Set<string>>(new Set());
   /* Intake ids of staged documents an Add to context request owns (#1688).
-     Their chips stay fenced until admission or a proven refusal, so a lost
+     Their chips stay fenced until delivery or a proven refusal, so a lost
      answer cannot let a second Add to context, the queue-first submit (Send, Enter,
      steer, dictation) and Codex's queue hand-off (Alt+Enter, Queue for Codex)
      carry those bytes again. Codex does not deduplicate injections. */
@@ -2717,7 +2717,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     }
   }, [displayedRuntimeReceipts, outbox, cardId]);
 
-  /* The original key owns the documents until its receipt proves admission or
+  /* The original key owns the documents until its receipt proves delivery or
      a safe refusal. Repeated presses only show the existing unconfirmed state;
      injection operations cannot be retried on the engine wire. */
   useEffect(() => {
@@ -2730,7 +2730,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         .filter((candidate) => candidate.conversationId === cardId && candidate.idempotencyKey === key && candidate.kind === "inject")
         .sort(receiptEvidenceOrder)[0];
       if (!receipt) continue;
-      if (receiptIsAdmitted(receipt.status) || receiptHasAbsorbingOutcome(receipt)) releaseInjectionFence(cardId, key, true);
+      if (receiptHasAbsorbingOutcome(receipt)) releaseInjectionFence(cardId, key, true);
       // Match Edit's proof rule: a failed row with no unknown fate is editable.
       else if (entry?.state === "failed" && !entry.deliveryUncertain && !receiptHasUnknownFate(receipt)) {
         releaseInjectionFence(cardId, key, false);
@@ -4577,7 +4577,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (chipProject) settleTaskChips(chipProject, chips);
     setInjectsPending((count) => count + 1);
     setText("");
-    /* THE STAGED DOCUMENTS STAY UNTIL ADMISSION OR REFUSAL. Clearing them now would be
+    /* THE STAGED DOCUMENTS STAY UNTIL DELIVERY OR REFUSAL. Clearing them now would be
        unrecoverable: the restore path rebuilds a file slot WITHOUT its bytes —
        it exists for a page reload, where the bytes are genuinely gone — so a
        refusal would leave the operator holding a chip that can no longer be
@@ -4636,7 +4636,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         updateOutbox(owner, clientMessageId, { deliveryUncertain: true });
       }
       const restoreDraft = !answer.ok && !operationExists && !answerLost;
-      if (answer.ok || restoreDraft) releaseInjectionFence(owner, clientMessageId, answer.ok);
+      if (answer.receipt?.kind === "inject" && receiptHasAbsorbingOutcome(answer.receipt)) releaseInjectionFence(owner, clientMessageId, true);
+      else if (restoreDraft) releaseInjectionFence(owner, clientMessageId, false);
       if (restoreDraft) {
         const laterWords = payloadOwner.current === owner ? textRef.current.trim() : sessionStorage.getItem(draftKey(owner))?.trim();
         const laterChips = chipProject ? readTaskChips(chipProject) : [];
@@ -4651,15 +4652,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       /* The composer may show another conversation by now, or none. The answer
          settles the conversation that pressed it, in its stored draft, and
          leaves the words and status on screen to their owner. */
-      if (payloadOwner.current !== owner) {
-        if (answer.ok) forgetDraftFiles(owner, requestedFiles.map((file) => file.id));
-        return;
-      }
+      if (payloadOwner.current !== owner) return;
       if (answer.ok) {
         /* Accepted, and only that. The placement is the receipt's to report,
            once the insertion has been observed in the thread. */
         setStatus({ kind: "ok", text: t("inject.submitted") });
-        attachments.settleDelivered([], requestedFiles);
         return;
       }
       if (answerLost) {
