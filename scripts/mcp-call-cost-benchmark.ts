@@ -11,6 +11,20 @@ const COLD_SAMPLES = 5;
 const COLD_CORPUS = { projects: 40, claudePerProject: 45, codex: 700 };
 const COLD_LONG = { codexBytes: 100 * 1024 * 1024, claudeBytes: 30 * 1024 * 1024 };
 
+/* Every root a scanner, an account store or tmux resolves from the environment,
+   pointed into the run's own sandbox before any product module loads. HOME and
+   TMPDIR alone leave the inherited COPILOT_HOME, OPENCLAW_STATE_DIR and the
+   operator's tmux server (TMUX, or the /tmp default of TMUX_TMPDIR) reachable. */
+const SANDBOX_ROOTS = ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'LLV_STATE_DIR', 'TMPDIR', 'CLAUDE_CODE_TMPDIR', 'TMUX_TMPDIR', 'COPILOT_HOME', 'OPENCLAW_STATE_DIR', 'GH_CONFIG_DIR'];
+function isolateEnvironment(sandbox: string, transcriptHomes: { codex: string; claude: string }) {
+ for (const key of Object.keys(process.env)) if (key.startsWith('LLV_') || key === 'TMUX' || key === 'TMUX_PANE') delete process.env[key];
+ for (const key of SANDBOX_ROOTS) { process.env[key] = path.join(sandbox, key); fs.mkdirSync(process.env[key]!, { recursive: true }); }
+ process.env.CODEX_HOME = process.env.LLV_CODEX_HOME = transcriptHomes.codex;
+ process.env.CLAUDE_CONFIG_DIR = process.env.LLV_CLAUDE_HOME = transcriptHomes.claude;
+ for (const home of Object.values(transcriptHomes)) fs.mkdirSync(home, { recursive: true });
+ process.env.LLV_STATE_ACTIVATION = 'sqlite';
+}
+
 /* A cold read is the first call a fresh MCP process answers with an empty
    state directory: no resource observation, no file-scan snapshot, nothing in
    memory. Every sample is its own process over one shared generated corpus. */
@@ -24,9 +38,19 @@ function coldPaths(root: string) {
   claudeLong: path.join(claudeHome, 'projects', '-workspace-fixture', `${coldId('2')}.jsonl`),
  };
 }
+/** One generated Codex rollout of the corpus, by its index. */
+function coldCodexRollout(codexHome: string, index: number) {
+ const day = String(1 + index % 28).padStart(2, '0');
+ const id = `${index.toString(16).padStart(8, '0')}-1111-4111-a111-${index.toString(16).padStart(12, '0')}`;
+ return { id, file: path.join(codexHome, 'sessions', '2026', '09', day, `rollout-2026-09-${day}T10-00-00-${id}.jsonl`) };
+}
+/* Live hosts whose transcript tails answer slowly: the part of a cold
+   agent_activity that follows the catalog wait. */
+const COLD_SLOW_HOSTS = { key: 'agent_activity/no-catalog-slow-hosts', hosts: 3, tailMs: 1100 };
 const COLD_SCENARIOS: Record<string, (files: ReturnType<typeof coldPaths>, key: string) => [string, Record<string, unknown>]> = {
  'resources/no-observation': () => ['resources', {}],
  'agent_activity/no-catalog': (_files, key) => ['agent_activity', { clientRequestId: key }],
+ [COLD_SLOW_HOSTS.key]: (_files, key) => ['agent_activity', { clientRequestId: key }],
  'get_conversation/claude-long': files => ['get_conversation', { transcriptPath: files.claudeLong }],
  'get_conversation/codex-long': files => ['get_conversation', { transcriptPath: files.codexLong }],
  'get_conversation/claude-long-tail40': files => ['get_conversation', { transcriptPath: files.claudeLong, tailLines: 40 }],
@@ -62,13 +86,11 @@ async function writeColdFixtures() {
   }
  }
  for (let index = 0; index < COLD_CORPUS.codex; index++) {
-  const day = String(1 + index % 28).padStart(2, '0');
-  const directory = path.join(files.codexHome, 'sessions', '2026', '09', day);
-  fs.mkdirSync(directory, { recursive: true });
-  const id = `${index.toString(16).padStart(8, '0')}-1111-4111-a111-${index.toString(16).padStart(12, '0')}`;
+  const { id, file } = coldCodexRollout(files.codexHome, index);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = [JSON.stringify({ timestamp: '2026-09-01T10:00:00.000Z', type: 'session_meta', payload: { id, cwd: `/workspace/project-${index % COLD_CORPUS.projects}` } })];
   for (let turn = 0, total = turns(); turn < total; turn++) lines.push(JSON.stringify({ timestamp: '2026-09-01T10:00:00.000Z', type: 'response_item', payload: { type: 'message', role: turn % 2 ? 'assistant' : 'user', content: [{ type: 'output_text', text: 'text ' + 'word '.repeat(150) }] } }));
-  fs.writeFileSync(path.join(directory, `rollout-2026-09-${day}T10-00-00-${id}.jsonl`), lines.join('\n') + '\n');
+  fs.writeFileSync(file, lines.join('\n') + '\n');
  }
  process.stdout.write(JSON.stringify({ transcripts: count + COLD_CORPUS.codex + 2, codexLongBytes: fs.statSync(files.codexLong).size, claudeLongBytes: fs.statSync(files.claudeLong).size }) + '\n');
 }
@@ -76,11 +98,7 @@ async function writeColdFixtures() {
 async function runColdSample() {
  const scenario = process.argv[process.argv.indexOf('--cold-sample') + 1]!;
  const files = coldPaths(process.env.COLD_ROOT!), sandbox = process.env.COLD_SANDBOX!;
- for (const key of Object.keys(process.env)) if (key.startsWith('LLV_')) delete process.env[key];
- for (const key of ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'LLV_STATE_DIR', 'TMPDIR', 'CLAUDE_CODE_TMPDIR']) { process.env[key] = path.join(sandbox, key); fs.mkdirSync(process.env[key]!, { recursive: true }); }
- process.env.CODEX_HOME = process.env.LLV_CODEX_HOME = files.codexHome;
- process.env.CLAUDE_CONFIG_DIR = process.env.LLV_CLAUDE_HOME = files.claudeHome;
- process.env.LLV_STATE_ACTIVATION = 'sqlite';
+ isolateEnvironment(sandbox, { codex: files.codexHome, claude: files.claudeHome });
  // A closed port: nothing in a cold sample may reach a running Viewer.
  process.env.LLV_VIEWER_CONTROL_URL = 'http://127.0.0.1:9';
  const serverMod = await import('@/lib/mcp/server');
@@ -93,7 +111,17 @@ async function runColdSample() {
  if (begun.kind !== 'created') throw new Error('fixture admission');
  const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
  const receipts = new serverMod.SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, 'audit-receipts.sqlite'));
- const service = serverMod.createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), productionDomainDependencies), receipts, viewerMcpToolPolicy(productionDomainDependencies));
+ // The slow-host scenario keeps the production catalog, describe and tail read,
+ // and adds verified live hosts whose tail takes longer than the answer may.
+ const hosted = Array.from({ length: COLD_SLOW_HOSTS.hosts }, (_, index) => coldCodexRollout(files.codexHome, index));
+ const domain: any = scenario !== COLD_SLOW_HOSTS.key ? productionDomainDependencies : { ...productionDomainDependencies, livenessSources: (catalog: any) => {
+  const sources: any = productionDomainDependencies.livenessSources(catalog);
+  return { ...sources,
+   registrySnapshot: () => { const snapshot = sources.registrySnapshot(); return { ...snapshot, entries: { ...snapshot.entries, ...Object.fromEntries(hosted.map((host, index) => [`cold-host-${index}`, { key: { engine: 'codex', accountId: null, sessionId: host.id }, artifactPath: host.file, status: 'live', host: null, accountId: null, structuredHost: { process: { pid: process.pid, startIdentity: 'cold-host' } }, updatedAt: new Date().toISOString() }])) } }; },
+   probe: { ...sources.probe, pidAlive: () => true, processIdentity: () => 'cold-host' },
+   transcriptEvidence: async (...args: any[]) => { if (hosted.some(host => host.file === args[1])) await Bun.sleep(COLD_SLOW_HOSTS.tailMs); return sources.transcriptEvidence(...args); } };
+ } };
+ const service = serverMod.createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain), receipts, viewerMcpToolPolicy(domain));
  const mcp = serverMod.createViewerMcpServer(service);
  const client = new Client({ name: 'private-audit', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair(); await Promise.all([client.connect(a), mcp.connect(b)]);
  let seq = 0;
@@ -103,8 +131,8 @@ async function runColdSample() {
   const answer: any = await runAsMcpHttpCaller({ capability }, () => client.callTool({ name: tool, arguments: args }));
   const ms = performance.now() - start;
   const result = answer.structuredContent ?? JSON.parse(answer.content[0].text);
-  const pending = result.freshness?.pending === true || result.catalog === 'pending';
-  return { ms, outTok: JSON.stringify(result).length / 4, ok: result.ok === true, pending };
+  const pending = result.freshness?.pending === true || result.catalog === 'pending' || result.evidence === 'pending';
+  return { ms, outTok: JSON.stringify(result).length / 4, ok: result.ok === true, pending, rows: Array.isArray(result.conversations) ? result.conversations.length : null };
  };
  const first = await call();
  // A pending first answer is followed until the complete one arrives, so the
@@ -117,7 +145,7 @@ async function runColdSample() {
    if (!next.pending) { completeAfterMs = performance.now() - started; break; }
   }
  }
- process.stdout.write(JSON.stringify({ scenario, ms: first.ms, outTok: first.outTok, ok: first.ok, pending: first.pending, followUps, worstFollowUpMs, completeAfterMs }) + '\n');
+ process.stdout.write(JSON.stringify({ scenario, ms: first.ms, outTok: first.outTok, ok: first.ok, pending: first.pending, rows: first.rows, followUps, worstFollowUpMs, completeAfterMs }) + '\n');
  await client.close(); await mcp.close(); receipts.close();
  process.exit(0);
 }
@@ -139,6 +167,7 @@ function runColdSide(checkout: string, work: string, side: string, coldRoot: str
   const complete = rows.filter(row => row.completeAfterMs !== null).map(row => row.completeAfterMs);
   return { key, n: rows.length, ok: rows.filter(row => row.ok).length, pending: rows.filter(row => row.pending).length,
    p50ms: +q(rows.map(row => row.ms), .5).toFixed(2), maxMs: +Math.max(...rows.map(row => row.ms)).toFixed(2), outTokP50: q(rows.map(row => row.outTok), .5),
+   ...(rows.every(row => typeof row.rows === 'number') ? { rowsMin: Math.min(...rows.map(row => row.rows)) } : {}),
    ...(complete.length ? { worstFollowUpMs: +Math.max(...rows.map(row => row.worstFollowUpMs)).toFixed(2), completeAfterP50ms: +q(complete, .5).toFixed(2) } : {}) };
  });
 }
@@ -210,6 +239,7 @@ async function runPair() {
   if (faultRows.length !== 18 || faultRows.some(row => row.ok || (row.side === 'head' ? row.attempts !== 1 : row.attempts !== 1 && row.attempts !== 11))) throw new Error('Expected three failed-verdict fault scenarios, n=3 per side, with one HTTP attempt on the head');
   const cold = { base: (output.base as any).cold as any[], head: (output.head as any).cold as any[] };
   if ([...cold.base, ...cold.head].some(row => row.ok !== row.n)) throw new Error('A cold fixture call failed');
+  if ([...cold.base, ...cold.head].find(row => row.key === COLD_SLOW_HOSTS.key && row.rowsMin < COLD_SLOW_HOSTS.hosts)) throw new Error('A cold agent_activity answer lost a hosted row');
   const fullKey = 'get_conversation/claude-long-full';
   if (cold.base.find(row => row.key === fullKey)!.outTokP50 !== cold.head.find(row => row.key === fullKey)!.outTokP50) throw new Error('get_conversation full:true no longer returns the complete answer');
   process.stdout.write(JSON.stringify({ base: baseCommit, head, healthyCallsPerSide: 303, scenarios: baseRows.length, profiles: { base: baseRows, head: headRows }, faultRows, coldSeed: { ...coldSeed, samplesPerScenario: COLD_SAMPLES }, cold }, null, 2) + '\n');
@@ -227,9 +257,8 @@ if (coldFixtures) {
 } else {
 const root=process.env.AUDIT_OUTPUT!,runTag=String(Date.now()),candidate=process.env.COST_CANDIDATE==='1';
 fs.mkdirSync(root,{recursive:true});
-for(const key of Object.keys(process.env))if(key.startsWith('LLV_'))delete process.env[key];
-for(const key of ['HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','LLV_STATE_DIR','CODEX_HOME','LLV_CODEX_HOME','CLAUDE_CONFIG_DIR','LLV_CLAUDE_HOME']){process.env[key]=path.join(root,'sandbox-'+runTag,key);fs.mkdirSync(process.env[key]!,{recursive:true});}
-process.env.LLV_STATE_ACTIVATION='sqlite';
+const warmSandbox=path.join(root,'sandbox-'+runTag);
+isolateEnvironment(warmSandbox,{codex:path.join(warmSandbox,'LLV_CODEX_HOME'),claude:path.join(warmSandbox,'LLV_CLAUDE_HOME')});
 const serverMod=await import('@/lib/mcp/server');
 const {viewerMcpBindings,productionDomainDependencies,productionViewerControlDependencies,viewerMcpToolPolicy}=await import('@/lib/mcp/bindings');
 const {pipelineCorpus}=await import('@/lib/pipelines/fixtures/corpus');

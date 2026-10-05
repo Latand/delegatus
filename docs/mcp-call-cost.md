@@ -23,10 +23,19 @@ system block, an empty session table, and `freshness.pending: true` with reason
 `collecting`, and a later call returns the table. `fresh:true` still waits for
 the completed observation.
 
-`agent_activity` waits 700 ms for a conversation catalog. A process that holds
-none answers with the hosts the registry names and `catalog: "pending"`, and
-the scan keeps running for the next call; a process that holds an older one
-answers from it with `selection.cacheStatus: "stale"`.
+`agent_activity` answers within 800 ms, of which up to 650 ms wait for a
+conversation catalog. A process that holds none answers with the hosts the
+registry names and `catalog: "pending"`, and the scan keeps running for the
+next call; a process that holds an older one answers from it with
+`catalog: "stale"`. Both markers sit at the top level of the default, compact
+and full answers. The rest of the 800 ms describes hosts the catalog lacks and
+reads transcript tails. When it ends, `evidence: "pending"` reports
+`unverifiedCount` rows projected without their tail (`evidenceSource:
+"projection"` in the full answer) and `undescribedHostCount` live hosts with no
+row yet. The tail reads left behind keep running, and the next call for the
+same unchanged transcript takes their result. A caller that cancels at any
+point of the call releases its own wait on the scan; an ordinary pending answer
+keeps it.
 
 `get_conversation` returns a summary inside a text budget: 40,000 characters of
 messages and 24,000 of tools, newest kept, each record cut to `maxChars` (4,000

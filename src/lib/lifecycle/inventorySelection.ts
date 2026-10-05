@@ -157,7 +157,8 @@ export interface CompletedGenerationSelectionDependencies {
    * no generation waits for a whole-corpus scan otherwise: 2.9 s over 2,500
    * transcripts. Past the budget the selection answers from the last completed
    * rows as `stale`, or as `pending` with none, and the wait is left subscribed
-   * so the scan finishes for the next read.
+   * so the scan finishes for the next read. `signal` keeps reaching that wait
+   * until the scan settles.
    */
   budgetMs?: number;
   /** The last completed rows, never starting a scan. */
@@ -166,8 +167,11 @@ export interface CompletedGenerationSelectionDependencies {
 
 const BUDGET_SPENT = Symbol("catalog-budget-spent");
 
-/** The generation, or `BUDGET_SPENT` when the budget ended first. A caller that
-    cancels releases its subscription; a spent budget keeps it. */
+/** The generation, or `BUDGET_SPENT` when the budget ended first. A spent
+    budget keeps the subscription, so the scan finishes for the next read. The
+    caller's cancellation still reaches it for as long as the scan runs: the
+    call that goes on to read its hosts after a spent budget can be cancelled,
+    and that releases this subscription and no other. */
 async function generationWithinBudget(
   dependencies: CompletedGenerationSelectionDependencies,
   budgetMs: number,
@@ -175,6 +179,10 @@ async function generationWithinBudget(
   const caller = dependencies.signal ?? null;
   const subscription = new AbortController();
   const read = dependencies.completedFileScan({ signal: subscription.signal });
+  const forward = () => subscription.abort(caller?.reason);
+  caller?.addEventListener("abort", forward, { once: true });
+  const settled = () => caller?.removeEventListener("abort", forward);
+  void read.then(settled, settled);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
@@ -182,17 +190,13 @@ async function generationWithinBudget(
       read,
       new Promise<typeof BUDGET_SPENT>((resolve) => { timer = setTimeout(() => resolve(BUDGET_SPENT), Math.max(0, budgetMs)); }),
       new Promise<never>((_resolve, reject) => {
-        onAbort = () => {
-          subscription.abort(caller?.reason);
-          reject(abortError(caller?.reason));
-        };
+        onAbort = () => reject(abortError(caller?.reason));
         caller?.addEventListener("abort", onAbort, { once: true });
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) caller?.removeEventListener("abort", onAbort);
-    void read.catch(() => undefined);
   }
 }
 

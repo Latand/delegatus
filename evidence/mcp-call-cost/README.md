@@ -18,10 +18,21 @@ aggregates, fixture dimensions, and fault attempt counts.
 
 The same command then measures cold reads. It generates one corpus of 2,502
 synthetic transcripts, among them a 100 MB Codex rollout and a 30 MB Claude
-session, and runs ten scenarios five times per side. Every sample is a fresh
-process with an empty state directory, its own `HOME` and `TMPDIR`, and a
-Viewer control URL on a closed port, so it holds no resource observation, no
-file-scan snapshot and nothing in memory. A row reports the first call's
+session, and runs eleven scenarios five times per side. Every sample is a fresh
+process with an empty state directory and a Viewer control URL on a closed
+port, so it holds no resource observation, no file-scan snapshot and nothing in
+memory. `agent_activity/no-catalog-slow-hosts` adds three verified live hosts
+whose transcript tails each take 1.1 s to answer, and `rowsMin` is the fewest
+rows any of its first answers returned.
+
+Both the warm and the cold runs point every root the product resolves from the
+environment into their own sandbox before a product module loads: `HOME`, the
+XDG directories, `TMPDIR`, `CLAUDE_CODE_TMPDIR`, the Codex and Claude homes,
+`COPILOT_HOME`, `OPENCLAW_STATE_DIR`, `GH_CONFIG_DIR` and `TMUX_TMPDIR`, with
+`TMUX` and `TMUX_PANE` removed, so no transcript, account file or tmux server
+outside the sandbox is opened. The scan's process-table refresh still reads the
+machine's `/proc`, which no variable relocates; it reads link names and opens
+none of the files they name. A row reports the first call's
 latency and output tokens. When that answer is pending, the sample repeats the
 call until the complete one arrives: `worstFollowUpMs` is the slowest of those
 calls and `completeAfterP50ms` the time from the first call to the complete

@@ -234,6 +234,42 @@ test("a caller that cancels inside the catalog budget releases the generation", 
   expect(held.signals[0]!.aborted).toBe(true);
 });
 
+test("a caller that cancels after the catalog budget was spent releases its own subscription", async () => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+
+  const selection = await completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    signal: controller.signal,
+    budgetMs: 5,
+    lastCompletedFiles: () => null,
+  });
+  expect(selection.cacheStatus).toBe("pending");
+  expect(held.signals[0]!.aborted).toBe(false);
+
+  /* The call is still reading its hosts when its caller goes away. */
+  controller.abort();
+  expect(held.signals).toHaveLength(1);
+  expect(held.signals[0]!.aborted).toBe(true);
+});
+
+test("a cancellation after the generation arrived has no scan left to release", async () => {
+  const held = heldGeneration();
+  const controller = new AbortController();
+  const selection = await completedGenerationSelection({ limit: 10 }, {
+    completedFileScan: held.read,
+    signal: controller.signal,
+    budgetMs: 5,
+    lastCompletedFiles: () => null,
+  });
+  expect(selection.cacheStatus).toBe("pending");
+  held.publish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  controller.abort();
+  expect(held.signals[0]!.aborted).toBe(false);
+});
+
 test("hydration never runs more than its concurrency and reports the bytes it charged", async () => {
   const items = Array.from({ length: 20 }, (_, index) => ({ index, size: 1_000 }));
   let inFlight = 0;

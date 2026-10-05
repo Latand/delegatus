@@ -5569,7 +5569,11 @@ async function conversationMigration(args: McpToolArgs, control: ViewerControlDe
 /* A process that holds no completed generation answers agent_activity with
    the hosts the registry names and `catalog: "pending"` after this wait,
    rather than holding the caller for a whole-corpus scan. */
-const MCP_ACTIVITY_CATALOG_BUDGET_MS = 700;
+const MCP_ACTIVITY_CATALOG_BUDGET_MS = 650;
+/* The whole agent_activity answer, the catalog wait included: hosts not yet
+   described and tails not yet read are reported as pending evidence, and the
+   next call takes what those reads returned. */
+const MCP_ACTIVITY_ANSWER_BUDGET_MS = 800;
 
 async function agentActivity(
   args: McpToolArgs,
@@ -5602,6 +5606,7 @@ async function agentActivity(
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
+      answerBudgetMs: MCP_ACTIVITY_ANSWER_BUDGET_MS,
       /* A call with less time left than the standard evidence budget degrades
          the remaining rows to the scan projection rather than spending a budget
          its caller will not be there to receive. */
@@ -5616,12 +5621,20 @@ async function agentActivity(
     const filtered = { ...snapshot, conversations, count: conversations.length,
       stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
       stalledConfirmedCount: conversations.filter(row => row.lifecycle === "stalled" && row.evidenceSource === "transcript").length };
+    const catalog = snapshot.selection.cacheStatus;
+    const unverifiedCount = conversations.filter(row => row.evidenceSource === "projection").length;
+    const undescribedHostCount = snapshot.selection.recoveryPending;
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
-      /* The catalog had no completed generation inside its budget: the rows
-         are the hosts the registry names, resolved by identity. */
-      ...(snapshot.selection.cacheStatus === "pending" ? { catalog: "pending" } : {}),
+      /* Every projection says what it could not confirm. `pending`: no
+         generation completed inside the budget, so the rows are the hosts the
+         registry names. `stale`: the rows are an earlier generation's while a
+         newer one is still being read. */
+      ...(catalog === "pending" || catalog === "stale" ? { catalog } : {}),
+      ...(unverifiedCount > 0 || undescribedHostCount > 0
+        ? { evidence: "pending", unverifiedCount, ...(undescribedHostCount > 0 ? { undescribedHostCount } : {}) }
+        : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
   } finally {
     deadline.release();

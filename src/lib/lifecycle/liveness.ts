@@ -169,12 +169,15 @@ export interface AgentLivenessSelectionReport {
       so the newest `HOSTED_RECOVERY_MAX` of them were resolved and the rest
       were not looked at. */
   recoveryTruncated: boolean;
+  /** Active hosts the generation lacks that the answer budget ended before
+      describing. They have no row in this answer; a later call resolves them. */
+  recoveryPending: number;
   /** Rows a transcript tail read was attempted for; `unreadable` is the subset
       of those whose tail could not be used. */
   hydrated: number;
   unreadable: number;
-  /** Selected rows no read was attempted for, because the budget was exhausted
-      before they came up. Equals the number of `evidenceSource: "projection"`
+  /** Selected rows with no tail evidence in this answer: a budget was exhausted
+      before their read started or before it finished. Equals the number of `evidenceSource: "projection"`
       records by construction. */
   projected: number;
   generation: number | null;
@@ -234,6 +237,15 @@ export interface AgentLivenessRequest {
   evidenceByteBudget?: number;
   /** Tail reads in flight at once. */
   evidenceConcurrency?: number;
+  /**
+   * Wall clock the whole answer may take: the catalog wait, identity recovery
+   * and transcript evidence share it. When it ends, hosts not yet described are
+   * counted in `recoveryPending` and rows whose tail has not answered are
+   * projected from the scan (`evidenceSource: "projection"`); their reads keep
+   * running and the next call for the same transcript takes the result. Omitted,
+   * each phase keeps only its own budget.
+   */
+  answerBudgetMs?: number;
 }
 
 /** Tail reads in flight at once. Small on purpose: a `limit: 10` read is ten
@@ -603,12 +615,13 @@ async function recoverHostedTranscripts(
   hostedSeen: ReadonlySet<string>,
   project: string | undefined,
   describe: AgentLivenessSources["describeTranscript"],
-): Promise<{ entries: LivenessTranscript[]; truncated: boolean }> {
+  answer: AnswerBudget,
+): Promise<{ entries: LivenessTranscript[]; truncated: boolean; pending: number }> {
   const missing: string[] = [];
   for (const path of hostedPaths) {
     if (!hostedSeen.has(path)) missing.push(path);
   }
-  if (missing.length === 0) return { entries: [], truncated: false };
+  if (missing.length === 0) return { entries: [], truncated: false, pending: 0 };
   /* The registry iterates oldest-entry-first, and recovery exists for the
      newest launches. Taking the head of an over-cap list would keep the stale
      active-status rot — permanently absent from every generation, so it fills
@@ -617,15 +630,17 @@ async function recoverHostedTranscripts(
   const candidates = truncated ? missing.slice(-HOSTED_RECOVERY_MAX) : missing;
   const described = await Promise.all(candidates.map(async (path) => {
     try {
-      return await describe(path);
-    } catch {
+      return await answer.within(describe(path));
+    } catch (error) {
+      if (answer.cancelled()) throw error;
       /* A host whose transcript cannot be described is not evidence of
          anything; the rest of the answer still stands. */
       return null;
     }
   }));
   return {
-    entries: described.filter((entry): entry is LivenessTranscript => entry !== null
+    pending: described.filter((entry) => entry === ANSWER_SPENT).length,
+    entries: described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT
       && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
       && (!project || entry.project === project)),
     truncated,
@@ -642,6 +657,79 @@ function byNewest(left: LivenessTranscript, right: LivenessTranscript): number {
 function livenessAbortError(reason?: unknown): Error {
   if (reason instanceof Error && reason.name === "AbortError") return reason;
   return new DOMException("liveness snapshot cancelled", "AbortError");
+}
+
+const ANSWER_SPENT = Symbol("liveness-answer-budget-spent");
+
+/** The one clock a bounded answer shares between its phases. */
+interface AnswerBudget {
+  /** The work, or `ANSWER_SPENT` once the budget has ended. Rejects when the
+      caller cancels, without waiting for the work to notice. */
+  within<T>(work: Promise<T>): Promise<T | typeof ANSWER_SPENT>;
+  spent(): boolean;
+  cancelled(): boolean;
+  release(): void;
+}
+
+function answerBudget(budgetMs: number | null, signal: AbortSignal | null): AnswerBudget {
+  let over = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const ended = budgetMs === null ? null : new Promise<typeof ANSWER_SPENT>((resolve) => {
+    timer = setTimeout(() => { over = true; resolve(ANSWER_SPENT); }, budgetMs);
+  });
+  const interrupted = signal === null ? null : new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(livenessAbortError(signal.reason));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  void interrupted?.catch(() => undefined);
+  return {
+    within: <T>(work: Promise<T>) => {
+      if (!ended && !interrupted) return work;
+      /* The loser keeps running; its rejection has nobody left to read it. */
+      void work.catch(() => undefined);
+      return Promise.race([work, ...(ended ? [ended] : []), ...(interrupted ? [interrupted] : [])]);
+    },
+    spent: () => over,
+    cancelled: () => signal?.aborted === true,
+    release: () => {
+      if (timer) clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+/* A tail read the answer budget walked away from keeps running. The next call
+   for the same unchanged transcript takes its result instead of starting the
+   read again, so a tail slower than the budget still becomes evidence. */
+const CARRIED_EVIDENCE_MAX_AGE_MS = 10_000;
+const CARRIED_EVIDENCE_MAX = 256;
+const carriedEvidence = new Map<string, {
+  read: Promise<LivenessTranscriptEvidence | null>;
+  mtimeMs: number;
+  sizeBytes: number | undefined;
+  startedAt: number;
+}>();
+
+function takeCarriedEvidence(entry: LivenessTranscript): { read: Promise<LivenessTranscriptEvidence | null>; startedAt: number } | null {
+  const carried = carriedEvidence.get(entry.path);
+  if (!carried) return null;
+  carriedEvidence.delete(entry.path);
+  /* A catalog row carries its mtime in seconds and a described one in
+     milliseconds; the same instant differs by float rounding between them. */
+  return Math.abs(carried.mtimeMs - entry.mtimeMs) < 1 && carried.sizeBytes === entry.sizeBytes
+    && performance.now() - carried.startedAt <= CARRIED_EVIDENCE_MAX_AGE_MS
+    ? carried
+    : null;
+}
+
+function carryEvidence(entry: LivenessTranscript, read: Promise<LivenessTranscriptEvidence | null>, startedAt: number): void {
+  for (const [path, carried] of carriedEvidence) {
+    if (carriedEvidence.size < CARRIED_EVIDENCE_MAX && performance.now() - carried.startedAt <= CARRIED_EVIDENCE_MAX_AGE_MS) break;
+    carriedEvidence.delete(path);
+  }
+  carriedEvidence.set(entry.path, { read, mtimeMs: entry.mtimeMs, sizeBytes: entry.sizeBytes, startedAt });
+  void read.catch(() => { if (carriedEvidence.get(entry.path)?.read === read) carriedEvidence.delete(entry.path); });
 }
 
 function roundMs(value: number): number {
@@ -661,6 +749,22 @@ function roundMs(value: number): number {
 export async function agentLivenessSnapshot(
   request: AgentLivenessRequest,
   sources: AgentLivenessSources,
+): Promise<AgentLivenessSnapshot> {
+  const answer = answerBudget(
+    Number.isFinite(request.answerBudgetMs) ? Math.max(0, request.answerBudgetMs as number) : null,
+    request.signal ?? null,
+  );
+  try {
+    return await livenessSnapshotWithin(request, sources, answer);
+  } finally {
+    answer.release();
+  }
+}
+
+async function livenessSnapshotWithin(
+  request: AgentLivenessRequest,
+  sources: AgentLivenessSources,
+  answer: AnswerBudget,
 ): Promise<AgentLivenessSnapshot> {
   const phaseClock = sources.phaseClock ?? (() => performance.now());
   const startedAt = phaseClock();
@@ -713,6 +817,7 @@ export async function agentLivenessSnapshot(
       selected: entries.length,
       recovered: 0,
       recoveryTruncated: false,
+      recoveryPending: 0,
       generation: null,
       cacheStatus: null,
       freshScan: false,
@@ -736,6 +841,7 @@ export async function agentLivenessSnapshot(
         selected: selected.entries.length,
         recovered: 0,
         recoveryTruncated: false,
+        recoveryPending: 0,
         generation: selected.generation,
         cacheStatus: selected.cacheStatus,
         freshScan: selected.freshScan,
@@ -751,6 +857,7 @@ export async function agentLivenessSnapshot(
         selected: selected.entries.length,
         recovered: 0,
         recoveryTruncated: false,
+        recoveryPending: 0,
         generation: null,
         cacheStatus: null,
         freshScan: true,
@@ -762,14 +869,14 @@ export async function agentLivenessSnapshot(
     /* Recovery and the completed generation share the same verified-owner
        priority. Order by freshness within each group before the final limit,
        so newer scan-only history cannot displace a recovered owner. */
-    const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript);
+    const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript, answer);
     const known = new Set(entries.map((entry) => entry.path));
     const added = recovery.entries.filter((entry) => {
       if (known.has(entry.path)) return false;
       known.add(entry.path);
       return true;
     });
-    if (added.length > 0 || recovery.truncated) {
+    if (added.length > 0 || recovery.truncated || recovery.pending > 0) {
       if (added.length > 0) entries = [...entries, ...added].sort((left, right) =>
         Number(hostedPaths.has(right.path)) - Number(hostedPaths.has(left.path))
         || byNewest(left, right),
@@ -781,6 +888,7 @@ export async function agentLivenessSnapshot(
         recovered: added.length,
         /* A capped recovery must not read as a complete one. */
         recoveryTruncated: recovery.truncated,
+        recoveryPending: recovery.pending,
       };
     }
   }
@@ -796,8 +904,15 @@ export async function agentLivenessSnapshot(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
+      if (answer.spent()) return ANSWER_SPENT;
       try {
-        return await sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
+        const { read, startedAt: readStartedAt } = takeCarriedEvidence(entry) ?? {
+          read: sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal }),
+          startedAt: performance.now(),
+        };
+        const evidence = await answer.within(read);
+        if (evidence === ANSWER_SPENT) carryEvidence(entry, read, readStartedAt);
+        return evidence;
       } catch (error) {
         /* One bad row costs one row. Cancellation is the exception: it is the
            caller going away, and it must still stop the pass. */
@@ -828,13 +943,17 @@ export async function agentLivenessSnapshot(
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = phaseClock();
   let unreadable = 0;
+  /* Rows whose tail answered. A read the answer budget left behind is not one. */
+  let answered = 0;
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
        produced none, and a row the budget never reached. The counters below are
        derived from the same distinction, so the report and the per-row labels
        cannot disagree. */
-    const attempted = hydration.results.has(index);
-    const evidence = hydration.results.get(index) ?? null;
+    const read = hydration.results.get(index);
+    const attempted = hydration.results.has(index) && read !== ANSWER_SPENT;
+    const evidence = read === ANSWER_SPENT ? null : read ?? null;
+    if (attempted) answered += 1;
     if (attempted && evidence === null) unreadable += 1;
     const turnState = turnStateFromEvidence(evidence, entry);
     /* Freshness is the newest RECORD, tool traffic included. Reading it off the
@@ -908,11 +1027,11 @@ export async function agentLivenessSnapshot(
     conversations,
     selection: {
       ...selection,
-      hydrated: hydration.hydrated,
+      hydrated: answered,
       unreadable,
-      projected: hydratable.length - hydration.hydrated,
+      projected: hydratable.length - answered,
       evidenceBytes: hydration.bytes,
-      budget: hydration.stopped,
+      budget: hydration.stopped === "complete" && answered < hydration.hydrated ? "deadline" : hydration.stopped,
     },
     timings: {
       inventorySelectionMs: roundMs(inventorySelectionMs),
