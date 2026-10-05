@@ -245,6 +245,9 @@ function contextDocumentToken(file: PendingFile): string {
 }
 const contextDocumentFencesKey = (id: string) => "llvContextDocumentFences:" + id;
 const unwrittenContextDocumentFences = new Map<string, Record<string, string[]>>();
+// A reply may belong to an unmounted composer. Keep its proof long enough for
+// the current instance to consume a reattached copy before any new submission.
+const settledContextDocuments = new Map<string, { owners: string[]; ids: string[] }>();
 function readContextDocumentFences(id: string, fallback: Record<string, string[]> = {}): Record<string, string[]> {
   const unwritten = unwrittenContextDocumentFences.get(id);
   if (unwritten) return unwritten;
@@ -1407,6 +1410,9 @@ export function adoptComposerState(path: string, cardId: string): void {
     const previousOwner = sessionStorage.getItem(composerOwnerKey(path));
     for (const from of [previousOwner, path]) {
       if (!from || from === cardId) continue;
+      for (const settlement of settledContextDocuments.values()) {
+        if (settlement.owners.includes(from) && !settlement.owners.includes(cardId)) settlement.owners.push(cardId);
+      }
       const merged = readContextDocumentFences(cardId);
       const transferred = readContextDocumentFences(from);
       if (Object.keys(transferred).length) {
@@ -1990,6 +1996,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      steer, dictation) and Codex's queue hand-off (Alt+Enter, Queue for Codex)
      carry those bytes again. Codex does not deduplicate injections. */
   const contextDocumentFences = useRef(new Map<string, Record<string, string[]>>());
+  const consumedContextDocuments = useRef(new Set<string>());
   const injectionFencesFor = (owner: string) => {
     // Storage is authoritative, including keys another composer removed.
     const fences = readContextDocumentFences(owner, contextDocumentFences.current.get(owner));
@@ -2009,9 +2016,18 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const owners = new Set([owner, contextOwnerForKey(owner, key)]);
     try { owners.add(sessionStorage.getItem(composerOwnerKey(file.path)) ?? file.path); }
     catch { /* The original in-memory owner still carries the fence. */ }
-    const ids = [...new Set([...owners].flatMap((alias) => injectionFencesFor(alias)[key] ?? []))];
+    const settled = settledContextDocuments.get(key);
+    const ids = [...new Set([
+      ...[...owners].flatMap(alias => injectionFencesFor(alias)[key] ?? []),
+      ...(settled?.owners.some(alias => owners.has(alias)) ? settled.ids : []),
+    ])];
     if (!ids.length) return;
-    if (admitted && owners.has(payloadOwner.current)) {
+    if (admitted) {
+      settledContextDocuments.set(key, { owners: [...new Set([...(settled?.owners ?? []), ...owners])], ids });
+      if (settledContextDocuments.size > 512) settledContextDocuments.delete(settledContextDocuments.keys().next().value!);
+    }
+    const consume = admitted && !consumedContextDocuments.current.has(key);
+    if (consume && owners.has(payloadOwner.current)) {
       for (const file of attachments.filesRef.current) {
         if (ids.includes(contextDocumentToken(file)) && !ids.includes(file.id)) ids.push(file.id);
       }
@@ -2022,15 +2038,26 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       delete fences[key];
       writeContextDocumentFences(alias, fences);
     }
-    if (admitted) {
+    if (consume) {
+      consumedContextDocuments.current.add(key);
+      if (consumedContextDocuments.current.size > 512) consumedContextDocuments.current.delete(consumedContextDocuments.current.values().next().value!);
       for (const alias of owners) forgetDraftFiles(alias, ids);
       if (owners.has(payloadOwner.current)) for (const id of ids) attachments.remove(id);
     }
   };
   const refuseWhileInjecting = (files: readonly PendingFile[]): boolean => {
-    const fences = Object.entries(injectionFencesFor(cardId));
-    if (!files.length || !fences.length) return false;
+    if (!files.length) return false;
     const documents = files.map(file => ({ id: file.id, token: contextDocumentToken(file) }));
+    for (const [key, settled] of settledContextDocuments) {
+      if (!settled.owners.includes(cardId) || consumedContextDocuments.current.has(key)) continue;
+      if (documents.some(file => settled.ids.includes(file.id) || settled.ids.includes(file.token))) {
+        releaseInjectionFence(cardId, key, true);
+        setStatus({ kind: "info", text: t("inject.submitted") });
+        return true;
+      }
+    }
+    const fences = Object.entries(injectionFencesFor(cardId));
+    if (!fences.length) return false;
     const fence = fences.find(([, ids]) => documents.some(file => ids.includes(file.id) || ids.includes(file.token)));
     if (!fence) return false;
     const uncertain = injectsPending === 0 || readOutbox(cardId).find((entry) => entry.id === fence[0])?.deliveryUncertain;
@@ -2694,6 +2721,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      a safe refusal. Repeated presses only show the existing unconfirmed state;
      injection operations cannot be retried on the engine wire. */
   useEffect(() => {
+    for (const [key, settled] of settledContextDocuments) {
+      if (settled.owners.includes(cardId) && !consumedContextDocuments.current.has(key)) releaseInjectionFence(cardId, key, true);
+    }
     for (const key of Object.keys(injectionFencesFor(cardId))) {
       const entry = outbox.find((candidate) => candidate.id === key);
       const receipt = [...displayedRuntimeReceipts, ...(entry?.deliveryReceipt ? [entry.deliveryReceipt] : [])]
@@ -3835,7 +3865,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return entry;
   };
 
-  const editFailedContext = (owner: string, key: string): boolean => {
+  const editFailedContext = (owner: string, key: string, originalText?: string): boolean => {
     const entry = readOutbox(owner).find(candidate => candidate.id === key);
     if (!entry || entry.intent !== "context" || entry.state !== "failed" || entry.deliveryUncertain) return false;
     const tasks = entry.selectedContext?.tasks ?? [];
@@ -3844,8 +3874,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       return false;
     }
     releaseInjectionFence(owner, key, false);
+    try {
+      const words = originalText ?? entry.text;
+      if (words.trim()) appendComposerDraft(owner, words);
+    } catch {
+      // Keep the failed row's complete words until draft storage can accept them.
+      if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("composer.payloadStorageUnavailable") });
+      return false;
+    }
     withdrawContextOutbox(owner, key);
-    if (entry.text.trim()) appendComposerDraft(owner, entry.text);
     return true;
   };
 
@@ -3885,7 +3922,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           state: "failed", deliveryUncertain: undefined,
           settledAt: nowMs(), error: t("composer.admissionLookupNotExecuted"),
         });
-        editFailedContext(owner, entry.id);
+        if (!editFailedContext(owner, entry.id)) return;
         if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
       } else if (payloadOwner.current === owner) {
         setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
@@ -4608,17 +4645,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           if (payloadOwner.current === owner) setStatus({ kind: "err", text: answer.error ?? t("inject.refused") });
           return;
         }
-        if (!chipProject || restoreTaskChips(chipProject, chips)) withdrawContextOutbox(owner, clientMessageId);
-        else {
-          updateOutbox(owner, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
-          if (payloadOwner.current === owner) setStatus({ kind: "err", text: t("taskChip.full") });
-          return;
-        }
+        updateOutbox(owner, clientMessageId, { state: "failed", error: answer.error ?? t("inject.refused"), settledAt: nowMs() });
+        if (!editFailedContext(owner, clientMessageId, snapshotText)) return;
       }
       /* The composer may show another conversation by now, or none. The answer
          settles the conversation that pressed it, in its stored draft, and
          leaves the words and status on screen to their owner. */
-      if (restoreDraft && snapshotText) appendComposerDraft(owner, snapshotText);
       if (payloadOwner.current !== owner) {
         if (answer.ok) forgetDraftFiles(owner, requestedFiles.map((file) => file.id));
         return;

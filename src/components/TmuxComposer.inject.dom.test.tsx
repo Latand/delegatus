@@ -1246,6 +1246,7 @@ test.each([false, true])("an unwritten document fence follows identity adoption 
     Object.assign(globalThis, { sessionStorage: {
       getItem: originalStorage.getItem.bind(originalStorage),
       removeItem: originalStorage.removeItem.bind(originalStorage),
+      clear: originalStorage.clear.bind(originalStorage),
       setItem: (key: string, value: string) => {
         if (key.startsWith("llvContextDocumentFences:")) throw new Error("storage quota exceeded");
         originalStorage.setItem(key, value);
@@ -1291,4 +1292,99 @@ test("a proven context refusal preserves words typed while the answer was pendin
     await settleUntil(() => sends.length > 0, () => press(textarea(host), "Enter"));
     expect(sends[0]!.text).toBe("later words\n\noriginal words");
   } finally { await act(async () => root.unmount()); }
+});
+
+
+test("an admission response after remount consumes the new composer's reattached document", async () => {
+  holdInjection = true;
+  injectAnswer = { ok: true, status: 202, operationId: "inject-admitted" };
+  const first = await mount();
+  let second: Awaited<ReturnType<typeof mount>> | undefined;
+  try {
+    await type(first.host, "read the notes");
+    await stageFile(first.host, "design-notes.md", "# notes\n");
+    await openSendMenu(first.host);
+    await settle(() => menuAction(first.host, "Add to context")!.click());
+    await act(async () => first.root.unmount());
+    second = await mount();
+    await settle(() => second!.host.querySelector<HTMLButtonElement>('[aria-label="Remove design-notes.md"]')!.click());
+    await stageFile(second.host, "renamed-notes.md", "# notes\n");
+    await settle(() => releaseInjection?.());
+    expect(second.host.textContent).not.toContain("renamed-notes.md");
+    await type(second.host, "plain follow-up");
+    await settleUntil(() => sends.length > 0, () => press(textarea(second!.host), "Enter"));
+    expect(sends[0]!.files).toBeUndefined();
+    expect(injections).toHaveLength(1);
+  } finally { await act(async () => second?.root.unmount()); }
+});
+
+test("both mounted composers consume a reattached document when the original receipt settles", async () => {
+  rejectInjection = true;
+  const first = await mount();
+  let second: Awaited<ReturnType<typeof mount>> | undefined;
+  try {
+    await stageFile(first.host, "design-notes.md", "# notes\n");
+    await openSendMenu(first.host);
+    await settle(() => menuAction(first.host, "Add to context")!.click());
+    const key = String(injections[0]!.idempotencyKey);
+    second = await mount();
+    await settle(() => second!.host.querySelector<HTMLButtonElement>('[aria-label="Remove design-notes.md"]')!.click());
+    await stageFile(second.host, "renamed-notes.md", "# notes\n");
+    durableReceipts = [{ conversationId: CARD, idempotencyKey: key, operationId: "inject-observed",
+      kind: "inject", status: "delivered", revision: 2, at: new Date().toISOString() }];
+    await settle(() => {
+      first.root.render(<TmuxComposer file={{ ...file }} />);
+      second!.root.render(<TmuxComposer file={{ ...file }} />);
+    });
+    expect(first.host.textContent).not.toContain("design-notes.md");
+    expect(second.host.textContent).not.toContain("renamed-notes.md");
+    await type(second.host, "plain follow-up");
+    await settleUntil(() => sends.length > 0, () => press(textarea(second!.host), "Enter"));
+    expect(sends[0]!.files).toBeUndefined();
+    expect(injections).toHaveLength(1);
+  } finally { await act(async () => { first.root.unmount(); second?.root.unmount(); }); }
+});
+
+test.each(["refusal", "not-executed", "failed"])("a %s context recovery retains its words when browser draft storage refuses the write", async (outcome) => {
+  holdInjection = true;
+  const originalStorage = globalThis.sessionStorage;
+  const { host, root } = await mount();
+  try {
+    await type(host, "words that must survive");
+    await stageFile(host, "design-notes.md", "# notes\n");
+    await openSendMenu(host);
+    await settle(() => menuAction(host, "Add to context")!.click());
+    const key = String(injections[0]!.idempotencyKey);
+    Object.assign(globalThis, { sessionStorage: {
+      getItem: originalStorage.getItem.bind(originalStorage),
+      removeItem: originalStorage.removeItem.bind(originalStorage),
+      clear: originalStorage.clear.bind(originalStorage),
+      setItem: (key: string, value: string) => {
+        if (key.startsWith("llvDraft:")) throw new Error("storage quota exceeded");
+        originalStorage.setItem(key, value);
+      },
+    } });
+    if (outcome === "refusal") injectAnswer = { ok: false, status: 409, delivery: "refused" };
+    else if (outcome === "failed") injectAnswer = { ok: false, status: 409, operationId: "inject-failed", receipt: {
+      conversationId: CARD, idempotencyKey: key, operationId: "inject-failed", kind: "inject", status: "failed",
+      revision: 2, at: new Date().toISOString(),
+    } };
+    else injectAnswer = { ok: false, error: "network" };
+    await settle(() => releaseInjection?.());
+    if (outcome === "not-executed") {
+      admissionAnswer = { outcome: "not-executed" };
+      await settle(() => messageRowRecovery(CARD)!.check(key));
+    } else if (outcome === "failed") await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+    expect(readOutbox(CARD)[0]).toMatchObject({ state: "failed", text: "words that must survive" });
+    expect(readOutbox(CARD)[0]!.deliveryUncertain).toBeUndefined();
+    expect(sessionStorage.getItem(`llvContextDocumentFences:${CARD}`)).toBeNull();
+    Object.assign(globalThis, { sessionStorage: originalStorage });
+    await settle(() => messageRowRecovery(CARD)!.editContext!(key));
+    expect(textarea(host).value).toBe("words that must survive");
+    expect(readOutbox(CARD).filter(entry => entry.intent === "context")).toEqual([]);
+    expect(injections).toHaveLength(1);
+  } finally {
+    Object.assign(globalThis, { sessionStorage: originalStorage });
+    await act(async () => root.unmount());
+  }
 });
