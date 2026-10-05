@@ -636,7 +636,7 @@ for (const withFallback of [false, true]) test(`a pinned expired Claude account 
   } finally { providerReply = null; removeStateDir(); }
 });
 
-for (const outcome of ["invalid", "unknown"] as const) test(`a changed expired pin stays unreserved after ${outcome} refresh`, async () => {
+for (const outcome of ["invalid", "unknown", "queued removal"] as const) test(`a changed expired pin stays unreserved after ${outcome} refresh`, async () => {
   const { createManagedClaudeAccount } = await import("./claude");
   const { readAccountSource, writeAccountSource } = await import("./accountsStore");
   const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
@@ -674,14 +674,36 @@ for (const outcome of ["invalid", "unknown"] as const) test(`a changed expired p
     }
     return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
   };
+  let release = () => {};
+  let holder: Promise<void> | undefined;
+  let resolverStarted!: () => void;
+  const started = new Promise<void>(resolve => { resolverStarted = resolve; });
+  const resolve: typeof resolveHealthySpawnAccount = (...args) => { resolverStarted(); return resolveHealthySpawnAccount(...args); };
+  if (outcome === "queued removal") {
+    let holderEntered!: () => void;
+    const entered = new Promise<void>(resolve => { holderEntered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    holder = withAccountMutationLockAsync(async () => {
+      holderEntered(); await gate;
+      const read = readAccountSource("claude-accounts.json");
+      if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+      const catalog = read.body as { accounts: { id: string; label: string }[] };
+      catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
+      writeAccountSource("claude-accounts.json", catalog);
+    });
+    await entered;
+  }
   try {
-    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+    const pending = POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
-      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome}` }),
-    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome.replaceAll(" ", "-")}` }),
+    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount: resolve, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    if (holder) { await started; await Bun.sleep(8); release(); await holder; }
+    const response = await pending;
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
   } finally {
+    release(); await holder;
     providerReply = null;
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
     if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
