@@ -36,6 +36,7 @@ import {
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   rotationBannerLines,
+  telegramActionLine,
   type SeatSubmitFailure,
   type SeatTransition,
 } from "../orchestrator/seatState";
@@ -1155,6 +1156,7 @@ function SeatIdentity({
   const percent = context?.percent ?? null;
   const left = percent === null ? null : Math.max(0, 100 - percent);
   const window = context?.limit ?? null;
+  const telegramLine = telegramActionLine(t, designated?.telegram);
   const rotationCauses = state.rotation && (state.rotation.causes?.length || state.rotation.reasons.includes("dead"))
     ? rotationBannerLines(t, locale, state.rotation)
     : [];
@@ -1234,6 +1236,10 @@ function SeatIdentity({
         <p className="text-label leading-4 text-warning" data-orchestrator-rotation={state.rotation.level} role="status">
           {t("mobile2.seat.rotationRecommended", { percent: String(left) })}
         </p>
+      ) : null}
+
+      {telegramLine ? (
+        <p className="text-label leading-4 text-warning" data-orchestrator-telegram={designated?.telegram ?? undefined} role="status">{telegramLine}</p>
       ) : null}
 
       {predecessorConversationId ? (

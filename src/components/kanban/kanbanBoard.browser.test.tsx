@@ -7465,6 +7465,113 @@ describe("the rotation banner says each cause once, in the interface language", 
   }, 300_000);
 });
 
+describe("the seat says in one line what Telegram needs from the operator", () => {
+  /*
+   * The seat over `?scenario=seat-head&seat=gone&telegram=<action>`: its agent
+   * is not running, it holds the Telegram tool, and Telegram waits on the
+   * operator. This is the pane that used to answer a message with "Not
+   * delivered" and an English sentence naming an internal connector. The
+   * conversation now starts without the tool, and the seat says once what the
+   * operator has to do.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "what Telegram needs"
+   *
+   * For both actions, at 390 and 1440 px in en and uk: the line is exactly the
+   * one worded for that action, it is drawn once, whole and inside the seat,
+   * and it names no internal tool. At 390 px the phone shell replaces the
+   * board, so the line is read from the seat's sheet.
+   * `SEAT_TELEGRAM_PNG_DIR` collects frames (never committed); the readings go
+   * to `evidence/seat-telegram-line/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-telegram-line");
+  const EVIDENCE = path.resolve("evidence/seat-telegram-line");
+
+  browserTest("for both actions at 390 and 1440 px in en and uk", async () => {
+    const pngDir = process.env.SEAT_TELEGRAM_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const action of ["sign_in", "check"] as const) {
+        for (const width of [390, 1440] as const) {
+          for (const lang of ["en", "uk"] as const) {
+            const phone = width < 640;
+            const label = `${action}-${width}-${lang}`;
+            const expected = translate(lang, action === "sign_in" ? "orchPanel.telegramSignIn" : "orchPanel.telegramCheck");
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone&telegram=${action}`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+            try {
+              const seat = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]";
+              if (phone) {
+                await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+                await page.locator("[data-mobile2-open=seat]").first().click();
+              }
+              await page.waitForSelector(`${seat} [data-orchestrator-telegram]`, { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              const reading = await page.evaluate((selector) => {
+                const root = document.querySelector<HTMLElement>(selector)!;
+                const box = root.getBoundingClientRect();
+                const lines = [...root.querySelectorAll<HTMLElement>("[data-orchestrator-telegram]")].map((line) => {
+                  const rect = line.getBoundingClientRect();
+                  return {
+                    action: line.getAttribute("data-orchestrator-telegram"),
+                    text: line.textContent ?? "",
+                    inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5,
+                    cut: line.scrollWidth > line.clientWidth + 1 || line.scrollHeight > line.clientHeight + 1,
+                    visible: rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= window.innerWidth + 0.5,
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                  };
+                });
+                return {
+                  lines,
+                  rotationCauses: [...root.querySelectorAll<HTMLElement>("[data-orchestrator-rotation-cause]")].map((line) => line.textContent ?? ""),
+                  buttons: root.querySelectorAll("[data-orchestrator-telegram] button, [data-orchestrator-telegram] a").length,
+                  text: root.innerText,
+                  pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+                };
+              }, seat);
+              frames[label] = reading;
+              if (pngDir) await page.locator(seat).first().screenshot({ path: path.join(pngDir, `seat-telegram-${label}.png`) });
+              if (reading.lines.length !== 1) failures.push(`${label}: ${reading.lines.length} Telegram lines are drawn`);
+              const line = reading.lines[0];
+              if (line) {
+                if (line.text !== expected) failures.push(`${label}: the line reads "${line.text}"; expected "${expected}"`);
+                if (line.action !== action) failures.push(`${label}: the line is marked ${line.action}`);
+                if (!line.inside || !line.visible) failures.push(`${label}: the line is drawn outside the seat`);
+                if (line.cut) failures.push(`${label}: the line is cut`);
+              }
+              if (reading.buttons !== 0) failures.push(`${label}: the line carries a control`);
+              if (reading.text.split(expected).length !== 2) failures.push(`${label}: the sentence is drawn ${reading.text.split(expected).length - 1} times`);
+              /* The seat's conversation below carries its own tool rows; the
+                 old refusal is what must be gone from the whole seat. */
+              if (/connector is not connected|at launch/i.test(reading.text)) failures.push(`${label}: the old refusal is drawn`);
+              if (line && /MCP|connector|grant|send_message/i.test(line.text)) failures.push(`${label}: the line names an internal part: ${line.text}`);
+              /* The agent that is not running is still said, once, by the rotation line. */
+              if (!reading.rotationCauses.includes(translate(lang, "orchPanel.rotationDead"))) failures.push(`${label}: the seat no longer says its agent is not running`);
+              if (reading.pageOverflow) failures.push(`${label}: the page scrolls sideways`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } catch (error) {
+              failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 /* PR and issue chips (#2059) over `issue1695Evidence.fixture.tsx?scenario=work-links`:
    the card whose five pipelines carry an open PR with two issues, a lane with
    no PR, a PR two lanes share, a closed attempt and a merged fix, and the

@@ -194,9 +194,6 @@ export interface CodexAppServerHostOptions {
   allowSubagents?: boolean;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
-  /** A relaunch of a conversation that already holds the Telegram grant: it
-      starts without the tool while the connector is disconnected. */
-  telegramOptional?: boolean;
   /** Codex plugins granted to this session (issue #687). Empty or absent
       denies the plugin subsystem, which is the default for every session. */
   plugins?: readonly string[];
@@ -1453,7 +1450,7 @@ export class CodexAppServerHost implements EngineHost {
     const granted = grantedPlugins(options.plugins);
     let telegram: TelegramLaunchGrant;
     try {
-      telegram = resolveTelegramLaunchGrant(
+      telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
           options.codexHome,
@@ -1461,7 +1458,7 @@ export class CodexAppServerHost implements EngineHost {
           options.forwardGitHubConfig === true,
         ),
         options.mcpServers,
-        { validateGrant: options.validateTelegramGrant, relaunch: options.telegramOptional },
+        { validateGrant: options.validateTelegramGrant },
       );
     } catch (error) {
       options.releaseCleanup?.();

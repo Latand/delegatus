@@ -2805,6 +2805,8 @@ export const en = {
   "orchPanel.rotationContextTokensEstimated": "This conversation has used about {tokens} tokens of context (an estimate); rotation is advised from {threshold}. Rotate to continue with a fresh context.",
   "orchPanel.rotationCompactions": "This conversation has been compacted {count} times (rotation is advised from {threshold}), so early details may be lost. Rotate to start with a fresh context.",
   "orchPanel.rotationTranscript": "The conversation log has grown to {size} MB (rotation is advised from {threshold} MB). Rotate to start a new, shorter one.",
+  "orchPanel.telegramSignIn": "The Telegram sign-in on this machine has ended, so the orchestrator works without Telegram. Open the Telegram panel and sign in again.",
+  "orchPanel.telegramCheck": "Telegram could not be reconnected automatically, so the orchestrator works without Telegram. Open the Telegram panel to see why, then reconnect.",
   "orchPanel.rotationDead": "The orchestrator is not running. Send it a message to start it again, or rotate.",
   "orchPanel.badgeNeedsYou": "needs you",
   "orchPanel.badgeWorking": "working",

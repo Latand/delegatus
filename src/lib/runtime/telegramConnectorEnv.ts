@@ -1,8 +1,7 @@
-import { readTelegramConnection, readTelegramSession, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { repairTelegramConnection } from "@/lib/telegram/launchReadiness";
+import { TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
 
-/** Refuses a new launch that asked for the tool; operator-facing, so plain. */
-export const TELEGRAM_LAUNCH_UNAVAILABLE = "Telegram is not connected, so an agent that needs the Telegram tool cannot start. Reconnect Telegram, or start the agent without it.";
 export const TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH = "telegram MCP grant was revoked before launch";
 export const TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH = "telegram MCP orchestrator seat is no longer active";
 /** The one line a relaunched agent reads when its run starts without the tool. */
@@ -26,19 +25,8 @@ export interface TelegramLaunchGrant {
   /** The servers this run materializes. The durable grant is never edited
       here, so a run that went without the tool gets it back on a later start. */
   mcpServers: string[] | undefined;
-  /** A granted relaunch that goes on without the tool; the agent is told. */
+  /** A granted launch that goes on without the tool; the agent is told. */
   unavailable: boolean;
-}
-
-function connectedTelegramToken(): string | null {
-  try {
-    const connection = readTelegramConnection();
-    const session = readTelegramSession();
-    if (connection.status !== "connected" || !session || connection.credentialRef !== session.credentialRef) return null;
-    return session.connectorToken || null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -46,26 +34,31 @@ function connectedTelegramToken(): string | null {
  * MCP grant includes `telegram`. The value always comes from the owner-only
  * session store; caller-provided environment cannot forge or retain it.
  *
- * A revoked grant refuses every launch. A disconnected connector refuses a new
- * launch that asked for the tool, and only that: a relaunch of a conversation
- * that already holds the grant starts without the server, because the tool is
- * optional and the conversation has to stay reachable.
+ * A revoked grant refuses the launch, and that is the only refusal here. The
+ * grant is checked before anything is repaired and again after the repair,
+ * because the repair waits and the grant can be withdrawn meanwhile.
+ *
+ * The connection itself never refuses a launch: the tool is optional and the
+ * conversation has to start. A connection the health check can restore is
+ * restored first and the host starts with the tool. Where Telegram is not set
+ * up, or needs the operator, the host starts without the server and the agent
+ * is told in one line.
  */
-export function resolveTelegramLaunchGrant(
+export async function resolveTelegramLaunchGrant(
   environment: NodeJS.ProcessEnv,
   mcpServers: readonly string[] | undefined,
-  options: { validateGrant?: () => void; relaunch?: boolean } = {},
-): TelegramLaunchGrant {
+  options: { validateGrant?: () => void } = {},
+): Promise<TelegramLaunchGrant> {
   const env = { ...environment };
   delete env[TELEGRAM_CONNECTOR_TOKEN_ENV];
   const servers = mcpServers ? [...mcpServers] : undefined;
   if (!servers?.includes("telegram")) return { env, mcpServers: servers, unavailable: false };
   options.validateGrant?.();
-  const token = connectedTelegramToken();
-  if (token) {
-    env[TELEGRAM_CONNECTOR_TOKEN_ENV] = token;
+  const state = await repairTelegramConnection();
+  options.validateGrant?.();
+  if (state.kind === "ready") {
+    env[TELEGRAM_CONNECTOR_TOKEN_ENV] = state.token;
     return { env, mcpServers: servers, unavailable: false };
   }
-  if (!options.relaunch) throw new Error(TELEGRAM_LAUNCH_UNAVAILABLE);
   return { env, mcpServers: servers.filter((name) => name !== "telegram"), unavailable: true };
 }

@@ -9,7 +9,7 @@ import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
 import { attentionId } from "../attention";
-import type { IncumbentRotationCause, OrchestratorIncumbent } from "./incumbent";
+import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
 
 /*
  * The orchestrator panel's state machine, as a pure module (PRD #976 slice A).
@@ -375,6 +375,17 @@ export function rotationBannerLines(t: TFunction, locale: Locale, rotation: Rota
   }
   if (rotation.reasons.includes("dead") && !named.has("host_gone")) lines.push(t("orchPanel.rotationDead"));
   return [...new Set(lines)];
+}
+
+/**
+ * The one line the seat shows while its Telegram tool waits on the operator:
+ * what happened and what to do, in the interface language. Null when nothing
+ * is asked of them.
+ */
+export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction | null | undefined): string | null {
+  if (action === "sign_in") return t("orchPanel.telegramSignIn");
+  if (action === "check") return t("orchPanel.telegramCheck");
+  return null;
 }
 
 /** `ROTATION_THRESHOLD_FRACTION` (`@/lib/orchestrator/contextPolicy`) as a

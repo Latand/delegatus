@@ -2758,6 +2758,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.rotationContextTokensEstimated": "Розмова використала приблизно {tokens} токенів контексту (це оцінка); ротацію радимо від {threshold}. Зробіть ротацію, щоб продовжити зі свіжим контекстом.",
   "orchPanel.rotationCompactions": "Кількість стискань цієї розмови: {count} (ротацію радимо від {threshold}), тож ранні деталі могли загубитися. Зробіть ротацію, щоб почати зі свіжим контекстом.",
   "orchPanel.rotationTranscript": "Журнал розмови виріс до {size} МБ (ротацію радимо від {threshold} МБ). Зробіть ротацію, щоб почати новий, коротший.",
+  "orchPanel.telegramSignIn": "Вхід у Telegram на цьому комп'ютері завершився, тому оркестратор працює без Telegram. Відкрийте панель Telegram і увійдіть знову.",
+  "orchPanel.telegramCheck": "Telegram не вдалося підключити автоматично, тому оркестратор працює без Telegram. Відкрийте панель Telegram, подивіться причину й підключіть знову.",
   "orchPanel.rotationDead": "Оркестратор не запущений. Напишіть йому повідомлення, щоб запустити знову, або зробіть ротацію.",
   "orchPanel.badgeNeedsYou": "потребує тебе",
   "orchPanel.badgeWorking": "працює",

@@ -16,6 +16,7 @@ import {
   resolveSeatFile,
   ROTATION_CONTEXT_PERCENT,
   rotationBannerLines,
+  telegramActionLine,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatDeputyPaths,
@@ -750,4 +751,23 @@ test("the seat refs carry every deputy the record names, and the phone hides the
   expect(seatDeputyPaths(status, [{ path: "/t/ghost-moved.jsonl", conversationId: "conversation_ghost" }, { path: "/t/w.jsonl", conversationId: "conversation_worker" }]).sort())
     .toEqual(["/t/ghost-moved.jsonl", "/t/ghost.jsonl"]);
   expect(seatDeputyPaths(null, [])).toEqual([]);
+});
+
+test("the seat's Telegram line says what happened and what to do, once, in the interface language", () => {
+  for (const lang of ["en", "uk"] as const) {
+    const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+    const signIn = telegramActionLine(t, "sign_in")!;
+    const check = telegramActionLine(t, "check")!;
+    expect(signIn).toBe(translate(lang, "orchPanel.telegramSignIn"));
+    expect(check).toBe(translate(lang, "orchPanel.telegramCheck"));
+    expect(signIn).not.toBe(check);
+    for (const line of [signIn, check]) {
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line).not.toMatch(/MCP|connector|launch|grant|mcp__|_to_/i);
+    }
+    expect(telegramActionLine(t, null)).toBeNull();
+    expect(telegramActionLine(t, undefined)).toBeNull();
+  }
+  expect(translate("uk", "orchPanel.telegramSignIn").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
+  expect(translate("uk", "orchPanel.telegramCheck").replace(/Telegram/g, "")).not.toMatch(/[a-z]{4,}/);
 });

@@ -11,14 +11,15 @@ import { NextRequest } from "next/server";
 import { AgentRegistry } from "./registry";
 import { beginLegacySpawnFixture } from "./registryTestFixtures";
 import { executeSpawnRequest, type SpawnCommandDependencies } from "./spawnCommand";
-import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, deleteTelegramSession, readTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV, type StoredTelegramConnection } from "@/lib/telegram/sessionStore";
+import { setTelegramLaunchRepairForTests, telegramOperatorAction } from "@/lib/telegram/launchReadiness";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { defaultStartHost, spawnStructuredConversation, type StructuredSpawnInput } from "@/lib/runtime/structuredSpawn";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
-import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_LAUNCH_UNAVAILABLE, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
-import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
+import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { defaultModelFor } from "@/lib/agent/models";
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
@@ -41,6 +42,7 @@ fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[{\"name\":\"viewer\"},{\"name
 fs.chmodSync(codexBinary, 0o755);
 process.env.LLV_CODEX_BINARY = codexBinary;
 afterAll(() => {
+  setTelegramLaunchRepairForTests(null);
   if (previous.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous.state;
   if (previous.config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous.config;
   if (previous.transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previous.transport;
@@ -72,6 +74,37 @@ function connected(): string {
   writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
     identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
   return session.connectorToken;
+}
+
+/** Telegram was never connected on this installation, or the operator signed
+    out: no credential is stored and the record names none. */
+function notSetUp(): void {
+  deleteTelegramSession();
+  clearTelegramConnection();
+}
+
+/** A stored credential behind a record that does not read connected: what a
+    failed health check, an ended session or an interrupted login leaves. */
+function signedInWith(record: Pick<StoredTelegramConnection, "status" | "errorCode">): string {
+  const session = readTelegramSession() ?? saveTelegramSession("placeholder-session-for-telegram-spawn-test");
+  writeTelegramConnection({ version: 1, status: record.status, credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: null, errorCode: record.errorCode, identityIdUpgradedAt: null });
+  return session.connectorToken;
+}
+
+/** The health check a launch runs to bring the connection back. `restores`
+    stands for the connector coming up; nothing real is started either way. */
+function repairPort(restores: boolean) {
+  const repair = { checks: 0 };
+  setTelegramLaunchRepairForTests({
+    healthCheck: async () => {
+      repair.checks += 1;
+      if (restores) signedInWith({ status: "connected", errorCode: null });
+    },
+    waitMs: 2_000,
+    cooldownMs: 0,
+  });
+  return repair;
 }
 
 function rewriteSqliteRow(sqlitePath: string, collection: "receipts" | "conversations", key: string,
@@ -358,7 +391,7 @@ for (const mode of ["off", "sqlite"] as const) test(`the ${mode} production buil
 
 for (const mode of ["off", "sqlite"] as const) test(`the ${mode} disconnected operator root launches without Telegram`,
   async () => withRegistryMode(mode, async () => {
-    clearTelegramConnection();
+    notSetUp();
     for (const engine of ["claude", "codex"] as const) {
       const probe = deferredLaunch(engine, null);
       const { response, receipt } = await launch(engine, null, undefined, probe.overrides);
@@ -453,14 +486,43 @@ test("a child read before a contradictory seat cannot retain its Telegram grant"
   expect(file.conversations[childId]?.generations.at(-1)?.launchProfile.mcpServers).toEqual(["viewer"]);
 }));
 
-test("an explicit seat-child Telegram request refuses a disconnected connector before reservation", async () => {
+for (const engine of ["claude", "codex"] as const) test(`where Telegram is not set up, a ${engine} child that asks for it starts without the grant`, async () => {
+  /* The seat's grant was recorded while Telegram was connected; the operator
+     has signed out since. */
+  connected();
   const seatId = seedSeat();
-  clearTelegramConnection();
-  const { response, receipt } = await launch("claude", seatId, ["telegram"]);
-  expect(response.status).toBe(400);
-  expect(await response.json()).toMatchObject({ error: TELEGRAM_LAUNCH_UNAVAILABLE });
-  expect(receipt).toBeNull();
+  notSetUp();
+  const repair = repairPort(true);
+  const probe = deferredLaunch(engine, null);
+  const { response, receipt } = await launch(engine, seatId, ["telegram"], probe.overrides);
+  expect(response.status).toBe(202);
+  expect(receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(receipt?.telegramSeatGrant).not.toBe(true);
+  await Promise.all(probe.work.map((work) => work()));
+  expect(probe.evidence.reachedEngine).toBe(true);
+  expect(probe.evidence.tokenPresent).toBe(false);
+  expect(probe.evidence.telegramDefinition).toBeFalsy();
+  /* Nothing is repaired and nobody is asked for anything. */
+  expect(repair.checks).toBe(0);
+  expect(telegramOperatorAction()).toBeNull();
+  connected();
 });
+
+test("a request left out where Telegram is not set up replays its receipt after Telegram is connected", async () => withRegistryMode("sqlite", async () => {
+  connected();
+  const seatId = seedSeat();
+  notSetUp();
+  const attempt = `left_out_replay_${crypto.randomUUID()}`;
+  const first = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(first.response.status).toBe(202);
+  expect(first.receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+  connected();
+  const replay = await launch("claude", seatId, ["telegram"], {}, attempt);
+  expect(replay.response.status).not.toBe(400);
+  expect(replay.response.status).not.toBe(409);
+  expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
+  expect(replay.receipt?.launchProfile.mcpServers).toEqual(["viewer"]);
+}));
 
 test("an ungranted seat cannot grant Telegram to a child", async () => {
   connected();
@@ -503,12 +565,12 @@ test("an ordinary tmux root keeps the Viewer baseline while Telegram is connecte
 
 for (const connectedFirst of [true, false]) test(`root replay keeps its ${connectedFirst ? "granted" : "denied"} Telegram selection across connector change`,
   async () => withRegistryMode("sqlite", async () => {
-    if (connectedFirst) connected(); else clearTelegramConnection();
+    if (connectedFirst) connected(); else notSetUp();
     const attempt = `root_replay_${crypto.randomUUID()}`;
     const first = await launch("claude", null, undefined, {}, attempt);
     expect(first.response.status).toBe(202);
     expect(first.receipt?.launchProfile.mcpServers).toEqual(connectedFirst ? ["viewer", "telegram"] : ["viewer"]);
-    if (connectedFirst) clearTelegramConnection(); else connected();
+    if (connectedFirst) notSetUp(); else connected();
     const replay = await launch("claude", null, undefined, {}, attempt);
     expect(replay.response.status).not.toBe(409);
     expect(replay.receipt?.launchId).toBe(first.receipt?.launchId);
@@ -664,9 +726,11 @@ async function sendToGoneHost(engine: "claude" | "codex", target: { conversation
 for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine} conversation whose host is gone relaunches it without Telegram while the connector is disconnected`,
   async () => withRegistryMode("sqlite", async () => {
     const target = await grantedConversationWithoutHost(engine);
-    clearTelegramConnection();
+    signedInWith({ status: "error", errorCode: "connector_failed" });
+    const repair = repairPort(false);
     const probe = deferredLaunch(engine, null, undefined, undefined, true);
     const { refusals } = await sendToGoneHost(engine, target, probe);
+    expect(repair.checks).toBe(1);
     /* The relaunch reaches the engine. The synthetic protocol stops it there,
        so the only refusal recovery may report is that stop. */
     expect(refusals.join(" | ")).not.toContain("elegram");
@@ -712,22 +776,22 @@ for (const engine of ["claude", "codex"] as const) test(`a ${engine} relaunch wh
     connected();
   }));
 
-test("disconnect between admission and deferred host start terminalizes a granted child", async () => {
-  const token = connected();
-  const seatId = seedSeat();
+test("a sign-out between admission and deferred host start starts the granted child without the tool", async () => {
   for (const engine of ["claude", "codex"] as const) {
+    const token = connected();
+    const seatId = seedSeat();
     const probe = deferredLaunch(engine, token);
     const { response, receipt } = await launch(engine, seatId, ["telegram"], probe.overrides);
     expect(response.status).toBe(202);
-    clearTelegramConnection();
+    expect(receipt?.launchProfile.mcpServers).toContain("telegram");
+    notSetUp();
     await Promise.all(probe.work.map((work) => work()));
-    expect(probe.evidence.reachedEngine).toBe(false);
-    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)).toMatchObject({
-      state: "failed",
-      error: TELEGRAM_LAUNCH_UNAVAILABLE,
-    });
-    connected();
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+    expect(registry.spawnReceiptForClientAttempt(receipt!.clientAttemptId!)?.error ?? "").not.toContain("elegram");
   }
+  connected();
 });
 
 for (const engine of ["claude", "codex"] as const) test(`revoking the seat during ${engine} account resolution refuses the explicit Telegram grant`,
@@ -858,3 +922,123 @@ test("a conflicting Codex account definition ends the granted launch with a name
     state: "failed", error: "telegram MCP account definition conflicts with operator connector",
   });
 });
+
+/* ── What a launch does about each state of the Telegram connection ───────── */
+
+for (const engine of ["claude", "codex"] as const) test(`a message to a ${engine} conversation whose host is gone reconnects Telegram and relaunches it with the tool`,
+  async () => withRegistryMode("sqlite", async () => {
+    const target = await grantedConversationWithoutHost(engine);
+    /* A credential is stored and the last health check failed: the connector
+       did not come up after a restart. No login is needed to fix that. */
+    const token = signedInWith({ status: "error", errorCode: "connector_failed" });
+    const repair = repairPort(true);
+    const probe = deferredLaunch(engine, token, undefined, undefined, true);
+    const { refusals } = await sendToGoneHost(engine, target, probe);
+    expect(refusals.join(" | ")).not.toContain("elegram");
+    expect(repair.checks).toBe(1);
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenMatches).toBe(true);
+    expect(probe.evidence.telegramDefinition).toBeTruthy();
+    expect(probe.evidence.runNotice).toBeNull();
+    /* A connection that reads connected is left alone by the next launch. */
+    const again = deferredLaunch(engine, token, undefined, undefined, true);
+    await sendToGoneHost(engine, target, again);
+    expect(repair.checks).toBe(1);
+    expect(again.evidence.tokenMatches).toBe(true);
+  }));
+
+for (const engine of ["claude", "codex"] as const) test(`a ${engine} relaunch where Telegram is not set up leaves the server out and asks nobody`,
+  async () => withRegistryMode("sqlite", async () => {
+    const target = await grantedConversationWithoutHost(engine);
+    notSetUp();
+    const repair = repairPort(true);
+    const probe = deferredLaunch(engine, null, undefined, undefined, true);
+    const { refusals } = await sendToGoneHost(engine, target, probe);
+    expect(refusals.join(" | ")).not.toContain("elegram");
+    expect(repair.checks).toBe(0);
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+    expect(telegramOperatorAction()).toBeNull();
+    /* The grant recorded earlier stays on the record. */
+    expect(registry.conversation(target.conversationId as `conversation_${string}`)?.generations.at(-1)?.launchProfile.mcpServers)
+      .toEqual(["viewer", "telegram"]);
+    connected();
+  }));
+
+for (const engine of ["claude", "codex"] as const) test(`a new ${engine} agent starts without the tool while Telegram waits for the operator to sign in`,
+  async () => withRegistryMode("sqlite", async () => {
+    connected();
+    const seatId = seedSeat();
+    /* Telegram ended the session: only a login with a code brings it back. */
+    signedInWith({ status: "expired", errorCode: null });
+    const repair = repairPort(true);
+    const probe = deferredLaunch(engine, null);
+    const { response, receipt } = await launch(engine, seatId, ["telegram"], probe.overrides);
+    expect(response.status).toBe(202);
+    /* The grant is recorded, so the tool returns after the operator signs in. */
+    expect(receipt?.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+    await Promise.all(probe.work.map((work) => work()));
+    expect(repair.checks).toBe(0);
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenPresent).toBe(false);
+    expect(probe.evidence.telegramDefinition).toBeFalsy();
+    expect(probe.evidence.runNotice).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+    expect(telegramOperatorAction()).toBe("sign_in");
+    connected();
+  }));
+
+type RotationState = { name: string; arrange: () => string | null; restores: boolean; granted: boolean; tool: boolean };
+const ROTATION_STATES: RotationState[] = [
+  { name: "Telegram is connected", arrange: () => connected(), restores: false, granted: true, tool: true },
+  { name: "Telegram is not set up", arrange: () => { notSetUp(); return null; }, restores: false, granted: false, tool: false },
+  { name: "the connector is down and comes back", arrange: () => signedInWith({ status: "error", errorCode: "connector_failed" }), restores: true, granted: true, tool: true },
+  { name: "the connector is down and stays down", arrange: () => signedInWith({ status: "error", errorCode: "connector_failed" }), restores: false, granted: true, tool: false },
+  { name: "the record was never published for the stored credential", arrange: () => { connected(); clearTelegramConnection(); return readTelegramSession()!.connectorToken; }, restores: true, granted: true, tool: true },
+  { name: "Telegram ended the session", arrange: () => signedInWith({ status: "expired", errorCode: null }), restores: true, granted: true, tool: false },
+];
+
+for (const state of ROTATION_STATES) for (const engine of ["claude", "codex"] as const) test(`the ${engine} orchestrator rotates while ${state.name}`,
+  async () => withRegistryMode("sqlite", async () => {
+    /* The observed seat: it holds the Telegram grant and its host is gone. */
+    connected();
+    const seatId = seedSeat();
+    const project = seatProjects.get(seatId)!;
+    const token = state.arrange();
+    repairPort(state.restores);
+    const probe = deferredLaunch(engine, state.tool ? token : null);
+    const attempt = `rotation_${crypto.randomUUID()}`;
+    const seatDependencies: SeatCommandDependencies = {
+      spawn: async (body) => {
+        const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST",
+          headers: { origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+          body: JSON.stringify(body) });
+        const response = await executeSpawnRequest(request, dependencies(engine, probe.overrides));
+        return { status: response.status, body: await response.json() as Record<string, unknown> };
+      },
+      deliver: async () => ({ ok: true }),
+      conversationTarget: () => null,
+      summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
+      launchSettlement: () => ({ kind: "unknown" }),
+      stampRegistryIdentity: () => {},
+      runtimeIdentity: () => ({ engine: null, model: null }),
+      resolvedConversation: () => null,
+      engineReadiness: () => "connected",
+      now: () => new Date().toISOString(),
+    };
+    /* The production rotation entry: the route and the agent tool both call it. */
+    const result = await executeOrchestratorRotation({
+      project, clientRequestId: attempt, engine, model: defaultModelFor(engine), cwd,
+    }, seatDependencies);
+    if (result.status !== 202) throw new Error(JSON.stringify(result.body));
+    expect(result.body).toMatchObject({ rotatedFrom: { conversationId: seatId } });
+    expect(registry.spawnReceiptForClientAttempt(attempt)?.launchProfile.mcpServers)
+      .toEqual(state.granted ? ["viewer", "telegram"] : ["viewer"]);
+    await Promise.all(probe.work.map((work) => work()));
+    expect(probe.evidence.reachedEngine).toBe(true);
+    expect(probe.evidence.tokenPresent).toBe(state.tool);
+    if (state.tool) expect(probe.evidence.tokenMatches).toBe(true);
+    expect(Boolean(probe.evidence.telegramDefinition)).toBe(state.tool);
+    expect(registry.spawnReceiptForClientAttempt(attempt)?.error ?? "").not.toContain("elegram");
+    connected();
+  }));

@@ -760,7 +760,6 @@ async function resumeGrantedThread(protocol: string) {
     pidAlive: () => true,
     processIdentity: () => "6161:owned",
     mcpServers: ["viewer", "telegram"],
-    telegramOptional: true,
   });
   const delivery = host.send({ id: "first-message-of-the-run", text: "are you there?" }).catch(() => null);
   for (let waited = 0; waited < 100 && !server.requests.some((request) => request.method === "turn/start"); waited += 1) await Bun.sleep(10);

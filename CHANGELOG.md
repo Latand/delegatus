@@ -19,15 +19,22 @@ guarantees for the 1.x series.
   alone, and the board's live animations pause while it is held.
 
 ### Fixed
-- **A disconnected Telegram connection no longer makes a conversation
-  unreachable.** A conversation that holds the Telegram tool and whose agent is
-  not running used to refuse every message while Telegram was disconnected,
-  because the restart itself was refused. It now starts without the tool, tells
-  the agent so in one line, and gets the tool back on the next start after
-  Telegram is reconnected. A new agent that asks for Telegram while it is
-  disconnected is still refused, in plain words. The rotation banner and the
-  "not delivered" reasons on this path read in the interface language, one line
-  per cause, each with what to do.
+- **Telegram never stops an agent from starting, and a connection that can be
+  restored is restored by the start itself.** A conversation that holds the
+  Telegram tool and whose agent was not running used to refuse every message
+  whenever the Telegram connection did not read connected, and a new agent that
+  asked for the tool was refused outright. Now the start looks at why. If you are signed in and the connection is only down (after a restart
+  or an update, or after one failed check), it reconnects, waiting at most
+  twenty seconds, and the agent starts with the tool. If Telegram was never
+  connected on this machine, or you signed out, the tool is left out and nothing
+  is asked of you; an agent started there is no longer given the tool on paper.
+  If Telegram needs you (it ended your session, or the reconnect failed), the
+  agent starts without the tool, is told so in one line, and the orchestrator
+  seat shows one line with what to do. The tool returns on the next start after
+  you reconnect. Access you withdrew still refuses the start. After a restart
+  the connection now comes back on its own even with daily reports switched
+  off. The rotation banner and the "not delivered" reasons on this path read in
+  the interface language, one line per cause, each with what to do.
 
 ## [1.9.0] — 2026-10-01
 

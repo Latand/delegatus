@@ -294,7 +294,7 @@ test("real Codex: a resumed thread's next model request carries the Telegram not
     /* The relaunch: a new app-server process resumes the thread while Telegram
        is disconnected, and the operator's message starts its first turn. */
     clearTelegramConnection();
-    resumed = await f.resume({ mcpServers: ["viewer", "telegram"], telegramOptional: true });
+    resumed = await f.resume({ mcpServers: ["viewer", "telegram"] });
     await resumed.send({ id: "first-message-of-the-run", text: "are you there?" });
     await until(() => f.requests.length === 2);
     expect(mentions(modelInput(1), TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE)).toBe(1);

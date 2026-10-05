@@ -284,6 +284,9 @@ const SEAT_HEAD = SCENARIO === "seat-head";
    line: the status read reports both causes, as data, beside the sentences it
    writes for an agent. */
 const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") === "gone";
+/* The seat holds the Telegram tool and Telegram waits on the operator: the
+   status read names the action, `sign_in` or `check`. */
+const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -3059,6 +3062,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           ],
         }
         : { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
+      ...(SEAT_TELEGRAM ? { telegram: SEAT_TELEGRAM } : {}),
     });
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something

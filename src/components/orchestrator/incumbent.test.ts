@@ -109,3 +109,10 @@ test("the server's causes are read as data, and a malformed one is dropped", () 
     { kind: "transcript", megabytes: 9.4, thresholdMegabytes: 8 },
   ]);
 });
+
+test("the Telegram action is one of the two the interface words, or nothing", () => {
+  expect(parseIncumbent({ ...body, telegram: "sign_in" })!.telegram).toBe("sign_in");
+  expect(parseIncumbent({ ...body, telegram: "check" })!.telegram).toBe("check");
+  expect(parseIncumbent({ ...body, telegram: "telegram MCP connector is not connected at launch" })!.telegram).toBeNull();
+  expect(parseIncumbent(body)!.telegram).toBeNull();
+});

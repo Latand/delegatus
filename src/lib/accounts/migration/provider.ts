@@ -500,11 +500,9 @@ async function publishClaudeSuccessorHost(
          bound, and widening native sub-agents is not a re-host's decision. */
       ...claudeHostLaunchPaths(input.target),
       mcpServers: input.profile.mcpServers,
-      /* The conversation exists and its Telegram tool is optional, so with
-         Telegram disconnected the successor starts without the tool for this
-         run, as any relaunch of an existing conversation does. */
+      /* The Telegram tool is optional, so with Telegram disconnected the
+         successor starts without the tool for this run, as any launch does. */
       validateTelegramGrant: successorTelegramGrantCheck(input),
-      telegramOptional: true,
       env: access.env,
       /* Transcripts keep dated provider ids the CLI may refuse as a launch
          argument; the launcher that used to project them is gone, so the

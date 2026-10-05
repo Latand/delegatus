@@ -300,6 +300,18 @@ export function telegramConnectorOwnsSession(session: ConnectorBinding): boolean
   return ownsRecordedConnector(session);
 }
 
+/**
+ * Whether a connector was recorded for this installation and that process no
+ * longer serves this credential generation: the pid is gone or recycled, or
+ * the record belongs to an earlier credential. A restart of the Viewer leaves
+ * exactly this, because the connector is its child and the record is a file.
+ * No record at all answers false: an orderly stop removes the record together
+ * with the status that claimed a connection.
+ */
+export function telegramConnectorRecordedGone(binding: ConnectorBinding): boolean {
+  return readConnectorRecord() !== null && !ownsRecordedConnector(binding);
+}
+
 function terminateChildImmediately(child: ConnectorChild): void {
   try { child.kill("SIGKILL"); } catch { /* already gone */ }
 }

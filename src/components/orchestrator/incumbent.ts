@@ -80,7 +80,11 @@ export interface OrchestratorIncumbent {
   context: IncumbentContext | null;
   transcriptFacts: IncumbentTranscript | null;
   rotation: IncumbentRotation | null;
+  /** What the operator has to do before this seat's Telegram tool works again. */
+  telegram?: IncumbentTelegramAction | null;
 }
+
+export type IncumbentTelegramAction = "sign_in" | "check";
 
 const str = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -108,6 +112,7 @@ export function parseIncumbent(body: unknown): OrchestratorIncumbent | null {
     context: contextOf(raw.context),
     transcriptFacts: transcriptOf(raw.transcriptFacts),
     rotation: rotationOf(raw.rotation),
+    telegram: raw.telegram === "sign_in" || raw.telegram === "check" ? raw.telegram : null,
   };
 }
 

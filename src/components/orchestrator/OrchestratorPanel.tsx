@@ -51,6 +51,7 @@ import {
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   rotationBannerLines,
+  telegramActionLine,
   type RotationHint,
   type SeatBadge,
   type SeatBindFailure,
@@ -251,6 +252,7 @@ export function OrchestratorPanel({
      describes the predecessor — showing that as «the incumbent» would put the
      retired orchestrator's model and context in the successor's header. */
   const incumbent = read && read.conversationId === seatConversationId ? read : null;
+  const telegramLine = telegramActionLine(t, incumbent?.telegram);
   /* The DURABLE id is the key, and the status read's `transcriptPath` is that id
      resolved through the registry's current generation — which is what binds a
      seat whose recorded path was replaced by a re-host (issue #1182). The
@@ -718,6 +720,11 @@ export function OrchestratorPanel({
               a retry and once without, so the draft's own block is the one. */}
           {state.transition && !rotating ? <TransitionBanner transition={state.transition} /> : null}
           {state.rotation ? <RotationBanner rotation={state.rotation} /> : null}
+          {telegramLine ? (
+            <p className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-ui text-warning" role="status" data-orchestrator-telegram={incumbent?.telegram ?? undefined}>
+              {telegramLine}
+            </p>
+          ) : null}
           {rotating ? null : (
             <>
               {orchestratorQuietBannerEligible(state, file) ? (

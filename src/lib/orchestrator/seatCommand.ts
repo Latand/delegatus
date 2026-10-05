@@ -30,17 +30,8 @@ import { mappingRowRefusal, type LaunchRuntime } from "@/lib/roles/sizing";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 import { activeDrain } from "@/lib/selfUpdate/drain";
-
-function operatorTelegramConnected(): boolean {
-  try {
-    const connection = readTelegramConnection();
-    return connection.status === "connected" && connection.credentialRef === readTelegramSession()?.credentialRef;
-  } catch {
-    return false;
-  }
-}
 
 import {
   boundHistoryBody,
@@ -1016,7 +1007,10 @@ async function runOrchestratorSeatRequest(
   // fresh agent spawn still needs admission after any awaited handoff work.
   const hold = agentSeatLaunchHold(triggeredBy);
   if (hold) return hold;
-  const telegramGrant = operatorTelegramConnected();
+  /* A seat holds the grant wherever Telegram is set up, whatever its
+     connection reads this minute: the launch repairs a connection that is down
+     or starts without the tool, and the grant brings the tool back later. */
+  const telegramGrant = telegramSetUp();
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
