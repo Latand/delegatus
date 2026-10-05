@@ -25,7 +25,9 @@ import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/s
  * reader will see: one more view drops the inline markup Markdown draws and
  * never shows (emphasis, strike-through, code-span ticks, link brackets, HTML
  * tags and comments), since `A**da**` and `dead<b>beef</b>` read as one
- * word. The digest and the line numbers stay those of the text as written.
+ * word. A reference link (`A[da][ref]`, `A[da][]`, `A[da]`) is read as its
+ * text wherever its definition sits, and the definition line is read as
+ * written. The digest and the line numbers stay those of the text as written.
  *
  * The rules below are the ones a report needs and neither set states: somebody
  * else's words (a quoted block, a quotation, a speaker's line) and an embedded
@@ -57,17 +59,24 @@ const STATIC_LABELS: Record<StaticFindingClass, string> = {
 const QUOTED_BLOCK = /^\s*>/;
 /* A quotation is two or more words between quotation marks. One marked word
    (a state called "delivered") is a term, and an apostrophe inside a word
-   opens nothing. Code spans stay readable: an error text belongs in one. A
+   opens nothing and closes nothing ('don't stop now' is one quotation). Code spans stay readable: an error text belongs in one. A
    quotation may run over any number of lines, so the patterns cross line
-   breaks; a mark cannot pair across another mark of its kind. */
+   breaks; a mark cannot pair across another mark of its kind. Spaces just
+   inside the marks change nothing: the words are counted between them. A
+   straight mark that opens stands after no letter and one that closes before
+   none, which is what keeps two marked terms from pairing across the prose
+   between them. */
+const QUOTED_WORD_CHAR = "(?:[^\\s'‘’]|(?<=\\p{L})['’](?=\\p{L}))";
 const QUOTATION = [
   /"[^"\s][^"]*\s[^"]*[^"\s]"/,
+  /(?<![\p{L}\p{N}])"\s*[^"\s]+\s+[^"\s][^"]*"(?![\p{L}\p{N}])/u,
   /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/,
-  /(?<![\p{L}\p{N}])['‘](?=[^\s'‘’])[^'‘’]*\s[^'‘’]*(?<=[^\s])['’](?![\p{L}\p{N}])/u,
+  new RegExp(`(?<![\\p{L}\\p{N}])['‘]\\s*${QUOTED_WORD_CHAR}+\\s+${QUOTED_WORD_CHAR}(?:\\s|${QUOTED_WORD_CHAR})*['’](?![\\p{L}\\p{N}])`, "u"),
 ];
 /* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
 const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
-const EMBEDDED_IMAGE = /!\[[^\]]*\]\(|<img\b/i;
+/* An image in any form: inline, or by reference (`![board][ref]`, `![board]`). */
+const EMBEDDED_IMAGE = /!\[|<img\b/i;
 
 const OWN_WORDS = "say what happened in your own words";
 
@@ -76,13 +85,21 @@ const OWN_WORDS = "say what happened in your own words";
  * gone and the characters on either side of it meet. `*` and `~` mark up
  * inside a word too; `_` only at a word's edge, which is why `issue_report`
  * keeps its underscore. A link shows its text; its address stays in the
- * written view, where the URL rule reads it. An image is the image rule's.
+ * written view, where the URL rule reads it. That holds for a reference link
+ * too: its label goes, and so do the brackets of whatever is left, since a
+ * definition anywhere in the document turns `[da]` into a link. An image is
+ * the image rule's.
  */
+/* An address may hold one level of brackets of its own: `[x](a(b)c)`. */
+const INLINE_LINK = /\[([^\[\]]*)\]\((?:\([^()]*\)|[^()])*\)/g;
+
 function markdownVisible(text: string): string {
   return text
     .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
     .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(INLINE_LINK, "$1")
+    .replace(/\[([^\[\]]*)\]\[[^\[\]]*\]/g, "$1")
+    .replace(/[[\]]/g, "")
     .replace(/[*~`]+/g, "")
     .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
 }

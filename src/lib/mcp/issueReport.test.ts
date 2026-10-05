@@ -149,6 +149,38 @@ test("Markdown markup, an uncommon top-level domain, a spaced folder and a quota
   expect(fs.readdirSync(sandbox)).toEqual([]);
 });
 
+/* The third review of #2518: each body below was stored. */
+test("reference links and images, a host before a remark in brackets, bare absolute paths and a spaced quotation are refused before any preview exists", async () => {
+  const h = harness({ deny: { accounts: ["claude-main-b"], people: ["Ada"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }] } });
+  const bodies: [string, string][] = [
+    ["person", "A[da][ref] observed the failure.\n\n[ref]: #details"],
+    ["account", "The launch picked claude-[main][ref]-b.\n\n[ref]: #details"],
+    ["project", "The project Arte[mis][ref] failed to launch.\n\n[ref]: #details"],
+    ["id", `The pipeline ${"dead"}[${"beef"}][ref] stayed queued.\n\n[ref]: #details`],
+    ["domain", `The failure happened on ${"buildbox"}.[${"tools"}][ref].\n\n[ref]: #details`],
+    ["path", `The evidence file is [${"/"}My][ref]/notes.txt.\n\n[ref]: #details`],
+    ["image", "![board][ref]\n\n[ref]: shot.png"],
+    ["domain", `The failing host was ${"buildbox"}.${"tools"} (offline).`],
+    ["domain", `The failing host was ${"buildbox"}.${"fr"} (offline).`],
+    ["path", `The evidence file is ${["", "notes.txt"].join("/")}.`],
+    ["path", `The evidence file is ${["", "My's data", "notes.txt"].join("/")}.`],
+    ["path", `The evidence file is ${["C:", "Evidence", "notes.txt"].join("/")}.`],
+    ["quote", "The operator said: \" restart every agent now \"."],
+    ["quote", "The operator said: ' restart every agent now '."],
+  ];
+  for (const [kind, body] of bodies) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+  }
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  /* A reference link to Delegatus's own code, a call and a marked term are stored. */
+  expect(await h.call(REPORTER, {
+    action: "preview", title: REPORT.title,
+    body: `${REPORT.body}\nSee [the bindings][ref]: Date.now() was read and the state "delivered" was kept.\n\n[ref]: src/lib/mcp/bindings.ts`,
+  })).toMatchObject({ ok: true, state: "preview" });
+});
+
 test("a clean report is stored under the digest of its exact text", async () => {
   const h = harness();
   const preview = await h.call(REPORTER, { action: "preview", ...REPORT });

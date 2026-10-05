@@ -103,7 +103,9 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
      space-separated run counts only once a later slash closes the folder. */
   ["path", /(?:^|[\s(«"'`=])\/(?:[\p{L}\p{N}_.@-]+(?:(?: |\\ )[\p{L}\p{N}_.@-]+)*\/)+[\p{L}\p{N}_.@-]*/u],
   ["path", /(?:^|[\s(«"'`=])\/(?:home|root|Users|tmp|var|etc|opt|usr|mnt|srv|proc|run|private)\b/],
-  ["path", /\b[a-z]:\\[\w\\. -]+/i],
+  /* A drive path, with either slash: `C:\x`, `C:/x`. A scheme (`ftp://`) has
+     more than one letter before its colon and two slashes after it. */
+  ["path", /(?<![\p{L}\p{N}_])[a-z]:(?:\\|\/(?!\/))[^\s\\/]/iu],
   ["phone", /\+\d{1,3}[\s-]?\(?\d{2,4}\)?(?:[\s-]?\d{2,4}){2,4}\b/],
   ["id", /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i],
   /* Delegatus's own tool names share the prefix and name nothing private. */
@@ -129,8 +131,13 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
  *    of the root zone (`buildbox.fr`, `buildbox.tools`, `buildbox.xn--p1ai`,
  *    `вузол.укр`) or a private one (`.lan`, `.internal`), and any ending in
  *    `xn--`. The endings that are source file extensions stay readable, or no
- *    report could name `bindings.ts`, and so does a name a call follows
- *    (`Date.now()`, `rows.map(...)`): that is code;
+ *    report could name `bindings.ts`, and so does a call written as code
+ *    writes it (`Date.now()`, `rows.map(...)`): plain identifiers and the
+ *    bracket straight after them. A bracket after a space is a remark in
+ *    prose (`buildbox.tools (offline)`), and a host stays a host before it;
+ *  - a path is every token a slash opens, whatever follows: one component
+ *    (`/notes.txt`), a folder with punctuation in its name (`/My's data/x`).
+ *    A repository-relative path has a name before its first slash and passes;
  *  - an id is also eight or more bare hex characters, whatever they are: a
  *    pipeline id is the first eight of a UUID, which can be all digits or all
  *    letters;
@@ -145,7 +152,14 @@ export interface PrivateClassOptions {
 const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion"]);
 const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
 /* Labels of any script, joined by any of the dots IDNA reads as one. */
-const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\s*\()?/giu;
+const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\()?/giu;
+/* A call as code writes it: ASCII identifiers, dots, the bracket. */
+const CODE_CALL = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\($/;
+/* A slash that opens a token. Before it: no name (`src/lib`), no dot
+   (`./x`), no slash (`//`, a URL) and no star (a comment's end). After it:
+   something other than a second slash, a star, a space or the `>` of a
+   self-closing tag. A closing tag (`</b>`) is markup. */
+const SLASH_OPENED_PATH = /(?<![\p{L}\p{M}\p{N}_.*\/])(?<!<(?=\/[A-Za-z][A-Za-z0-9-]*\s*>))\/(?![\/*>\s])/u;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
 
@@ -160,7 +174,7 @@ function topLevelDomain(ending: string): boolean {
 
 function strictDomain(text: string): boolean {
   for (const match of text.matchAll(DOTTED_NAME)) {
-    if (match[2] || SOURCE_EXTENSIONS.has(match[1].toLowerCase())) continue;
+    if ((match[2] && CODE_CALL.test(match[0])) || SOURCE_EXTENSIONS.has(match[1].toLowerCase())) continue;
     if (topLevelDomain(match[1])) return true;
   }
   return false;
@@ -206,6 +220,7 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
+    if (SLASH_OPENED_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
   }
   if (namesHit(text, deny.accounts, usable)) found.add("account");

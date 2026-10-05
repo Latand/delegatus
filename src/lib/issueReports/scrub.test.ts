@@ -240,3 +240,103 @@ test("a quotation over several lines is refused against the line it opens on", (
   expect(classes("The recipient's turn never\nstarted, and the agents' queue\nstayed empty.")).toEqual([]);
   expect(classes("The operator asked\nfor every agent\nto be restarted.")).toEqual([]);
 });
+
+/* The third review of #2518 found the following passing: a reference link or
+   image, a host with a remark in brackets after it, an absolute path of one
+   component or with punctuation in a folder name, and a quotation with spaces
+   just inside its marks. */
+
+test("a reference link is read as its text, and a reference image is an image", () => {
+  const deny: PublicDenyList = {
+    accounts: ["claude-main-b"], people: ["Ada"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }],
+  };
+  const defined = (line: string, definition = "[ref]: #details") => `${line}\n\n${definition}`;
+  expect(classes(defined("A[da][ref] observed the failure."), deny)).toContain("person");
+  expect(classes(defined("A[da][] observed the failure.", "[da]: #details"), deny)).toContain("person");
+  expect(classes(defined("A[da] observed the failure.", "[da]: #details"), deny)).toContain("person");
+  expect(classes(defined("The launch picked claude-[main][ref]-b."), deny)).toContain("account");
+  expect(classes(defined("The project Arte[mis][ref] failed to launch."), deny)).toContain("project");
+  expect(classes(defined(`The pipeline ${"dead"}[${"beef"}][ref] stayed queued.`))).toContain("id");
+  expect(classes(defined(`The failure happened on ${"buildbox"}.[${"tools"}][ref].`))).toContain("domain");
+  expect(classes(defined(`The evidence file is [${"/"}My][ref]/notes.txt.`))).toContain("path");
+  /* Encoded brackets and an encoded letter inside the link text change nothing. */
+  expect(classes(defined(`A${entity("[")}da${entity("]")}[ref] observed the failure.`), deny)).toContain("person");
+  expect(classes(defined(`A[d${entity("a")}][ref] observed the failure.`), deny)).toContain("person");
+  expect(classes(defined(`A[d${percent("a")}][ref] observed the failure.`), deny)).toContain("person");
+  /* An inline link whose address holds brackets of its own still ends where it ends. */
+  expect(classes("A[da](#a(b)c) observed the failure.", deny)).toContain("person");
+  /* What a definition points at is read as written. */
+  expect(classes(defined("See [the log][ref].", `[ref]: ${["", "notes.txt"].join("/")}`))).toContain("path");
+  expect(classes(defined("See [the log][ref].", `[ref]: ${"buildbox"}.${"tools"}`))).toContain("domain");
+
+  for (const body of [defined("![board][ref]", "[ref]: shot.png"), defined("![board][]", "[board]: shot.png"), defined("![board]", "[board]: shot.png"), "![bo\nard][ref]"]) {
+    expect(classes(body)).toContain("image");
+  }
+  expect(classes(defined(`${entity("!")}[board][ref]`, "[ref]: shot.png"))).toContain("image");
+
+  /* Reference links to Delegatus's own code stay readable. */
+  expect(classes(defined("See [the bindings][ref] and [the contract][] for the rule.", "[ref]: src/lib/mcp/bindings.ts\n[the contract]: docs/design/agent-prompt-contract.md"), deny)).toEqual([]);
+});
+
+test("a host with a remark in brackets after it is still a host, and a call is still code", () => {
+  for (const host of [`${"buildbox"}.${"tools"}`, `${"buildbox"}.${"fr"}`, `${"buildbox"}.${"xn--p1ai"}`, `${"вузол"}.${"укр"}`, `${"buildbox"}．${"tools"}`]) {
+    expect(classes(`The failing host was ${host} (offline).`)).toContain("domain");
+    expect(classes(`The failing host was ${host}\t(offline).`)).toContain("domain");
+  }
+  /* Only plain identifiers make a call: a hyphenated or non-Latin name is a host with a bracket stuck to it. */
+  expect(classes(`The failing host was ${"build-box"}.${"tools"}(offline).`)).toContain("domain");
+  expect(classes(`The failing host was ${"вузол"}.${"укр"}(offline).`)).toContain("domain");
+  expect(classes("The clock read Date.now() and rows.map(render) returned nothing.")).toEqual([]);
+  expect(classes("`Math.max(a, b)` and `this.queue.push(next)` both returned.")).toEqual([]);
+});
+
+test("an absolute path is a path whatever its shape", () => {
+  for (const file of [
+    ["", "notes.txt"].join("/"),
+    ["", "My's data", "notes.txt"].join("/"),
+    ["", "My (old) data", "notes.txt"].join("/"),
+    ["C:", "Evidence", "notes.txt"].join("/"),
+    ["c:", "notes.txt"].join("/"),
+    ["", "notes.txt"].join(entity("/")),
+    ["", "notes.txt"].join(percent("/")),
+    ["", "My's data", "notes.txt"].join("／"),
+    ["C:", "Evidence", "notes.txt"].join(percent("/")),
+    `C${entity(":")}${entity("/")}Evidence/notes.txt`,
+  ]) {
+    const findings = scrubIssueReport({ title: CLEAN.title, body: `The evidence file is ${file}.` });
+    expect(findings.find((finding) => finding.class === "path")).toMatchObject({ where: "body", lines: [1], label: "a local path" });
+  }
+  expect(classes(`The evidence file is "${["", "notes.txt"].join("/")}".`)).toContain("path");
+  expect(classes(`The evidence file is [${["", "notes.txt"].join("/")}](#x).`)).toContain("path");
+  /* Repository-relative paths, markup and prose with a slash in it name nothing. */
+  for (const line of [
+    "The settlement path in src/lib/mcp/bindings.ts.",
+    "See ./scripts/gate-slot.sh and ../docs/design/agent-prompt-contract.md.",
+    "The read/write split and the implement→review loop, 3/4 of the time.",
+    "A<b>n</b> answer<br /> came, and either / or was shown.",
+  ]) expect(classes(line)).toEqual([]);
+});
+
+test("spaces just inside the marks do not make a quotation a term", () => {
+  const opened = (body: string) => scrubIssueReport({ title: CLEAN.title, body }).filter((finding) => finding.class === "quote");
+  for (const line of [
+    "The operator said: \" restart every agent now \".",
+    "The operator said: \"restart every agent now \".",
+    "The operator said: \" restart every agent now\".",
+    "The operator said: ' restart every agent now '.",
+    "The operator said: ‘ restart every agent now ’.",
+    "The operator said: 'don't stop any agent now'.",
+    "The operator said: &quot; restart every agent now &quot;.",
+    "The operator said: \" restart every agent now \".",
+  ]) expect(classes(line)).toContain("quote");
+  expect(opened("Intro.\nThe operator said: \" restart\nevery agent\nnow \".")).toEqual([expect.objectContaining({ where: "body", lines: [2] })]);
+  expect(opened("Intro.\n\nThe operator said: ' restart\nevery\nagent '.")).toEqual([expect.objectContaining({ lines: [3] })]);
+  /* One-word terms, with or without the spaces, and prose between two of them. */
+  for (const line of [
+    "The state \" delivered \" never changed.",
+    "The state \"delivered\" and then the state \"queued\" were shown.",
+    "The state (\"delivered\") came first and the state \"queued\" came after it.",
+    "The state 'delivered' and then the agents' state 'queued' were shown.",
+    "The operator asked for every agent to be restarted at once.",
+  ]) expect(classes(line)).toEqual([]);
+});
