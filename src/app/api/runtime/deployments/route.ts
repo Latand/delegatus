@@ -1,3 +1,6 @@
+import { selfUpdateService } from "@/lib/selfUpdate/instance";
+import { checkoutDeployments } from "@/lib/selfUpdate/deployments";
+import { statePath } from "@/lib/configDir";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -34,6 +37,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       { error: "runtime events are disabled", code: RUNTIME_PLANE_ABSENT },
       { status: 503 },
     );
+  }
+  const decision = await selfUpdateService().decide();
+  if (decision.mode === "checkout" || decision.mode === "package") {
+    await selfUpdateService().snapshot();
+    try {
+      const rows = checkoutDeployments(statePath("self-update")).slice().reverse().slice(0, deploymentListLimit(request));
+      return NextResponse.json({ count: rows.length, deployments: rows, nextCursor: null });
+    } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Deployment ledger unavailable" }, { status: 503 }); }
   }
   const client = runtimeHostClient();
   if (!client) {
@@ -136,6 +147,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
+    const service = selfUpdateService();
+    const decision = await service.decide();
+    if (decision.mode !== "managed") {
+      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
+      return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
+    }
     const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
@@ -145,7 +162,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { status: 503 },
       );
     }
-    const status = error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict" ? 409 : 503;
+    const status = error instanceof Error && error.message === "idempotency-conflict" || error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict" ? 409 : 503;
     return NextResponse.json({ error: error instanceof Error ? error.message : "viewer deployment request failed" }, { status });
   }
 }

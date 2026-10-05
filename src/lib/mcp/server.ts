@@ -1021,6 +1021,12 @@ function readRecoveryOwner(ownerPath: string): ReceiptRecoveryOwner {
   return value as ReceiptRecoveryOwner;
 }
 
+function recoveryOwnerTargets(owner: ReceiptRecoveryOwner, observation: ReceiptLockObservation): boolean {
+  return owner.targetDev === observation.identity.dev
+    && owner.targetIno === observation.identity.ino
+    && owner.targetToken === observation.token;
+}
+
 function recoveryOwners(
   recoveryPath: string,
   observation: ReceiptLockObservation,
@@ -1054,18 +1060,21 @@ function recoveryOwners(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "retry" };
       throw error;
     }
-    if (owner.epoch !== Number(epochText)
-      || owner.targetDev !== observation.identity.dev
-      || owner.targetIno !== observation.identity.ino
-      || owner.targetToken !== observation.token) {
-      throw new Error("invalid MCP receipt recovery owner target");
-    }
+    if (owner.epoch !== Number(epochText)) throw new Error("invalid MCP receipt recovery owner epoch");
+    /* The namespace is named by the lock's inode, and an inode number is
+       handed out again once its last link is gone. An entry for another token
+       at the same inode belongs to another generation of the lock. Its
+       retirement guards other files, so it neither owns nor blocks this one;
+       the two share only the epoch names (`claimRecoveryOwnership`). */
+    if (!recoveryOwnerTargets(owner, observation)) continue;
     entries.push({ owner, ownerPath });
   }
   entries.sort((left, right) => left.owner.epoch - right.owner.epoch);
   return { kind: "owners", entries };
 }
 
+/** The owners of this lock generation's retirement, or null when they cannot
+    be read before the deadline. */
 async function recoveryOwnersUntil(
   recoveryPath: string,
   observation: ReceiptLockObservation,
@@ -1115,22 +1124,40 @@ async function claimRecoveryOwnership(
   deadline: number,
 ): Promise<ReceiptRecoveryClaim | "blocked" | "retry"> {
   const token = crypto.randomUUID();
-  const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
-  if (!owners) return "retry";
-  const current = owners.at(-1)?.owner;
-  if (current && processOwnerAlive(current)) return "blocked";
-  const owner: ReceiptRecoveryOwner = {
-    version: 1,
-    epoch: (current?.epoch ?? -1) + 1,
-    pid: process.pid,
-    startIdentity: procBackend.processIdentity(process.pid),
-    token,
-    targetDev: observation.identity.dev,
-    targetIno: observation.identity.ino,
-    targetToken: observation.token,
-  };
-  const ownerPath = publishRecoveryOwner(recoveryPath, owner);
-  return ownerPath ? { owner, ownerPath } : "retry";
+  while (true) {
+    const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
+    if (!owners) return "retry";
+    const current = owners.at(-1)?.owner;
+    if (current && processOwnerAlive(current)) return "blocked";
+    const owner: ReceiptRecoveryOwner = {
+      version: 1,
+      epoch: (current?.epoch ?? -1) + 1,
+      pid: process.pid,
+      startIdentity: procBackend.processIdentity(process.pid),
+      token,
+      targetDev: observation.identity.dev,
+      targetIno: observation.identity.ino,
+      targetToken: observation.token,
+    };
+    const ownerPath = publishRecoveryOwner(recoveryPath, owner);
+    if (ownerPath) return { owner, ownerPath };
+    /* Another claimant published this epoch first. This generation's winner
+       shows in the next scan. Another generation's holds only the name, and
+       this claimant has published nothing while it waits, so no two
+       generations ever wait on each other: a live one unlinks the name within
+       its own retirement, a dead one only when residue cleanup retires it
+       under its own target. */
+    let holder: ReceiptRecoveryOwner;
+    try {
+      holder = readRecoveryOwner(`${recoveryOwnerPrefix(recoveryPath)}${owner.epoch}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (recoveryOwnerTargets(holder, observation)) continue;
+    if (!processOwnerAlive(holder)) return "retry";
+    await receiptLockClock.pause(Math.min(10, Math.max(1, deadline - receiptLockClock.now())));
+  }
 }
 
 async function recoveryClaimCurrent(
@@ -1217,17 +1244,22 @@ function recoveryPathsForLock(lockPath: string): string[] {
   return [...paths];
 }
 
-function abandonedRecoveryObservation(recoveryPath: string): ReceiptLockObservation | null {
+/** Every lock generation that left something in this namespace: the one the
+    recovery link names and each one an owner entry targets. The generation
+    with the newest epoch comes first. Its successor epoch is a name nobody
+    holds, so residue retired in this order never meets an epoch name that
+    another dead generation still has. */
+function abandonedRecoveryObservations(recoveryPath: string): ReceiptLockObservation[] {
+  const generations: Array<{ observation: ReceiptLockObservation; epoch: number }> = [];
   const linked = observeLock(recoveryPath);
-  if (linked) return linked;
+  if (linked) generations.push({ observation: linked, epoch: -1 });
   const directory = path.dirname(recoveryPath);
   const prefix = path.basename(recoveryOwnerPrefix(recoveryPath));
-  let current: ReceiptRecoveryOwner | null = null;
   let entries: string[];
   try {
     entries = fs.readdirSync(directory);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   for (const entry of entries) {
@@ -1238,24 +1270,28 @@ function abandonedRecoveryObservation(recoveryPath: string): ReceiptLockObservat
     try {
       owner = readRecoveryOwner(path.join(directory, entry));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
     if (owner.epoch !== Number(epochText)) throw new Error("invalid MCP receipt recovery owner epoch");
-    if (current && (current.targetDev !== owner.targetDev
-      || current.targetIno !== owner.targetIno
-      || current.targetToken !== owner.targetToken)) {
-      throw new Error("invalid MCP receipt recovery owner lineage");
+    const generation = generations.find(({ observation }) => recoveryOwnerTargets(owner, observation));
+    if (generation) {
+      generation.epoch = Math.max(generation.epoch, owner.epoch);
+    } else {
+      generations.push({
+        observation: {
+          identity: { dev: owner.targetDev, ino: owner.targetIno },
+          mtimeMs: 0,
+          owner: null,
+          token: owner.targetToken,
+        },
+        epoch: owner.epoch,
+      });
     }
-    if (!current || owner.epoch > current.epoch) current = owner;
   }
-  if (!current) return null;
-  return {
-    identity: { dev: current.targetDev, ino: current.targetIno },
-    mtimeMs: 0,
-    owner: null,
-    token: current.targetToken,
-  };
+  return generations
+    .sort((left, right) => right.epoch - left.epoch)
+    .map(({ observation }) => observation);
 }
 
 function lockReferencesObservation(lockPath: string, observation: ReceiptLockObservation): boolean {
@@ -1269,32 +1305,45 @@ async function cleanupAbandonedRecoveryArtifacts(
 ): Promise<ReceiptRecoveryNamespaceState> {
   for (const recoveryPath of recoveryPathsForLock(lockPath)) {
     removeDeadRecoveryOwnerAliases(recoveryPath);
-    const observation = abandonedRecoveryObservation(recoveryPath);
-    if (!observation) {
+    const observations = abandonedRecoveryObservations(recoveryPath);
+    if (observations.length === 0) {
       if (recoveryPathsForLock(lockPath).includes(recoveryPath)) return "retry";
       continue;
     }
-    if (lockReferencesObservation(lockPath, observation)) continue;
-    const claim = await claimRecoveryOwnership(recoveryPath, observation, deadline);
-    if (claim === "blocked" || claim === "retry") return claim;
-    let cleaned = false;
-    try {
-      if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
-        || lockReferencesObservation(lockPath, observation)) return "retry";
-      if (sameLock(recoveryPath, observation.identity)
-        && readLockMetadata(recoveryPath).token === observation.token) {
-        try {
-          fs.unlinkSync(recoveryPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    for (const observation of observations) {
+      if (lockReferencesObservation(lockPath, observation)) continue;
+      const claim = await claimRecoveryOwnership(recoveryPath, observation, deadline);
+      if (claim === "blocked" || claim === "retry") return claim;
+      let cleaned = false;
+      try {
+        if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
+          || lockReferencesObservation(lockPath, observation)) return "retry";
+        if (sameLock(recoveryPath, observation.identity)
+          && readLockMetadata(recoveryPath).token === observation.token) {
+          try {
+            fs.unlinkSync(recoveryPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
         }
+      } finally {
+        cleaned = await releaseRecoveryOwnership(recoveryPath, observation, claim, deadline);
       }
-    } finally {
-      cleaned = await releaseRecoveryOwnership(recoveryPath, observation, claim, deadline);
+      if (!cleaned) return "retry";
     }
-    if (!cleaned) return "retry";
   }
   return "clear";
+}
+
+/** A claimant that gives up takes its own entry with it. Left behind, a live
+    process's entry blocks every other claimant of this generation until that
+    process exits. */
+function withdrawRecoveryClaim(claim: ReceiptRecoveryClaim): void {
+  try {
+    if (readRecoveryOwner(claim.ownerPath).token === claim.owner.token) fs.unlinkSync(claim.ownerPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 async function releaseRecoveryOwnership(
@@ -1303,9 +1352,13 @@ async function releaseRecoveryOwnership(
   claim: ReceiptRecoveryClaim,
   deadline: number,
 ): Promise<boolean> {
-  if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)) return false;
-  const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
-  if (!owners) return false;
+  const owners = await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
+    ? await recoveryOwnersUntil(recoveryPath, observation, deadline)
+    : null;
+  if (!owners) {
+    withdrawRecoveryClaim(claim);
+    return false;
+  }
   for (const { ownerPath } of owners.reverse()) {
     try {
       fs.unlinkSync(ownerPath);
@@ -1408,7 +1461,16 @@ async function withFileLock<T>(filePath: string, operation: () => T): Promise<T>
         fs.closeSync(fd);
         if (observation) {
           const retirementDeadline = receiptLockClock.now() + LOCK_WAIT_MS;
-          const retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          let retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          /* A retirement that could not claim found another generation's dead
+             owner on its epoch name. Residue cleanup retires that owner; no
+             outer loop comes back here to do it. */
+          while (retired === "retry" && receiptLockClock.now() < retirementDeadline) {
+            if (await cleanupAbandonedRecoveryArtifacts(lockPath, retirementDeadline) !== "clear") {
+              await receiptLockClock.pause(Math.min(10, Math.max(1, retirementDeadline - receiptLockClock.now())));
+            }
+            retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          }
           if (retired === "retry"
             || (retired !== "removed"
               && sameLock(lockPath, observation.identity)
