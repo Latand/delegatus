@@ -1,3 +1,4 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -102,7 +103,7 @@ test("plain Codex launch flags preserve restrictive shell policy and pin the Git
     for (const [key, value] of Object.entries(controllerCommitIdentityEnv())) {
       expect(spec.command).toContain(`shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
     }
-    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", ...Object.keys(controllerCommitIdentityEnv())])}`);
+    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
   } finally {
     restore();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
@@ -506,7 +507,7 @@ test("Claude commands do not gain Codex environment assignments", () => {
   const spec = freshSpecFor("claude", "/repo", { codexHome: path.join(SANDBOX, "unused") });
 
   expect(spec.command).not.toContain("CODEX_HOME=");
-  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: controllerCommitIdentityEnv() })}'`);
+  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }).replaceAll("'", "'\\''")}'`);
 });
 
 test("fresh read-only Claude commands accept a non-interactive permission mode", () => {

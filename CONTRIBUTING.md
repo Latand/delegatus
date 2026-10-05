@@ -49,6 +49,19 @@ including pipeline stages and plain spawns. The default is the controller's
 Delegatus machine identity. Git configuration stays untouched, and agents can
 keep their machine attribution trailers.
 
+An agent must add a new commit on top of work authored by someone else. The
+launch environment installs Git hooks that refuse
+amends and other history changes which remove commits authored by a different
+identity, including `--reset-author` and `--no-verify` amends. New commits,
+merges and amendments of the configured machine's commits remain available.
+The same protection applies to detached HEAD history; moving a detached HEAD
+back past another author's work is refused. Existing repository hooks still
+run, including the publication gate. This environment policy is intended for
+cooperating agents and does not isolate hostile shell commands. Author reuse
+through `commit -C`, `cherry-pick` and `am` is also refused when it would create
+a commit carrying another author's identity. Hooks live under the launching
+home's cache so container-launched agents can reach them on the host.
+
 To configure an installation's agent publication identity, set
 `DELEGATUS_PUBLICATION_NAME` and `DELEGATUS_PUBLICATION_EMAIL` in the launching
 Viewer and runtime host environment. The legacy `LLV_` spellings also work;
@@ -57,6 +70,108 @@ mailbox whose local part is exactly `noreply` or `no-reply`. Personal mailboxes,
 the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
+
+## GitHub writes from launched agents and from the engine
+
+In a repository this installation declared as an App repository, a push, a
+pull request creation or edit, a merge and a branch update made by a launched
+agent or by the pipeline engine go out as the Delegatus GitHub App, with a
+short-lived installation token asked for that one repository and for exactly
+`contents: write`, `pull_requests: write` and `metadata: read`. None of those
+writes falls back to a person's credentials: when the App credential is
+missing, locked, suspended or refused, the write stops with a message that
+starts `Delegatus refused this GitHub write` and nothing is sent.
+
+**The declaration** is `forge-app-repositories.json` in the state directory, a
+JSON array of `owner/name`, for example `["acme/widgets"]`. It is off by
+default: with no file, no repository is declared and a launch adds no shim, no
+rewrite and no variable. A second repository is one more string in the array,
+after the App is installed on it and its credential item exists. The file is
+read at every launch, so a change needs no restart, and a file that is not such
+a list refuses the launch instead of reading as empty. Every repository that is
+not listed keeps the credentials and the commands it had.
+
+**The covered kinds** are a written list, `FORGE_APP_GH_COMMANDS` and
+`FORGE_APP_API_WRITES` in `bin/forge-app-token.mjs`: `gh pr create`, `pr edit`,
+`pr merge`, `pr update-branch`, and the same four through `gh api`. A kind the
+App holds no permission for (an issue, a workflow dispatch, a run rerun, a
+release, a comment) is not on the list, is not rerouted, and runs as it always
+did. Adding a kind is a decision about the App's permissions.
+
+One action has one classification in every spelling `gh` accepts: `pr new`
+for `pr create`, a pull request given as its URL (which names the repository
+from any directory, before `--repo`), a REST path or its absolute
+`https://api.github.com/` URL, flags joined to their values (`-ftitle=x`,
+`-XPUT`), and both placeholders, `{owner}/{repo}` and `:owner/:repo`, filled
+from `GH_REPO` or the checkout. The repository is read the way `gh` reads it:
+an empty `--repo` or `-R` and an empty `GH_REPO` are absent, so the next source
+in `gh`'s order (the flag, `GH_REPO`, the checkout) names it; a subdomain of
+github.com, a user name and a port in a URL are dropped; and a pull request URL
+is read by its start, whatever follows the number. A covered kind whose
+repository is named in a form the shim cannot read (a repository number, one placeholder beside a
+written name) is refused, and so is one typed in a checkout whose first GitHub
+remote is undeclared while another is declared, until `--repo` names it. An
+alias the operator defined with `gh alias set` is not expanded.
+
+- **`gh` in an agent's shell** is a shim (`bin/forge-app-token.mjs gh`) once a
+  repository is declared. For a covered kind aimed at a declared repository it
+  mints a token, starts `gh` with it as `GH_TOKEN` and an empty configuration
+  directory, and revokes it when `gh` exits. Every other command reaches `gh`
+  with the arguments and the environment it was typed with. `gh` 2.45 reads a
+  pull request's classic project cards before `gh pr edit`, which an
+  installation token may not; the shim then names the REST form,
+  `gh api -X PATCH repos/<owner/name>/pulls/<number>`, which is covered too.
+  The shim is found because its directory is first on `PATH`, and an engine
+  types commands into a login shell whose profile may put directories of its
+  own in front. So each agent launch asks `bash -lc` (and `$SHELL`) which `gh`
+  and which `git` it finds in the launch environment and is refused, with the
+  path it found, when either is any file but its shim. Keep `gh` and `git` in
+  a directory the login profile does not prepend, such as `/usr/bin`.
+- **`git push` to a declared repository** is rewritten, in the agent's
+  environment only, to a push URL that one credential helper answers, with
+  every other helper cleared for that URL. SSH remotes are rewritten the same
+  way. Fetches, and pushes to every other repository, keep the remote and the
+  credentials they had. The rewrite written at launch matches a remote spelled
+  as the declaration spells it or in lower case. It matches by prefix, so a
+  sibling whose name starts with a declared one is caught too; the helper
+  answers that push from git's ordinary helpers, over HTTPS. A refusal answers
+  `quit=true`, also from a shim that finds no helper file or no `bun` or
+  `node`, so git never goes on to askpass or a terminal prompt.
+- **`git` in an agent's shell** is a shim too. Every command but a push goes
+  straight to the real `git`, with no process started in between. A push runs
+  `bin/forge-app-token.mjs git`, which reads the checkout's remote URLs and the
+  URLs typed on the command line and, for each that names a declared
+  repository in a spelling the launch rewrite does not match (other letter
+  case, a user name or a port in the URL, `www.github.com`, an explicit
+  `pushurl`, a shorthand the checkout's own `insteadOf` expands), adds a
+  rewrite of that exact spelling to the App's URL for that one command. Git
+  asks for a credential before any hook runs, which is why this is done in
+  front of `git` and not in `pre-push`. A push the shim cannot start the helper
+  for is refused. A git alias that stands for `push` is not expanded.
+- **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
+  through `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
+  the plain `gh` runner for any other. A refusal blocks the merge with the
+  refusal as its reason. The push that publishes a lane's branch
+  (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
+  workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
+  the same push rewrite and the same `gh` and `git` shims.
+- **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
+  installation endpoint. Run from a launched agent in a declared repository,
+  that check and the merge both go through the shim.
+
+The App's registration and its verified installation id live in the operator's
+encrypted Secret Service collection, as one item with the attributes
+`service=delegatus-github-app` and `repository=<owner/name>`; the helper reads
+it with `secret-tool`. Nothing about the App is stored in this repository, in
+state files or in logs, and a token exists only in the memory and environment
+of the process that asked for it. `bun bin/forge-app-token.mjs token` prints one
+on captured stdout and refuses a terminal. The declaration names repositories
+and holds nothing secret.
+
+A push that edits `.github/workflows` needs a `workflows` permission the App
+does not hold and is refused by GitHub itself. Nothing here changes git or
+`gh` configuration on disk, so a person's own terminal behaves as before. The
+shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
 ## Local hooks
 
@@ -144,7 +259,13 @@ baseline needs fresh base retries before a candidate failure can become `NEW`.
 
 The pre-push gate reuses the platform import closure to scope Linux tests,
 Viewer and runtime-host verification under the Dockerfile's Bun pin, and the
-supported native Codex fixtures. Bun and Codex fixtures are cached under
+supported native Codex fixtures. Scoped Linux tests use the same merge-base
+comparison as touched tests, so a platform test `origin/main` already fails is
+`PRE-EXISTING`. A push that changes no file against the merge base (a read-only
+stage, a branch that only trails `origin/main`) runs privacy with
+`--check-commits` and nothing else; a push that changes only `.md`, `.mdx` or
+`.txt` files skips types. Any other changed file keeps every scoped check.
+Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
 
@@ -165,6 +286,11 @@ jobs with timeouts, and Bun verification remains available by dispatch.
 Docker PR builds are limited to image inputs, with a 45-minute timeout and
 cancellation of superseded runs. Main and v* tag image publishing are preserved,
 as are npm publishing and the in-image candidate rehearsal.
+
+`scripts/rebuild.test.ts` exercises the actual host deploy command against a
+port-0 server behind the team gate, including credentials, redirect refusal,
+receipt replay and terminal exit codes. The changed test is selected by the
+pre-push touched-tests gate. Run it by path in isolated home/config/state.
 
 After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Branch protection needs no change: keep exactly

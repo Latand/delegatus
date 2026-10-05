@@ -76,7 +76,7 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
     run(["git", "commit", "--allow-empty", "-m", "base"], { ...env, ...agentPublicationIdentityEnv(env) });
     const base = run(["git", "rev-parse", "HEAD"]);
     run(["git", "commit", "--allow-empty", "-m", "agent work"], shellEnv);
-    expect(run(["git", "log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(Object.values(agentPublicationIdentityEnv(env)).join("\n"));
+    expect(run(["git", "log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"].map((key) => agentPublicationIdentityEnv(env)[key]).join("\n"));
     expect(run([process.execPath, path.resolve("scripts/privacy-publication-gate.ts"), "--repository", repo, "--base", base, "--check-commits"])).toContain("PRIVACY GATE: PASS");
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);
     expect(run(["git", "config", "user.email"])).toBe(personal);

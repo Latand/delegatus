@@ -17,6 +17,8 @@ import {
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatDeputyPaths,
+  seatFailureCauseOf,
+  seatFailureCopy,
   seatRefsOf,
   seatRequestSettled,
   type OrchestratorPanelState,
@@ -707,4 +709,51 @@ test("the seat refs carry every deputy the record names, and the phone hides the
   expect(seatDeputyPaths(status, [{ path: "/t/ghost-moved.jsonl", conversationId: "conversation_ghost" }, { path: "/t/w.jsonl", conversationId: "conversation_worker" }]).sort())
     .toEqual(["/t/ghost-moved.jsonl", "/t/ghost.jsonl"]);
   expect(seatDeputyPaths(null, [])).toEqual([]);
+});
+
+describe("a designation failure in the operator's words", () => {
+  test("the lock's diagnostic, old and new wording, is one cause", () => {
+    expect(seatFailureCauseOf("account mutation is busy; held by Codex login commit (pid 9559, age 2 ms); retry shortly")).toBe("store-busy");
+    expect(seatFailureCauseOf("the account store stayed busy, so the designation could not be recorded; try again")).toBe("store-busy");
+  });
+
+  test("a launch that timed out or found no runtime host is named, wherever the layer put the words", () => {
+    expect(seatFailureCauseOf("structured spawn transport failed: runtime host request timed out")).toBe("launch-timeout");
+    expect(seatFailureCauseOf("the accepted launch failed before its conversation became readable: structured spawn transport failed: runtime host timed out")).toBe("launch-timeout");
+    expect(seatFailureCauseOf("structured spawn runtime host is unavailable")).toBe("host-unavailable");
+  });
+
+  test("anything else keeps its recorded text", () => {
+    expect(seatFailureCauseOf("mandate is required")).toBeNull();
+    expect(seatFailureCopy("mandate is required", "fresh")).toBeNull();
+  });
+
+  test("a busy store whose outcome is unknown promises the replay; a recorded one only asks for a retry", () => {
+    const busy = "account mutation is busy; held by Codex login commit (pid 9559, age 2 ms); retry shortly";
+    expect(seatFailureCopy(busy, "same")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetrySameHint" });
+    expect(seatFailureCopy(busy, "fresh")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetryHint" });
+  });
+
+  test("a launch that failed after the reply was lost derives one error state with a fresh retry, never «creating»", () => {
+    const state = deriveOrchestratorPanelState({
+      status: parseSeatStatus({
+        seat: null,
+        pending: null,
+        exists: true,
+        lastFailure: {
+          error: "structured spawn transport failed: runtime host request timed out",
+          clientRequestId: "req-aaaaaaaa",
+          seatEpoch: 5,
+          designatedAt: "2026-10-05T09:00:00.000Z",
+          terminalizedAt: "2026-10-05T09:01:18.000Z",
+        },
+      }),
+      statusFailed: false,
+      submitting: false,
+      submitFailure: null,
+      file: null,
+      surface: null,
+    });
+    expect(state).toMatchObject({ kind: "intent-error", retry: "fresh" });
+  });
 });

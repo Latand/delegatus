@@ -2491,6 +2491,32 @@ test("post-push settlement contention stays recoverable in the same live Viewer"
   }
 });
 
+test("the publication's dependency install and its push run without the Viewer's own settings", async () => {
+  const box = (await publishSandbox());
+  // What the live Viewer carries: its language parked five lanes on 2026-10-04.
+  const settings = { LLV_LANG: "uk", LLV_SKIP_HOOKS: "1", LLV_STATE_OWNER: "viewer", NODE_ENV: "production" };
+  const previous = Object.fromEntries(Object.keys(settings).map((key) => [key, process.env[key]]));
+  try {
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
+    const head = (await box.commit("stage.txt", "stage work\n"));
+    Object.assign(process.env, settings);
+    const seen = new Map<string, Record<string, string | undefined>>();
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      const step = command === "bun" && args[0] === "install" ? "install" : command === "git" && args[0] === "push" ? "push" : null;
+      // The child's environment is the process's with these keys laid over it.
+      if (step) seen.set(step, { ...process.env, ...env });
+      return step === "install" ? { code: 0, stdout: "", stderr: "" } : realExec(command, args, cwd, env, options);
+    };
+    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect([...seen.keys()].sort()).toEqual(["install", "push"]);
+    for (const env of seen.values()) for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
 test("publishPipelineBranch reports a repo with no origin as unavailable rather than a failure", async () => {
   const box = (await publishSandbox(false));
   try {
