@@ -205,6 +205,9 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
       if (accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();
       return snapshot.revision === accountsCollectionRevision();
     }, { holder: "Claude validity recheck", ...(retryUnrelatedRevision ? { caller: "spawn health" } : {}) });
+    // Keychain rotations have no filesystem metadata for the lease to fence.
+    // Re-read outside the lease after waiting for the final revision check.
+    if (claudeProbeCredentialIdentity(snapshot.account.home) !== credentialIdentity) throw new AccountAdmissionChangedError();
     if (unchanged) return result;
   }
   throw new AccountAdmissionChangedError();

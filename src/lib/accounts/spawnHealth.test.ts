@@ -726,3 +726,62 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
     clearAccountTestState(process.env.LLV_STATE_DIR!);
   }
 });
+
+for (const change of ["rotation", "removal", "unreadable"] as const) test(`Keychain ${change} while the final probe recheck queues stays unreserved`, async () => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const store = await import("./claudeCredentials");
+  const { accountProbeIdentity } = await import("./accountMutation");
+  const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/spawn/route");
+  const { clearAccountTestState } = await import("./accountsStoreFixture");
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
+  const pin = createManagedClaudeAccount("Keychain probe fixture");
+  let credential: ReturnType<typeof store.readClaudeCredentials> = { state: "present", source: "keychain", document: {
+    claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 },
+  } };
+  const reader = spyOn(store, "readClaudeCredentials").mockImplementation(home => home === pin.home ? credential : { state: "absent" });
+  const cwd = fs.mkdtempSync(path.join(STATE_SANDBOX, "keychain-recheck-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  let release = () => {};
+  let holder: Promise<void> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let before: string | undefined;
+  let after: string | undefined;
+  providerReply = async () => {
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    holder = withAccountMutationLockAsync(async () => { entered(); await gate; });
+    await ready;
+    before = accountProbeIdentity(pin);
+    timer = setTimeout(() => {
+      credential = change === "removal" ? { state: "absent" } : change === "unreadable" ? { state: "unknown" } : {
+        state: "present", source: "keychain", document: { claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } },
+      };
+      after = accountProbeIdentity(pin);
+      release();
+    }, 40);
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Keychain recheck fixture", prompt: "Review", clientAttemptId: `keychain-recheck-${change}` }),
+    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    expect(before).toBe(after);
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    clearTimeout(timer); release(); await holder;
+    reader.mockRestore(); providerReply = null;
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  }
+});
