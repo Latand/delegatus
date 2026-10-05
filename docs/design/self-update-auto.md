@@ -298,7 +298,7 @@ Two consequences shape the rule:
    - a row counts while its host is alive, while a launch is inside its
      five-minute grace, while its registry row records a process that still
      answers, while a headless reviewer its flow round records answers under
-     its exact start identity (`headlessReviewerAlive`), and whenever a host in
+     its exact start identity (`headlessReviewerProcess`), and whenever a host in
      this Viewer holds an active turn for it;
    - a conversation with no transcript to read is judged on its registry row
      alone (`conversationRegistryHost`): a row with no live host releases it at
@@ -371,6 +371,14 @@ Two consequences shape the rule:
    answers under another start identity the round has no owner, whatever
    launch marker is left beside it. A pid with no saved identity proves
    nothing and keeps the stage counted.
+   Process ownership follows the recorded reviewer across `needs_decision`
+   and `paused`, including when the attempt still names the previous round.
+   The same headless process verdict is projected into `agent_activity` and
+   used when a transcript cannot be read. A bound reviewer's proven death or
+   replaced start identity releases its turn and stage immediately, even with
+   a fresh `starting` registry marker. A current live or unproven replacement
+   process remains protected. An unproven recorded reviewer does not age out
+   through the grace intended for launches with no process evidence.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.

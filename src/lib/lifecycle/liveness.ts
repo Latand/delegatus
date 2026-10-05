@@ -377,23 +377,28 @@ function hostEvidence(
   return { state: young ? "unknown" : "gone", kind: "none", pid: null };
 }
 
+/** Process ownership survives changes to the flow's control phase. */
 function headlessHostEvidence(
   flows: readonly Flow[],
   transcriptPath: string | null,
   conversationId: string | null,
   probe: LivenessProbe,
+  registry: LivenessRegistrySnapshot,
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
+  const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
+  let gone: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
   for (const flow of flows) {
-    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
+    if (flow.reviewerMode !== "headless") continue;
     const round = flow.rounds.at(-1);
-    if (!round || (!transcriptPath || !round.reviewerPath || round.reviewerPath !== transcriptPath)
-      && (!conversationId || round.reviewerConversationId !== conversationId)) continue;
-    const pid = round.reviewerPid;
-    const identity = round.reviewerIdentity;
-    if (!exactHeadlessIdentityAlive(pid, identity, probe)) continue;
-    return { state: "alive", kind: "headless", pid };
+    if (!round || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
+      || (!transcriptPath || round.reviewerPath !== transcriptPath)
+      && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
+    const verdict = headlessRoundProcess(round, probe);
+    const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
+    if (verdict !== "gone") return host;
+    gone = host;
   }
-  return null;
+  return gone;
 }
 
 /**
@@ -401,10 +406,9 @@ function headlessHostEvidence(
  * (#2515), including a process whose start identity cannot be proven.
  *
  * A headless launch writes its process only to the flow round; the registry
- * row keeps no host for it. A liveness record finds that process through the
- * transcript, so this is the same check for a conversation whose transcript is
- * missing or moved and therefore has no record to read. A round with no
- * recorded pid adds no process evidence to the conversation's own verdict.
+ * row keeps no host for it. This is the same process evidence the liveness
+ * record uses, including when the transcript is missing or moved. A round
+ * with no recorded pid adds no process evidence to the conversation's verdict.
  * An unbound dispatch is held separately by its launch markers.
  */
 export function headlessReviewerProcess(
@@ -414,19 +418,8 @@ export function headlessReviewerProcess(
   probe: LivenessProbe,
   registry: LivenessRegistrySnapshot,
 ): "alive" | "gone" | "unproven" | null {
-  const canonicalId = canonicalConversationId(registry, conversationId);
-  let result: "gone" | null = null;
-  for (const flow of flows) {
-    if (flow.reviewerMode !== "headless" || !["spawning", "reviewing"].includes(flow.state)) continue;
-    const round = flow.rounds.at(-1);
-    if (!round || round.verdict || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
-      || (!transcriptPath || round.reviewerPath !== transcriptPath)
-      && (!round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
-    const verdict = headlessRoundProcess(round, probe);
-    if (verdict !== "gone") return verdict;
-    result = "gone";
-  }
-  return result;
+  const host = headlessHostEvidence(flows, transcriptPath, conversationId, probe, registry);
+  return host ? host.state === "unknown" ? "unproven" : host.state : null;
 }
 
 /** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
@@ -701,7 +694,7 @@ function activeHeadlessTranscriptPaths(
 ): Set<string> {
   const paths = new Set<string>();
   for (const flow of flows) {
-    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
+    if (flow.reviewerMode !== "headless") continue;
     const round = flow.rounds.at(-1);
     const path = round?.reviewerPath
       ?? (round?.reviewerConversationId ? conversations[round.reviewerConversationId]?.generations.at(-1)?.path : null);
@@ -977,8 +970,10 @@ export async function agentLivenessSnapshot(
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
     const registryEntry = entryForPath(registry, entry.path);
     const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
-    const host = headlessHostEvidence(flows, entry.path, conversationId, sources.probe)
-      ?? hostEvidence(registryEntry, sources.probe);
+    const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
+    const registeredHost = hostEvidence(registryEntry, sources.probe);
+    // A current replacement host wins over the previous reviewer's death.
+    const host = registeredHost.state === "alive" ? registeredHost : reviewerHost ?? registeredHost;
     const providerThrottle = turnState === "busy" && host.state === "alive"
       ? hostProviderRetry(registryEntry, now)
       : { retryAt: null, throttledAt: null };
@@ -997,6 +992,9 @@ export async function agentLivenessSnapshot(
         turnState,
         silentForMs,
         stallAfterMs,
+        // A recorded PID with an unreadable identity is held until proof of
+        // death or replacement; it is not an unbound launch aging through grace.
+        startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
         providerRetryAt: providerThrottle.retryAt,
         providerThrottleAt: providerThrottle.throttledAt,
         providerProgressAt: evidence?.providerProgressAt ?? null,

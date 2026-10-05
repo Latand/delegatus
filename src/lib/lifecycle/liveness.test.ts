@@ -708,11 +708,12 @@ test("a headless reviewer needs a readable exact start identity", async () => {
   );
 
   expect((await snapshotFor("reviewer-start", "reviewer-start")).conversations[0]!.host).toMatchObject({ state: "alive", kind: "headless" });
-  for (const [saved, current, alive] of [
-    ["reused-start", "reviewer-start", true], [null, "reviewer-start", true],
-    ["reviewer-start", null, true], ["reviewer-start", "reviewer-start", false],
+  for (const [saved, current, alive, expected] of [
+    ["reused-start", "reviewer-start", true, "gone"], [null, "reviewer-start", true, "unknown"],
+    ["reviewer-start", null, true, "unknown"], ["reviewer-start", "reviewer-start", false, "gone"],
   ] as const) {
-    expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state).toBe("unknown");
+    expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state)
+      .toBe(expected);
   }
 });
 

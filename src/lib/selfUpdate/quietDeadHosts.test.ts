@@ -454,3 +454,118 @@ test("the initial review round is judged on its process before the attempt has a
     expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
   } finally { saveFlows([]); child.kill(); await child.exited; }
 });
+
+/** A headless reviewer bound by the production launch writers, with no registry host. */
+function boundHeadlessReviewer(identity: ProcessIdentity, savedIdentity: string | null, aged = false) {
+  const previous = ended("open");
+  const reviewerPath = transcript("open");
+  const flowId = `flow_${randomUUID()}`;
+  reviewFlow(flowId, previous.artifactPath, "reviewing", {});
+  const flow = loadFlows()[0]!;
+  flow.implementerConversationId = previous.conversation.id;
+  const begun = reserveReviewerSpawn(flow, newRound(flow, "button", null), flow.roles.reviewer, "fixture", registry);
+  const settled = registry.settleSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId: randomUUID() }, artifactPath: reviewerPath,
+    cwd: directory, accountId: "fixture", status: "starting", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+  });
+  if (settled.kind === "conflict") throw new Error(settled.code);
+  const startedAt = new Date(Date.now() - (aged ? 10 * 60_000 : 0)).toISOString();
+  reviewFlow(flowId, previous.artifactPath, "reviewing", {
+    reviewerPath, reviewerConversationId: settled.conversation.id,
+    reviewerPid: identity.pid, reviewerIdentity: savedIdentity,
+    sessionId: settled.entry.key.sessionId, launchId: begun.receipt.launchId, spawnStartedAt: startedAt,
+  });
+  if (aged) {
+    const disk = JSON.parse(readFileSync(registry.filename, "utf8"));
+    disk.entries[`codex:${settled.entry.key.sessionId}`].updatedAt = startedAt;
+    writeFileSync(registry.filename, JSON.stringify(disk));
+  }
+  const reviewer = { conversation: settled.conversation, artifactPath: reviewerPath };
+  const session = { ...row(reviewer, "hosted"), sessionKey: settled.entry.key };
+  const journal = journalOf(randomUUID(), [session]);
+  const stage = lane("lane_bound", "reviewing", {
+    conversationId: settled.conversation.id, agentPath: reviewerPath, flowId,
+  });
+  const p = { ...ports([], [stage]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  return { previous, settled, reviewer, session, journal, stage, p };
+}
+
+for (const replaced of [false, true]) {
+  test(`a fresh bound headless ${replaced ? "replaced PID" : "dead PID"} immediately releases its turn and stage`, async () => {
+    const child = Bun.spawn(["sleep", "60"]);
+    const identity = captureProcessIdentity(child.pid)!;
+    const fixture = boundHeadlessReviewer(identity, replaced ? `${identity.startIdentity}-replaced` : identity.startIdentity);
+    try {
+      if (!replaced) { child.kill(); await child.exited; }
+      const evidence = await fixture.p.turnLiveness!(fixture.session, {});
+      expect(evidence).toMatchObject({ record: { host: { state: "gone" } }, headlessReviewerProcess: "gone", registryHost: { processAlive: false } });
+      expect(await agentActivity(fixture.reviewer.conversation.id)).toMatchObject([{ host: { state: "gone" } }]);
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
+        .toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
+    } finally { saveFlows([]); fixture.journal.close(); child.kill(); await child.exited; }
+  });
+}
+
+for (const paused of [false, true]) {
+  test(`a live headless reviewer preserves turn and stage blockers after tickFlows enters ${paused ? "paused" : "needs_decision"}`, async () => {
+    const child = Bun.spawn(["sleep", "60"]);
+    const identity = captureProcessIdentity(child.pid)!;
+    const fixture = boundHeadlessReviewer(identity, paused ? identity.startIdentity : null, true);
+    const held = { quiet: false, blockers: { turns: 1, stages: 1 } };
+    try {
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject(held);
+      const { tickFlows } = await import("@/lib/flows/engine");
+      await tickFlows(paused ? [] : [{ path: fixture.previous.artifactPath } as never]);
+      expect(loadFlows()[0]!.state).toBe(paused ? "paused" : "needs_decision");
+      expect(captureProcessIdentity(child.pid)).toMatchObject(identity);
+      expect(registry.readOnlySnapshot().entries[`codex:${fixture.settled.entry.key.sessionId}`])
+        .toMatchObject({ status: "starting", pendingAction: "spawn" });
+      expect(await agentActivity(fixture.reviewer.conversation.id))
+        .toMatchObject([{ host: { state: paused ? "alive" : "unknown", kind: "headless" } }]);
+      for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
+        expect(await probeQuiet(snapshot, fixture.p, at, true)).toMatchObject(held);
+      }
+      // The attempt can still name the previous round while the flow is parked.
+      Object.assign(fixture.stage.runs[0]!.attempts[0]!, {
+        conversationId: fixture.previous.conversation.id, agentPath: fixture.previous.artifactPath,
+      });
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject(held);
+      if (paused) {
+        const flow = loadFlows()[0]!;
+        flow.rounds.at(-1)!.reviewerIdentity = `${identity.startIdentity}-replaced`;
+        saveFlows([flow]);
+        expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
+          .toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+        flow.rounds.at(-1)!.reviewerIdentity = identity.startIdentity;
+        saveFlows([flow]);
+      }
+      child.kill();
+      await child.exited;
+      expect(await agentActivity(fixture.reviewer.conversation.id)).toMatchObject([{ host: { state: "gone" } }]);
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
+        .toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+    } finally { saveFlows([]); fixture.journal.close(); child.kill(); await child.exited; }
+  });
+}
+
+for (const unproven of [false, true]) {
+  test(`a ${unproven ? "unproven" : "live"} replacement host overrides a gone headless reviewer`, async () => {
+    const child = Bun.spawn(["sleep", "60"]);
+    const identity = captureProcessIdentity(child.pid)!;
+    const fixture = boundHeadlessReviewer(deadProcess, deadProcess.startIdentity);
+    try {
+      const entry = registry.readOnlySnapshot().entries[`codex:${fixture.settled.entry.key.sessionId}`]!;
+      registry.upsert({ ...entry, status: "live", structuredHost: {
+        kind: "codex-app-server", endpoint: "stdio:fixture",
+        process: { ...identity, startIdentity: unproven ? null : identity.startIdentity },
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0,
+        activeTurnRef: "replacement-turn", pendingAttention: [], activeFlags: [],
+      } });
+      expect(await fixture.p.turnLiveness!(fixture.session, {}))
+        .toMatchObject({ headlessReviewerProcess: "gone", registryHost: { processAlive: true } });
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
+        .toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+    } finally { saveFlows([]); fixture.journal.close(); child.kill(); await child.exited; }
+  });
+}

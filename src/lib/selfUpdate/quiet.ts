@@ -107,6 +107,14 @@ function judgeTurn(evidence: TurnEvidence): TurnVerdict {
   // a replacement host was admitted for this conversation.
   if (evidence.currentTurnIdle === false || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
   const { record, registryHost } = evidence;
+  // A replacement host wins over proof that the recorded reviewer is gone.
+  if (registryHost?.processAlive || record?.host.state === "alive") {
+    if (record?.turnState === "idle" && evidence.currentTurnIdle === true) return "discounted";
+    return "blocks";
+  }
+  // The launch marker has no process of its own. Its grace cannot override
+  // proof that the bound reviewer died or its PID was reused.
+  if (evidence.headlessReviewerProcess === "gone") return "discounted";
   if (!record) {
     if (!registryHost) return "unresolved";
     // A row that records no live process and is past its launch grace proves
@@ -132,6 +140,8 @@ function judgeTurn(evidence: TurnEvidence): TurnVerdict {
 function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settled" | "unresolved" {
   if (evidence.currentTurnIdle === false || evidence.registryHost?.processAlive || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
   const { record, registryHost } = evidence;
+  if (record?.host.state === "alive") return "blocks";
+  if (evidence.headlessReviewerProcess === "gone") return "released";
   if (record) {
     if (livenessRecordIsLive(record)) return "blocks";
     return record.turnState === "idle" ? "settled" : "released";
@@ -155,9 +165,13 @@ function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settl
  * round has no owner, and the launch markers left beside it say nothing more.
  */
 function currentReviewRound(flow: Flow | undefined, attemptConversationId: string | null, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null } | "dispatching" | "gone" | null {
-  if (!flow || (flow.state !== "spawning" && flow.state !== "reviewing")) return null;
+  if (!flow) return null;
   const round = flow.rounds.at(-1);
-  if (!round || round.verdict) return null;
+  if (!round) return null;
+  // A parked flow can still own a reviewer. Only active dispatch phases
+  // receive protection from launch markers without a recorded process.
+  const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
+  if (!recordedProcess && (round.verdict || (flow.state !== "spawning" && flow.state !== "reviewing"))) return null;
   if (round.reviewerConversationId) {
     return round.reviewerConversationId === attemptConversationId ? null
       : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
