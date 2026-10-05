@@ -646,7 +646,9 @@ describe("structured transport prohibits legacy tmux Claude launches", () => {
 for (const shell of ["bash", "zsh"]) {
   test.skipIf(spawnSync("tmux", ["-V"]).status !== 0 || spawnSync(shell, ["--version"]).status !== 0)(`${shell} slow prompts receive complete denied and granted Codex argv`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tmux-command-"));
-  const socket = path.join(root, "socket");
+  // Unix socket names must fit even when the gate nests a long TMPDIR.
+  const socketRoot = fs.mkdtempSync("/tmp/llv-tmux-socket-");
+  const socket = path.join(socketRoot, "socket");
   const output = path.join(root, "argv.json");
   const ready = path.join(root, "ready");
   const threadId = ["0".repeat(8), "0000", "4000", "8000", "0".repeat(12)].join("-");
@@ -702,6 +704,7 @@ for (const shell of ["bash", "zsh"]) {
     }
   } finally {
     if (serverPid) { try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ } }
+    fs.rmSync(socketRoot, { recursive: true, force: true });
     restore(); restoreShell();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);

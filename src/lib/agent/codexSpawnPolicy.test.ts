@@ -383,7 +383,9 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
       Object.assign(process.env, previous);
     }
     if (terminalCommand !== null) {
-      const socket = path.join(root, "tmux-socket");
+      // Keep the Unix socket below its path limit in nested gate sandboxes.
+      const socketRoot = fs.mkdtempSync("/tmp/llv-codex-tmux-");
+      const socket = path.join(socketRoot, "socket");
       const ready = path.join(root, "shell-ready");
       const rc = path.join(root, "bashrc");
       fs.writeFileSync(rc, `HISTFILE=/dev/null\nPS1='fixture> '\nPROMPT_COMMAND='sleep 0.05; touch ${shellQuote(ready)}'\n`);
@@ -416,6 +418,7 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
           await Bun.sleep(100);
           try { process.kill(serverPid, "SIGTERM"); } catch { /* private server exited */ }
         }
+        fs.rmSync(socketRoot, { recursive: true, force: true });
       }
       return;
     }
