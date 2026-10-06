@@ -306,8 +306,13 @@ test("a catalog generation change cannot admit the previously selected home", as
     body: JSON.stringify({ clientAttemptId, title: "Reject stale catalog", engine: "claude", cwd, prompt: "inspect", mcpServers: [] }),
   }), dependencies);
   expect(reads).toBe(2);
-  expect(response.status).toBe(500);
-  expect(await response.json()).toMatchObject({ error: "spawn account changed during admission" });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({
+    error: "The account changed while preparing the launch; try again shortly.",
+    code: "account_admission_changed",
+    retrySafe: true,
+    retryable: true,
+  });
   expect(agentRegistry().spawnReceiptForClientAttempt(clientAttemptId)).toBeNull();
 });
 

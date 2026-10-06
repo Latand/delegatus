@@ -9,7 +9,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -176,21 +176,22 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
     the authoritative downstream evidence; if it cannot be written, recovery
     must retain unknown rather than trusting the HTTP error. */
-export function fenceSpawnAdmissionRejection(
+export async function fenceSpawnAdmissionRejection(
   body: Record<string, unknown>,
   status: number,
   error: string,
   dependencies: Pick<SpawnCommandDependencies, "registry">,
-): SpawnAdmissionFenceResult | null {
+): Promise<SpawnAdmissionFenceResult | null> {
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
   if (!clientAttemptId || !/^[A-Za-z0-9_-]{8,128}$/.test(clientAttemptId)) return null;
   try {
-    return recordSpawnAdmissionRejection({
+    const requestDigest = spawnAdmissionBodyDigest(body);
+    return await withAccountMutationLockAsync(() => recordSpawnAdmissionRejection({
       clientAttemptId,
-      requestDigest: spawnAdmissionBodyDigest(body),
+      requestDigest,
       status,
       error,
-    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId));
+    }, () => dependencies.registry().spawnReceiptForClientAttempt(clientAttemptId)), { caller: "spawn refusal" });
   } catch {
     return null;
   }
@@ -340,9 +341,9 @@ export async function executeSpawnRequest(
   /* Every pre-reservation refusal below records the request-bound fence, so a
      caller whose dispatch was interrupted can recover this exact key to a
      terminal NOT_EXECUTED instead of an indefinite unknown (#1641). */
-  const refuse = (error: string): NextResponse<ApiError> => {
+  const refuse = async (error: string): Promise<NextResponse<ApiError>> => {
     if (!authenticatedCallerError) {
-      fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
+      await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 400, error, dependencies);
     }
     return NextResponse.json({ error }, { status: 400 });
   };
@@ -389,7 +390,7 @@ export async function executeSpawnRequest(
   if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
     const refusal = { role: role.value.role, engine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
-    if (!authenticatedCallerError) fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
+    if (!authenticatedCallerError) await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
     return NextResponse.json({ error, code: ENGINE_NOT_CONNECTED, details: engineNotConnectedDetails(refusal) }, { status: 409 });
   }
   if (body.accountId !== undefined && typeof body.accountId !== "string") return NextResponse.json({ error: "accountId must be a string" }, { status: 400 });
@@ -800,6 +801,7 @@ export async function executeSpawnRequest(
       ...(explicitProject ? { project: explicitProject } : {}),
     });
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
+      if (isAccountAdmissionRetryable(failure)) throw failure;
       const accountId = body.accountId as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
       const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
@@ -843,6 +845,7 @@ export async function executeSpawnRequest(
         ? dependencies.resolveSpawnAccount(existingAttempt.engine, existingAttempt.accountId)
         : await dependencies.resolveHealthySpawnAccount(engine, body.accountId, spawnProject, selectedModel.model, launchTier ? { id: launchTier, model: selectedModel.model!, required: tierResolution.required } : undefined);
     } catch (error) {
+      if (isAccountAdmissionRetryable(error)) throw error;
       /* The record needs the operator, and until it gets them this launch
          selects nothing. A conflict, not a server fault: the request is well
          formed and the state it addresses is what is wrong — the same answer
@@ -873,7 +876,8 @@ export async function executeSpawnRequest(
           } else {
             return await terminalizePinnedAccountFailure(error);
           }
-        } catch {
+        } catch (fallbackError) {
+          if (isAccountAdmissionRetryable(fallbackError)) throw fallbackError;
           return await terminalizePinnedAccountFailure(error);
         }
       } else {
@@ -992,7 +996,7 @@ export async function executeSpawnRequest(
           || accountProbeIdentity(current) !== admissionAccount!.identity
           || current.accountId !== account.accountId || current.kind !== account.kind
           || current.home !== account.home || current.transcriptRoot !== account.transcriptRoot) {
-          throw new Error("spawn account changed during admission");
+          throw new AccountAdmissionChangedError();
         }
       }
       return registry.beginSpawnRequest(canonicalSpawnRequest(
