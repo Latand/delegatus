@@ -4842,12 +4842,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      never disagree about what the conversation is doing. Desktop passes no slot
      and keeps its plain send. */
   const phoneState = chatState(file);
-  // A structured host can finish while the scanner still holds an open turn.
-  // Its current turn axes decide whether the composer offers an interrupt.
-  const turnWorking = structuredSession
-    ? structuredSession.session.turn === "running" || structuredSession.session.turn === "interrupt_requested"
-      || Boolean(structuredSession.session.activeTurnId)
-    : phoneState === "working";
   /* Respawn answers to the HOST, not to the turn (#1487). A host stopped after
      its turn settled is not a killed conversation — the bar reads «done» — but
      it is still a conversation with nobody to send to, and its way back is the
@@ -4857,7 +4851,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const slotKind = composerSlotKind({
     killed: hostGone,
     offline: runtimeOffline && !contextOffline,
-    working: turnWorking,
+    working: phoneState === "working",
     hasDraft: composerHasDraft,
   });
 
