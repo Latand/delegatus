@@ -29,7 +29,7 @@ import type { FileEntry } from "@/lib/types";
 import { conversationIdentity, withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
-import { ComposerBar } from "./ComposerBar";
+import { ComposerBar, type ComposerBarProps } from "./ComposerBar";
 import { markLaunchedConversation } from "./launchedConversations";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { DraftLaunchStatus } from "./DraftLaunchStatus";
@@ -56,6 +56,7 @@ import { ReasoningControls } from "./ReasoningControls";
 import { cleanTitle, engineTintOf } from "./utils";
 import { draftWorkingDirectory } from "./projectModel";
 import { Z } from "@/components/layers";
+import { hasDraftLayout, InstalledDraftLayout } from "@/components/draft/draftLayout";
 
 type Engine = "claude" | "codex" | "copilot";
 
@@ -833,6 +834,94 @@ export function DraftAgentPane({
     (file.engine === "claude" || file.engine === "codex")
     && Boolean(file.conversationId || file.path));
 
+  const roleExtras = (
+    <>
+    {selectedRole?.id === "reviewer" ? (
+      <label className="flex max-w-full flex-col gap-0.5 text-caption text-muted">
+        <span>{t("draft.reviews")}</span>
+        <Select
+          value={reviews}
+          disabled={fieldsDisabled}
+          onChange={(event) => setReviews(event.target.value)}
+          aria-label={t("draft.reviewsAria")}
+        >
+          <option value="">{t("draft.reviewsPlaceholder")}</option>
+          {reviews && !reviewCandidates.some((file) => (file.conversationId ?? file.path) === reviews) ? (
+            <option value={reviews}>{reviews}</option>
+          ) : null}
+          {reviewCandidates.map((file) => {
+            const value = file.conversationId ?? file.path;
+            return <option key={value} value={value}>{cleanTitle(file.title, 80)}</option>;
+          })}
+        </Select>
+      </label>
+    ) : null}
+    {selectedRole?.id === "deployer" ? (
+      <label className="flex max-w-52 flex-col gap-0.5 text-[10px] text-muted">
+        <span>{t("draft.deployConfirm")}</span>
+        <input value={deployConfirm} disabled={fieldsDisabled} onChange={(event) => setDeployConfirm(event.target.value)} aria-label={t("draft.deployConfirm")} placeholder="deploy" className="h-7 rounded-[7px] border border-border bg-card px-1.5 text-[11px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60" />
+      </label>
+    ) : null}
+    </>
+  );
+  const capabilityAlert = spawnImageNegotiation.status === "error" ? (
+      <div role="alert" className="flex items-center justify-between gap-2 rounded-control bg-danger-soft px-2 py-1 text-caption text-danger">
+        <span>{t("composer.imageCapabilityError")}</span>
+        <button
+          type="button"
+          className="shrink-0 rounded-control border border-danger/30 bg-card px-2 py-1 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30"
+          onClick={() => {
+            setSpawnImageNegotiation({ status: "loading", requestKey: spawnImageNegotiationKey });
+            setSpawnNegotiationAttempt((attempt) => attempt + 1);
+          }}
+        >
+          {t("composer.imageCapabilityRetry")}
+        </button>
+      </div>
+    ) : null;
+  const composerProps: ComposerBarProps = {
+    composer,
+    placeholder: structuredSpawn ? t("draft.placeholderStructured") : t("draft.placeholder"),
+    textareaAriaLabel: t("draft.promptTextAria"),
+    imageAriaLabel: t("draft.addImages"),
+    sendLabelIdle: t("composer.launchAgent"),
+    sendLabelRecording: t("draft.stopAndLaunch"),
+    sendIdleClassName: "hover:opacity-90",
+    sendIdleStyle: { backgroundColor: tint.color, borderColor: tint.color },
+    imageDisabled: spawnImagesDisabled,
+    imageDisabledReason: spawnImagesReason,
+    sendDisabledReason: signInFirst && !attempt
+      ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
+      : undefined,
+    onSendBlockedRecover: signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined,
+    sendBlockedRecoverLabel: signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined,
+    leftSlot: <span
+        className="inline-flex min-w-0 items-center gap-1 rounded-control bg-sunken px-1.5 py-1 text-caption font-semibold text-secondary"
+        title={structuredSpawn ? t("draft.newWindowTitleStructured") : t("draft.newWindowTitle")}
+      >
+        <Play className="h-3 w-3 shrink-0" aria-hidden /> {t("draft.newAgent")}
+      </span>,
+  };
+  const launchStatus = attempt
+    ? <DraftLaunchStatus ref={attentionRef} phase={phase} target={target} structured={structuredSpawn} error={attempt.error ?? null} />
+    : null;
+  const submitForm = () => void send();
+  const heading = src ? t("draft.handoffLabel", { title: srcFile ? cleanTitle(srcFile.title, 60) : t("draft.conversation") }) : t("draft.newConvo");
+  const headingTitle = srcFile ? cleanTitle(srcFile.title) : undefined;
+
+  /* A design prototype may arrange the same parts another way
+     (`@/components/draft/draftLayout`); the product installs none. */
+  if (hasDraftLayout()) {
+    return (
+      <InstalledDraftLayout
+        draftId={draftId} launch={launch} fieldsDisabled={fieldsDisabled} heading={heading} headingTitle={headingTitle} src={src} band={draftBand(draftId)}
+        cwd={cwd} dirs={dirs} setCwd={setCwd} roles={roles} roleId={roleId} roleParams={roleParams} selectRole={selectRole} setRoleParam={setRoleParam}
+        roleExtras={roleExtras} attempt={attempt} launchStatus={launchStatus} capabilityAlert={capabilityAlert} composerProps={composerProps}
+        submit={submitForm} onClose={onClose}
+      />
+    );
+  }
+
   return (
     <section
       data-pan-ignore
@@ -846,9 +935,9 @@ export function DraftAgentPane({
         <EngineRadioGroup engine={engine} engines={AGENT_LAUNCH_ENGINES} disabled={fieldsDisabled} onChange={setEngine} />
         <span
           className="min-w-0 flex-1 truncate text-[12px] font-semibold text-muted"
-          title={srcFile ? cleanTitle(srcFile.title) : undefined}
+          title={headingTitle}
         >
-          {src ? t("draft.handoffLabel", { title: srcFile ? cleanTitle(srcFile.title, 60) : t("draft.conversation") }) : t("draft.newConvo")}
+          {heading}
         </span>
         <button
           className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -882,32 +971,7 @@ export function DraftAgentPane({
         onSelectRole={selectRole}
         onSetParam={setRoleParam}
       >
-        {selectedRole?.id === "reviewer" ? (
-          <label className="flex max-w-full flex-col gap-0.5 text-caption text-muted">
-            <span>{t("draft.reviews")}</span>
-            <Select
-              value={reviews}
-              disabled={fieldsDisabled}
-              onChange={(event) => setReviews(event.target.value)}
-              aria-label={t("draft.reviewsAria")}
-            >
-              <option value="">{t("draft.reviewsPlaceholder")}</option>
-              {reviews && !reviewCandidates.some((file) => (file.conversationId ?? file.path) === reviews) ? (
-                <option value={reviews}>{reviews}</option>
-              ) : null}
-              {reviewCandidates.map((file) => {
-                const value = file.conversationId ?? file.path;
-                return <option key={value} value={value}>{cleanTitle(file.title, 80)}</option>;
-              })}
-            </Select>
-          </label>
-        ) : null}
-        {selectedRole?.id === "deployer" ? (
-          <label className="flex max-w-52 flex-col gap-0.5 text-[10px] text-muted">
-            <span>{t("draft.deployConfirm")}</span>
-            <input value={deployConfirm} disabled={fieldsDisabled} onChange={(event) => setDeployConfirm(event.target.value)} aria-label={t("draft.deployConfirm")} placeholder="deploy" className="h-7 rounded-[7px] border border-border bg-card px-1.5 text-[11px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60" />
-          </label>
-        ) : null}
+        {roleExtras}
       </RoleSection>
 
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-sunken px-2.5 py-1.5">
@@ -932,7 +996,7 @@ export function DraftAgentPane({
                 {attempt.prompt || t("draft.imagesOnly")}
               </span>
             </div>
-            <DraftLaunchStatus ref={attentionRef} phase={phase} target={target} structured={structuredSpawn} error={attempt.error ?? null} />
+            {launchStatus}
           </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
@@ -954,51 +1018,13 @@ export function DraftAgentPane({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          void send();
+          submitForm();
         }}
         className="flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 py-2"
         aria-label={t("draft.promptAria")}
       >
-        {spawnImageNegotiation.status === "error" ? (
-          <div role="alert" className="flex items-center justify-between gap-2 rounded-control bg-danger-soft px-2 py-1 text-caption text-danger">
-            <span>{t("composer.imageCapabilityError")}</span>
-            <button
-              type="button"
-              className="shrink-0 rounded-control border border-danger/30 bg-card px-2 py-1 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30"
-              onClick={() => {
-                setSpawnImageNegotiation({ status: "loading", requestKey: spawnImageNegotiationKey });
-                setSpawnNegotiationAttempt((attempt) => attempt + 1);
-              }}
-            >
-              {t("composer.imageCapabilityRetry")}
-            </button>
-          </div>
-        ) : null}
-        <ComposerBar
-          composer={composer}
-          placeholder={structuredSpawn ? t("draft.placeholderStructured") : t("draft.placeholder")}
-          textareaAriaLabel={t("draft.promptTextAria")}
-          imageAriaLabel={t("draft.addImages")}
-          sendLabelIdle={t("composer.launchAgent")}
-          sendLabelRecording={t("draft.stopAndLaunch")}
-          sendIdleClassName="hover:opacity-90"
-          sendIdleStyle={{ backgroundColor: tint.color, borderColor: tint.color }}
-          imageDisabled={spawnImagesDisabled}
-          imageDisabledReason={spawnImagesReason}
-          sendDisabledReason={signInFirst && !attempt
-            ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
-            : undefined}
-          onSendBlockedRecover={signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined}
-          sendBlockedRecoverLabel={signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined}
-          leftSlot={
-            <span
-              className="inline-flex min-w-0 items-center gap-1 rounded-control bg-sunken px-1.5 py-1 text-caption font-semibold text-secondary"
-              title={structuredSpawn ? t("draft.newWindowTitleStructured") : t("draft.newWindowTitle")}
-            >
-              <Play className="h-3 w-3 shrink-0" aria-hidden /> {t("draft.newAgent")}
-            </span>
-          }
-        />
+        {capabilityAlert}
+        <ComposerBar {...composerProps} />
       </form>
     </section>
   );

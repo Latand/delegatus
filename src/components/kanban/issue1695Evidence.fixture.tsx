@@ -18,6 +18,8 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { installDraftLayout } from "@/components/draft/draftLayout";
+import { NewAgentHost, newAgentLayout, parseNewAgent } from "@/components/draft/newAgentVariants.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -312,6 +314,13 @@ const TICK_CARDS = SCENARIO === "seat-tick-cards";
    arriving while the turn runs, the turn's end. The driver reads every layout shift from the first click to
    the end of the turn. */
 const LAUNCH_CLS = SCENARIO === "launch-cls";
+/* Creating a new agent (docs/design/new-agent-redesign.md): the board of `atlas`, with what a draft reads
+   answered in full — the accounts of each engine, the role catalog, the directories, a structured launch
+   that takes images — and a launch the server refuses by name. `?newagent=<n>` draws the draft in look n,
+   0 being today's; the page prints the number in a strip around the application's frame. */
+const NEW_AGENT = SCENARIO === "new-agent";
+const NEW_AGENT_LOOK = parseNewAgent(location.search);
+if (NEW_AGENT_LOOK?.inner) installDraftLayout(newAgentLayout(NEW_AGENT_LOOK.look));
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -2528,6 +2537,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
+  if (NEW_AGENT && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map((role) => ({ ...role, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS], promptPreview: role.promptScaffold })) });
+  if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "GET") {
+    const images = { supported: true, reason: null, formats: ["image/png", "image/jpeg"], maxImages: 8, maxRawBytesPerImage: 5_000_000, maxEncodedBytesPerRequest: 20_000_000 };
+    return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: null, spawnTransport: "structured", imageInput: { claude: images, codex: images } });
+  }
+  if (NEW_AGENT && url.pathname === "/api/spawn" && method === "POST") {
+    return json({ error: L("Launch refused: /repo/worktrees/export-csv is not a checkout this account may write to.", "Запуск відхилено: /repo/worktrees/export-csv не є копією, у яку цей акаунт може писати.") }, 422);
+  }
   if (LAUNCH_CLS && url.pathname === "/api/spawn" && method === "POST") {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     Object.assign(launchRun, {
@@ -3095,4 +3113,4 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-pre
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : <Viewer />);
+) : NEW_AGENT_LOOK && !NEW_AGENT_LOOK.inner ? <NewAgentHost look={NEW_AGENT_LOOK.look} /> : <Viewer />);

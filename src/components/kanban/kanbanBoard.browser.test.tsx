@@ -17953,3 +17953,226 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("creating a new agent: today's draft and three numbered looks", () => {
+  /*
+   * docs/design/new-agent-redesign.md. The real Viewer over `?scenario=new-agent`, with the draft drawn in
+   * look 0 (today's) and looks 1 to 3 (`?newagent=<n>`): the page prints the look's number in a strip around
+   * the application's frame. Each look is walked through the same states at 1440x900, 1000x700 and a 390
+   * phone, light and dark, en and uk: empty, runtime chosen, a long prompt, an attachment, a refused launch,
+   * the narrowest column, and the draft a task card's own «+ Agent» opens. Design evidence only: the frames and the contact sheets go to `NEW_AGENT_OUT`,
+   * outside the repository, and the block asserts that every look keeps every option of the draft.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
+   *
+   * `NEW_AGENT_ONLY` narrows a run while a look is being drawn: `looks=0,1;views=desktop-1440;langs=en;schemes=light`.
+   */
+  const OUT = process.env.NEW_AGENT_OUT ? path.resolve(process.env.NEW_AGENT_OUT) : null;
+  const only = new Map((process.env.NEW_AGENT_ONLY ?? "").split(";").filter(Boolean).map((entry) => {
+    const [key, value] = entry.split("=");
+    return [key!, new Set((value ?? "").split(","))] as const;
+  }));
+  const wanted = (key: string, value: string) => !only.has(key) || only.get(key)!.has(value);
+  const STRIP = 40;
+  const views = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const STATES = ["empty", "chosen", "long", "attachment", "error", "narrow", "task-card"] as const;
+  /* One sheet: a block per caption, a row per state, each cell a frame scaled to one height. */
+  const CELL = 380;
+  const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+  const sheet = async (file: string, title: string, blocks: { name: string; rows: { state: string; frames: string[] }[] }[]) => {
+    const layers: { input: Buffer; left: number; top: number }[] = [];
+    let top = 64;
+    let widest = 0;
+    for (const block of blocks) {
+      const blockTop = top;
+      top += 40;
+      for (const row of block.rows) {
+        let left = 150;
+        const present = row.frames.filter((frame) => fs.existsSync(frame));
+        if (!present.length) continue;
+        layers.push({ input: await sharp(caption(row.state, 142, CELL, 17)).png().toBuffer(), left: 0, top });
+        for (const frame of present) {
+          const input = await sharp(frame).resize({ height: CELL }).png().toBuffer();
+          const { width } = await sharp(input).metadata();
+          layers.push({ input, left, top });
+          left += width! + 8;
+        }
+        widest = Math.max(widest, left);
+        top += CELL + 8;
+      }
+      layers.push({ input: await sharp(caption(block.name, 1600, 34, 18)).png().toBuffer(), left: 0, top: blockTop });
+      top += 16;
+    }
+    layers.push({ input: await sharp(caption(title, Math.max(widest, 1600), 56, 26)).png().toBuffer(), left: 0, top: 0 });
+    await sharp({ create: { width: Math.max(widest, 1600), height: top, channels: 3, background: "#8a8f99" } }).composite(layers).png().toFile(file);
+  };
+  const LONG = {
+    en: "Read docs/export.md and the CSV writer in src/export/csv.ts, then make the export stream rows instead of building the whole file in memory.\n\nKeep the column order and the header row exactly as they are today: three downstream scripts parse the file by position. Add a test with 200 000 synthetic rows that fails on the old writer by memory and passes on the new one.\n\nWhen it works, write what changed and how you checked it in the pull request, and stop before merging.",
+    uk: "Прочитай docs/export.md і записувач CSV у src/export/csv.ts, потім зроби так, щоб експорт передавав рядки потоком, а не збирав увесь файл у пам’яті.\n\nПорядок колонок і рядок заголовків залиш точно такими, як сьогодні: три сценарії далі розбирають файл за позицією. Додай тест на 200 000 синтетичних рядків, який падає на старому записувачі через пам’ять і проходить на новому.\n\nКоли запрацює, опиши в запиті на злиття, що змінилося і як ти це перевірив, і зупинись перед злиттям.",
+  } as const;
+  const SHORT = { en: "Compare these two export screens and list what differs", uk: "Порівняй ці два екрани експорту й перелічи відмінності" } as const;
+
+  browserTest("every look keeps every option, in every state, at three sizes, in both themes and languages", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "new-agent-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const shots = [path.join(work, "export-before.png"), path.join(work, "export-after.png")];
+    await sharp({ create: { width: 320, height: 200, channels: 3, background: "#d9cfbd" } }).png().toFile(shots[0]!);
+    await sharp({ create: { width: 320, height: 200, channels: 3, background: "#7f93a8" } }).png().toFile(shots[1]!);
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const look of [0, 1, 2, 3]) for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (!wanted("looks", String(look)) || !wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        for (const pass of ["walk", "narrow", "task-card"] as const) {
+          if (pass !== "walk" && !wanted("states", pass)) continue;
+          /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
+          if (pass === "task-card" && view.touch) continue;
+          /* The narrowest column: the desktop at its smallest supported width, the phone at 320. */
+          const width = pass !== "narrow" ? view.width : view.touch ? 320 : 760;
+          const height = view.height;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent&newagent=${look}&frame=${width}x${height}`, { width, height: height + STRIP }, scheme, lang, "reduce", view.touch);
+          const label = (state: string) => `look${look}-${view.name}-${scheme}-${lang}-${state}`;
+          const shoot = async (state: string) => {
+            if (!wanted("states", state)) return;
+            /* The launch button's tooltip follows the pointer and the focus the press left on it, and would lie
+               over the frame it is not part of. */
+            if (!view.touch) await page.mouse.move(0, 0);
+            if (state === "error") await page.frames()[1]!.addStyleTag({ content: '[role="tooltip"] { display: none !important; }' });
+            await page.waitForTimeout(250);
+            await page.frames()[1]!.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "nearest" }), `[aria-label="${tr("draft.paneAria")}"]`);
+            await page.waitForTimeout(150);
+            await page.screenshot({ path: path.join(out, `${label(state)}.png`) });
+          };
+          try {
+            const app = page.frameLocator("[data-na-frame]");
+            await app.locator("[data-kanban-board] .card[data-id], [data-phone-card]").first().waitFor({ state: "attached", timeout: 30_000 });
+            /* An attention toast is another surface's and would lie over the draft. */
+            await page.frames()[1]!.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+            if (pass === "task-card") {
+              await app.locator("[data-add-agent]:visible").first().click();
+            } else if (view.touch) {
+              await app.locator('[data-mobile2-open="menu"]').click();
+              await app.locator('[data-mobile2-menu-row="new-agent"]').click();
+            } else if (await app.locator("[data-new-agent]").isVisible()) {
+              await app.locator("[data-new-agent]").click();
+            } else {
+              await app.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await app.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
+            }
+            /* The draft, whichever look draws it: every control below is found inside it. */
+            const draft = app.locator(`[aria-label="${tr("draft.paneAria")}"]`).first();
+            const prompt = draft.locator(`textarea[aria-label="${tr("draft.promptTextAria")}"]`);
+            await prompt.waitFor({ timeout: 15_000 });
+            /* A look that folds a group opens it where the driver asks, as the operator would. */
+            const reveal = async (group: string) => {
+              const opener = draft.locator(`[data-na-open="${group}"][aria-expanded="false"]`).first();
+              if (await opener.count()) await opener.click();
+            };
+            if (pass === "task-card") {
+              await shoot("task-card");
+            } else if (pass === "narrow") {
+              await reveal("runtime");
+              await draft.getByRole("radio", { name: "Codex" }).first().click();
+              await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
+              await prompt.fill(SHORT[lang]);
+              await shoot("narrow");
+            } else {
+              await shoot("empty");
+              /* The role comes first: it sets the runtime its preset names. Then Codex, pressed only when the
+                 preset left another engine: a press on the engine already chosen leaves the draft's image
+                 negotiation waiting for an answer nothing asks for again (docs/design/new-agent-redesign.md §3). */
+              await reveal("role");
+              await draft.locator(`select[aria-label="${tr("draft.roleAria")}"]`).first().selectOption("builder");
+              await reveal("runtime");
+              const codex = draft.getByRole("radio", { name: "Codex" }).first();
+              if (await codex.getAttribute("aria-checked") !== "true") await codex.click();
+              await draft.locator(`select[aria-label="${tr("draft.modelAria")}"]`).first().selectOption({ index: 1 });
+              await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
+              await draft.locator(`select[aria-label="${tr("draft.speedAria")}"]`).first().selectOption("fast");
+              await shoot("chosen");
+              await prompt.fill(LONG[lang]);
+              await shoot("long");
+              await prompt.fill(SHORT[lang]);
+              await draft.locator('input[type="file"]').first().setInputFiles(shots);
+              await shoot("attachment");
+              await draft.getByRole("button", { name: tr("composer.launchAgent") }).first().click();
+              await draft.locator("text=/export-csv/").first().waitFor({ timeout: 10_000 });
+              await shoot("error");
+              /* Every option of the draft, found in this look: a folded group is opened first, as it is for the operator. */
+              await reveal("runtime");
+              const count = (selector: string) => draft.locator(selector).count();
+              const runtime = {
+                engines: await draft.getByRole("radio").count(),
+                model: await count(`select[aria-label="${tr("draft.modelAria")}"]`),
+                effort: await count(`select[aria-label="${tr("draft.reasoningAria")}"]`),
+                speed: await count(`select[aria-label="${tr("draft.speedAria")}"]`),
+                account: await count(`select[aria-label="${tr("draft.accountAria", { engine: "Codex" })}"]`),
+              };
+              await reveal("folder");
+              const folder = await count(`[aria-label^="${tr("draft.dirAria")}: "]`);
+              await page.keyboard.press("Escape");
+              await reveal("role");
+              const role = {
+                role: await count(`select[aria-label="${tr("draft.roleAria")}"]`),
+                parameters: await count(`[role="group"][aria-label="${tr("draft.roleParameters")}"] select`),
+                rolePrompt: await count("details"),
+              };
+              const options = {
+                ...runtime, folder, ...role,
+                images: await count('input[type="file"]'), voice: await count("button:has(svg.lucide-mic)"), prompt: await prompt.count(),
+                launch: await draft.getByRole("button", { name: tr("composer.launchAgent") }).count(),
+                cancel: await count(`button[aria-label="${tr("draft.dismiss")}"]`),
+                error: await draft.locator("text=/export-csv/").count(),
+              };
+              readings.push({ look, view: view.name, scheme, lang, options, pageErrors });
+              expect(options, label("options")).toEqual({ engines: 3, model: 1, effort: 1, speed: 1, account: 1, folder: 1, role: 1, parameters: 3, rolePrompt: 1, images: 1, voice: 1, prompt: 1, launch: 1, cancel: 1, error: 1 });
+            }
+            expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label(`${pass}-FAILED`)}.png`) }).catch(() => {});
+            throw error;
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const frame = (look: number, view: string, scheme: string, lang: string, state: string) => path.join(out, `look${look}-${view}-${scheme}-${lang}-${state}.png`);
+    const complete = !only.size;
+    if (complete || only.has("sheets")) {
+      const titles = ["Today", "1 · The composer is the card", "2 · One line, opened where asked", "3 · A sheet at the button"];
+      for (const look of [1, 2, 3]) {
+        await sheet(path.join(out, `sheet-look${look}.png`), `Creating a new agent — ${titles[look]} — each row: today, then look ${look}, at 1440, 1000 and the phone`, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
+          name: `${scheme} · ${lang}`,
+          rows: STATES.map((state) => ({
+            state,
+            frames: views.flatMap((view) => [frame(0, view.name, scheme!, lang!, state), frame(look, view.name, scheme!, lang!, state)]),
+          })),
+        })));
+      }
+      await sheet(path.join(out, "sheet-compare.png"), "Creating a new agent — each row: today (0), then looks 1, 2 and 3", [
+        ["desktop-1440", "light", "en"], ["desktop-1000", "dark", "uk"], ["phone-390", "light", "uk"],
+      ].map(([view, scheme, lang]) => ({
+        name: `${view} · ${scheme} · ${lang}`,
+        rows: STATES.map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
+      })));
+    }
+    if (complete) {
+      fs.mkdirSync("evidence/new-agent-redesign", { recursive: true });
+      fs.writeFileSync("evidence/new-agent-redesign/options.json", `${JSON.stringify({ viewports: views.map((view) => `${view.width}x${view.height}`), readings }, null, 2)}\n`);
+    }
+  }, 3_600_000);
+});
