@@ -8,6 +8,8 @@ import { NextRequest } from "next/server";
 import { setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 
+import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
+import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
 
 /**
@@ -34,6 +36,7 @@ beforeEach(() => {
      handler below is only reachable with a socket configured. */
   process.env.LLV_RUNTIME_HOST_SOCKET = path.join(dir, "runtime.sock");
   delete process.env.LLV_RUNTIME_EVENTS;
+  setSelfUpdateServiceForTests(new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode: "managed", record: null, reason: null }) }));
   requested = [];
   setDeploymentRuntimeForTests(async (request) => {
     requested.push(request);
@@ -42,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSelfUpdateServiceForTests(null);
   setDeploymentRuntimeForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;

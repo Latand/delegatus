@@ -45,20 +45,24 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
       {deadHost ? <DeadHostBanner file={file} /> : null}
-      {transcriptSlot ?? (
-        <ToolDisclosurePolicy value="collapsed">
-          <LogFeed
-            file={file}
-            showSvc={false}
-            lineFilter=""
-            onStatus={noop}
-            paused={false}
-            follow
-            setFollow={noop}
-            compact
-          />
-        </ToolDisclosurePolicy>
-      )}
+      {/* The one row here that gives room up to a growing draft, named so the
+          kanban seat can hold it at its minimum and grow past it (#1734). */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-composer-yields="">
+        {transcriptSlot ?? (
+          <ToolDisclosurePolicy value="collapsed">
+            <LogFeed
+              file={file}
+              showSvc={false}
+              lineFilter=""
+              onStatus={noop}
+              paused={false}
+              follow
+              setFollow={noop}
+              compact
+            />
+          </ToolDisclosurePolicy>
+        )}
+      </div>
       {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
       <AgentControlStrip file={file} />
       <TmuxComposer

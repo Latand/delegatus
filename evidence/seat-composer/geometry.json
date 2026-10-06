@@ -1,0 +1,7624 @@
+{
+  "commit": "942c85480f9963275537bd7af41b40e5c368e311",
+  "case": "seat-composer",
+  "transcriptFloor": 72,
+  "draftLines": [
+    1,
+    3,
+    8,
+    20
+  ],
+  "seat-composer-1440x900-en-default": {
+    "seat": 675,
+    "box": 570,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "seat": 675,
+      "board": 735,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 441.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 411.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 321.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 315.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "seat": 675,
+      "board": 735,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 411.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 576,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 613,
+          "w": 678,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 623,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 321.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 486,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 523,
+          "w": 678,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 533,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 315.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 480,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 517,
+          "w": 678,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 527,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1440x900-en-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 365,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 365,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 395,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 485,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 491,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 366,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 335
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 315.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 313.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 360.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 358.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 395,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 425
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 405.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 403.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 450.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 448.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 485,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 431
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 411.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 409.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 456.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 454.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 491,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": 270
+  },
+  "seat-composer-1440x900-en-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 365,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 365,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 395,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 485,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 491,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 366,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 335
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 315.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 313.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 360.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 358.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 395,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 425
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 405.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 403.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 450.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 448.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 485,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 431
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 916,
+              "y": 411.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 952,
+              "y": 409.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 337,
+              "y": 456.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 959,
+              "y": 454.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 491,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1440x900-uk-default": {
+    "seat": 675,
+    "box": 570,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "seat": 675,
+      "board": 735,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 441.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 411.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 321.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 315.5,
+        "seat": 675,
+        "board": 735,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 441.5,
+      "seat": 675,
+      "board": 735,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 411.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 576,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 613,
+          "w": 678,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 623,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 321.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 486,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 523,
+          "w": 678,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 533,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 675
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 570,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 315.5
+        },
+        "strip": {
+          "x": 325,
+          "y": 480,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 517,
+          "w": 678,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 527,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 655,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 653,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 700,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 698,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 735,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1440x900-uk-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 365,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 365,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 395,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 485,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 491,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 366,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 335
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 315.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 313.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 360.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 358.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 395,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 425
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 405.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 403.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 450.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 448.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 485,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 431
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 411.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 409.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 456.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 454.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 491,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": 270
+  },
+  "seat-composer-1440x900-uk-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 365,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 365,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 395,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 485,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 491,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 366,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 335
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 315.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 313.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 360.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 358.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 395,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 425
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 405.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 403.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 450.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 448.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 485,
+          "w": 1192,
+          "h": 852
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1440,
+          "h": 900
+        },
+        "seat": {
+          "x": 324,
+          "y": 60,
+          "w": 1040,
+          "h": 431
+        },
+        "head": {
+          "x": 325,
+          "y": 61,
+          "w": 1038,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 325,
+          "y": 164.5,
+          "w": 678,
+          "h": 72
+        },
+        "strip": {
+          "x": 325,
+          "y": 236.5,
+          "w": 678,
+          "h": 37
+        },
+        "form": {
+          "x": 325,
+          "y": 273.5,
+          "w": 678,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 348,
+          "y": 283.5,
+          "w": 564,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 916,
+              "y": 411.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 952,
+              "y": 409.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 337,
+              "y": 456.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 959,
+              "y": 454.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 491,
+          "w": 1192,
+          "h": 852
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1000x700-en-default": {
+    "seat": 525,
+    "box": 420,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "seat": 525,
+      "board": 660,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 291.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 261.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 171.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 165.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "seat": 525,
+      "board": 660,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 261.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 501,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 538,
+          "w": 726,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 548,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 171.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 411,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 448,
+          "w": 726,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 458,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 165.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 405,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 442,
+          "w": 726,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 452,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1000x700-en-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 440,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 440,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 470,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 560,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 566,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 441,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 335
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 390.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 388.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 435.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 433.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 470,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 425
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 480.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 478.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 525.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 523.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 560,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 431
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 486.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 484.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 531.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 529.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 566,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": 210
+  },
+  "seat-composer-1000x700-en-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 440,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 440,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 470,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 560,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 566,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 441,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 335
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 390.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 388.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 435.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 433.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 470,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 425
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 480.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 478.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 525.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 523.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 560,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 431
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 900,
+              "y": 486.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 936,
+              "y": 484.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 273,
+              "y": 531.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 943,
+              "y": 529.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 566,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1000x700-uk-default": {
+    "seat": 525,
+    "box": 420,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "seat": 525,
+      "board": 660,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 291.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 261.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 171.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 165.5,
+        "seat": 525,
+        "board": 660,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 291.5,
+      "seat": 525,
+      "board": 660,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 261.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 501,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 538,
+          "w": 726,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 548,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 171.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 411,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 448,
+          "w": 726,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 458,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 525
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 420,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 165.5
+        },
+        "strip": {
+          "x": 261,
+          "y": 405,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 442,
+          "w": 726,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 452,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 580,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 578,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 625,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 623,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 660,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1000x700-uk-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 440,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 440,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 470,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 560,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 566,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 441,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 335
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 390.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 388.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 435.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 433.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 470,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 425
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 480.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 478.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 525.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 523.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 560,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 431
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 486.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 484.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 531.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 529.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 566,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": 210
+  },
+  "seat-composer-1000x700-uk-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 440,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 440,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 470,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 560,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 566,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 441,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 335
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 390.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 388.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 435.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 433.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 470,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 425
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 480.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 478.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 525.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 523.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 560,
+          "w": 752,
+          "h": 577
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1000,
+          "h": 700
+        },
+        "seat": {
+          "x": 260,
+          "y": 135,
+          "w": 728,
+          "h": 431
+        },
+        "head": {
+          "x": 261,
+          "y": 136,
+          "w": 726,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 261,
+          "y": 239.5,
+          "w": 726,
+          "h": 72
+        },
+        "strip": {
+          "x": 261,
+          "y": 311.5,
+          "w": 726,
+          "h": 37
+        },
+        "form": {
+          "x": 261,
+          "y": 348.5,
+          "w": 726,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 284,
+          "y": 358.5,
+          "w": 612,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 900,
+              "y": 486.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 936,
+              "y": 484.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 273,
+              "y": 531.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 943,
+              "y": 529.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 566,
+          "w": 752,
+          "h": 577
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1280x600-en-default": {
+    "seat": 450,
+    "box": 345,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "seat": 450,
+      "board": 545,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 216.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 186.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 96.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 90.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "seat": 450,
+      "board": 545,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 186.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 386,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 423,
+          "w": 638,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 433,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 96.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 296,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 333,
+          "w": 638,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 343,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 90.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 290,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 327,
+          "w": 638,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 337,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1280x600-en-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 400,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 400,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 430,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 520,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 526,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 401,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 335
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 350.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 348.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 395.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 393.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 430,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 425
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 440.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 438.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 485.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 483.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 520,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 431
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 446.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 444.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 491.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 489.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 526,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": 180
+  },
+  "seat-composer-1280x600-en-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 400,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 400,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 430,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 520,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 526,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 401,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 335
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 350.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 348.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 395.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 393.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 430,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 425
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 440.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 438.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 485.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 483.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 520,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 431
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 816,
+              "y": 446.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 852,
+              "y": 444.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+            "rect": {
+              "x": 277,
+              "y": 491.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 859,
+              "y": 489.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 526,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1280x600-uk-default": {
+    "seat": 450,
+    "box": 345,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "seat": 450,
+      "board": 545,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 91,
+        "transcript": 216.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 121,
+        "transcript": 186.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 211,
+        "transcript": 96.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 217,
+        "transcript": 90.5,
+        "seat": 450,
+        "board": 545,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 216.5,
+      "seat": 450,
+      "board": 545,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 186.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 386,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 423,
+          "w": 638,
+          "h": 121
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 433,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 96.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 296,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 333,
+          "w": 638,
+          "h": 211
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 343,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 450
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 345,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 90.5
+        },
+        "strip": {
+          "x": 265,
+          "y": 290,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 327,
+          "w": 638,
+          "h": 217
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 337,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 465,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 463,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 510,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 508,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 545,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": null
+  },
+  "seat-composer-1280x600-uk-compact": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 400,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 400,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 430,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 520,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 526,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 401,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 335
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 350.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 348.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 395.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 393.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 430,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 425
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 440.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 438.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 485.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 483.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 520,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 431
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 446.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 444.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 491.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 489.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 526,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": 180
+  },
+  "seat-composer-1280x600-uk-minimum": {
+    "seat": 305,
+    "box": 200,
+    "lineHeight": 18,
+    "empty": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 90.5,
+      "transcript": 72,
+      "seat": 305,
+      "board": 400,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 28,
+        "rows": 1,
+        "fits": true,
+        "form": 90.5,
+        "transcript": 72,
+        "seat": 305,
+        "board": 400,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 64,
+        "rows": 3,
+        "fits": true,
+        "form": 120.5,
+        "transcript": 72,
+        "seat": 335,
+        "board": 430,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 154,
+        "rows": 8,
+        "fits": true,
+        "form": 210.5,
+        "transcript": 72,
+        "seat": 425,
+        "board": 520,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 160,
+        "rows": 8.3,
+        "fits": false,
+        "form": 216.5,
+        "transcript": 72,
+        "seat": 431,
+        "board": 526,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 28,
+      "rows": 1,
+      "fits": true,
+      "form": 91,
+      "transcript": 72.5,
+      "seat": 306,
+      "board": 401,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 208,
+      "scrolledTop": 0,
+      "range": 208
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 335
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 230,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 120.5
+        },
+        "formClient": 120,
+        "formScroll": 120,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 64
+        },
+        "fieldClient": 64,
+        "fieldScroll": 64,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 350.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 348.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 395.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 393.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 430,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "eight": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 425
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 320,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 210.5
+        },
+        "formClient": 210,
+        "formScroll": 210,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 154
+        },
+        "fieldClient": 154,
+        "fieldScroll": 154,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 440.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 438.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 485.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 483.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 520,
+          "w": 1032,
+          "h": 517
+        }
+      },
+      "twenty": {
+        "viewport": {
+          "w": 1280,
+          "h": 600
+        },
+        "seat": {
+          "x": 264,
+          "y": 95,
+          "w": 1000,
+          "h": 431
+        },
+        "head": {
+          "x": 265,
+          "y": 96,
+          "w": 998,
+          "h": 73
+        },
+        "box": 326,
+        "transcript": {
+          "x": 265,
+          "y": 199.5,
+          "w": 638,
+          "h": 72
+        },
+        "strip": {
+          "x": 265,
+          "y": 271.5,
+          "w": 638,
+          "h": 37
+        },
+        "form": {
+          "x": 265,
+          "y": 308.5,
+          "w": 638,
+          "h": 216.5
+        },
+        "formClient": 216,
+        "formScroll": 216,
+        "field": {
+          "x": 288,
+          "y": 318.5,
+          "w": 524,
+          "h": 160
+        },
+        "fieldClient": 160,
+        "fieldScroll": 368,
+        "fieldScrollTop": 208,
+        "fieldOverflow": "auto",
+        "lineHeight": 18,
+        "controls": [
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 816,
+              "y": 446.5,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 852,
+              "y": 444.5,
+              "w": 34,
+              "h": 34
+            }
+          },
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+            "rect": {
+              "x": 277,
+              "y": 491.5,
+              "w": 120,
+              "h": 28
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 859,
+              "y": 489.5,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ],
+        "frame": {
+          "x": 248,
+          "y": 526,
+          "w": 1032,
+          "h": 517
+        }
+      }
+    },
+    "setHeight": 160
+  },
+  "seat-composer-1440x900-en-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 305
+      },
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 325,
+        "y": 164.5,
+        "w": 678,
+        "h": 72
+      },
+      "strip": {
+        "x": 325,
+        "y": 236.5,
+        "w": 678,
+        "h": 37
+      },
+      "form": {
+        "x": 325,
+        "y": 273.5,
+        "w": 678,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 348,
+        "y": 286.5,
+        "w": 564,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 916,
+            "y": 285.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 952,
+            "y": 283.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 337,
+            "y": 330.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 959,
+            "y": 328.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 365,
+        "w": 1192,
+        "h": 852
+      }
+    }
+  },
+  "seat-composer-1440x900-uk-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "seat": {
+        "x": 324,
+        "y": 60,
+        "w": 1040,
+        "h": 305
+      },
+      "head": {
+        "x": 325,
+        "y": 61,
+        "w": 1038,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 325,
+        "y": 164.5,
+        "w": 678,
+        "h": 72
+      },
+      "strip": {
+        "x": 325,
+        "y": 236.5,
+        "w": 678,
+        "h": 37
+      },
+      "form": {
+        "x": 325,
+        "y": 273.5,
+        "w": 678,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 348,
+        "y": 286.5,
+        "w": 564,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 916,
+            "y": 285.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 952,
+            "y": 283.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 337,
+            "y": 330.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 959,
+            "y": 328.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 365,
+        "w": 1192,
+        "h": 852
+      }
+    }
+  },
+  "seat-composer-1000x700-en-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1000,
+        "h": 700
+      },
+      "seat": {
+        "x": 260,
+        "y": 135,
+        "w": 728,
+        "h": 305
+      },
+      "head": {
+        "x": 261,
+        "y": 136,
+        "w": 726,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 261,
+        "y": 239.5,
+        "w": 726,
+        "h": 72
+      },
+      "strip": {
+        "x": 261,
+        "y": 311.5,
+        "w": 726,
+        "h": 37
+      },
+      "form": {
+        "x": 261,
+        "y": 348.5,
+        "w": 726,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 284,
+        "y": 361.5,
+        "w": 612,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 900,
+            "y": 360.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 936,
+            "y": 358.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 273,
+            "y": 405.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 943,
+            "y": 403.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 440,
+        "w": 752,
+        "h": 577
+      }
+    }
+  },
+  "seat-composer-1000x700-uk-dragged": {
+    "from": 465,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1000,
+        "h": 700
+      },
+      "seat": {
+        "x": 260,
+        "y": 135,
+        "w": 728,
+        "h": 305
+      },
+      "head": {
+        "x": 261,
+        "y": 136,
+        "w": 726,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 261,
+        "y": 239.5,
+        "w": 726,
+        "h": 72
+      },
+      "strip": {
+        "x": 261,
+        "y": 311.5,
+        "w": 726,
+        "h": 37
+      },
+      "form": {
+        "x": 261,
+        "y": 348.5,
+        "w": 726,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 284,
+        "y": 361.5,
+        "w": 612,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 900,
+            "y": 360.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 936,
+            "y": 358.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 273,
+            "y": 405.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 943,
+            "y": 403.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 440,
+        "w": 752,
+        "h": 577
+      }
+    }
+  },
+  "seat-composer-1280x600-en-dragged": {
+    "from": 450,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1280,
+        "h": 600
+      },
+      "seat": {
+        "x": 264,
+        "y": 95,
+        "w": 1000,
+        "h": 305
+      },
+      "head": {
+        "x": 265,
+        "y": 96,
+        "w": 998,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 265,
+        "y": 199.5,
+        "w": 638,
+        "h": 72
+      },
+      "strip": {
+        "x": 265,
+        "y": 271.5,
+        "w": 638,
+        "h": 37
+      },
+      "form": {
+        "x": 265,
+        "y": 308.5,
+        "w": 638,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 288,
+        "y": 321.5,
+        "w": 524,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Dictate",
+          "rect": {
+            "x": 816,
+            "y": 320.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Launch the agent",
+          "rect": {
+            "x": 852,
+            "y": 318.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Model and reasoning — applies to your next message — Sonnet, Light",
+          "rect": {
+            "x": 277,
+            "y": 365.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Add files or images",
+          "rect": {
+            "x": 859,
+            "y": 363.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 400,
+        "w": 1032,
+        "h": 517
+      }
+    }
+  },
+  "seat-composer-1280x600-uk-dragged": {
+    "from": 450,
+    "setHeight": "160px",
+    "loadedSeat": 305,
+    "released": {
+      "viewport": {
+        "w": 1280,
+        "h": 600
+      },
+      "seat": {
+        "x": 264,
+        "y": 95,
+        "w": 1000,
+        "h": 305
+      },
+      "head": {
+        "x": 265,
+        "y": 96,
+        "w": 998,
+        "h": 73
+      },
+      "box": 200,
+      "transcript": {
+        "x": 265,
+        "y": 199.5,
+        "w": 638,
+        "h": 72
+      },
+      "strip": {
+        "x": 265,
+        "y": 271.5,
+        "w": 638,
+        "h": 37
+      },
+      "form": {
+        "x": 265,
+        "y": 308.5,
+        "w": 638,
+        "h": 90.5
+      },
+      "formClient": 90,
+      "formScroll": 90,
+      "field": {
+        "x": 288,
+        "y": 321.5,
+        "w": 524,
+        "h": 28
+      },
+      "fieldClient": 28,
+      "fieldScroll": 28,
+      "fieldScrollTop": 0,
+      "fieldOverflow": "auto",
+      "lineHeight": 18,
+      "controls": [
+        {
+          "name": "Надиктувати",
+          "rect": {
+            "x": 816,
+            "y": 320.5,
+            "w": 32,
+            "h": 32
+          }
+        },
+        {
+          "name": "Запустити агента",
+          "rect": {
+            "x": 852,
+            "y": 318.5,
+            "w": 34,
+            "h": 34
+          }
+        },
+        {
+          "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, Легкі",
+          "rect": {
+            "x": 277,
+            "y": 365.5,
+            "w": 120,
+            "h": 28
+          }
+        },
+        {
+          "name": "Додати файли або картинки",
+          "rect": {
+            "x": 859,
+            "y": 363.5,
+            "w": 32,
+            "h": 32
+          }
+        }
+      ],
+      "frame": {
+        "x": 248,
+        "y": 400,
+        "w": 1032,
+        "h": 517
+      }
+    }
+  },
+  "seat-composer-390x844-en": {
+    "seat": null,
+    "box": 790,
+    "lineHeight": 22,
+    "empty": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "seat": null,
+      "board": null,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 32,
+        "rows": 1,
+        "fits": true,
+        "form": 97,
+        "transcript": 689,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 76,
+        "rows": 3,
+        "fits": true,
+        "form": 141,
+        "transcript": 645,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 186,
+        "rows": 8,
+        "fits": true,
+        "form": 251,
+        "transcript": 535,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 255,
+        "rows": 11.1,
+        "fits": false,
+        "form": 320,
+        "transcript": 466,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "seat": null,
+      "board": null,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 193,
+      "scrolledTop": 0,
+      "range": 193
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 645
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 702,
+          "w": 388,
+          "h": 141
+        },
+        "formClient": 140,
+        "formScroll": 140,
+        "field": {
+          "x": 20,
+          "y": 714,
+          "w": 350,
+          "h": 76
+        },
+        "fieldClient": 76,
+        "fieldScroll": 76,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      },
+      "eight": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 535
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 592,
+          "w": 388,
+          "h": 251
+        },
+        "formClient": 250,
+        "formScroll": 250,
+        "field": {
+          "x": 20,
+          "y": 604,
+          "w": 350,
+          "h": 186
+        },
+        "fieldClient": 186,
+        "fieldScroll": 186,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      },
+      "twenty": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 466
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 523,
+          "w": 388,
+          "h": 320
+        },
+        "formClient": 319,
+        "formScroll": 319,
+        "field": {
+          "x": 20,
+          "y": 535,
+          "w": 350,
+          "h": 255
+        },
+        "fieldClient": 255,
+        "fieldScroll": 448,
+        "fieldScrollTop": 193,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Model and reasoning — applies to your next message — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Add files or images",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Dictate",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Launch the agent",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      }
+    }
+  },
+  "seat-composer-390x844-uk": {
+    "seat": null,
+    "box": 790,
+    "lineHeight": 22,
+    "empty": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "seat": null,
+      "board": null,
+      "formScrolls": false
+    },
+    "drafts": {
+      "1": {
+        "field": 32,
+        "rows": 1,
+        "fits": true,
+        "form": 97,
+        "transcript": 689,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "3": {
+        "field": 76,
+        "rows": 3,
+        "fits": true,
+        "form": 141,
+        "transcript": 645,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "8": {
+        "field": 186,
+        "rows": 8,
+        "fits": true,
+        "form": 251,
+        "transcript": 535,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      },
+      "20": {
+        "field": 255,
+        "rows": 11.1,
+        "fits": false,
+        "form": 320,
+        "transcript": 466,
+        "seat": null,
+        "board": null,
+        "formScrolls": false
+      }
+    },
+    "cleared": {
+      "field": 32,
+      "rows": 1,
+      "fits": true,
+      "form": 97,
+      "transcript": 689,
+      "seat": null,
+      "board": null,
+      "formScrolls": false
+    },
+    "scroll": {
+      "pinnedBottom": 193,
+      "scrolledTop": 0,
+      "range": 193
+    },
+    "readings": {
+      "three": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 645
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 702,
+          "w": 388,
+          "h": 141
+        },
+        "formClient": 140,
+        "formScroll": 140,
+        "field": {
+          "x": 20,
+          "y": 714,
+          "w": 350,
+          "h": 76
+        },
+        "fieldClient": 76,
+        "fieldScroll": 76,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      },
+      "eight": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 535
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 592,
+          "w": 388,
+          "h": 251
+        },
+        "formClient": 250,
+        "formScroll": 250,
+        "field": {
+          "x": 20,
+          "y": 604,
+          "w": 350,
+          "h": 186
+        },
+        "fieldClient": 186,
+        "fieldScroll": 186,
+        "fieldScrollTop": 0,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      },
+      "twenty": {
+        "viewport": {
+          "w": 390,
+          "h": 844
+        },
+        "seat": null,
+        "head": null,
+        "box": 790,
+        "transcript": {
+          "x": 1,
+          "y": 57,
+          "w": 388,
+          "h": 466
+        },
+        "strip": null,
+        "form": {
+          "x": 1,
+          "y": 523,
+          "w": 388,
+          "h": 320
+        },
+        "formClient": 319,
+        "formScroll": 319,
+        "field": {
+          "x": 20,
+          "y": 535,
+          "w": 350,
+          "h": 255
+        },
+        "fieldClient": 255,
+        "fieldScroll": 448,
+        "fieldScrollTop": 193,
+        "fieldOverflow": "auto",
+        "lineHeight": 22,
+        "controls": [
+          {
+            "name": "Модель і міркування — застосується до наступного повідомлення — Sonnet, low",
+            "rect": {
+              "x": 20,
+              "y": 790,
+              "w": 105.5,
+              "h": 44
+            }
+          },
+          {
+            "name": "Додати файли або картинки",
+            "rect": {
+              "x": 127.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Надиктувати",
+            "rect": {
+              "x": 173.5,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          },
+          {
+            "name": "Запустити агента",
+            "rect": {
+              "x": 326,
+              "y": 790,
+              "w": 44,
+              "h": 44
+            }
+          }
+        ],
+        "frame": null
+      }
+    }
+  },
+  "failures": []
+}

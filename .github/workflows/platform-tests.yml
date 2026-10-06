@@ -140,3 +140,21 @@ jobs:
           src/runtime-host/runtimeHostFence.test.ts
           bin/server-runtime.test.ts
           bin/bind-guard.test.ts
+
+      - name: Install the launcher trial runtime
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Terminal bootstrap custody with native Windows paths
+        env:
+          USERPROFILE: ${{ runner.temp }}\llv-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}\llv-config
+          LLV_STATE_DIR: ${{ runner.temp }}\llv-state
+          TMP: ${{ runner.temp }}\llv-tmp
+          TEMP: ${{ runner.temp }}\llv-tmp
+        run: >
+          bun test
+          bin/launcher-relaunch.test.ts
+          bin/launcher-credentials.test.ts
+          src/lib/selfUpdate/pid.test.ts

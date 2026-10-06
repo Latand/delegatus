@@ -22,6 +22,7 @@ import {
 import {
   describeTranscriptPath,
   readLivenessTranscriptEvidence,
+  transcriptFileIdentity,
   type LivenessTranscript,
   type LivenessTranscriptEvidence,
 } from "./transcript";
@@ -169,12 +170,16 @@ export interface AgentLivenessSelectionReport {
       so the newest `HOSTED_RECOVERY_MAX` of them were resolved and the rest
       were not looked at. */
   recoveryTruncated: boolean;
+  /** Active hosts the generation lacks, or the transcripts a targeted call
+      named, that the answer budget ended before describing. They have no row
+      in this answer; a later call resolves them. */
+  recoveryPending: number;
   /** Rows a transcript tail read was attempted for; `unreadable` is the subset
       of those whose tail could not be used. */
   hydrated: number;
   unreadable: number;
-  /** Selected rows no read was attempted for, because the budget was exhausted
-      before they came up. Equals the number of `evidenceSource: "projection"`
+  /** Selected rows with no tail evidence in this answer: a budget was exhausted
+      before their read started or before it finished. Equals the number of `evidenceSource: "projection"`
       records by construction. */
   projected: number;
   generation: number | null;
@@ -234,6 +239,16 @@ export interface AgentLivenessRequest {
   evidenceByteBudget?: number;
   /** Tail reads in flight at once. */
   evidenceConcurrency?: number;
+  /**
+   * Wall clock the whole answer may take: the catalog wait, identity recovery
+   * and transcript evidence share it. When it ends, hosts not yet described are
+   * counted in `recoveryPending` and rows whose tail has not answered are
+   * projected from the scan (`evidenceSource: "projection"`); their reads keep
+   * running and a later call for the same unchanged file takes the result. A
+   * targeted transcript not yet described is counted in `recoveryPending` too.
+   * Omitted, each phase keeps only its own budget.
+   */
+  answerBudgetMs?: number;
 }
 
 /** Tail reads in flight at once. Small on purpose: a `limit: 10` read is ten
@@ -293,11 +308,15 @@ export interface AgentLivenessSources {
     transcriptPath: string,
     options?: { signal?: AbortSignal | null },
   ): Promise<LivenessTranscriptEvidence | null>;
+  /** The file a transcript path names right now, or null when it names none.
+      Evidence read in an earlier call is reused only under the same identity.
+      Omitted, the file is stat'ed. */
+  transcriptIdentity?(transcriptPath: string): Promise<string | null>;
   probe: LivenessProbe;
 }
 
 export function productionLivenessSources(
-  dependencies: { completedFileScan?: CompletedGenerationRead } = {},
+  dependencies: { completedFileScan?: CompletedGenerationRead; catalogBudgetMs?: number } = {},
 ): AgentLivenessSources {
   const read = dependencies.completedFileScan ?? completedFileScan;
   return {
@@ -307,6 +326,7 @@ export function productionLivenessSources(
     selectInventory: (request, options) => completedGenerationSelection(request, {
       completedFileScan: read,
       signal: options?.signal ?? null,
+      ...(dependencies.catalogBudgetMs === undefined ? {} : { budgetMs: dependencies.catalogBudgetMs }),
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
@@ -602,12 +622,13 @@ async function recoverHostedTranscripts(
   hostedSeen: ReadonlySet<string>,
   project: string | undefined,
   describe: AgentLivenessSources["describeTranscript"],
-): Promise<{ entries: LivenessTranscript[]; truncated: boolean }> {
+  answer: AnswerBudget,
+): Promise<{ entries: LivenessTranscript[]; truncated: boolean; pending: number }> {
   const missing: string[] = [];
   for (const path of hostedPaths) {
     if (!hostedSeen.has(path)) missing.push(path);
   }
-  if (missing.length === 0) return { entries: [], truncated: false };
+  if (missing.length === 0) return { entries: [], truncated: false, pending: 0 };
   /* The registry iterates oldest-entry-first, and recovery exists for the
      newest launches. Taking the head of an over-cap list would keep the stale
      active-status rot — permanently absent from every generation, so it fills
@@ -616,15 +637,17 @@ async function recoverHostedTranscripts(
   const candidates = truncated ? missing.slice(-HOSTED_RECOVERY_MAX) : missing;
   const described = await Promise.all(candidates.map(async (path) => {
     try {
-      return await describe(path);
-    } catch {
+      return await describeWithin(path, describe, answer);
+    } catch (error) {
+      if (answer.cancelled()) throw error;
       /* A host whose transcript cannot be described is not evidence of
          anything; the rest of the answer still stands. */
       return null;
     }
   }));
   return {
-    entries: described.filter((entry): entry is LivenessTranscript => entry !== null
+    pending: described.filter((entry) => entry === ANSWER_SPENT).length,
+    entries: described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT
       && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
       && (!project || entry.project === project)),
     truncated,
@@ -641,6 +664,115 @@ function byNewest(left: LivenessTranscript, right: LivenessTranscript): number {
 function livenessAbortError(reason?: unknown): Error {
   if (reason instanceof Error && reason.name === "AbortError") return reason;
   return new DOMException("liveness snapshot cancelled", "AbortError");
+}
+
+const ANSWER_SPENT = Symbol("liveness-answer-budget-spent");
+
+/** The one clock a bounded answer shares between its phases. */
+interface AnswerBudget {
+  /** The work, or `ANSWER_SPENT` once the budget has ended. Rejects when the
+      caller cancels, without waiting for the work to notice. */
+  within<T>(work: Promise<T>): Promise<T | typeof ANSWER_SPENT>;
+  spent(): boolean;
+  /** Whether a clock runs at all; without one nothing is ever left behind. */
+  bounded: boolean;
+  cancelled(): boolean;
+  release(): void;
+}
+
+function answerBudget(budgetMs: number | null, signal: AbortSignal | null): AnswerBudget {
+  let over = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const ended = budgetMs === null ? null : new Promise<typeof ANSWER_SPENT>((resolve) => {
+    timer = setTimeout(() => { over = true; resolve(ANSWER_SPENT); }, budgetMs);
+  });
+  const interrupted = signal === null ? null : new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(livenessAbortError(signal.reason));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  void interrupted?.catch(() => undefined);
+  return {
+    within: <T>(work: Promise<T>) => {
+      if (!ended && !interrupted) return work;
+      /* The loser keeps running; its rejection has nobody left to read it. */
+      void work.catch(() => undefined);
+      return Promise.race([work, ...(ended ? [ended] : []), ...(interrupted ? [interrupted] : [])]);
+    },
+    spent: () => over,
+    bounded: ended !== null,
+    cancelled: () => signal?.aborted === true,
+    release: () => {
+      if (timer) clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+/* A tail read the answer budget walked away from keeps running, and a later
+   call takes its result instead of starting the read again, so a tail slower
+   than the budget still becomes evidence. The result stays for the calls after
+   that one too: dropping it on first use sent every other call back to the head
+   of the list, where the re-read tails held all the slots and the rows behind
+   them were never reached. What makes it reusable is the file, stat'ed on every
+   call: the entry answers only for the identity it was read under. */
+const CARRIED_EVIDENCE_IDLE_MS = 60_000;
+const CARRIED_EVIDENCE_MAX = 256;
+const carriedEvidence = new Map<string, {
+  read: Promise<LivenessTranscriptEvidence | null>;
+  /** The file as it was before the read started. A file that changed during
+      the read no longer matches, and its newer evidence is read again. */
+  identity: string;
+  usedAt: number;
+}>();
+
+function takeCarriedEvidence(transcriptPath: string, identity: string): Promise<LivenessTranscriptEvidence | null> | null {
+  const carried = carriedEvidence.get(transcriptPath);
+  if (!carried) return null;
+  carriedEvidence.delete(transcriptPath);
+  if (carried.identity !== identity || performance.now() - carried.usedAt > CARRIED_EVIDENCE_IDLE_MS) return null;
+  /* Re-inserted last: the map's order is its eviction order. */
+  carriedEvidence.set(transcriptPath, { ...carried, usedAt: performance.now() });
+  return carried.read;
+}
+
+function carryEvidence(transcriptPath: string, identity: string, read: Promise<LivenessTranscriptEvidence | null>): void {
+  for (const [path, carried] of carriedEvidence) {
+    if (carriedEvidence.size < CARRIED_EVIDENCE_MAX && performance.now() - carried.usedAt <= CARRIED_EVIDENCE_IDLE_MS) break;
+    carriedEvidence.delete(path);
+  }
+  carriedEvidence.set(transcriptPath, { read, identity, usedAt: performance.now() });
+  const drop = () => { if (carriedEvidence.get(transcriptPath)?.read === read) carriedEvidence.delete(transcriptPath); };
+  /* An unreadable tail is no evidence to keep; the next call reads it again. */
+  void read.then((evidence) => { if (evidence === null) drop(); }, drop);
+}
+
+/* The same for a description the budget walked away from: the stat keeps
+   running and the next call for that path takes it, once. It is a snapshot of
+   the file's size and mtime, which only rank the row and charge its read. */
+const CARRIED_DESCRIPTION_MAX_AGE_MS = 10_000;
+const carriedDescriptions = new Map<string, { work: Promise<LivenessTranscript | null>; startedAt: number }>();
+
+async function describeWithin(
+  transcriptPath: string,
+  describe: AgentLivenessSources["describeTranscript"],
+  answer: AnswerBudget,
+): Promise<LivenessTranscript | null | typeof ANSWER_SPENT> {
+  const carried = carriedDescriptions.get(transcriptPath);
+  carriedDescriptions.delete(transcriptPath);
+  const { work, startedAt } = carried && performance.now() - carried.startedAt <= CARRIED_DESCRIPTION_MAX_AGE_MS
+    ? carried
+    : { work: describe(transcriptPath), startedAt: performance.now() };
+  const described = await answer.within(work);
+  if (described === ANSWER_SPENT) {
+    for (const [path, kept] of carriedDescriptions) {
+      if (carriedDescriptions.size < CARRIED_EVIDENCE_MAX && performance.now() - kept.startedAt <= CARRIED_DESCRIPTION_MAX_AGE_MS) break;
+      carriedDescriptions.delete(path);
+    }
+    carriedDescriptions.set(transcriptPath, { work, startedAt });
+    void work.catch(() => { if (carriedDescriptions.get(transcriptPath)?.work === work) carriedDescriptions.delete(transcriptPath); });
+  }
+  return described;
 }
 
 function roundMs(value: number): number {
@@ -660,6 +792,22 @@ function roundMs(value: number): number {
 export async function agentLivenessSnapshot(
   request: AgentLivenessRequest,
   sources: AgentLivenessSources,
+): Promise<AgentLivenessSnapshot> {
+  const answer = answerBudget(
+    Number.isFinite(request.answerBudgetMs) ? Math.max(0, request.answerBudgetMs as number) : null,
+    request.signal ?? null,
+  );
+  try {
+    return await livenessSnapshotWithin(request, sources, answer);
+  } finally {
+    answer.release();
+  }
+}
+
+async function livenessSnapshotWithin(
+  request: AgentLivenessRequest,
+  sources: AgentLivenessSources,
+  answer: AnswerBudget,
 ): Promise<AgentLivenessSnapshot> {
   const phaseClock = sources.phaseClock ?? (() => performance.now());
   const startedAt = phaseClock();
@@ -701,10 +849,11 @@ export async function agentLivenessSnapshot(
     /* The targeted branch. A caller that named a specific target gets back what
        it named and nothing else — even an empty set. Falling through to the
        catalog would turn a stale alias into an unrelated read. */
-    entries = requestedPaths.size > 0
-      ? (await Promise.all([...requestedPaths].slice(0, limit).map((path) => sources.describeTranscript(path))))
-        .filter((entry): entry is LivenessTranscript => entry !== null)
-      : [];
+    /* The description shares the answer's budget and its cancellation: a stat
+       that outlives them is reported as not yet described, never waited out. */
+    const described = await Promise.all([...requestedPaths].slice(0, limit)
+      .map((path) => describeWithin(path, sources.describeTranscript, answer)));
+    entries = described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT);
     selection = {
       scope: "targeted",
       scanned: requestedPaths.size,
@@ -712,6 +861,7 @@ export async function agentLivenessSnapshot(
       selected: entries.length,
       recovered: 0,
       recoveryTruncated: false,
+      recoveryPending: described.filter((entry) => entry === ANSWER_SPENT).length,
       generation: null,
       cacheStatus: null,
       freshScan: false,
@@ -735,6 +885,7 @@ export async function agentLivenessSnapshot(
         selected: selected.entries.length,
         recovered: 0,
         recoveryTruncated: false,
+        recoveryPending: 0,
         generation: selected.generation,
         cacheStatus: selected.cacheStatus,
         freshScan: selected.freshScan,
@@ -750,6 +901,7 @@ export async function agentLivenessSnapshot(
         selected: selected.entries.length,
         recovered: 0,
         recoveryTruncated: false,
+        recoveryPending: 0,
         generation: null,
         cacheStatus: null,
         freshScan: true,
@@ -761,14 +913,14 @@ export async function agentLivenessSnapshot(
     /* Recovery and the completed generation share the same verified-owner
        priority. Order by freshness within each group before the final limit,
        so newer scan-only history cannot displace a recovered owner. */
-    const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript);
+    const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript, answer);
     const known = new Set(entries.map((entry) => entry.path));
     const added = recovery.entries.filter((entry) => {
       if (known.has(entry.path)) return false;
       known.add(entry.path);
       return true;
     });
-    if (added.length > 0 || recovery.truncated) {
+    if (added.length > 0 || recovery.truncated || recovery.pending > 0) {
       if (added.length > 0) entries = [...entries, ...added].sort((left, right) =>
         Number(hostedPaths.has(right.path)) - Number(hostedPaths.has(left.path))
         || byNewest(left, right),
@@ -780,6 +932,7 @@ export async function agentLivenessSnapshot(
         recovered: added.length,
         /* A capped recovery must not read as a complete one. */
         recoveryTruncated: recovery.truncated,
+        recoveryPending: recovery.pending,
       };
     }
   }
@@ -791,12 +944,22 @@ export async function agentLivenessSnapshot(
   const deadlineMs = Number.isFinite(request.evidenceDeadlineMs) && (request.evidenceDeadlineMs as number) > 0
     ? Math.floor(request.evidenceDeadlineMs as number)
     : DEFAULT_EVIDENCE_DEADLINE_MS;
+  const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
   const hydration = await hydrateWithBudget(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
+      if (answer.spent()) return ANSWER_SPENT;
       try {
-        return await sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
+        /* Only a bounded answer leaves reads behind, so only it pays the stat. */
+        const identity = answer.bounded ? await answer.within(identityOf(entry.path).catch(() => null)) : null;
+        if (identity === ANSWER_SPENT) return ANSWER_SPENT;
+        const carried = identity === null ? null : takeCarriedEvidence(entry.path, identity);
+        const read = carried
+          ?? sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
+        const evidence = await answer.within(read);
+        if (evidence === ANSWER_SPENT && identity !== null && !carried) carryEvidence(entry.path, identity, read);
+        return evidence;
       } catch (error) {
         /* One bad row costs one row. Cancellation is the exception: it is the
            caller going away, and it must still stop the pass. */
@@ -827,13 +990,17 @@ export async function agentLivenessSnapshot(
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = phaseClock();
   let unreadable = 0;
+  /* Rows whose tail answered. A read the answer budget left behind is not one. */
+  let answered = 0;
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
        produced none, and a row the budget never reached. The counters below are
        derived from the same distinction, so the report and the per-row labels
        cannot disagree. */
-    const attempted = hydration.results.has(index);
-    const evidence = hydration.results.get(index) ?? null;
+    const read = hydration.results.get(index);
+    const attempted = hydration.results.has(index) && read !== ANSWER_SPENT;
+    const evidence = read === ANSWER_SPENT ? null : read ?? null;
+    if (attempted) answered += 1;
     if (attempted && evidence === null) unreadable += 1;
     const turnState = turnStateFromEvidence(evidence, entry);
     /* Freshness is the newest RECORD, tool traffic included. Reading it off the
@@ -907,11 +1074,11 @@ export async function agentLivenessSnapshot(
     conversations,
     selection: {
       ...selection,
-      hydrated: hydration.hydrated,
+      hydrated: answered,
       unreadable,
-      projected: hydratable.length - hydration.hydrated,
+      projected: hydratable.length - answered,
       evidenceBytes: hydration.bytes,
-      budget: hydration.stopped,
+      budget: hydration.stopped === "complete" && answered < hydration.hydrated ? "deadline" : hydration.stopped,
     },
     timings: {
       inventorySelectionMs: roundMs(inventorySelectionMs),

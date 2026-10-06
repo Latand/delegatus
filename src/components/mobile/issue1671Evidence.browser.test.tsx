@@ -796,6 +796,79 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
 
+describe("close-card receipt Reopen", () => {
+  browserTest("restores root and manual cards at 390 in en and uk across the next board refresh", async () => {
+    const out = path.resolve(".artifacts/phone-reopen");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    /* Own the browser server and retain its PID; closing this handle stops only
+       the process this case launched, even if another browser is on the host. */
+    const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    fs.writeFileSync(path.join(out, "browser.pid"), `${browserServer.process().pid}\n`);
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const kind of ["root", "manual"] as const) {
+        const target = kind === "root" ? RUNNING_PATH : "/repo/done-0.jsonl";
+        const id = kind === "root" ? "conversation_running" : "conversation_done-0";
+        const key = `${locale}-${kind}-390`;
+        const { page, context, pageErrors } = await openFixture(browser, `${base}?reopen=${kind}#c=${id}`, { width: 390, height: 844 }, "dark", locale, "reduce", true);
+        try {
+          await page.locator('[data-testid="mobile-chat-shell"]').waitFor();
+          const beforeWrites = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations.length);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-menu-row="close"]').click();
+          await page.waitForFunction((path) => {
+            const e = (window as unknown as { evidence: { boardSnapshot(): { prefs: { hidden: string[] } }; boardMutations: Array<{ kind: string; path?: string }> } }).evidence;
+            return e.boardSnapshot().prefs.hidden.includes(path) && e.boardMutations.some(m => m.kind === "close" && m.path === path);
+          }, target);
+          const reopen = page.locator('[data-mobile2-receipt-undo="reopen"]');
+          const receipt = await reopen.evaluate(el => {
+            const r = el.getBoundingClientRect();
+            return { text: el.textContent?.trim(), x: r.x, right: r.right, width: r.width, height: r.height };
+          });
+          expect(receipt.text).toBe(translate(locale, "mobile2.receipt.reopen"));
+          expect(receipt.x).toBeGreaterThanOrEqual(0);
+          expect(receipt.right).toBeLessThanOrEqual(390);
+          expect(receipt.width).toBeGreaterThanOrEqual(44);
+          expect(receipt.height).toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${key}-closed.png`) });
+          await reopen.click();
+          await page.waitForFunction((path) => {
+            const e = (window as unknown as { evidence: { boardSnapshot(): { prefs: { hidden: string[] } }; boardMutations: Array<{ kind: string; path?: string }> } }).evidence;
+            return !e.boardSnapshot().prefs.hidden.includes(path) && e.boardMutations.some(m => m.kind === "restore" && m.path === path);
+          }, target);
+          /* Closing the focused card returns the phone to its board. */
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const row = page.locator(`[data-phone-card-agent="${target}"]`);
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-restored.png`) });
+          const beforeReads = await page.evaluate(() => {
+            const e = (window as unknown as { evidence: { boardReads: number; advanceBoardRevision(): void } }).evidence;
+            e.advanceBoardRevision();
+            return e.boardReads;
+          });
+          await page.waitForFunction((before) => (window as unknown as { evidence: { boardReads: number } }).evidence.boardReads > before, beforeReads, { timeout: 15000 });
+          /* Give the fetched snapshot its render before judging membership. */
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          expect(await row.isVisible()).toBe(true);
+          await row.scrollIntoViewIfNeeded();
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${key}-refreshed.png`) });
+          const writes = await page.evaluate(({ path, start }) => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string; placement?: string }> } }).evidence.boardMutations.slice(start).filter(m => m.path === path && (m.kind === "close" || m.kind === "restore")), { path: target, start: beforeWrites });
+          expect(writes.map(m => m.kind)).toEqual(["close", "restore"]);
+          if (kind === "manual") expect(writes[1]?.placement).toBe("manual");
+          readings.push({ locale, kind, viewport: { width: 390, height: 844 }, receipt, writes, restoredAfterRefresh: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/phone-reopen", { recursive: true });
+      fs.writeFileSync("evidence/phone-reopen/receipt.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await browserServer.close(); stop(); }
+  }, 90000);
+});
+
 browserTest("agent-delivered seat message keeps its author at desktop and phone widths in both languages", async () => {
   const evidence = await admittedAgentEvidence();
   const { base, stop } = await serveFixture({ "/evidence/agent-message-label": evidence });

@@ -374,6 +374,7 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
   ],
   get_conversation: [
     { path: ["maxRecords"], min: 1, max: 500, fallback: 100 },
+    { path: ["maxChars"], min: 1, max: 16_000, fallback: 4_000 },
     { path: ["tailLines"], min: 1, max: SELECTED_TAIL_MAX_LINES, fallback: 1 },
   ],
   conversation_messages: [
@@ -1020,6 +1021,12 @@ function readRecoveryOwner(ownerPath: string): ReceiptRecoveryOwner {
   return value as ReceiptRecoveryOwner;
 }
 
+function recoveryOwnerTargets(owner: ReceiptRecoveryOwner, observation: ReceiptLockObservation): boolean {
+  return owner.targetDev === observation.identity.dev
+    && owner.targetIno === observation.identity.ino
+    && owner.targetToken === observation.token;
+}
+
 function recoveryOwners(
   recoveryPath: string,
   observation: ReceiptLockObservation,
@@ -1053,18 +1060,21 @@ function recoveryOwners(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "retry" };
       throw error;
     }
-    if (owner.epoch !== Number(epochText)
-      || owner.targetDev !== observation.identity.dev
-      || owner.targetIno !== observation.identity.ino
-      || owner.targetToken !== observation.token) {
-      throw new Error("invalid MCP receipt recovery owner target");
-    }
+    if (owner.epoch !== Number(epochText)) throw new Error("invalid MCP receipt recovery owner epoch");
+    /* The namespace is named by the lock's inode, and an inode number is
+       handed out again once its last link is gone. An entry for another token
+       at the same inode belongs to another generation of the lock. Its
+       retirement guards other files, so it neither owns nor blocks this one;
+       the two share only the epoch names (`claimRecoveryOwnership`). */
+    if (!recoveryOwnerTargets(owner, observation)) continue;
     entries.push({ owner, ownerPath });
   }
   entries.sort((left, right) => left.owner.epoch - right.owner.epoch);
   return { kind: "owners", entries };
 }
 
+/** The owners of this lock generation's retirement, or null when they cannot
+    be read before the deadline. */
 async function recoveryOwnersUntil(
   recoveryPath: string,
   observation: ReceiptLockObservation,
@@ -1114,22 +1124,40 @@ async function claimRecoveryOwnership(
   deadline: number,
 ): Promise<ReceiptRecoveryClaim | "blocked" | "retry"> {
   const token = crypto.randomUUID();
-  const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
-  if (!owners) return "retry";
-  const current = owners.at(-1)?.owner;
-  if (current && processOwnerAlive(current)) return "blocked";
-  const owner: ReceiptRecoveryOwner = {
-    version: 1,
-    epoch: (current?.epoch ?? -1) + 1,
-    pid: process.pid,
-    startIdentity: procBackend.processIdentity(process.pid),
-    token,
-    targetDev: observation.identity.dev,
-    targetIno: observation.identity.ino,
-    targetToken: observation.token,
-  };
-  const ownerPath = publishRecoveryOwner(recoveryPath, owner);
-  return ownerPath ? { owner, ownerPath } : "retry";
+  while (true) {
+    const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
+    if (!owners) return "retry";
+    const current = owners.at(-1)?.owner;
+    if (current && processOwnerAlive(current)) return "blocked";
+    const owner: ReceiptRecoveryOwner = {
+      version: 1,
+      epoch: (current?.epoch ?? -1) + 1,
+      pid: process.pid,
+      startIdentity: procBackend.processIdentity(process.pid),
+      token,
+      targetDev: observation.identity.dev,
+      targetIno: observation.identity.ino,
+      targetToken: observation.token,
+    };
+    const ownerPath = publishRecoveryOwner(recoveryPath, owner);
+    if (ownerPath) return { owner, ownerPath };
+    /* Another claimant published this epoch first. This generation's winner
+       shows in the next scan. Another generation's holds only the name, and
+       this claimant has published nothing while it waits, so no two
+       generations ever wait on each other: a live one unlinks the name within
+       its own retirement, a dead one only when residue cleanup retires it
+       under its own target. */
+    let holder: ReceiptRecoveryOwner;
+    try {
+      holder = readRecoveryOwner(`${recoveryOwnerPrefix(recoveryPath)}${owner.epoch}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (recoveryOwnerTargets(holder, observation)) continue;
+    if (!processOwnerAlive(holder)) return "retry";
+    await receiptLockClock.pause(Math.min(10, Math.max(1, deadline - receiptLockClock.now())));
+  }
 }
 
 async function recoveryClaimCurrent(
@@ -1216,17 +1244,22 @@ function recoveryPathsForLock(lockPath: string): string[] {
   return [...paths];
 }
 
-function abandonedRecoveryObservation(recoveryPath: string): ReceiptLockObservation | null {
+/** Every lock generation that left something in this namespace: the one the
+    recovery link names and each one an owner entry targets. The generation
+    with the newest epoch comes first. Its successor epoch is a name nobody
+    holds, so residue retired in this order never meets an epoch name that
+    another dead generation still has. */
+function abandonedRecoveryObservations(recoveryPath: string): ReceiptLockObservation[] {
+  const generations: Array<{ observation: ReceiptLockObservation; epoch: number }> = [];
   const linked = observeLock(recoveryPath);
-  if (linked) return linked;
+  if (linked) generations.push({ observation: linked, epoch: -1 });
   const directory = path.dirname(recoveryPath);
   const prefix = path.basename(recoveryOwnerPrefix(recoveryPath));
-  let current: ReceiptRecoveryOwner | null = null;
   let entries: string[];
   try {
     entries = fs.readdirSync(directory);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   for (const entry of entries) {
@@ -1237,24 +1270,28 @@ function abandonedRecoveryObservation(recoveryPath: string): ReceiptLockObservat
     try {
       owner = readRecoveryOwner(path.join(directory, entry));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
     if (owner.epoch !== Number(epochText)) throw new Error("invalid MCP receipt recovery owner epoch");
-    if (current && (current.targetDev !== owner.targetDev
-      || current.targetIno !== owner.targetIno
-      || current.targetToken !== owner.targetToken)) {
-      throw new Error("invalid MCP receipt recovery owner lineage");
+    const generation = generations.find(({ observation }) => recoveryOwnerTargets(owner, observation));
+    if (generation) {
+      generation.epoch = Math.max(generation.epoch, owner.epoch);
+    } else {
+      generations.push({
+        observation: {
+          identity: { dev: owner.targetDev, ino: owner.targetIno },
+          mtimeMs: 0,
+          owner: null,
+          token: owner.targetToken,
+        },
+        epoch: owner.epoch,
+      });
     }
-    if (!current || owner.epoch > current.epoch) current = owner;
   }
-  if (!current) return null;
-  return {
-    identity: { dev: current.targetDev, ino: current.targetIno },
-    mtimeMs: 0,
-    owner: null,
-    token: current.targetToken,
-  };
+  return generations
+    .sort((left, right) => right.epoch - left.epoch)
+    .map(({ observation }) => observation);
 }
 
 function lockReferencesObservation(lockPath: string, observation: ReceiptLockObservation): boolean {
@@ -1268,32 +1305,45 @@ async function cleanupAbandonedRecoveryArtifacts(
 ): Promise<ReceiptRecoveryNamespaceState> {
   for (const recoveryPath of recoveryPathsForLock(lockPath)) {
     removeDeadRecoveryOwnerAliases(recoveryPath);
-    const observation = abandonedRecoveryObservation(recoveryPath);
-    if (!observation) {
+    const observations = abandonedRecoveryObservations(recoveryPath);
+    if (observations.length === 0) {
       if (recoveryPathsForLock(lockPath).includes(recoveryPath)) return "retry";
       continue;
     }
-    if (lockReferencesObservation(lockPath, observation)) continue;
-    const claim = await claimRecoveryOwnership(recoveryPath, observation, deadline);
-    if (claim === "blocked" || claim === "retry") return claim;
-    let cleaned = false;
-    try {
-      if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
-        || lockReferencesObservation(lockPath, observation)) return "retry";
-      if (sameLock(recoveryPath, observation.identity)
-        && readLockMetadata(recoveryPath).token === observation.token) {
-        try {
-          fs.unlinkSync(recoveryPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    for (const observation of observations) {
+      if (lockReferencesObservation(lockPath, observation)) continue;
+      const claim = await claimRecoveryOwnership(recoveryPath, observation, deadline);
+      if (claim === "blocked" || claim === "retry") return claim;
+      let cleaned = false;
+      try {
+        if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
+          || lockReferencesObservation(lockPath, observation)) return "retry";
+        if (sameLock(recoveryPath, observation.identity)
+          && readLockMetadata(recoveryPath).token === observation.token) {
+          try {
+            fs.unlinkSync(recoveryPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
         }
+      } finally {
+        cleaned = await releaseRecoveryOwnership(recoveryPath, observation, claim, deadline);
       }
-    } finally {
-      cleaned = await releaseRecoveryOwnership(recoveryPath, observation, claim, deadline);
+      if (!cleaned) return "retry";
     }
-    if (!cleaned) return "retry";
   }
   return "clear";
+}
+
+/** A claimant that gives up takes its own entry with it. Left behind, a live
+    process's entry blocks every other claimant of this generation until that
+    process exits. */
+function withdrawRecoveryClaim(claim: ReceiptRecoveryClaim): void {
+  try {
+    if (readRecoveryOwner(claim.ownerPath).token === claim.owner.token) fs.unlinkSync(claim.ownerPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 async function releaseRecoveryOwnership(
@@ -1302,9 +1352,13 @@ async function releaseRecoveryOwnership(
   claim: ReceiptRecoveryClaim,
   deadline: number,
 ): Promise<boolean> {
-  if (!await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)) return false;
-  const owners = await recoveryOwnersUntil(recoveryPath, observation, deadline);
-  if (!owners) return false;
+  const owners = await recoveryClaimCurrent(recoveryPath, observation, claim, deadline)
+    ? await recoveryOwnersUntil(recoveryPath, observation, deadline)
+    : null;
+  if (!owners) {
+    withdrawRecoveryClaim(claim);
+    return false;
+  }
   for (const { ownerPath } of owners.reverse()) {
     try {
       fs.unlinkSync(ownerPath);
@@ -1407,7 +1461,16 @@ async function withFileLock<T>(filePath: string, operation: () => T): Promise<T>
         fs.closeSync(fd);
         if (observation) {
           const retirementDeadline = receiptLockClock.now() + LOCK_WAIT_MS;
-          const retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          let retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          /* A retirement that could not claim found another generation's dead
+             owner on its epoch name. Residue cleanup retires that owner; no
+             outer loop comes back here to do it. */
+          while (retired === "retry" && receiptLockClock.now() < retirementDeadline) {
+            if (await cleanupAbandonedRecoveryArtifacts(lockPath, retirementDeadline) !== "clear") {
+              await receiptLockClock.pause(Math.min(10, Math.max(1, retirementDeadline - receiptLockClock.now())));
+            }
+            retired = await removeObservedLock(lockPath, observation, retirementDeadline);
+          }
           if (retired === "retry"
             || (retired !== "removed"
               && sameLock(lockPath, observation.identity)
@@ -3100,7 +3163,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_conversations: "List scanned Delegatus conversations with durable ids and transcript paths, compact titles by default, within a 12 KB answer budget. project/query filters run server-side. Follow nextCursor as cursor for the next page. compact:false retains full titles; get_conversation reads a full conversation.",
   search_transcripts: "Search indexed user and assistant message bodies across engines and accounts. Ask it \"has this been solved before?\", using several phrasings, project-scoped then unscoped. Default relevance ranks conversations by query coverage and returns six conversations with up to three linked fragments each. Check matched, missing and interpretedAs. A unit ending in ~ matched loosely, by a compound term's parts near each other or by an identifier prefix: its fragment decides whether the hit is on topic. Copies fold into alsoIn. Open a hit with conversation_messages at transcriptPath and timestamp as since. order: newest returns matching messages newest first, requiring every query unit. byteOffset and lineNumber pin the exact line. Pass nextCursor unchanged to continue the snapshot. project accepts a key, repository name or path; an unrecognised value searches everywhere and projectScope says so. Queries read only the index, never transcript files.",
   search_memory: "Search the local read-only index of Claude and Codex memories, global instructions and single-fact skills. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
-  get_conversation: "Read a conversation summary and its recent messages and tools. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
+  get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
   deploy_exact_sha: "Deploy one full commit SHA of the Delegatus application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Delegatus project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy is recorded against the calling seat (wakeOnSettle:true), and the seat tick wakes that seat once when it reaches a terminal phase, listing the lanes the seat paused, so end the turn after the call.",
@@ -3115,9 +3178,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
-  resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. viewer is null with viewerUnavailable \"not-the-viewer\" when this tool is served by a stdio MCP server beside the agent, which cannot measure the web server's tree; the HTTP transport answers it from the Viewer itself.",
+  resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. viewer is null with viewerUnavailable \"not-the-viewer\" when this tool is served by a stdio MCP server beside the agent, which cannot measure the web server's tree; the HTTP transport answers it from the Viewer itself.",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
-  agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports.",
+  agent_activity: "Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
@@ -3649,6 +3712,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     conversationId: z.string().optional(),
     transcriptPath: z.string().optional(),
     maxRecords: boundedNumericInput("get_conversation", "maxRecords"),
+    maxChars: boundedNumericInput("get_conversation", "maxChars")
+      .describe("Characters retained per record or raw tail line after secret redaction. Integer 1..16000; default 4000 for messages and tail lines, 1000 for tools."),
+    full: z.boolean().optional().describe("true returns complete record texts and tail lines with no answer budget."),
     selectedContext: selectedContextSchema,
     tailLines: boundedNumericInput("get_conversation", "tailLines")
       .describe("Read this many trailing transcript lines instead of the scanned summary. Use conversationId or selectedContext for the bounded identity path, or transcriptPath for the validated pinned reader; all alternatives keep answering while corpus scans are degraded."),

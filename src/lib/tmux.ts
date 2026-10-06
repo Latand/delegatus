@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import { prepareAgentPublicationSpec, withSpawnCapability, type ResumeSpec } from "@/lib/agent/cli";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -1210,6 +1211,52 @@ export function cdCommandForCwd(cwd: string): string {
   return `cd -- ${shellSingleQuote(cwd)}`;
 }
 
+/** Deliver through the caller's process-fenced tmux runner. Long commands
+ * travel in a private shell file: typing them while a prompt hook is running
+ * can overflow the tty's canonical input line before readline takes over. */
+export async function sendShellCommandToPane(
+  target: TmuxTarget, cwd: string, command: string,
+  run: (args: string[]) => Promise<RunResult>,
+): Promise<void> {
+  let script: string | undefined;
+  let input = command;
+  if (Buffer.byteLength(command) > 2048) {
+    // The host tmux shell must see the same file as the containerized Viewer.
+    const base = process.env.LLV_DOCKER_NSENTER_SHIMS === "1"
+      ? path.join(process.env.HOME ?? os.homedir(), ".cache", "delegatus", "tmux-commands")
+      : os.tmpdir();
+    fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+    script = path.join(base, `delegatus-command-${crypto.randomUUID()}.sh`);
+    input = `. ${shellSingleQuote(script)}`;
+    if (Buffer.byteLength(input) > 2048) throw new Error("tmux command file path exceeds the safe tty input limit");
+    let fileCommand = command;
+    if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1") {
+      // The adapter rewrites container CLI paths for the host shell. A source
+      // command only exposes the filename to its usual send-keys translation.
+      const translated = await run(["delegatus-host-command-text", command]);
+      if (translated.code !== 0) throw new Error(translated.stderr.trim() || "could not translate command for host pane");
+      fileCommand = translated.stdout;
+    }
+    // Sourcing keeps the pane's shell and argv semantics. The shell opens the
+    // file before unlinking it, removing the capability before CLI startup.
+    fs.writeFileSync(script, `command rm -f -- ${shellSingleQuote(script)}\n${fileCommand}\n`, { mode: 0o600, flag: "wx" });
+  }
+  try {
+    for (const [args, message] of [
+      [["send-keys", "-t", target, "-l", cdCommandForCwd(cwd)], "could not type cwd into pane"],
+      [["send-keys", "-t", target, "Enter"], "could not enter cwd"],
+      [["send-keys", "-t", target, "-l", input], "could not type command into pane"],
+      [["send-keys", "-t", target, "Enter"], "could not start command"],
+    ] as const) {
+      const result = await run([...args]);
+      if (result.code !== 0) throw new Error(result.stderr.trim() || message);
+    }
+  } catch (error) {
+    if (script) fs.rmSync(script, { force: true });
+    throw error;
+  }
+}
+
 async function paneCommand(target: TmuxTarget, endpoint = tmuxEndpointDescriptor()): Promise<string | null> {
   const res = await runTmux(["display-message", "-p", "-t", target, "#{pane_current_command}"], undefined, endpoint).catch(() => null);
   return res && res.code === 0 ? res.stdout.trim() : null;
@@ -1293,16 +1340,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     }
     const capability = initialCapability ?? agentRegistry().rotateSpawnCapabilityForReceipt(receipt.launchId);
     const bootSpec = withSpawnCapability(spec, capability);
-    const cwdTyped = await runBoundTmux(["send-keys", "-t", target, "-l", cdCommandForCwd(spec.cwd)]);
-    if (cwdTyped.code !== 0) throw new Error(cwdTyped.stderr.trim() || "could not type cwd into pane");
-    const cwdEnter = await runBoundTmux(["send-keys", "-t", target, "Enter"]);
-    if (cwdEnter.code !== 0) throw new Error(cwdEnter.stderr.trim() || "could not enter cwd");
-
-    /* Type the boot command literally into the fenced shell, then run it. */
-    const typed = await runBoundTmux(["send-keys", "-t", target, "-l", bootSpec.command]);
-    if (typed.code !== 0) throw new Error(typed.stderr.trim() || "could not type command into pane");
-    const enter = await runBoundTmux(["send-keys", "-t", target, "Enter"]);
-    if (enter.code !== 0) throw new Error(enter.stderr.trim() || "could not start agent");
+    await sendShellCommandToPane(target, spec.cwd, bootSpec.command, runBoundTmux);
   }
 
   const deadline = Date.now() + SPAWN_READY_TIMEOUT_MS;
@@ -1468,16 +1506,10 @@ export async function spawnCommandWindow(spec: { command: string; cwd: string; w
   if (!server) throw new Error("tmux server identity is unavailable before command spawn");
   const binding = await createSpawnWindow({ session, ...spec, endpoint, server });
   const paneId = binding.paneId;
-  for (const [args, message] of [
-    [["send-keys", "-t", paneId, "-l", cdCommandForCwd(spec.cwd)], "could not type cwd into pane"],
-    [["send-keys", "-t", paneId, "Enter"], "could not enter cwd"],
-    [["send-keys", "-t", paneId, "-l", spec.command], "could not type command into pane"],
-    [["send-keys", "-t", paneId, "Enter"], "could not start command"],
-  ] as const) {
+  await sendShellCommandToPane(paneId, spec.cwd, spec.command, async (args) => {
     if (!await verifyTmuxSpawnBinding(binding, endpoint)) throw new Error("tmux server or created pane changed during command launch");
-    const result = await runTmux([...args], undefined, endpoint);
-    if (result.code !== 0) throw new Error(result.stderr.trim() || message);
-  }
+    return runTmux(args, undefined, endpoint);
+  });
   return { paneId, display: binding.display ?? paneId, panePid: binding.panePid.pid };
 }
 
