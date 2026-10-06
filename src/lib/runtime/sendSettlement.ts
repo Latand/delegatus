@@ -361,11 +361,15 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
  * Only an account switch holds a reservation, and the record names it when
  * the hold is placed. While the switch itself still waits for the running turn
  * to end, the code says that, so the operator learns the message goes out once
- * the turn is over and the switch has landed.
+ * the turn is over and the switch has landed. A failed switch instead names
+ * the explicit retry or cancellation it needs before delivery can resume.
  */
-export function heldWaitReason(file: RegistryFile, delivery: HeldDelivery): "switching-accounts" | "switch-after-turn" {
+export function heldWaitReason(file: RegistryFile, delivery: HeldDelivery): "switching-accounts" | "switch-after-turn" | "switch-failed" {
   const migration = file.conversations[delivery.conversationId]?.migration;
-  if (migration?.phase === "waiting-turn" && delivery.fencedBy === migration.operationId) return "switch-after-turn";
+  if (delivery.fencedBy === migration?.operationId) {
+    if (migration?.phase === "failed-recoverable") return "switch-failed";
+    if (migration?.phase === "waiting-turn") return "switch-after-turn";
+  }
   return delivery.waitReason ?? "switching-accounts";
 }
 

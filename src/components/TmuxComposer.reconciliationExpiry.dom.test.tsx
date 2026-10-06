@@ -903,6 +903,7 @@ test("a terminal failure after the window exposes Retry and re-enables the compo
     expect(submitButton(host).disabled).toBe(false);
     expect(host.querySelectorAll('[data-operation^="composer-unconfirmed:"] > [role="status"]')).toHaveLength(0);
     expect(retries()).toHaveLength(1);
+    expect(host.textContent).not.toContain(translate("en", "composer.deliveryUnconfirmed"));
     expect(textarea.value).toBe("");
     expect(sentKeys).toHaveLength(1);
 
@@ -1589,8 +1590,11 @@ test.each([
    the successor was up, after both local windows had closed, and the message
    arrived. The answer and the successor host's receipt reach the same
    conversation, and nothing about an arrived message may read as a failure. */
-test("a send answered after the windows closed, across a host change, ends delivered with no failure left", async () => {
-  setLocale("en");
+test.each(([["en", "switching-accounts", "receipt.human.switchingAccounts"], ["uk", "switching-accounts", "receipt.human.switchingAccounts"],
+  ["en", "switch-after-turn", "receipt.human.switchAfterTurn"], ["uk", "switch-after-turn", "receipt.human.switchAfterTurn"],
+  ["en", "switch-failed", "receipt.human.switchFailed"], ["uk", "switch-failed", "receipt.human.switchFailed"]] as const).flatMap(args => ["immediate", "late"].map(timing => [args[0], args[1], timing, args[2]] as const)))(
+  "a held send shows its %s %s hold at rest, then clears across a host change (%s)", async (locale, reason, timing, reasonKey) => {
+  setLocale(locale);
   mobileViewport = false;
   const conversationId = "conv-switch-late-answer";
   const prompt = "switch to the other account";
@@ -1628,7 +1632,7 @@ test("a send answered after the windows closed, across a host change, ends deliv
   refreshRuntimeImpl = async () => false;
   resetOutboxForTests();
   sessionStorage.setItem(`llvDraft:${conversationId}`, prompt);
-  const unconfirmed = translate("en", "composer.deliveryUnconfirmed");
+  const unconfirmed = translate(locale, "composer.deliveryUnconfirmed");
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -1636,19 +1640,31 @@ test("a send answered after the windows closed, across a host change, ends deliv
     flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
     const form = host.querySelector("textarea")!.closest("form")!;
     flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
-    await until(() => host.textContent?.includes(unconfirmed) === true);
-    /* What the operator saw: both windows closed with nothing admitted yet. */
-    expect(host.textContent).toContain(unconfirmed);
+    if (timing === "late") {
+      await until(() => host.textContent?.includes(unconfirmed) === true);
+      /* Both windows closed before the server admitted anything. */
+      expect(host.textContent).toContain(unconfirmed);
+    } else {
+      await until(() => sends.length === 1);
+    }
     const key = sends[0]!;
 
     /* The request finally answers: held, its reservation waiting on the switch. */
     const operationId = "op-switch-late";
     answer({ ok: true, held: true, operationId, receipt: {
       operationId, idempotencyKey: key, conversationId, kind: "send", status: "queued",
-      reason: "switching-accounts", at: new Date().toISOString(), revision: 1,
+      reason, at: new Date().toISOString(), revision: 1,
     } as RuntimeReceipt });
-    await until(() => host.textContent?.includes(unconfirmed) !== true);
+    await until(() => host.querySelector("[data-composer-switch-hint]") !== null && !host.textContent?.includes(unconfirmed));
     expect(host.textContent).not.toContain(unconfirmed);
+    const sentence = translate(locale, reasonKey);
+    expect(host.querySelector("[data-composer-switch-hint]")?.textContent).toBe(sentence);
+    const progress = host.querySelector("[data-outbox-progress]")!;
+    expect(progress).not.toBeNull();
+    flushSync(() => progress.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    const disclosure = host.querySelector("[data-outbox-detail]")!;
+    expect(disclosure.textContent).toContain(sentence);
+    expect(disclosure.textContent).not.toContain(reason);
 
     /* The successor host publishes the delivery for the same conversation,
        and the composer now reads the successor's transcript. */
@@ -1659,6 +1675,8 @@ test("a send answered after the windows closed, across a host change, ends deliv
     } as RuntimeReceipt]));
     await until(() => readOutbox(conversationId)[0]?.state === "delivered");
 
+    expect(host.querySelector("[data-composer-switch-hint]")).toBeNull();
+    expect(host.textContent).not.toContain(sentence);
     expect(readOutbox(conversationId)).toMatchObject([{ id: key, state: "delivered" }]);
     expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
     expect(host.textContent).not.toContain(unconfirmed);

@@ -121,7 +121,7 @@ import {
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
 import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
-import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
 import { commitBridgeTurn, useBridgeTurnStartDrain } from "@/hooks/useBridgeReportRelay";
@@ -2674,11 +2674,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        not confirm" placeholder and its status line, so an arrived message never
        keeps reading as a delivery failure. */
     const confirmed = displayedRuntimeReceipts.filter((candidate) => unconfirmedKeys.current.has(candidate.idempotencyKey)
-      && !candidate.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && receiptIsAdmitted(candidate.status));
+      && !candidate.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)
+      && (receiptIsAdmitted(candidate.status) || receiptIsTerminal(candidate.status)));
     if (confirmed.length) {
-      const retired = new Set(confirmed.map((candidate) => unconfirmedReceiptOperationId(candidate.idempotencyKey)));
+      // Terminal failures already mask the placeholder in the receipt merger.
+      // Keep that projection stable for retries, and release every resolved key.
+      const retired = new Set(confirmed.filter(candidate => receiptIsAdmitted(candidate.status))
+        .map(candidate => unconfirmedReceiptOperationId(candidate.idempotencyKey)));
       for (const candidate of confirmed) unconfirmedKeys.current.delete(candidate.idempotencyKey);
-      setImmediateRuntimeReceipts((current) => current.filter((candidate) => !retired.has(candidate.operationId)));
+      if (retired.size) setImmediateRuntimeReceipts((current) => current.filter((candidate) => !retired.has(candidate.operationId)));
       if (!unconfirmedKeys.current.size) {
         setStatus((current) => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
       }
@@ -4226,6 +4230,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
    * send from another tab or device, an operation recovered from the journal
    * after this queue aged out, a non-message operation.
    */
+  const heldSwitchReceipt = displayedRuntimeReceipts.find(receipt => receipt.status === "queued"
+    && receipt.reason && SWITCH_WAIT_REASONS.has(receipt.reason));
+  const heldSwitchHint = heldSwitchReceipt?.reason ? t(humanReceiptReasonKey(heldSwitchReceipt.reason)!) : null;
   const unownedRuntimeReceipts = displayedRuntimeReceipts.filter((receipt) => !rowOwnedKeys.has(receipt.idempotencyKey));
 
   const editRuntimeReceipt = (receipt: RuntimeReceipt) => {
@@ -5457,10 +5464,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       {/* Proactive hold hint: while the card is switching accounts, the next
           send is queued for the successor rather than delivered live. Shown
           identically under the desktop and mobile composers. */}
-      {holdsSends ? (
+      {heldSwitchHint || holdsSends ? (
         <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-control border border-warning/45 bg-warning-soft px-2 py-1 text-label font-semibold text-warning">
           <ArrowUpToLine className="h-3 w-3 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">{t("migrate.heldSend")}</span>
+          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">{heldSwitchHint ?? t("migrate.heldSend")}</span>
         </div>
       ) : null}
       {pipComposerSlot

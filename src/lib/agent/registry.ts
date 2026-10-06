@@ -1519,6 +1519,7 @@ function rearmRolledBackMigrationDeliveries(
       continue;
     }
     delivery.state = "assigned";
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;

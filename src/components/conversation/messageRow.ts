@@ -234,7 +234,7 @@ export function transportLine(
   if (entry.deliveryReceipt?.reason && SWITCH_WAIT_REASONS.has(entry.deliveryReceipt.reason)
     && (entry.state === "delivering" || entry.state === "queued")) {
     return {
-      label: switchHold?.label
+      label: switchHold?.label && entry.deliveryReceipt.reason !== "switch-failed"
         ? t("outbox.heldForSwitch", { label: switchHold.label })
         : t(humanReceiptReasonKey(entry.deliveryReceipt.reason)!),
       wait: null,

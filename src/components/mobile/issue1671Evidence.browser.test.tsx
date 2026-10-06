@@ -8178,3 +8178,52 @@ describe("long conversation scroll", () => {
     }
   }, 120_000);
 });
+
+
+describe("account-switch message receipts", () => {
+  browserTest("switch explanations wrap at phone and desktop widths in both languages", async () => {
+    const out = path.resolve(".artifacts/account-switch-receipts"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [390, 1280]) {
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "?switch-receipts=1",
+          { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator("[data-receipt-switch-reason]").first().waitFor();
+          const rows = page.locator("[data-switch-receipt-row]");
+          expect(await rows.count()).toBe(6);
+          const geometry = [];
+          for (let n = 0; n < 6; n++) {
+            const row = rows.nth(n);
+            const reason = await row.getAttribute("data-switch-receipt-row");
+            const key = reason === "switch-after-turn" ? "receipt.human.switchAfterTurn"
+              : reason === "switch-failed" ? "receipt.human.switchFailed" : "receipt.human.switchingAccounts";
+            expect(await row.locator("[data-receipt-switch-reason]").innerText()).toBe(translate(locale, key));
+            expect(await row.locator("[data-receipt-status]").innerText()).toBe(translate(locale, "runtime.receipt.queued"));
+            expect(await row.locator("[data-receipt-uncertain-retry]").count()).toBe(0);
+            const box = await row.evaluate(el => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+              panelWidth: el.getAttribute("data-panel-width"), reason: el.getAttribute("data-switch-receipt-row") }));
+            expect(box.scrollWidth).toBe(box.clientWidth);
+            geometry.push(box);
+          }
+          const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+          expect(pageWidth).toBe(width);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, locale + "-" + width + ".png") });
+          evidence.push({ locale, width, pageWidth, rows: geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/account-switch-receipts", { recursive: true });
+      fs.writeFileSync("evidence/account-switch-receipts/geometry.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally {
+      await browser.close(); await launched.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true }));
+    }
+  }, 90000);
+});

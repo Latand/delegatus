@@ -4,9 +4,14 @@ import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration, drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { MigrationTargetUnavailableError } from "@/lib/accounts/migration/safeHistoryCopy";
+import { registerAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { runtimeReceiptForSend, sendReceiptFor } from "./sendSettlement";
+import { translate } from "@/lib/i18n";
+import { messageRowModel } from "@/components/conversation/messageRow";
+import type { OutboxEntry } from "@/components/conversation/outbox";
 import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 import { setBoardFileForTests } from "@/lib/board/store";
@@ -346,52 +351,71 @@ test("a send to an idle host is answered at once and the switch's owner carries 
   const { registry, conversation, sourceKey, sourcePath, successorPath, releasedKeys, reconfigure, hostTurn } = await switchRequestedMidTurn();
   hostTurn(null);
   const commands: string[] = [];
-  let migrationTicks = 0;
-  let drain: Promise<unknown> | null = null;
-  const client = {
-    snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
-    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(registry.conversation(conversation.id)!, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
-    command: async (command: { text: string }) => { commands.push(command.text); throw new Error("the send must not reach a host from its request"); },
-  } as unknown as RuntimeHostClient;
-
-  const result = await enqueueStructuredMessage({
-    path: sourcePath,
-    conversationId: conversation.id,
-    clientMessageId: "send-during-switch",
-    text: "continue on the other account",
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-    requestMigrationTick: () => { migrationTicks += 1; },
-    /* What the structured queue's drain does when the send kicks it; the
-       request answers without waiting for it (2026-10-06). */
-    kick: () => { drain = reconfigure(); return drain; },
-  });
-
-  expect(result).toMatchObject({ ok: true, outcome: "held", target: conversation.id });
-  expect(migrationTicks).toBeGreaterThan(0);
-  expect(drain).not.toBeNull();
-  await drain;
-  const switched = registry.conversation(conversation.id)!;
-  expect(switched.migration?.phase).toBe("committed");
-  expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
-  /* One executor still owned the transition, so the predecessor is gone. */
-  expect(releasedKeys).toEqual([sourceKey]);
-  expect(terminatedSource(registry, sourceKey)).toMatchObject({ status: "dead", structuredHost: null });
-  expect(commands).toEqual([]);
-
   const delivered: string[] = [];
-  const port = { async deliver(input: { path: string; clientMessageId: string }) { delivered.push(`${input.path}:${input.clientMessageId}`); return "delivered" as const; } };
-  await drainHeldDeliveries(conversation.id, port, registry);
-  await drainHeldDeliveries(conversation.id, port, registry);
-  expect(delivered).toEqual([`${successorPath}:send-during-switch`]);
-  expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
-    clientMessageId: "send-during-switch",
-    state: "delivered",
-    generationId: "successor-native",
-    attempts: 1,
-  }]);
+  const port = { async deliver(input: { path: string; clientMessageId: string }) { delivered.push(input.path + ":" + input.clientMessageId); return "delivered" as const; } };
+  const ticks: Promise<void>[] = [];
+  const tick = () => { const work = reconcileMigrations(provider, port, registry, { deferBoardRepair: true }); ticks.push(work); return work; };
+  let allowCreate!: () => void;
+  const creating = new Promise<void>(resolve => { allowCreate = resolve; });
+  const ordinaryProvider = successorProvider(successorPath);
+  const provider: SuccessorProviderPort = { ...ordinaryProvider, async create(input) {
+    await creating;
+    return ordinaryProvider.create(input);
+  } };
+  const unregister = registerAccountMigrationTick(tick);
+  let drain: Promise<unknown> | null = null;
+  try {
+    const client = {
+      snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
+      readSession: async (identity: { conversationId?: string }) => structuredSnapshot(registry.conversation(conversation.id)!, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
+      command: async (command: { text: string }) => { commands.push(command.text); throw new Error("the send must not reach a host from its request"); },
+    } as unknown as RuntimeHostClient;
+
+    const result = await enqueueStructuredMessage({
+      path: sourcePath,
+      conversationId: conversation.id,
+      clientMessageId: "send-during-switch",
+      text: "continue on the other account",
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      requestMigrationTick: () => { void tick(); },
+      /* What the structured queue's drain does when the send kicks it; the
+         request answers without waiting for it (2026-10-06). */
+      kick: () => { drain = reconfigure(provider); return drain; },
+    });
+
+    expect(result).toMatchObject({ ok: true, outcome: "held", target: conversation.id });
+    expect(ticks).toHaveLength(1);
+    await ticks[0];
+    expect(delivered).toEqual([]);
+    allowCreate();
+    expect(drain).not.toBeNull();
+    await drain;
+    const switched = registry.conversation(conversation.id)!;
+    expect(switched.migration?.phase).toBe("committed");
+    expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+    /* One executor still owned the transition, so the predecessor is gone. */
+    expect(releasedKeys).toEqual([sourceKey]);
+    expect(terminatedSource(registry, sourceKey)).toMatchObject({ status: "dead", structuredHost: null });
+    expect(commands).toEqual([]);
+
+    await Promise.resolve();
+    expect(ticks).toHaveLength(2);
+    await ticks[1];
+    expect(delivered).toEqual([`${successorPath}:send-during-switch`]);
+    expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
+      clientMessageId: "send-during-switch",
+      state: "delivered",
+      generationId: "successor-native",
+      attempts: 1,
+    }]);
+  } finally {
+    allowCreate();
+    await drain;
+    unregister();
+  }
 });
 
 test("an image send during a switch is held durably, never rejected", async () => {
@@ -501,4 +525,29 @@ test("a switch that cannot execute surfaces an actionable failure instead of sta
     errorCode: "target-account-unavailable",
     error: "target account is not signed in; sign it in or switch to another account",
   });
+});
+
+test("held receipts follow a failed switch, retry and rollback in both languages", async () => {
+  const { registry, conversation, hostTurn } = await switchWithoutOwner();
+  const held = registry.holdDelivery(conversation.id, "keep this message", "failed-switch-send");
+  hostTurn(null);
+  const unavailable: SuccessorProviderPort = {
+    async create() { throw new MigrationTargetUnavailableError("not-authenticated", "target account requires authentication"); },
+    async verify() {},
+  };
+  await advanceConversationMigration(conversation.id, registry, unavailable, { deferBoardRepair: true });
+  const receipt = () => sendReceiptFor(registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId);
+  expect(registry.conversation(conversation.id)?.migration?.phase).toBe("failed-recoverable");
+  expect(receipt()).toMatchObject({ state: "in-flight", reason: "switch-failed" });
+  for (const locale of ["en", "uk"] as const) {
+    const entry: OutboxEntry = { id: held.clientMessageId!, text: held.text, images: 0, at: Date.now(),
+      state: "delivering", deliveryReceipt: { ...runtimeReceiptForSend(receipt()!), revision: 1 } };
+    const row = messageRowModel((key, vars) => translate(locale, key, vars), entry);
+    expect(row.transport).toBe(translate(locale, "receipt.human.switchFailed"));
+  }
+  registry.retryConversationMigration(conversation.id);
+  expect(receipt()).toMatchObject({ state: "in-flight", reason: "switch-after-turn" });
+  registry.rollbackConversationMigration(conversation.id);
+  expect(registry.deliverySnapshotForOperation(held.command.operationId)!.heldDeliveries[held.id]).toMatchObject({ state: "assigned", waitReason: null });
+  expect(receipt()!.reason).not.toBe("switching-accounts");
 });
