@@ -57,7 +57,7 @@ test("a terminal record survives for investigation and is pruned after the reten
   expect(store.get("operation-done")?.waitReason).toBe("dispatching");
   store.flush();
   now += DELIVERY_PROGRESS_TERMINAL_RETENTION_MS - 60_000;
-  store.note("operation-other", "conversation-a", { waitReason: "admitted" });
+  store.note("operation-other", "conversation-a", { waitReason: "awaiting-turn" });
   store.flush();
   expect(readDeliveryProgress(["operation-done"], filename).size).toBe(1);
   now += 11 * 60_000;
@@ -71,7 +71,7 @@ test("a terminal record survives for investigation and is pruned after the reten
 test("a busy file keeps the records owed and returns at once", () => {
   const filename = path.join(root, "busy.sqlite");
   const store = new DeliveryProgressStore(filename, Date.now, noTimer);
-  store.note("operation-first", "conversation-a", { waitReason: "admitted" });
+  store.note("operation-first", "conversation-a", { waitReason: "awaiting-turn" });
   expect(store.flush()).toBe(true);
   const holder = new Database(filename);
   holder.exec("BEGIN IMMEDIATE");

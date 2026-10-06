@@ -9,8 +9,6 @@
  * turn are told apart by one field.
  */
 export const DELIVERY_WAIT_REASONS = [
-  /** Accepted; no drain pass has looked at it yet. */
-  "admitted",
   /** No drain pass reached it when one was due; the watchdog started one. */
   "wake-lost",
   /** An earlier delivery step on the same conversation is still running. */

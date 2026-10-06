@@ -3220,7 +3220,6 @@ export const en = {
   "runtime.receipt.waitedHour": "{n} h",
   /* Incident 2026-10-06: what the delivery queue recorded a held message is
      waiting on, its attempt and its next check (src/lib/runtime/deliveryWaitReason.ts). */
-  "delivery.wait.admitted": "accepted, waiting for the delivery queue",
   "delivery.wait.wake-lost": "the queue missed its wake; a fresh pass is on it",
   "delivery.wait.conversation-busy": "waiting behind an earlier step in this conversation",
   "delivery.wait.awaiting-turn": "waiting for the agent to finish its turn",
