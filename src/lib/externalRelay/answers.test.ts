@@ -7,6 +7,7 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const {
   answerRecorder,
+  countMemberAnswers,
   listAnswerRecords,
   pruneAnswerRecords,
   readAnswerRecord,
@@ -84,4 +85,31 @@ test("ids that cannot name a file read nothing and record nothing", () => {
   finished("b_rq");
   finished("a_b_rq");
   expect(readAnswerRecord("relay", "target", "b_rq")?.requestId).toBe("b_rq");
+});
+
+test("member counts include every admission and exclude runs made as admin or owner", () => {
+  const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
+  const chatKey = "chat_key_aaaaaaaaaaaa";
+  for (const row of [
+    { id: "reply", outcome: "answered" },
+    { id: "handoff", outcome: "declined:handoff" },
+    { id: "failed", outcome: "failed:agent_error" },
+    { id: "running", outcome: null },
+    { id: "admin", outcome: "answered", requester: { ...requester, is_admin: true } },
+    { id: "owner", outcome: "answered", requester: { ...requester, is_owner: true } },
+    { id: "unadmitted", outcome: "declined:member_limit", admitted: false },
+    { id: "other_key", outcome: "answered", requester: { ...requester, key: "u_other" } },
+    { id: "other_chat", outcome: "answered", chatKey: "chat_key_bbbbbbbbbbbb" },
+  ]) {
+    const record = answerRecorder({ requestId: row.id, relayId: "relay", targetId: "counts", targetName: null, claimedAt: null, requester: row.requester ?? requester, chatKey: row.chatKey ?? chatKey, input: {} })!;
+    if (row.admitted !== false) record.begin("codex", "test", { webSearch: true });
+    if (row.outcome) record.finish({ outcome: row.outcome, answer: null, delivery: "accepted" });
+  }
+  const scope = { relayId: "relay", targetId: "counts", chatKey, requesterKey: requester.key, sinceMs: Date.now() - 3600000 };
+  expect(countMemberAnswers(scope).count).toBe(4);
+  expect(countMemberAnswers(scope).oldestMs).not.toBeNull();
+  expect(countMemberAnswers({ ...scope, requesterKey: "u_other" }).count).toBe(1);
+  expect(countMemberAnswers({ ...scope, chatKey: "chat_key_bbbbbbbbbbbb" }).count).toBe(1);
+  expect(countMemberAnswers({ ...scope, targetId: "other" }).count).toBe(0);
+  expect(countMemberAnswers({ ...scope, sinceMs: Date.now() + 1 }).count).toBe(0);
 });

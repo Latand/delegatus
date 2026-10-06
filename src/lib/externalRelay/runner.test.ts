@@ -833,7 +833,13 @@ test("the member limit declines a member past it, per chat, and never counts the
     expect(await ask(8, member, undefined, { memberLimitPerHour: 0 })).toMatchObject({ outcome: "answered" });
     expect(await ask(9, member, undefined, { memberLimitPerHour: null })).toMatchObject({ outcome: "answered" });
     expect(await ask(10, null)).toMatchObject({ outcome: "answered" });
-    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(1);
+    // A former admin or owner starts their member count with their first member run.
+    const roleChangeChat = "chat_key_changedaaaaa";
+    expect(await ask(11, { ...member, is_admin: true }, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(12, { ...member, is_owner: true }, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(13, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(14, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(2);
   } finally {
     await server.close();
   }

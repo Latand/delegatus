@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import type { ExternalRelayRequester } from "./protocol";
-import type { RelayAnswerProfile } from "./profile";
+import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
 
 /**
  * One read-only record per relayed request this install claimed (relay.md
@@ -284,7 +284,13 @@ export function countMemberAnswers(scope: {
     // Newest first: the rest started before the window.
     if (started < scope.sinceMs) break;
     const record = readRecord(file);
-    if (!record?.admitted || record.requester?.key !== scope.requesterKey || (record.chatKey ?? null) !== scope.chatKey) continue;
+    if (
+      !record?.admitted ||
+      !record.requester ||
+      record.requester.key !== scope.requesterKey ||
+      exemptFromMemberLimit(record.requester) ||
+      (record.chatKey ?? null) !== scope.chatKey
+    ) continue;
     count += 1;
     oldestMs = started;
   }

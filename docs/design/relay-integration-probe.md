@@ -166,7 +166,7 @@ The slice 0 transport result above still stands.
    the service alone enforces authority. The service's index already incorporates
    all relevant requester and owner restrictions.
 2. **Separate context from executable reads.** Use exactly `requester_context`
-   in descriptor/claim features for slice 1. Reserve independent `direct_reads`
+   in descriptor/claim features for slice 1. Reserve independent `relay_tool_calls`
    for slice 2. Send enriched role/tool fields only after the context capability
    is advertised both at enqueue and in the claim that takes the request;
    a tool gets `direct` only when the install also negotiated
