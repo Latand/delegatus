@@ -18,10 +18,10 @@ drawn as it was.
 | Phone: the task's ⋯ | variant 1 | `src/components/mobile/MobileTaskScreen.tsx` |
 | A pipeline's and a stage's menu | as they were | `compactLayout` returns `null` for them, held by a test |
 | The header's ⋯ | as it was | pending its own design (icons, grouping, names) |
+| Phone: a conversation's menu | variant 1 | `src/components/mobile/MobileConversationMenu.tsx`, its sections drawn by `MobileSheetFold` |
 | Phone: the board menu | as it was | it holds the header's entries, so it follows the header's design |
-| Phone: a conversation's menu | as it was | not built in this change; variant 1 below is still its design |
 
-Four things differ from variant 1 as it was drawn, each to close a note the
+Five things differ from variant 1 as it was drawn, each to close a note a
 critic left open on it:
 
 - **A section always opens under its own row.** A menu with no room below its
@@ -40,16 +40,26 @@ critic left open on it:
   row.
 - **On the phone the cells stand at one inset from both edges** of the sheet,
   and the line about Hide is under them there too.
+- **The refused Hide fits with its whole reason.** The card that holds the
+  orchestrator's conversation says why it stays on the board on two lines
+  under the cells. So that Appearance still opens inside 360 px there, the
+  rows of a section opened in place are 28 px, as a page's are, and a swatch
+  is a 22 px circle; it used to be drawn as tall as a row.
 
-The two lines of words make the card's menu 300×280 at rest and 300×356 at its
-tallest (Appearance open), against 300×257 and 300×341 as drawn; the separator
-between the cells and the priority row was taken out to stay inside 360 px.
-A pipeline's page is 300×290–342. The board's ⋯ rests at 256×192 against
-256×491, and its two pages are 256×218 and 256×238. On the phone the card's
-sheet is 390×376 against 390×445 and the task's ⋯ is 390×270 against 390×401.
-The built measurements are in `evidence/compact-card-menu/built.json`: 228
-states, with 166 section openings on 32 cards at each desktop size that moved
-nothing and covered no ⋯, and 92 double clicks that sent no write.
+The two lines of words make the card's menu 300×280 at rest, against 300×257
+as drawn; the separator between the cells and the priority row was taken out
+to stay inside 360 px. With Appearance open it is 300×342 and with More open
+300×340. On the card that holds the orchestrator's conversation, where the
+reason takes a second line, it is 300×293 at rest and 300×355 at its tallest
+(Appearance open). A pipeline's page is 300×290–342. The board's ⋯ rests at
+256×192 against 256×491, and its two pages are 256×218 and 256×238. On the
+phone the card's sheet is 390×376 against 390×445, the task's ⋯ is 390×270
+against 390×401, and a conversation's menu rests at 390×372 against 390×706:
+390×460 with "This turn" or "Close or stop" open and 390×636 with
+"Conversation" open. The built measurements are in
+`evidence/compact-card-menu/built.json`: 272 states, with 166 section openings
+on 32 cards at each desktop size that moved nothing and covered no ⋯, and 92
+double clicks that sent no write.
 
 ## The request
 
@@ -322,7 +332,13 @@ In a conversation's ⋯, variant 1 keeps Full pane, Copy link and To task as
 icon cells and draws "Remove from the board" as a full row with its
 explanation: as a fourth cell with a cross it sat under the pane's own close
 button and read as it. On the phone, "Interrupt the current turn" stays at
-rest in every variant; "This turn" holds only Compact and Recheck.
+rest in every variant; "This turn" holds only Compact and Recheck. As built,
+the rows at rest keep the order they had (the pinned message, the background
+tasks, the seat, the pipeline, what needs the operator, Reports, Interrupt),
+"Conversation" holds Rename, Crown, Hand off, the earlier round, Details and
+host, Open in terminal and the project's menu, "Close or stop" holds Close
+card and Stop host, and a conversation's subagents are one more row that opens
+in place and says how many it holds.
 
 Removed by name in the family:
 
@@ -407,12 +423,15 @@ priority row are missing or cut; when the phone's cells stand at different
 insets; when a double click on a row that opens a page, or on a back row,
 sends a write or lands on another row; when a state leaves the window or cuts
 a label; when an entry of the old card or conversation menu is not in the
-built one; and when the header's ⋯, the phone's board menu or the phone's
-conversation menu measures differently from before.
+built one; when the card that holds the orchestrator's conversation does not
+say in full why its Hide is refused, or any state of its menu is over 300×360
+or scrolls; when a state of the phone's conversation menu is taller than the
+sheet was, scrolls, cuts a label, hides Interrupt behind a section or loses a
+row the sheet had; and when the header's ⋯ or the phone's board menu measures
+differently from before.
 
 `compactMenuModel.test.ts` holds that the layout loses no entry, that the
 resting list does not grow with the number of pipelines, and that no placement
 puts the tallest state over the button or outside the window, for a button
-anywhere in either desktop window. `compactMenu.test.tsx` reads the states the
-fixture cannot reach, such as the refused Hide on the card that holds the
-orchestrator's conversation.
+anywhere in either desktop window. `compactMenu.test.tsx` reads the first
+render as markup: the line under the cells, the keys, the arrows.

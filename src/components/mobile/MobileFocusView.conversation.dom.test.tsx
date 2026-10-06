@@ -528,6 +528,9 @@ test("Hand off is a labelled row in the menu, between Crown and Compact context"
   const more = dom.document.querySelector('[data-mobile2-open="menu"]') as unknown as HTMLButtonElement;
   flushSync(() => more.click());
   await settle();
+  /* The identity group is behind «Conversation», which opens in place. */
+  expect(dom.document.querySelector('[data-mobile2-menu-row="handoff"]')).toBeNull();
+  flushSync(() => (dom.document.querySelector('[data-mobile2-menu-section="manage"]') as unknown as HTMLButtonElement).click());
   /* §4.2's order for the identity group: Rename · Crown · Hand off, then the
      host rows. Crown needs a favorites host this mount has none of, so the
      row it follows here is Rename. The control the phone used to reach only

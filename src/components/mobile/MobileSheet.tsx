@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import { useModalLayer } from "@/components/modalLayer";
@@ -195,6 +195,37 @@ export function MobileSheetCell({ icon, caption, label, onSelect, attrs }: {
       <span aria-hidden className="flex shrink-0 items-center justify-center text-secondary">{icon}</span>
       <span className="max-w-full truncate">{caption}</span>
     </button>
+  );
+}
+
+/** A named row that opens its rows in place, under itself
+    (docs/design/compact-card-menu.md): the arrow points down while it is
+    closed and up once the rows are there, and the rows hang from one rule. */
+export function MobileSheetFold({ id, title, value, open, onToggle, children }: {
+  id: string;
+  title: string;
+  /** What the closed row holds, at its end (a count). */
+  value?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const Arrow = open ? ChevronUp : ChevronDown;
+  return (
+    <div role="none">
+      <button
+        type="button"
+        aria-expanded={open}
+        data-mobile2-menu-section={id}
+        onClick={onToggle}
+        className="flex min-h-11 w-full items-center gap-3 px-4 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      >
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {value === undefined ? null : <span className="shrink-0 text-label font-medium tabular-nums text-muted">{value}</span>}
+        <Arrow className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+      </button>
+      {open ? <div role="group" aria-label={title} data-mobile2-menu-body={id} className="ml-4 flex flex-col border-l border-border">{children}</div> : null}
+    </div>
   );
 }
 

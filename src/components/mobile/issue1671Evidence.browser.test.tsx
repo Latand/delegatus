@@ -817,6 +817,7 @@ describe("close-card receipt Reopen", () => {
           await page.locator('[data-testid="mobile-chat-shell"]').waitFor();
           const beforeWrites = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations.length);
           await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-menu-section="end"]').click();
           await page.locator('[data-mobile2-menu-row="close"]').click();
           await page.waitForFunction((path) => {
             const e = (window as unknown as { evidence: { boardSnapshot(): { prefs: { hidden: string[] } }; boardMutations: Array<{ kind: string; path?: string }> } }).evidence;
@@ -3904,6 +3905,7 @@ browserTest("#2105: Back and the phone's screen history follow the path the oper
       await step("conversation", () => page.locator("[data-phone-task-agent] button").first().click(), { screen: "chat", id: agent, sheet: null });
       await step("menu", () => page.locator('[data-mobile2-open="menu"]').first().click(), { screen: "chat", id: agent, sheet: "menu" });
       const length = await page.evaluate(() => history.length);
+      await page.locator('[data-mobile2-menu-section="manage"]').click();
       const round = await page.locator('[data-mobile2-menu-row="predecessor"]').getAttribute("data-continues-conversation");
       await step("round-before", () => page.locator('[data-mobile2-menu-row="predecessor"]').click(), { screen: "chat", id: round ?? undefined, sheet: null });
       const after = await page.evaluate(() => history.length);

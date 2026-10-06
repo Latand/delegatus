@@ -18004,18 +18004,20 @@ describe("compact card menu and overflow menus: today and built", () => {
    * The board's compact menus (docs/design/compact-card-menu.md), opened on the
    * real Viewer over this fixture: the card's ⋯ at rest and with each section
    * opened, from a card at the bottom and at the right edge of the window, on
-   * a waiting card and on a card holding five pipelines; a column's ⋯, a
-   * conversation's ⋯, the board's ⋯ and the rail header's ⋯; on the phone the
-   * card's long-press sheet, the task's ⋯, the board menu and a conversation's
-   * menu. Desktop at 1440×900 and 1000×700, the phone at 390×844, light and
-   * dark, en and uk.
+   * a waiting card, on a card holding five pipelines and on the card that
+   * holds the orchestrator's conversation, whose Hide is refused in words; a
+   * column's ⋯, a conversation's ⋯, the board's ⋯ and the rail header's ⋯; on
+   * the phone the card's long-press sheet, the task's ⋯, the board menu and a
+   * conversation's menu at rest and with each section opened. Desktop at
+   * 1440×900 and 1000×700, the phone at 390×844, light and dark, en and uk.
    *
    * Each state reports its box, whether it scrolls, whether it stays inside
    * the window and every label it had to cut. The run fails when any state of
    * a card's menu is wider than 300 px, taller than 360 px or scrolls; when
    * any state of a column's, a conversation's or the board's menu is taller
-   * than 360 px or scrolls; when the card's sheet or the task's menu on the
-   * phone is taller than it was or scrolls; when opening a section moves the
+   * than 360 px or scrolls; when the card's sheet, the task's menu or any
+   * state of a conversation's menu on the phone is taller than the sheet was
+   * or scrolls; when opening a section moves the
    * row that was pressed or the top edge of the menu, or when any state covers
    * the menu's own button (both read on every card of the fixture, where it
    * stands and at the bottom of the window); when the rows of a section opened
@@ -18036,7 +18038,8 @@ describe("compact card menu and overflow menus: today and built", () => {
    * Frames and sheets go to `LLV_COMPACT_MENUS_OUT` (default
    * `.artifacts/compact-menus/`, never committed); the built measurements to
    * `evidence/compact-card-menu/built.json`. `LLV_COMPACT_MENUS_FRAMES=390`,
-   * `..._LANGS=uk` and `..._SCHEMES=light` narrow a run, and a narrowed run
+   * `..._LANGS=uk`, `..._SCHEMES=light` and `..._STEPS=seat` (frames,
+   * stretched, seat, act, steady, doubled) narrow a run, and a narrowed run
    * writes no evidence.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_COMPACT_MENUS_OUT=… \
@@ -18051,7 +18054,9 @@ describe("compact card menu and overflow menus: today and built", () => {
   const ONLY_FRAMES = pick("LLV_COMPACT_MENUS_FRAMES");
   const ONLY_LANGS = pick("LLV_COMPACT_MENUS_LANGS");
   const ONLY_SCHEMES = pick("LLV_COMPACT_MENUS_SCHEMES");
-  const NARROWED = Boolean(ONLY_FRAMES || ONLY_LANGS || ONLY_SCHEMES);
+  const ONLY_STEPS = pick("LLV_COMPACT_MENUS_STEPS");
+  const runs = (step: string) => !ONLY_STEPS || ONLY_STEPS.includes(step);
+  const NARROWED = Boolean(ONLY_FRAMES || ONLY_LANGS || ONLY_SCHEMES || ONLY_STEPS);
   const NAMES: Record<Side, string> = { today: "TODAY", built: "BUILT · quick row, segments, sections" };
   const FILL: Record<Side, string> = { today: "#3a3a3a", built: "#1f4fb5" };
   const FRAMES = ([
@@ -18089,22 +18094,22 @@ describe("compact card menu and overflow menus: today and built", () => {
     const shown = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden" && !element.closest(".cm-probe"); };
     const scrolls = [surface, ...surface.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY));
     const controls = [...surface.querySelectorAll<HTMLElement>('button, a[href], [role^="menuitem"], [role="switch"]')].filter(shown);
-    const clipped = [...surface.querySelectorAll<HTMLElement>(".cm-cap, .cm-val, .cm-title, .cm-ends, .lbl, [data-bar-menu-head] > span, [data-phone-task-menu-cells] button > span:last-child, [data-phone-card-cells] button > span:last-child")].filter(shown)
+    const clipped = [...surface.querySelectorAll<HTMLElement>(".cm-cap, .cm-val, .cm-title, .cm-ends, .lbl, [data-bar-menu-head] > span, [data-phone-task-menu-cells] button > span:last-child, [data-phone-card-cells] button > span:last-child, [data-mobile2-chat-menu] button > span")].filter(shown)
       .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim().slice(0, 40));
     const label = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.getAttribute("aria-label") ?? element.textContent ?? "").trim();
     /* A row that opens a page carries the arrow to the right. A row that opens
        in place points down while it is closed and up once its rows are there,
        and those rows are under it. */
-    const grammar = [...surface.querySelectorAll<HTMLElement>("[data-cm-opens], [data-bar-menu-opens]")].filter(shown).flatMap((row) => {
+    const grammar = [...surface.querySelectorAll<HTMLElement>("[data-cm-opens], [data-bar-menu-opens], [data-mobile2-menu-section]")].filter(shown).flatMap((row) => {
       const name = label(row).slice(0, 40);
-      const id = row.dataset.cmSection ?? row.dataset.barMenuHead ?? "";
+      const id = row.dataset.cmSection ?? row.dataset.barMenuHead ?? row.dataset.mobile2MenuSection ?? "";
       const pages = row.dataset.cmOpens === "drill" || row.dataset.barMenuOpens === "page";
       const has = (direction: string) => Boolean(row.querySelector(`:scope > svg.lucide-chevron-${direction}`));
       if (pages) return has("right") && !has("down") && !has("up") ? [] : [`${name}: opens a page without the arrow to the right`];
       const open = row.getAttribute("aria-expanded") === "true";
       const said: string[] = [];
       if (has("right") || has(open ? "down" : "up") || !has(open ? "up" : "down")) said.push(`${name}: ${open ? "open" : "closed"} with the wrong arrow`);
-      const body = surface.querySelector<HTMLElement>(`[data-cm-body="${CSS.escape(id)}"], [data-bar-menu-body="${CSS.escape(id)}"]`);
+      const body = surface.querySelector<HTMLElement>(`[data-cm-body="${CSS.escape(id)}"], [data-bar-menu-body="${CSS.escape(id)}"], [data-mobile2-menu-body="${CSS.escape(id)}"]`);
       const drawn = Boolean(body && shown(body));
       if (open !== drawn) said.push(`${name}: ${open ? "open with no rows" : "closed with rows drawn"}`);
       if (open && body && body.getBoundingClientRect().top < row.getBoundingClientRect().bottom - 0.5) said.push(`${name}: its rows are not under it`);
@@ -18119,7 +18124,7 @@ describe("compact card menu and overflow menus: today and built", () => {
       controls: controls.length,
       clipped,
       labels: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([data-cm-section]):not([data-cm-back])')].filter(shown).map(label),
-      items: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"], .head, .swatches, [data-phone-card-action], [data-phone-task-menu], [data-mobile2-menu-row], [data-bar-menu-head], [data-bar-menu-back]')].filter(shown)
+      items: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"], .head, .swatches, [data-phone-card-action], [data-phone-task-menu], [data-mobile2-menu-row], [data-mobile2-menu-section], [data-bar-menu-head], [data-bar-menu-back]')].filter(shown)
         .filter((element) => !element.closest(".swatches") || element.classList.contains("swatches"))
         .map((element): [string, number, number] => [element.classList.contains("swatches") ? "(swatches)" : label(element).slice(0, 60), round(element.getBoundingClientRect().width), round(element.getBoundingClientRect().height)]),
     };
@@ -18171,7 +18176,7 @@ describe("compact card menu and overflow menus: today and built", () => {
       fs.writeFileSync(path.join(OUT, file), await frameWithStrip(await page.screenshot(), where.frame.width, text));
       const entry: Reading = { side: SIDE, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state, ...measured, ...(stands ? { stands } : {}), file };
       readings.push(entry);
-      if (BUILT && surface !== "header" && surface !== "phone-board" && surface !== "phone-conversation") {
+      if (BUILT && surface !== "header" && surface !== "phone-board") {
         if (!reading.inside) failures.push(`${keyOf(where)} ${surface} ${state}: leaves the window ${JSON.stringify(reading.box)}`);
         if (reading.clipped.length) failures.push(`${keyOf(where)} ${surface} ${state}: cut labels ${JSON.stringify(reading.clipped)}`);
         if (grammar.length) failures.push(`${keyOf(where)} ${surface} ${state}: ${grammar.join("; ")}`);
@@ -18482,6 +18487,51 @@ describe("compact card menu and overflow menus: today and built", () => {
       for (const [name, ok] of Object.entries(done)) if (!ok) failures.push(`${keyOf(where)}: «${name}» through the menu did not reach the board`);
     }
 
+    /** The card that holds the orchestrator's conversation: its Hide is refused, and the reason is two lines under the cells. Every state of its menu, at both sizes, in both languages and schemes. */
+    async function seated() {
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const scheme of SCHEMES) for (const lang of LANGS) {
+        const where: Where = { frame, scheme, lang };
+        await alive();
+        const { context, page } = await openFixture(browser, url(), frame, scheme, lang, "reduce");
+        try {
+          await settleBoard(page);
+          /* The card with one pipeline takes the seat's conversation, as the board's own server would hand it over. */
+          await page.evaluate(async () => {
+            const { seat } = await (await fetch("/api/orchestrator/seat")).json() as { seat: { conversationId: string; path: string } };
+            const stored = (window as unknown as { evidence: { storedTask(id: string): { assignments: unknown[] } | null } }).evidence.storedTask("t-links");
+            stored?.assignments.push({ path: seat.path, conversationId: seat.conversationId, panePid: null, state: "delivered", error: null, at: new Date().toISOString() });
+            window.dispatchEvent(new Event("llv:tasks-changed"));
+          });
+          await page.waitForSelector(`${card("t-links")} [data-lock]`, { timeout: 15_000 });
+          await page.waitForTimeout(300);
+          await openCardMenu(page, "t-links");
+          const rest = await capture(page, where, MENU, "card-seat", "rest");
+          if (BUILT) {
+            const hide = await page.evaluate(() => {
+              const menu = document.querySelector<HTMLElement>(".kb .menu");
+              const note = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-note="hide"]');
+              const cell = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-item="hide"]');
+              if (!menu || !note || !cell) return null;
+              const box = note.getBoundingClientRect();
+              const frame = menu.getBoundingClientRect();
+              return { text: (note.textContent ?? "").trim(), whole: box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.top >= frame.top && box.bottom <= frame.bottom + 0.5 && note.scrollWidth <= note.clientWidth + 1, lines: Math.round(box.height / parseFloat(getComputedStyle(note).lineHeight)), refused: cell.getAttribute("aria-disabled") === "true" };
+            });
+            said[`${keyOf(where)} card-seat`] = { hide: hide?.text ?? null };
+            const wanted = `${translate(lang, "kanban.menu.cell.hide" as never)}: ${translate(lang, "kanban.seatProtected" as never)}`;
+            if (!hide || hide.text !== wanted || !hide.whole || !hide.refused) failures.push(`${keyOf(where)} card-seat rest: the refused Hide does not say why in full under the cells (${JSON.stringify(hide)})`);
+            bounded(where, [rest, ...await walk(page, where, "card-seat")]);
+          }
+          await closeMenu(page);
+        } catch (error) {
+          failures.push(`${keyOf(where)} card-seat: ${brief(error)}`);
+          fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+          await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}-card-seat.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
     /** Every state of the menu on the cards that stretch it: a waiting card with a pipeline and a card holding five pipelines. */
     async function stretched() {
       const cases = [["stages", "t-limits", "card-waiting"], ["work-links", "t-many", "card-many"]] as const;
@@ -18709,7 +18759,7 @@ describe("compact card menu and overflow menus: today and built", () => {
       {
         const { context, page, pageErrors } = await fresh();
         try {
-          /* A conversation's menu, which this change leaves as it was. */
+          /* A conversation's menu: at rest, then each of its sections opened in place. */
           await page.locator('[data-phone-kanban-tab="inbox"]').first().click();
           await page.waitForTimeout(300);
           await page.locator('[data-phone-card-kind="conversation"]').first().click();
@@ -18718,6 +18768,21 @@ describe("compact card menu and overflow menus: today and built", () => {
           await page.waitForSelector("[data-mobile2-chat-identity]", { timeout: 10_000 });
           await page.waitForTimeout(300);
           await capture(page, where, SHEET, "phone-conversation", "rest");
+          if (BUILT) {
+            /* Interrupt is urgent while the agent works: it is never behind a section. */
+            const atRest = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile2-chat-menu] [data-mobile2-menu-row]")].filter((row) => row.getBoundingClientRect().height > 0).map((row) => row.dataset.mobile2MenuRow!));
+            if (!atRest.includes("stop")) failures.push(`${keyOf(where)} phone-conversation rest: Interrupt is not at rest (${JSON.stringify(atRest)})`);
+            const sections = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile2-chat-menu] [data-mobile2-menu-section]")].map((row) => row.dataset.mobile2MenuSection!));
+            if (!sections.length) failures.push(`${keyOf(where)} phone-conversation rest: no section to open`);
+            for (const id of sections) {
+              const head = `${SHEET} [data-mobile2-menu-section="${id}"]`;
+              await jsClick(page, head);
+              await page.waitForTimeout(250);
+              await capture(page, where, SHEET, "phone-conversation", `open ${id}`);
+              await jsClick(page, head);
+              await page.waitForTimeout(150);
+            }
+          }
           if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
           failures.push(`${keyOf(where)} phone conversation: ${brief(error)}`);
@@ -18731,14 +18796,16 @@ describe("compact card menu and overflow menus: today and built", () => {
       for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
         const where: Where = { frame, scheme, lang };
         await alive();
+        if (!runs("frames")) continue;
         if (frame.phone) await phone(where); else await desktop(where);
       }
       await alive();
-      await stretched();
+      if (runs("stretched")) await stretched();
+      if (runs("seat")) await seated();
       if (BUILT) {
-        await act();
-        await steady();
-        await doubled();
+        if (runs("act")) await act();
+        if (runs("steady")) await steady();
+        if (runs("doubled")) await doubled();
       }
     } finally {
       await browser.close();
@@ -18754,17 +18821,19 @@ describe("compact card menu and overflow menus: today and built", () => {
 
     const same = (a: Pick<Reading, "frame" | "scheme" | "lang" | "surface">, b: Reading) => a.frame === b.frame && a.scheme === b.scheme && a.lang === b.lang && a.surface === b.surface;
     const was = (entry: Pick<Reading, "frame" | "scheme" | "lang" | "surface">, state = "rest") => before.find((other) => same(entry, other) && other.state === state) ?? null;
-    /* Every entry the card's and the conversation's menus showed is in the built ones. */
+    /* Every entry the card's and the conversation's menus showed is in the built ones, on the phone too. */
     const reach: Record<string, string[]> = {};
-    for (const base of before.filter((entry) => entry.state === "rest" && ["card", "conversation"].includes(entry.surface))) {
-      const have = new Set(readings.filter((entry) => same(base, entry)).flatMap((entry) => entry.labels));
+    for (const base of before.filter((entry) => entry.state === "rest" && ["card", "conversation", "phone-conversation"].includes(entry.surface))) {
+      /* A phone sheet's rows carry no menu role; they are read as drawn. */
+      const shown = (entry: Reading) => (entry.surface === "phone-conversation" ? entry.items.map(([label]) => label) : entry.labels);
+      const have = new Set(readings.filter((entry) => same(base, entry)).flatMap(shown));
       if (!have.size) continue;
-      const lost = base.labels.filter((label) => !have.has(label));
+      const lost = shown(base).filter((label) => !have.has(label));
       reach[`${base.frame}-${base.scheme}-${base.lang} ${base.surface}`] = lost;
       if (lost.length) failures.push(`${base.frame}-${base.scheme}-${base.lang} ${base.surface}: no longer reachable ${JSON.stringify(lost)}`);
     }
-    /* On the desktop no state is taller than 360 px or scrolls; on the phone the card's sheet and the task's menu are no taller than they were. What this change leaves alone measures as it did. */
-    const SHEET_WAS: Record<string, number> = { "phone-card": 445, "phone-task": 401 };
+    /* On the desktop no state is taller than 360 px or scrolls; on the phone no state of the card's sheet, the task's menu or a conversation's menu is taller than the sheet was. What this change leaves alone measures as it did. */
+    const SHEET_WAS: Record<string, number> = { "phone-card": 445, "phone-task": 401, "phone-conversation": 706 };
     for (const entry of readings) {
       const at = `${entry.frame}-${entry.scheme}-${entry.lang} ${entry.surface} ${entry.state}`;
       if (["column", "conversation", "board"].includes(entry.surface)) {
@@ -18775,7 +18844,7 @@ describe("compact card menu and overflow menus: today and built", () => {
         const height = was(entry)?.box[3] ?? SHEET_WAS[entry.surface]!;
         if (entry.box[3] > height + 0.5) failures.push(`${at}: ${entry.box[3]} px is taller than the ${height} it was`);
         if (entry.scrolls) failures.push(`${at}: scrolls`);
-      } else if (["header", "phone-board", "phone-conversation"].includes(entry.surface)) {
+      } else if (["header", "phone-board"].includes(entry.surface)) {
         const old = was(entry);
         if (old && (JSON.stringify(old.items) !== JSON.stringify(entry.items) || old.box[2] !== entry.box[2] || old.box[3] !== entry.box[3])) failures.push(`${at}: changed, and this change leaves it alone (${old.box[2]}×${old.box[3]} → ${entry.box[2]}×${entry.box[3]})`);
       }
@@ -18838,6 +18907,7 @@ describe("compact card menu and overflow menus: today and built", () => {
       { name: "The card's ⋯ · 1440×900 · uk · light: today, then built at rest and with each section open", tiles: [...await tiles([old("1440", "light", "uk", "card")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
       { name: "The same · 1440×900 · en · dark", tiles: [...await tiles([old("1440", "dark", "en", "card")], false, 0.5), ...await tiles(built("1440", "dark", "en", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
       { name: "A card holding five pipelines · 1440×900 · uk · light: at rest, the list, one pipeline", tiles: [...await tiles([old("1440", "light", "uk", "card-many")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card-many", ["rest", "open pipelines", "open pipelines, pipeline 1"]))] },
+      { name: "The card that holds the orchestrator's conversation · 1440×900 · uk · light, then 1000×700 · en · dark: why Hide is refused, at rest and with each section open", tiles: [...await tiles(built("1440", "light", "uk", "card-seat")), ...await tiles(built("1000", "dark", "en", "card-seat", ["rest", "open appearance"]))] },
       { name: "A card at the bottom of the window · 1000×700 · uk · light (whole frames): a section opens under its own row", tiles: [...await tiles([old("1000", "light", "uk", "card", "bottom card")], true, 0.45), ...await tiles(built("1000", "light", "uk", "card", ["bottom card", "bottom card, open appearance", "bottom card, open more"]), true, 0.45)] },
       { name: "A card at the right edge · 1440×900 · uk · light (whole frames)", tiles: [...await tiles([old("1440", "light", "uk", "card", "right-edge card")], true, 0.42), ...await tiles(built("1440", "light", "uk", "card", ["right-edge card", "right-edge card, open pipeline"]), true, 0.42)] },
     ]);
@@ -18845,6 +18915,8 @@ describe("compact card menu and overflow menus: today and built", () => {
       { name: "A column's ⋯ and a conversation's ⋯ · 1440×900 · uk · light", tiles: [...await tiles([old("1440", "light", "uk", "column", "assigned")]), ...await tiles(built("1440", "light", "uk", "column", ["assigned"])), ...await tiles([old("1440", "light", "uk", "conversation")]), ...await tiles(built("1440", "light", "uk", "conversation"))] },
       { name: "The board's ⋯ · 1440×900 · uk · light: today, then built at rest and with each section open", tiles: [...await tiles([old("1440", "light", "uk", "board")], false, 0.6), ...await tiles(built("1440", "light", "uk", "board"))] },
       { name: "Phone 390×844 · uk · light (whole frames): the card's long-press sheet, then the task's ⋯", tiles: [...await tiles([old("390", "light", "uk", "phone-card")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-card"), true, 0.5), ...await tiles([old("390", "light", "uk", "phone-task")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-task"), true, 0.5)] },
+      { name: "Phone 390×844 · uk · light (whole frames): a conversation's menu, today, then built at rest and with each section open", tiles: [...await tiles([old("390", "light", "uk", "phone-conversation")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-conversation"), true, 0.5)] },
+      { name: "Phone 390×844 · en · dark (whole frames): a conversation's menu", tiles: [...await tiles([old("390", "dark", "en", "phone-conversation")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-conversation"), true, 0.5)] },
       { name: "Phone 390×844 · en · dark (whole frames)", tiles: [...await tiles([old("390", "dark", "en", "phone-card")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-card"), true, 0.5), ...await tiles([old("390", "dark", "en", "phone-task")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-task"), true, 0.5)] },
     ]);
 

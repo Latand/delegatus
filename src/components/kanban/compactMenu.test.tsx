@@ -5,9 +5,9 @@ import { BoardMenu } from "./compactMenu";
 import type { MenuAction } from "./compactMenuModel";
 import type { KanbanMenuItem } from "./kanbanMenus";
 
-/* What the first render of a compact menu holds, read as markup: the states
-   the browser driver cannot reach in the fixture. No card of the fixture holds
-   the orchestrator's conversation, so the refused Hide is read here. */
+/* What the first render of a compact menu holds, read as markup. How tall
+   each state is, the refused Hide's two lines included, is the browser
+   driver's to measure (kanbanBoard.browser.test.tsx, the menus block). */
 
 const item = (id: string, label: string, extra: Partial<MenuAction> = {}): KanbanMenuItem => ({ type: "item", id, label, onSelect: () => {}, ...extra });
 const render = (kind: string, items: KanbanMenuItem[]) => {

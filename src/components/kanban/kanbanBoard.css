@@ -724,6 +724,10 @@
 /* Under a pointer no state is taller than 360 px; under a finger the rows are 44 px and the window is the bound. */
 @media (pointer: fine) {
   .kb .menu.cm { max-height: min(360px, calc(100vh - 16px)); }
+  /* The rows of a section opened in place sit as close as a page's, and a swatch is a circle rather than a row's height:
+     the card that holds the orchestrator's conversation says why it cannot be hidden on two lines, and Appearance still opens inside the bound. */
+  .kb .menu.cm .cm-body [role^="menuitem"]:not(.swatch):not(.cm-tall) { min-height: 28px; }
+  .kb .menu.cm .cm-body .swatch { min-height: 0; }
 }
 @media (pointer: coarse) {
   .kb .menu.cm .cm-key { display: none; }
