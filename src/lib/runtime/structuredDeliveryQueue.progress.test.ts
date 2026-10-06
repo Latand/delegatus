@@ -9,6 +9,9 @@ import {
   type StructuredDeliveryQueuePort,
   type StructuredDeliveryQueueTiming,
 } from "./structuredDeliveryQueue";
+import { deliveryStalledText } from "@/components/runtime/deliveryWait";
+import { translate } from "@/lib/i18n";
+import { structuredContent } from "./structuredContent";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 
@@ -28,7 +31,7 @@ interface JournalOp {
   operationId: string;
   conversationId: string;
   text: string;
-  policy: "queue" | "interrupt-active";
+  policy: "queue" | "interrupt-active" | "steer-if-active";
   status: string;
   revision: number;
   reason: string | null;
@@ -621,4 +624,155 @@ test("a delivery write refused for a busy record lock defers the message with th
   await queue.drain();
   expect(target.inputs).toEqual(["op-busy"]);
   expect(journal.ops.get("op-busy")!.status).toBe("delivered");
+});
+
+test("a steer whose observation never answers shows a truthful stall within ten seconds, is never called a lost wake and is never steered again", async () => {
+  const journal = fakeJournal();
+  const time = clock();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const steers: string[] = [];
+  const target = fakeHost(delivered, () => idleState("turn-live"));
+  target.engine.steer = async (entry) => {
+    steers.push(entry.id);
+    /* The write is acknowledged; whether it landed in the turn is never told. */
+    return { turnId: "turn-live", observe: () => new Promise(() => {}) };
+  };
+  const other = fakeHost(delivered);
+  journal.admit("op-steer", "conversation-a", "steer-if-active");
+  const queue = queueFor(journal.port({ progress }), { "conversation-a": target.engine, "conversation-b": other.engine },
+    { passBudgetMs: 1_000, stallMs: 4_000, safetyPassMs: 5_000, now: time.now });
+
+  await queue.drain();
+  expect(steers).toEqual(["op-steer"]);
+  expect(journal.ops.get("op-steer")!.status).toBe("delivering");
+  const handedOverAt = progress.get("op-steer")!.lastProgressAt;
+
+  /* Nine seconds on: the lane ended long ago and the observation still hangs. */
+  time.advance(9_000);
+  await queue.tick();
+  await sleep(5);
+  const record = progress.get("op-steer")!;
+  expect(record.waitReason).toBe("dispatching");
+  expect(record.lastProgressAt).toBe(handedOverAt);
+  expect(record.stalledSince).not.toBeNull();
+  expect(record.detail).toContain("arrival has not been confirmed");
+  for (const lang of ["en", "uk"] as const) {
+    const text = deliveryStalledText((key, params) => translate(lang, key, params), record, time.now());
+    expect(text).toContain(translate(lang, "delivery.wait.dispatching"));
+  }
+  expect(steers).toEqual(["op-steer"]);
+
+  /* Another conversation is delivered while this one waits. */
+  journal.admit("op-other", "conversation-b");
+  await queue.drain();
+  expect(other.inputs).toEqual(["op-other"]);
+  time.advance(9_000);
+  await queue.tick();
+  await sleep(5);
+  expect(progress.get("op-steer")!.waitReason).toBe("dispatching");
+  expect(steers).toEqual(["op-steer"]);
+});
+
+/** The injection half of the journal: one operation, and the real journal's
+    rule that a `delivering` write over a `delivering` row is answered as a
+    replay unless the writer named the statuses it may leave. */
+function injectJournal() {
+  const text = "extra context";
+  const op = { status: "queued", revision: 1, reason: null as string | null };
+  const port: StructuredDeliveryQueuePort = {
+    effects: async () => ["delivered", "failed", "uncertain"].includes(op.status) ? [] : [{
+      id: "effect:op-inject",
+      kind: "runtime.inject",
+      eventSeq: 1,
+      payload: {
+        kind: "inject",
+        operationId: "op-inject",
+        conversationId: "conversation-a",
+        text,
+        contentDigest: structuredContent(text, []).contentDigest,
+        binding: { threadId: "session-one", accountId: null, writerClaim: "owner:1" },
+      },
+    }],
+    status: async () => ({ ...op }),
+    settled: async () => false,
+    hostClaim: async () => "owner:1",
+    injectionBinding: () => ({ threadId: "session-one", accountId: null, writerClaim: "owner:1" }),
+    transition: async (_operationId, status, details, options) => {
+      if (options?.fromStatuses && !options.fromStatuses.includes(op.status as never)) {
+        throw new Error("runtime operation moved before its transition");
+      }
+      if (op.status === status) return;
+      op.status = status;
+      op.revision += 1;
+      op.reason = details?.reason ?? null;
+    },
+  };
+  return { op, port };
+}
+
+test("an injection whose first executor is replaced while its host read hangs reaches the engine once, and the late answer writes nothing", async () => {
+  const { op, port } = injectJournal();
+  const injections: string[] = [];
+  const firstHealth = deferred<HostState>();
+  let healthReads = 0;
+  const observed = deferred<boolean>();
+  const engine = {
+    ...fakeHost(delivered).engine,
+    health: async () => { healthReads += 1; return healthReads === 1 ? firstHealth.promise : idleState(); },
+    inject: async (request: { operationId: string }) => {
+      injections.push(request.operationId);
+      /* The engine does not deduplicate, and history is not written yet. */
+      return { placement: "history" as const, turnId: null, observe: () => observed.promise };
+    },
+  } as EngineHost;
+  const timing = { passBudgetMs: 20, safetyPassMs: 600_000 };
+  const first = queueFor(port, { "conversation-a": engine }, timing);
+  const second = queueFor(port, { "conversation-a": engine }, timing);
+
+  /* The first executor's pass ends on its budget with the host read open. */
+  await first.drain();
+  expect(injections).toEqual([]);
+  first.retire();
+  await second.drain();
+  expect(injections).toEqual(["op-inject"]);
+  expect(op.status).toBe("delivering");
+
+  /* The late answer of the retired executor's read. */
+  firstHealth.resolve(idleState());
+  await sleep(20);
+  expect(injections).toEqual(["op-inject"]);
+
+  observed.resolve(true);
+  await sleep(20);
+  expect(op.status).toBe("delivered");
+  expect(injections).toEqual(["op-inject"]);
+});
+
+test("two live executors that both read an injection as queued insert it once", async () => {
+  const { op, port } = injectJournal();
+  const injections: string[] = [];
+  const bothThere = deferred<void>();
+  let arrived = 0;
+  const transition = port.transition;
+  port.transition = async (operationId, status, details, options) => {
+    if (status === "delivering") {
+      arrived += 1;
+      if (arrived === 2) bothThere.resolve();
+      await bothThere.promise;
+    }
+    return transition(operationId, status, details, options);
+  };
+  const engine = {
+    ...fakeHost(delivered).engine,
+    inject: async (request: { operationId: string }) => {
+      injections.push(request.operationId);
+      return { placement: "history" as const, turnId: null, observe: async () => true };
+    },
+  } as EngineHost;
+  const first = queueFor(port, { "conversation-a": engine }, { safetyPassMs: 600_000 });
+  const second = queueFor(port, { "conversation-a": engine }, { safetyPassMs: 600_000 });
+  await Promise.allSettled([first.drain(), second.drain()]);
+  await sleep(20);
+  expect(injections).toEqual(["op-inject"]);
+  expect(op.status).toBe("delivered");
 });

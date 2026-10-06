@@ -9365,6 +9365,28 @@ export class AgentRegistry {
     });
   }
 
+  /** {@link settleDeliveryRetryAttempt} with the write lock waited for off the
+      event loop. False when the lock stayed held and nothing was written. */
+  async settleDeliveryRetryAttemptOffLoop(
+    ...attempt: Parameters<AgentRegistry["settleDeliveryRetryAttempt"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.settle-retry", operationId: attempt[0] },
+      () => this.settleDeliveryRetryAttempt(...attempt));
+    return write.acquired;
+  }
+
+  /** {@link recordDeliveryOutcome} with the write lock waited for off the event
+      loop, correlated with the operation the reservation belongs to. False
+      when the lock stayed held and nothing was written. */
+  async recordDeliveryOutcomeOffLoop(
+    operationId: string,
+    ...outcome: Parameters<AgentRegistry["recordDeliveryOutcome"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.settle", operationId },
+      () => this.recordDeliveryOutcome(...outcome));
+    return write.acquired;
+  }
+
   recordDeliveryOutcome(
     id: string,
     state: Extract<HeldDelivery["state"], "delivered" | "failed" | "delivery-uncertain">,

@@ -131,13 +131,18 @@ interface Fixture {
   close(): void;
 }
 
-function fixture(name: string, options: { now?: () => number; engine?: "codex" | "claude" } = {}): Fixture {
+function fixture(name: string, options: { now?: () => number; engine?: "codex" | "claude"; sqlite?: boolean } = {}): Fixture {
   const directory = fs.mkdtempSync(path.join(isolated, `${name}-`));
   const registry = new AgentRegistry(
     path.join(directory, "agent-registry.json"),
     undefined,
     undefined,
-    ...(options.now ? [{ now: options.now }] as const : []),
+    {
+      ...(options.now ? { now: options.now } : {}),
+      /* The store the Viewer runs on, where a writer in another process holds
+         a real lock. */
+      ...(options.sqlite ? { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") } : {}),
+    },
   );
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const transcriptPath = path.join(directory, `${name}.jsonl`);
@@ -390,6 +395,222 @@ test("with no reader asking, the background deadline ends a dropped send and the
     expect((await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).settled).toEqual([]);
   } finally {
     active.close();
+  }
+});
+
+/** A second hosted conversation in the same registry and journal. */
+function secondConversation(active: Fixture, name: string): Fixture {
+  const transcriptPath = path.join(path.dirname(active.transcriptPath), `${name}.jsonl`);
+  const launchProfile = emptyLaunchProfile({ cwd: path.dirname(active.transcriptPath) });
+  active.registry.reconcileConversations([{
+    engine: "codex",
+    path: transcriptPath,
+    accountId: "settlement-fixture-account",
+    launchProfile,
+    turn: { state: "idle", source: "assistant", terminalAt: null },
+    observedAt: "2026-08-30T10:00:00.000Z",
+  }]);
+  const conversation = Object.values(active.registry.snapshot().conversations)
+    .find((candidate) => candidate.generations.at(-1)?.path === transcriptPath);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) throw new Error("fixture conversation is missing");
+  active.registry.upsert({
+    key: { engine: "codex", sessionId: generation.id },
+    artifactPath: transcriptPath,
+    cwd: path.dirname(transcriptPath),
+    accountId: "settlement-fixture-account",
+    launchProfile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fixture:settlement-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fixture-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  active.journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey: { engine: "codex", sessionId: generation.id },
+      hostKind: "codex-app-server",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath: transcriptPath,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  return { ...active, conversationId: conversation.id, generationId: generation.id, transcriptPath };
+}
+
+/** The longest gap between 5 ms ticks while `operation` runs. */
+async function longestLoopGap<T>(operation: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
+  let last = performance.now();
+  let gapMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    gapMs = Math.max(gapMs, now - last);
+    last = now;
+  }, 5);
+  try {
+    const value = await operation();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return { value, gapMs: Math.max(gapMs, performance.now() - last) };
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** Another process holding the registry's write lock, as in the incident. */
+async function foreignWriter(active: Fixture, holdMs: number) {
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))});
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("locked\\n");
+    setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, ${holdMs});
+  `], { stdout: "pipe", stderr: "inherit" });
+  const reader = child.stdout.getReader();
+  const { value } = await reader.read();
+  reader.releaseLock();
+  if (!new TextDecoder().decode(value).includes("locked")) throw new Error("the foreign writer did not take the lock");
+  return child;
+}
+
+test("background settlement waits out another process's long write off the event loop, correlated with its operation, and commits once", async () => {
+  const active = fixture("foreign-writer", { sqlite: true });
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "foreign-writer-key" });
+    resetBlockingWaitsForTests(() => {});
+    const child = await foreignWriter(active, 1_500);
+    const startedAt = performance.now();
+    const { value: swept, gapMs } = await longestLoopGap(() => settleDueSends({
+      registry: active.registry, client: active.client, now: AFTER_THE_WINDOW,
+    }));
+    await child.exited;
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_000);
+    expect(gapMs).toBeLessThan(150);
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).toBe("failed");
+    const diagnostics = blockingWaitDiagnostics();
+    expect(diagnostics.sites["registry-lock"]).toBeUndefined();
+    const wait = diagnostics.longest.find((sample) => sample.site === "registry-lock-async");
+    expect(wait).toMatchObject({ synchronous: false, label: "delivery.settle", operationId });
+    expect(wait!.durationMs).toBeGreaterThanOrEqual(1_000);
+    /* The send was fenced in the journal before the wait began, so the queue
+       delivers nothing however long the record's write took. */
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "foreign-writer-key", "hold the cutover until I say go"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+  } finally {
+    resetBlockingWaitsForTests();
+    active.close();
+  }
+});
+
+test("a settlement whose write lock stays held past its deadline writes nothing, keeps the journal fence, and is completed by the next sweep", async () => {
+  const active = fixture("foreign-writer-deadline", { sqlite: true });
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "writer-deadline-key" });
+    const child = await foreignWriter(active, 5_600);
+    const { value: swept, gapMs } = await longestLoopGap(() => settleDueSends({
+      registry: active.registry, client: active.client, now: AFTER_THE_WINDOW,
+    }));
+    expect(gapMs).toBeLessThan(150);
+    /* Nothing was written, so nothing is reported ended. */
+    expect(swept.settled).toEqual([]);
+    expect(receiptOf(active, operationId)?.state).toBe("in-flight");
+    /* The journal already refuses the send: the fence came first. */
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "writer-deadline-key", "hold the cutover until I say go"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    await child.exited;
+    const again = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(again.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).toBe("failed");
+    expect(receiptOf(active, operationId)?.reason).toBe(SEND_LOST_REASON);
+  } finally {
+    active.close();
+  }
+}, 20_000);
+
+test("a conversation whose journal read never answers holds nobody: the other settles at once, the hung one ends unverified in bounded time, and its late answer changes nothing", async () => {
+  const first = fixture("hung-reader");
+  try {
+    const second = secondConversation(first, "hung-reader-second");
+    const hung = acceptSend(first, { clientMessageId: "hung-key", text: "resume the cutover" });
+    const free = acceptSend(second, { clientMessageId: "free-key" });
+    const release: Array<() => void> = [];
+    let hungReads = 0;
+    const client = {
+      ...first.client,
+      operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) => {
+        if (operationId === hung.operationId) {
+          hungReads += 1;
+          await new Promise<void>((resolve) => { release.push(resolve); });
+        }
+        return first.client.operationStatus(operationId, options);
+      },
+    } as RuntimeHostClient;
+    const running = new Set<string>();
+    const settledAt: Record<string, number> = {};
+    const startedAt = performance.now();
+    const ports = {
+      registry: first.registry,
+      client,
+      now: AFTER_THE_WINDOW,
+      readMs: 400,
+      running,
+      onSettled: ({ operationId }: { operationId: string }) => { settledAt[operationId] = performance.now() - startedAt; },
+    };
+    const sweep = settleDueSends(ports);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    /* The free conversation is done while the hung one's read is still open. */
+    expect(settledAt[free.operationId]).toBeLessThan(100);
+    expect(receiptOf(second, free.operationId)?.state).toBe("failed");
+    expect(receiptOf(first, hung.operationId)?.state).toBe("in-flight");
+    expect(running.has(first.conversationId)).toBe(true);
+    /* The next sweep starts on time, and leaves the conversation still being
+       settled alone: its operation is read once. */
+    const next = await settleDueSends(ports);
+    expect(next.settled).toEqual([]);
+    expect(hungReads).toBe(1);
+
+    const swept = await sweep;
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    /* Nothing answered, so nothing is proved: it ends unverified and a resend
+       stays behind verification. */
+    expect(swept.settled).toContainEqual({ operationId: hung.operationId, state: "failed", duplicateRisk: true });
+    expect(receiptOf(first, hung.operationId)?.reason).toBe(SEND_UNSETTLEABLE_REASON);
+    expect(running.size).toBe(0);
+
+    /* The late answer arrives: the queue, wired as in production, still reads
+       the durable record before it actuates and hands nothing over. */
+    for (const done of release) done();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const { host, received } = recordingHost(first.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(first, hung.operationId, "hung-key", "resume the cutover"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    expect(receiptOf(first, hung.operationId)?.reason).toBe(SEND_UNSETTLEABLE_REASON);
+  } finally {
+    first.close();
   }
 });
 

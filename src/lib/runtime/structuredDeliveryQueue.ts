@@ -804,6 +804,11 @@ export class StructuredDeliveryQueue {
       without holding kill, interrupt, or answer. */
   private readonly compactingConversations = new Set<string>();
   private readonly lanes = new Map<string, DeliveryLane>();
+  /** Hand-overs whose engine write is done and whose arrival is being read
+      back off the lane: a steer into a running turn, an injection. Their lane
+      has ended, so the watchdog marks a stalled one from here, and a pass that
+      finds one knows it was looked at. */
+  private readonly observing = new Map<string, { effect: SendEffect | InjectEffect; since: number; recorded: boolean }>();
   /** Open progress records whose operation left the listing, and when this
       executor last asked the journal how they ended. */
   private readonly unlistedChecks = new Map<string, number>();
@@ -1127,13 +1132,14 @@ export class StructuredDeliveryQueue {
 
   /** A watchdog pass that finds a message nobody looked at when it was due
       records that its wake was lost. A conversation whose lane is running was
-      looked at: whatever that lane waits on is its own phase. */
+      looked at: whatever that lane waits on is its own phase. So was a message
+      already handed over whose arrival is still being read back. */
   private noteLostWakes(effects: readonly DeliveryEffect[]): void {
     const progress = this.port.progress;
     if (!progress) return;
     const now = this.timing.now();
     for (const effect of effects) {
-      if (!isMessageEffect(effect) || this.lanes.has(effect.conversationId)) continue;
+      if (!isMessageEffect(effect) || this.lanes.has(effect.conversationId) || this.observing.has(effect.operationId)) continue;
       const record = progress.get(effect.operationId);
       const due = record?.nextWakeAt ? Date.parse(record.nextWakeAt) : null;
       if (record && (due === null || due + WAKE_GRACE_MS > now)) continue;
@@ -1260,6 +1266,21 @@ export class StructuredDeliveryQueue {
         && (lane.reconciledAt === null || now - lane.reconciledAt >= this.timing.interruptReconcileMs)) {
         this.reconcileHeldLane(lane);
       }
+    }
+    /* A hand-over whose arrival has not been read back keeps its real start:
+       nothing is sent again, and the record says what it is waiting on. */
+    for (const [operationId, observation] of this.observing) {
+      if (now - observation.since < this.timing.stallMs) continue;
+      if (!observation.recorded) {
+        observation.recorded = true;
+        this.noteWait(observation.effect, "dispatching", {
+          wake: "none",
+          detail: "handed over; its arrival has not been confirmed yet",
+          sinceMs: observation.since,
+        });
+      }
+      try { progress?.stalled(operationId); }
+      catch (error) { console.error("[structured delivery] progress record failed", { error: failureReason(error) }); }
     }
     if (this.lastListed) this.settleUnlistedProgress(this.lastListed);
     let wake = now - this.lastPassStartedAt >= this.timing.safetyPassMs;
@@ -1700,7 +1721,7 @@ export class StructuredDeliveryQueue {
          write in — active, attention, idle — is a state injection can be
          executed in, because it does not contend for the turn. */
       if (effect.kind === "inject") {
-        if (!await this.executeInjection(effect, host, health)) return true;
+        if (!await this.executeInjection(effect, host, health, lane)) return true;
         continue;
       }
       const steerOrQueue = effect.policy === "steer-or-queue";
@@ -1895,9 +1916,14 @@ export class StructuredDeliveryQueue {
           const outcome = await host.steer(entry, firstDispatch);
           const settling = this.settleObservedSteer(effect, outcome).finally(() => {
             this.activeSteers.delete(effect.operationId);
+            this.observing.delete(effect.operationId);
             this.retrySoon();
           });
           this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: outcome.turnId, settling });
+          /* The lane ends here and the observation carries on without it. It
+             has no wake of its own to lose: its own answer ends it. */
+          this.observing.set(effect.operationId, { effect, since: this.timing.now(), recorded: false });
+          this.noteWait(effect, "dispatching", { wake: "none" });
           void settling.catch(() => undefined);
           continue;
         }
@@ -2322,7 +2348,7 @@ export class StructuredDeliveryQueue {
    *   this operation's dedup marker before writing, and `uncertain` is a
    *   terminal the journal refuses to transition out of.
    */
-  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostState): Promise<boolean> {
+  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostState, lane?: DeliveryLane): Promise<boolean> {
     /* Its acknowledgement already came back and its evidence is still being
        read. Re-issuing here would be a second insertion, which the engine does
        not deduplicate. */
@@ -2351,12 +2377,28 @@ export class StructuredDeliveryQueue {
       await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
       return true;
     }
+    /* The reads above can outlast this executor: a successor that replaced it,
+       or a pass that let its lane go, may be handing this operation over now. */
+    if (lane?.released || this.retirementExecutor.retired) return false;
     if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
       turnId: health.activeTurnRef,
       reason: deliveringOwnershipReason(this.executorId, { readable: true, value: binding.writerClaim }),
-    })) {
+    },
+    /* Only from a state nobody is delivering it in, as for a send: the journal
+       answers a second `delivering` write as a replay, and the engine does not
+       deduplicate an insertion, so a second executor has to be refused here. */
+    { fromStatuses: ["pending", "queued"] })) {
       return true;
     }
+    if (lane?.released) return false;
+    if (this.retirementExecutor.retired) {
+      /* Replaced while the fence was being written. Nothing was handed over,
+         so the operation goes back to the queue for the executor that drains
+         this conversation now. */
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "executor-retired" }, { fromStatuses: ["delivering"] });
+      return false;
+    }
+    this.noteWait(effect, "dispatching", { lane, attempted: true, wake: "event" });
     let outcome;
     try {
       outcome = await host.inject({
@@ -2395,9 +2437,12 @@ export class StructuredDeliveryQueue {
        injection nor needs to wait for its evidence. */
     const settle = this.settleObservedInjection(effect, outcome).finally(() => {
       this.activeInjections.delete(effect.operationId);
+      this.observing.delete(effect.operationId);
       this.retrySoon();
     });
     this.activeInjections.set(effect.operationId, settle);
+    this.observing.set(effect.operationId, { effect, since: this.timing.now(), recorded: false });
+    this.noteWait(effect, "dispatching", { wake: "none" });
     void settle.catch(() => undefined);
     return true;
   }

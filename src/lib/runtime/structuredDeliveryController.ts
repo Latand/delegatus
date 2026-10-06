@@ -1885,28 +1885,27 @@ export async function bindStructuredDeliveryQueue(
   }
   const sweepMs = dependencies.settlementSweepMs ?? DELIVERY_SETTLEMENT_SWEEP_MS;
   if (sweepMs > 0) {
-    let sweeping = false;
+    /* The conversations a sweep is still settling. Each one settles on its
+       own, so a sweep starts whether or not the last one has ended, and a
+       conversation whose evidence does not answer holds only itself. */
+    const settling = new Set<string>();
     settlementSweepTimer = setInterval(() => {
-      if (sweeping || stopped || state.activeQueue !== queue) return;
-      sweeping = true;
+      if (stopped || state.activeQueue !== queue) return;
       void settleDueSends({
         registry,
         client,
+        running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
-      })
-        .then((swept) => {
-          for (const { operationId, state: settled, duplicateRisk } of swept.settled) {
-            progressStore.settle(operationId, settled === "delivered" ? "delivered" : duplicateRisk ? "uncertain" : "failed",
-              "settled by the background deadline");
-          }
-          if (swept.settled.length > 0) requestDrain();
-        })
-        .catch((error) => {
-          console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
-        })
-        .finally(() => { sweeping = false; });
+        onSettled: ({ operationId, state: settled, duplicateRisk }) => {
+          progressStore.settle(operationId, settled === "delivered" ? "delivered" : duplicateRisk ? "uncertain" : "failed",
+            "settled by the background deadline");
+          requestDrain();
+        },
+      }).catch((error) => {
+        console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+      });
     }, sweepMs);
     settlementSweepTimer.unref?.();
   }
