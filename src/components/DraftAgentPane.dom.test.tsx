@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
+import { reasoningFromBody } from "@/lib/agent/efforts";
 
 import { DraftAgentPane, setDraftBand, setDraftCwd, setDraftSrc } from "./DraftAgentPane";
 
@@ -19,6 +20,7 @@ Object.assign(globalThis, {
   HTMLSelectElement: dom.HTMLSelectElement,
   Event: dom.Event,
   MouseEvent: dom.MouseEvent,
+  KeyboardEvent: dom.KeyboardEvent,
   sessionStorage: dom.sessionStorage,
 });
 
@@ -267,6 +269,237 @@ test("a handoff carries its source and its parent into the launch, and no field 
   expect(posts).toHaveLength(1);
   /* The source's own directory, answered by the server, replaces the board's guess. */
   expect(posts[0]).toMatchObject({ engine: "codex", src: implementer.path, parentConversationId: implementer.conversationId, cwd: "/repos/source-checkout" });
+});
+
+test("two presses before the next render make one attempt and one request", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  setDraftCwd("double-draft", "/repo");
+  const host = mount("double-draft");
+  await settle();
+  type(host, "Start once");
+
+  /* Enter and a click in one task: neither press has seen a render with the other's attempt. */
+  flushSync(() => {
+    host.querySelector("textarea")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }) as unknown as Event);
+    host.querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event);
+    (host.querySelector('button[aria-label="Launch the agent"]') as HTMLButtonElement | null)?.click();
+  });
+  await settle();
+  submit(host);
+  await settle();
+
+  expect(posts).toHaveLength(1);
+  expect(host.querySelectorAll("[data-draft-opening] [data-message-row]")).toHaveLength(1);
+});
+
+test("a refused launch gives the field back, and the next press is a new attempt", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input) === "/api/spawn" && init?.method === "POST" && !posts.length) {
+      posts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return { ok: false, status: 400, json: async () => ({ error: "directory does not exist: /repo" }) } as Response;
+    }
+    return serve(input, init);
+  }) as typeof fetch;
+  setDraftCwd("refused-draft", "/repo");
+  const host = mount("refused-draft");
+  await settle();
+  type(host, "Start again");
+  submit(host);
+  await settle();
+
+  expect(posts).toHaveLength(1);
+  expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Start again");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(2);
+  expect(posts[1]!.clientAttemptId).not.toBe(posts[0]!.clientAttemptId);
+});
+
+/** A launch seam whose answer about the source's folder waits for the test. */
+function heldSourceLookup(posts: Record<string, unknown>[]) {
+  let answer: (response: Response) => void = () => {};
+  let lookups = 0;
+  launchSeam(posts);
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).startsWith("/api/spawn?")) {
+      lookups += 1;
+      return await new Promise<Response>((resolve) => { answer = resolve; });
+    }
+    return serve(input, init);
+  }) as typeof fetch;
+  return {
+    lookups: () => lookups,
+    answer: (body: Record<string, unknown> | null) => answer(body
+      ? { ok: true, json: async () => body } as Response
+      : { ok: false, status: 500, json: async () => ({}) } as Response),
+  };
+}
+
+test("a handoff does not launch in the board's guess while its source's folder is still being read", async () => {
+  const posts: Record<string, unknown>[] = [];
+  const lookup = heldSourceLookup(posts);
+  setDraftSrc("held-handoff", implementer.path, implementer.conversationId);
+  setDraftBand("held-handoff", "task:task-9");
+  setDraftCwd("held-handoff", "/repos/project-root-guess");
+  const host = mount("held-handoff", [implementer]);
+  await settle();
+
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.textContent).toContain("Finding the folder of the conversation this agent continues");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(0);
+  expect(host.textContent).not.toContain("/repos/project-root-guess");
+
+  lookup.answer({ ...imageNegotiation("structured"), cwd: "/repos/source-worktree" });
+  await settle();
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ cwd: "/repos/source-worktree", src: implementer.path, parentConversationId: implementer.conversationId, taskId: "task-9" });
+});
+
+test("a handoff whose source's folder cannot be read refuses the launch in words, and launches after a retry finds it", async () => {
+  const posts: Record<string, unknown>[] = [];
+  const lookup = heldSourceLookup(posts);
+  setDraftSrc("lost-handoff", implementer.path, implementer.conversationId);
+  setDraftCwd("lost-handoff", "/repos/project-root-guess");
+  const host = mount("lost-handoff", [implementer]);
+  await settle();
+  lookup.answer(null);
+  await settle();
+
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.textContent).toContain("could not be found");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(0);
+
+  click([...host.querySelectorAll("button")].find((button) => button.textContent === "Retry image check")!);
+  await settle();
+  lookup.answer({ ...imageNegotiation("structured"), cwd: "/repos/source-worktree" });
+  await settle();
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ cwd: "/repos/source-worktree", src: implementer.path });
+});
+
+test("a handoff whose source has no folder on record refuses the launch instead of taking the guess", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts, { ...imageNegotiation("structured"), cwd: null });
+  setDraftSrc("rootless-handoff", implementer.path, implementer.conversationId);
+  setDraftCwd("rootless-handoff", "/repos/project-root-guess");
+  const host = mount("rootless-handoff", [implementer]);
+  await settle();
+
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.textContent).toContain("could not be found");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(0);
+});
+
+const pillOf = (host: HTMLElement) => host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+const row = (value: string) => document.querySelector(`[data-runtime-popover] [data-runtime-value="${value}"]`) as HTMLElement;
+function pickModel(host: HTMLElement, value: string) {
+  click(pillOf(host));
+  click(row("model"));
+  click(row(value));
+}
+
+test("a level the next model does not have goes back to the default, and one it has is kept", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  setDraftCwd("effort-draft", "/repo");
+  const host = mount("effort-draft");
+  await settle();
+
+  pickModel(host, "codex/gpt-6.1-sol");
+  click(pillOf(host));
+  click(row("tier-high"));
+  pickModel(host, "gpt-6-luna");
+  expect(pillOf(host).textContent).toContain("Codex · 6-Luna · High");
+
+  pickModel(host, "gpt-6.1-sol");
+  click(pillOf(host));
+  click(row("tier-ultra"));
+  expect(pillOf(host).textContent).toContain("Codex · 6.1-Sol · Ultra");
+  pickModel(host, "gpt-6-luna");
+  expect(pillOf(host).textContent).toContain("Codex · 6-Luna · Default");
+
+  type(host, "Run on Luna");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ engine: "codex", model: "gpt-6-luna" });
+  expect(posts[0]).not.toHaveProperty("effort");
+  /* The server's own check of the level against the model. */
+  expect(reasoningFromBody("codex", posts[0]!).error).toBeUndefined();
+});
+
+test("a stored level from another model is neither shown nor sent", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  setDraftCwd("stale-effort-draft", "/repo");
+  for (const [name, value] of [["engine", "codex"], ["model", "gpt-6-luna"], ["effort", "ultra"]]) sessionStorage.setItem(`llvDraftPane:stale-effort-draft:${name}`, value!);
+  const host = mount("stale-effort-draft");
+  await settle();
+
+  expect(pillOf(host).textContent).toContain("Codex · 6-Luna · Default");
+  type(host, "Run on Luna");
+  submit(host);
+  await settle();
+  expect(posts[0]).not.toHaveProperty("effort");
+});
+
+test("Codex's speed is said and sent for Codex alone", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  setDraftCwd("speed-draft", "/repo");
+  const host = mount("speed-draft");
+  await settle();
+
+  pickModel(host, "codex/gpt-6.1-sol");
+  click(pillOf(host));
+  click(row("speed"));
+  click(row("fast"));
+  expect(pillOf(host).textContent).toContain("Fast");
+
+  pickModel(host, "claude/opus");
+  expect(pillOf(host).textContent).toContain("Claude · Opus 5.5 · Default");
+  expect(pillOf(host).textContent).not.toContain("Fast");
+  expect(pillOf(host).getAttribute("aria-label")).not.toContain("Fast");
+  click(pillOf(host));
+  expect(row("speed")).toBeNull();
+  click(pillOf(host));
+
+  /* Back on Codex the choice stands, and the launch carries it. */
+  pickModel(host, "codex/gpt-6.1-sol");
+  expect(pillOf(host).textContent).toContain("Fast");
+  type(host, "Run fast");
+  submit(host);
+  await settle();
+  expect(posts[0]).toMatchObject({ engine: "codex", fast: true });
+});
+
+test("a launch on Claude after Codex's fast speed carries no speed", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts);
+  setDraftCwd("speed-claude-draft", "/repo");
+  for (const [name, value] of [["engine", "claude"], ["speed", "fast"]]) sessionStorage.setItem(`llvDraftPane:speed-claude-draft:${name}`, value!);
+  const host = mount("speed-claude-draft");
+  await settle();
+
+  expect(pillOf(host).textContent).not.toContain("Fast");
+  type(host, "Run on Claude");
+  submit(host);
+  await settle();
+  expect(posts[0]).toMatchObject({ engine: "claude" });
+  expect(posts[0]).not.toHaveProperty("fast");
 });
 
 test("a draft whose project folder is not known refuses the launch in words and asks for no path", async () => {

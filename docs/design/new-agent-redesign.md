@@ -373,8 +373,16 @@ else. What differs from sections 1 to 8:
   name. Parity needs the launch command to admit, stage and settle a file
   batch as the message route does, and to count the files in its replay
   digest.
-- **The working directory** is the one the board seeded when the draft was
-  opened: the project's root, or a handoff's source directory. While the
+- **A handoff launches in its source's own folder and nowhere else.** The
+  board's seed for a handoff is a guess when the source's folder is not in the
+  files feed, and nobody sees it any more. The form launches a handoff only in
+  a folder the source names: the one `GET /api/spawn?src=` reads from the
+  source transcript, or the one the files feed carries for it. Until that
+  answer arrives Send is held («Finding the folder of the conversation this
+  agent continues…»); when no record names the folder the launch is refused in
+  words and no path is asked for.
+- **The working directory** of any other draft is the one the board seeded when
+  it was opened: the project's root. While the
   project's folder is unresolved the board seeds `/`; the form then holds Send
   with the composer's blocked-send line («This project's folder is not known
   yet…») and launches as soon as the board finds the folder. The suggestions'
@@ -383,6 +391,13 @@ else. What differs from sections 1 to 8:
 - **A launch from this form carries no role.** Reviewer and Deployer were
   reachable only through the form's role select and have no entry point here;
   roles stay with the orchestrator's tools.
+
+- **The pill says what the launch carries.** A reasoning level the chosen
+  model does not have goes back to the default when the model changes; Codex's
+  speed is shown and sent for Codex alone; a Copilot draft chooses its account
+  in the pill's Account panel, among the accounts the draft's catalog lists.
+- **One press, one launch.** Send is guarded from the press until its request
+  answers, so Enter and a click in the same instant make one attempt.
 
 Evidence: the block «creating a new agent» in
 `src/components/kanban/kanbanBoard.browser.test.tsx` over

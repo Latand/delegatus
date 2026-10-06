@@ -1011,6 +1011,8 @@ export const en = {
   "draft.sheetTitle": "New agent",
   "draft.sheetSummary": "The agent starts on: {runtime}",
   "draft.folderUnknown": "This project's folder is not known yet, so an agent cannot start here. Send works as soon as the board finds the folder.",
+  "draft.sourceFolderPending": "Finding the folder of the conversation this agent continues. Send works as soon as it is found.",
+  "draft.sourceFolderUnknown": "The folder of the conversation this agent continues could not be found, so the agent cannot start in it.",
   "draft.engineAria": "Agent engine",
   "draft.accountAria": "{engine} account for this launch",
   "draft.accountDefault": "{label} · active",

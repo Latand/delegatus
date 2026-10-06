@@ -17960,9 +17960,10 @@ describe("creating a new agent: the composer alone, and the conversation after S
    * from the board's own button through the same moments at 1440x900, 1000x700 and a 390 phone, light and
    * dark, en and uk: the empty form, the runtime pill open, the model and the account chosen, dictation in
    * progress, the frame after Send, the frame after the launch answered, and the loaded conversation. On the
-   * desktop the same launch is walked from a task card's own «+ Agent». Three more states are drawn once, at
-   * 1440 in the light theme in English: a refused launch, a handoff draft and a signed-out account. The
-   * launch is the fixture's own: no agent starts.
+   * desktop the same launch is walked from a task card's own «+ Agent». Five more states are drawn once, at
+   * 1440 in the light theme in English: a refused launch, a handoff draft, a handoff whose source's folder
+   * is on no record, a signed-out account and a Copilot account chosen in the pill. The launch is the
+   * fixture's own: no agent starts.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> NEW_AGENT_TODAY=<dir> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
@@ -17988,7 +17989,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
   ] as const;
   const STATES = ["empty", "picker", "chosen", "dictation", "sent", "receipt", "loaded", "task-card-empty", "task-card-sent", "task-card-receipt", "task-card-loaded"] as const;
   /* Drawn once. */
-  const EXTRAS = ["refused", "handoff", "signed-out"] as const;
+  const EXTRAS = ["refused", "handoff", "handoff-lost", "signed-out", "copilot"] as const;
   const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
   );
@@ -18062,7 +18063,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
             await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             if (pass === "task-card") {
               await page.locator("[data-add-agent]:visible").first().click();
-            } else if (pass === "handoff") {
+            } else if (pass === "handoff" || pass === "handoff-lost") {
               /* The fixture restored this draft the way the product restores a tab's drafts. */
             } else if (view.touch) {
               await page.locator('[data-mobile2-open="menu"]').click();
@@ -18182,10 +18183,56 @@ describe("creating a new agent: the composer alone, and the conversation after S
               await prompt.press("Enter");
               await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
               const posted = await launches();
-              const carried = { src: posted[0]?.src, parentConversationId: posted[0]?.parentConversationId ?? null, role: posted[0]?.role ?? null };
+              const carried = { src: posted[0]?.src, cwd: posted[0]?.cwd, parentConversationId: posted[0]?.parentConversationId ?? null, role: posted[0]?.role ?? null };
               readings.push({ view: view.name, scheme, lang, state: pass, found, carried, controls: controlsRead, pageErrors });
               expect(found, label(pass)).toEqual({ sourceInPrompt: 1 });
               expect(carried.src, `${label(pass)} the launch names its source`).toBe("/repo/pending-worker.jsonl");
+              /* The source's own checkout, which the fixture answers for it; the project's root is `/repo`. */
+              expect(carried.cwd, `${label(pass)} the launch runs in its source's folder`).toBe("/repo/worktrees/export-csv");
+            } else if (pass === "handoff-lost") {
+              /* No record names the source's folder: the launch is refused in words, and the board's guess is not taken. */
+              await draft.scrollIntoViewIfNeeded();
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.getByText(tr("draft.sourceFolderUnknown")).waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              await prompt.press("Enter");
+              await page.waitForTimeout(400);
+              const found = { refusal: await blocked.getByText(tr("draft.sourceFolderUnknown")).count(), launches: (await launches()).length, opening: await draft.locator("[data-draft-opening]").count() };
+              const read = await controls();
+              readings.push({ view: view.name, scheme, lang, state: pass, found, controls: read, pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, launches: 0, opening: 0 });
+              expect({ selects: read.selects, textInputs: read.textInputs, clipped: read.clipped }, `${label(pass)} no path is asked for`).toEqual({ selects: 0, textInputs: 0, clipped: 0 });
+              expect(within(await box(blocked)), `${label(pass)} the refusal in the window`).toBe(true);
+            } else if (pass === "copilot") {
+              /* Copilot's account is chosen in the same pill, among the draft's own. */
+              const pill = draft.locator("[data-runtime-pill]");
+              const popover = page.locator("[data-runtime-popover]");
+              await pill.click();
+              await popover.locator('[data-runtime-value="model"]').click();
+              await popover.locator('[data-runtime-value="copilot/auto"]').click();
+              await pill.click();
+              const head = (await popover.locator("[data-runtime-popover-account]").innerText()).trim();
+              await popover.locator('[data-runtime-value="account"]').click();
+              await popover.locator('[data-runtime-value="account-account-k"]').waitFor({ timeout: 5_000 });
+              await settle();
+              await shoot(pass);
+              const offered = await popover.locator('[data-runtime-row="account"]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-runtime-value")));
+              expect(within(await box(popover)), `${label(pass)} the popover in the window`).toBe(true);
+              await popover.locator('[data-runtime-value="account-account-k"]').click();
+              const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+              const controlsRead = await composerOnly(pass);
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
+              await draft.locator("[data-draft-opening]").waitFor({ timeout: 5_000 });
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, accountId: posted[0]?.accountId, fast: posted[0]?.fast ?? null };
+              readings.push({ view: view.name, scheme, lang, state: pass, head, offered, face, launchedWith, controls: controlsRead, pageErrors });
+              expect(head, `${label(pass)} the account the agent starts on`).toBe(tr("draft.accountStartsOn", { account: "Account H" }));
+              expect(offered, `${label(pass)} the accounts offered`).toEqual(["account-default", "account-account-k"]);
+              expect(face, `${label(pass)} the pill names the engine and the account`).toContain("Copilot · Auto");
+              expect(face, `${label(pass)} the pill names the account`).toContain("Account K");
+              expect(launchedWith, `${label(pass)} what was launched`).toEqual({ count: 1, engine: "copilot", model: "auto", accountId: "account-k", fast: null });
             } else if (pass === "signed-out") {
               const blocked = draft.locator('[data-testid="composer-send-blocked"]');
               await blocked.waitFor({ timeout: 10_000 });

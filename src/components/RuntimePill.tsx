@@ -932,6 +932,9 @@ interface PanelProps {
   /** The account line where nothing runs yet: a new agent's composer says which account it starts on, and
       its rows carry no «current» and «next message» marks, which are a running conversation's. */
   accountStart?: string | null;
+  /** The accounts a caller lists itself, for an engine the accounts store does not carry: a new agent on
+      Copilot chooses among its draft's own. A conversation passes none and keeps the store's list. */
+  ownAccounts?: readonly AccountOption[] | null;
   face: RuntimeDraft;
   efforts: readonly string[];
   speedShown: boolean;
@@ -947,7 +950,7 @@ interface PanelProps {
 }
 
 export function RuntimePopover({
-  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, face, efforts, speedShown, speedDetail, panel, setPanel,
+  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -961,7 +964,8 @@ export function RuntimePopover({
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   /* Read only once the Account panel opens, so the ordinary popover subscribes to no accounts store. */
-  const [accountOptions, setAccountOptions] = useState<readonly AccountOption[] | null>(null);
+  const [storeAccounts, setAccountOptions] = useState<readonly AccountOption[] | null>(null);
+  const accountOptions = ownAccounts ?? storeAccounts;
 
   // Rows for the current panel (document order), each with an enabled flag.
   const rows = useMemo(() => buildRows({
@@ -1050,7 +1054,7 @@ export function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          {engine !== "copilot" ? (
+          {engine !== "copilot" || accountStart ? (
             <div className="px-2 pb-1 pt-1.5 text-label text-muted" data-runtime-popover-account>
               {accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
@@ -1067,7 +1071,7 @@ export function RuntimePopover({
         </>
       ) : (
         <div role="group" aria-label={panel === "model" ? t("composer.modelGroup") : panel === "account" ? t("mobile2.composer.accountGroup") : t("composer.speedGroup")}>
-          {panel === "account" && accountChoice && engine !== "copilot" ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
+          {panel === "account" && accountChoice && engine !== "copilot" && !ownAccounts ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
@@ -1106,7 +1110,7 @@ interface Row {
   activate: () => void;
 }
 
-interface AccountOption {
+export interface AccountOption {
   id: string;
   label: string;
 }
@@ -1292,7 +1296,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 export function RuntimeSheet({
-  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, owner, face, efforts, speedShown, speedDetail,
+  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & {
@@ -1369,7 +1373,17 @@ export function RuntimeSheet({
           </div>
         </div>
 
-        {engine !== "copilot" ? <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} /> : null}
+        {engine !== "copilot" ? (
+          <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} />
+        ) : ownAccounts && accountChoice ? (
+          <div data-runtime-sheet-accounts>
+            <SheetSection label={t("mobile2.composer.accountGroup")}>
+              {ownAccounts.map((option) => (
+                <SheetRow key={option.id} label={option.label} checked={option.id === accountChoice.next} onSelect={() => accountChoice.pick(option.id)} />
+              ))}
+            </SheetSection>
+          </div>
+        ) : null}
 
         <SheetSection label={t("composer.modelGroup")}>
           {modelOptions.map((model) => (

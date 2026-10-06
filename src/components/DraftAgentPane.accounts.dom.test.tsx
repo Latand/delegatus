@@ -169,6 +169,106 @@ test("the ukrainian locale words the pill's default tier and its account line", 
   expect(popover("[data-runtime-popover-account]")!.textContent).toBe("стартує на anna");
 });
 
+/** Two Copilot accounts beside the stored profiles; B is not the active one. */
+function installCopilotAccounts(posts: Record<string, unknown>[], accountB: Record<string, unknown> = {}): void {
+  installFetch(posts);
+  const serve = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input) === "/api/accounts") {
+      return { ok: true, json: async () => ({
+        ...catalog,
+        copilot: { active: "copilot-a", accounts: [
+          { id: "copilot-a", label: "Account A", authPresent: true },
+          { id: "copilot-b", label: "Account B", authPresent: true, ...accountB },
+        ] },
+      }) } as Response;
+    }
+    return serve(input, init);
+  }) as typeof fetch;
+}
+
+function pickCopilot(host: HTMLElement): void {
+  click(pill(host));
+  click(popover('[data-runtime-value="model"]')!);
+  click(popover('[data-runtime-value="copilot/auto"]')!);
+}
+
+test("a Copilot draft chooses its account in the pill, and the launch runs on the one picked", async () => {
+  const posts: Record<string, unknown>[] = [];
+  installCopilotAccounts(posts);
+  const host = mount("copilot-account-draft");
+  await settle();
+  pickCopilot(host);
+
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("starts on Account A");
+  click(pill(host));
+  expect(await openAccounts(host)).toEqual(["account-copilot-a", "account-copilot-b"]);
+  expect(popover('[data-runtime-value="account-copilot-a"]')!.getAttribute("aria-checked")).toBe("true");
+  click(popover('[data-runtime-value="account-copilot-b"]')!);
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")!.textContent).toBe("→ Account B");
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("starts on Account B");
+  click(pill(host));
+
+  await launch(host, "Run on the second Copilot account");
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ engine: "copilot", model: "auto", accountId: "copilot-b" });
+});
+
+test("on the phone a Copilot draft's sheet lists its accounts and marks the one the launch goes to", async () => {
+  const posts: Record<string, unknown>[] = [];
+  installCopilotAccounts(posts);
+  const desktop = dom.matchMedia;
+  (dom as unknown as { matchMedia(query: string): unknown }).matchMedia = (query: string) => ({
+    matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  });
+  try {
+    const host = mount("copilot-phone-draft");
+    await settle();
+    click(pill(host));
+    const sheetRow = (label: string) => [...document.querySelectorAll("[data-runtime-sheet] [data-runtime-sheet-row]")].find((entry) => entry.textContent === label) as HTMLElement;
+    click(sheetRow("Copilot · Auto"));
+    const accounts = () => [...document.querySelectorAll("[data-runtime-sheet-accounts] [data-runtime-sheet-row]")] as HTMLElement[];
+    expect(accounts().map((entry) => [entry.textContent, entry.getAttribute("aria-checked")])).toEqual([["Account A", "true"], ["Account B", "false"]]);
+    click(accounts()[1]!);
+    expect(accounts().map((entry) => entry.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    click(document.querySelector("[data-runtime-sheet-close]")!);
+
+    await launch(host, "Run on the second Copilot account");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ engine: "copilot", accountId: "copilot-b" });
+  } finally {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = desktop;
+  }
+});
+
+test("a Copilot draft on a signed-out account opens that account's sign-in instead of launching", async () => {
+  const posts: Record<string, unknown>[] = [];
+  installCopilotAccounts(posts, { auth: { state: "signed_out" } });
+  sessionStorage.setItem("llvDraftPane:copilot-signed-out-draft:engine", "copilot");
+  sessionStorage.setItem("llvDraftPane:copilot-signed-out-draft:accountId", "copilot-b");
+  const requests: unknown[] = [];
+  const listen = (event: Event) => requests.push((event as CustomEvent).detail);
+  window.addEventListener("llv:open-accounts", listen);
+  try {
+    const host = mount("copilot-signed-out-draft");
+    await settle();
+
+    const blocked = host.querySelector('[data-testid="composer-send-blocked"]')!;
+    expect(blocked.textContent).toContain("Account B is signed out of Copilot.");
+    /* An account that cannot take a launch is not offered; the one chosen before it signed out stays the way back. */
+    expect(await openAccounts(host)).toEqual(["account-copilot-b", "account-copilot-a"]);
+    click(pill(host));
+    click([...blocked.querySelectorAll("button")].find((button) => button.textContent === "Sign in to Copilot first")!);
+    expect(requests).toEqual([{ engine: "copilot", accountId: "copilot-b" }]);
+    await launch(host, "Should not start");
+    expect(posts).toHaveLength(0);
+  } finally {
+    window.removeEventListener("llv:open-accounts", listen);
+  }
+});
+
 /* #2170: the engine readiness preflight. A newcomer's only Claude account,
    «Main», is signed out; the launcher used to offer it as «Main · active»,
    send, fail, and move the task. */

@@ -18,6 +18,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useComposer } from "@/hooks/useComposer";
 import { seedLaunchOutbox } from "@/components/conversation/outbox";
 import { playCue } from "@/lib/audio/app";
+import { effortScale } from "@/lib/agent/efforts";
 import { codexModelSupportsImages } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 import { requestFilesRefresh } from "@/lib/filesEvents";
@@ -428,6 +429,11 @@ export function DraftAgentPane({
      long as the operator has not picked a directory of their own. */
   const awaitingInheritedCwdRef = useRef(Boolean(src && draftCwdIsUntouched(draftId)));
   const [cwd, setCwdState] = useState(() => initialCwd || draftWorkingDirectory(files, project, src));
+  /* A handoff launches in its source's own checkout and nowhere else. The seed above is the board's guess
+     for it, which nobody sees any more, so only a directory the source itself names counts: the one the
+     spawn route reads from the source transcript, or the one the files feed already carries for it. */
+  const [answeredSourceCwd, setAnsweredSourceCwd] = useState("");
+  const sourceCwd = src ? answeredSourceCwd || srcFile?.cwd?.trim() || "" : "";
   const isMobile = useIsMobile();
   /* The stored key is "" before the first negotiation and after an engine flip;
      the derived value below reads any mismatch as «loading», which is exactly
@@ -468,6 +474,10 @@ export function DraftAgentPane({
   /* Records launched from this mount are already in flight. Reloaded records
      are replayed once with their own idempotency key to fetch the same receipt. */
   const replayedAttemptIds = useRef(new Set<string>());
+  /* Held from the press until its POST answers. `attempt` and `busy` are read from the last render, and two
+     presses can land before the next one: Enter and a click in one task each saw no attempt and each made
+     its own idempotency key, which the server cannot join. */
+  const launchingRef = useRef(false);
 
   useEffect(() => {
     const applyResolvedCwd = (event: Event) => {
@@ -523,6 +533,7 @@ export function DraftAgentPane({
         const inherited = typeof json.cwd === "string" ? json.cwd.trim() : "";
         const shouldInherit = Boolean(awaitingInheritedCwdRef.current && inherited);
         if (shouldInherit) awaitingInheritedCwdRef.current = false;
+        if (src && inherited) setAnsweredSourceCwd(inherited);
         setCwdState((prev) => {
           /* Only the source's own directory is inherited. The suggestions' other directories are guesses
              the operator used to see and correct; unseen, a guess is not launched in. */
@@ -723,11 +734,15 @@ export function DraftAgentPane({
      draft was opened, or a handoff's source directory. `/` is what the board seeds while the project's
      folder is still unresolved; it counts only when the project's own conversations say the root is `/`. */
   const seededCwd = cwd.trim();
-  const launchCwd = seededCwd && seededCwd !== "/" ? seededCwd : draftWorkingDirectory(files, project, src);
+  const launchCwd = src
+    ? sourceCwd
+    : seededCwd && seededCwd !== "/" ? seededCwd : draftWorkingDirectory(files, project);
+  /* The level the launch carries is one the chosen model has; a stored level from another model is not sent. */
+  const launchEffort = effort && (effortScale(engine, model) ?? []).includes(effort) ? effort : "";
 
   const send = async (overrideText?: string) => {
     const payloadText = overrideText ?? text;
-    if (busy || voiceSending || attempt) return;
+    if (busy || voiceSending || attempt || launchingRef.current) return;
     if (signInFirst) {
       openLaunchSignIn(signInFirst);
       return;
@@ -744,7 +759,7 @@ export function DraftAgentPane({
       engine,
       model,
       cwd: launchCwd,
-      effort,
+      effort: launchEffort,
       fast: engine === "codex" && speed ? speed === "fast" : null,
       accountId: launch.launchAccountId,
       "prompt": payloadText,
@@ -755,13 +770,19 @@ export function DraftAgentPane({
     });
     /* Persist before POST: a navigation now has the launch id, timestamp, and
        exact recoverable payload needed to reconcile the original request. */
+    launchingRef.current = true;
     replayedAttemptIds.current.add(candidate.clientAttemptId);
     setSlowBoot(false);
     setWatchBase(null);
     setAttempt(candidate);
     setText("");
     attachments.clear();
-    await submitAttempt(candidate);
+    try {
+      await submitAttempt(candidate);
+    } finally {
+      /* A refused launch gives the field back, and the next press is a new attempt. */
+      launchingRef.current = false;
+    }
   };
 
   const fieldsDisabled = composer.fieldsDisabled;
@@ -779,7 +800,11 @@ export function DraftAgentPane({
     ? undefined
     : signInFirst
       ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
-      : launchCwd ? undefined : t("draft.folderUnknown");
+      : launchCwd
+        ? undefined
+        : !src
+          ? t("draft.folderUnknown")
+          : spawnImageNegotiation.status === "loading" ? t("draft.sourceFolderPending") : t("draft.sourceFolderUnknown");
 
   /* The title the launched card will carry: the launch's own title without the engine it leads with. */
   const openingTitle = (attempt?.request?.title ?? "").replace(/^[^·]*·\s*/, "") || attempt?.prompt.split("\n")[0] || "";

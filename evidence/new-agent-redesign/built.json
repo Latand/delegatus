@@ -179,6 +179,7 @@
       },
       "carried": {
         "src": "/repo/pending-worker.jsonl",
+        "cwd": "/repo/worktrees/export-csv",
         "parentConversationId": null,
         "role": null
       },
@@ -206,10 +207,78 @@
       "view": "desktop-1440",
       "scheme": "light",
       "lang": "en",
+      "state": "handoff-lost",
+      "found": {
+        "refusal": 1,
+        "launches": 0,
+        "opening": 0
+      },
+      "controls": {
+        "voice": 1,
+        "prompt": 1,
+        "images": 1,
+        "imageOnly": 1,
+        "paperclip": 0,
+        "launch": 0,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "headings": 0,
+        "buttons": 4,
+        "clipped": 0,
+        "focused": true,
+        "height": 115
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
       "state": "signed-out",
       "found": {
         "signedOut": 1,
         "signIn": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "copilot",
+      "head": "starts on Account H",
+      "offered": [
+        "account-default",
+        "account-account-k"
+      ],
+      "face": "Copilot · Auto · Default → Account K",
+      "launchedWith": {
+        "count": 1,
+        "engine": "copilot",
+        "model": "auto",
+        "accountId": "account-k",
+        "fast": null
+      },
+      "controls": {
+        "voice": 1,
+        "prompt": 1,
+        "images": 1,
+        "imageOnly": 1,
+        "paperclip": 0,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "headings": 0,
+        "buttons": 4,
+        "clipped": 0,
+        "focused": false,
+        "height": 82
       },
       "pageErrors": []
     },

@@ -36,22 +36,29 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   /* The document the pill stands in, which its panels portal into; read at the press that opens them. */
   const [owner, setOwner] = useState<Document | null>(null);
   const pillRef = useRef<HTMLButtonElement>(null);
-  const nameOf = useAccountName(engine === "codex" ? "codex" : "claude");
+  const storeName = useAccountName(engine === "codex" ? "codex" : "claude");
+  /* Copilot's accounts are not in the accounts store a conversation names its account from; the draft's
+     own catalog names every engine's. */
+  const { accounts } = launch;
+  const nameOf = useCallback((id: string) => accounts.find((account) => account.id === id)?.label ?? storeName(id), [accounts, storeName]);
 
   const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.flatMap((entry) => ENGINE_MODELS[entry].map((model) => ({
     ...model, id: entry === engine ? model.id : foreignModel(entry, model.id), label: `${launchEngineLabel(entry)} · ${model.label}`,
   }))), [engine]);
   const efforts = effortScale(engine, launch.model) ?? [];
-  const fast = launch.speed === "fast";
+  /* Speed is Codex's, and only a Codex launch carries it: the choice is kept for a return to Codex and
+     said nowhere while another engine is chosen. */
+  const fast = engine === "codex" && launch.speed === "fast";
   /* No tier chosen is the engine's own default, and the launch sends none: the face says so in a word
      instead of naming a tier the agent may not run at. */
-  const tier = launch.effort ? tierWord(t, launch.effort, isMobile) : t("draft.tierDefault");
+  const effort = efforts.includes(launch.effort) ? launch.effort : "";
+  const tier = effort ? tierWord(t, effort, isMobile) : t("draft.tierDefault");
   const short = ENGINE_MODELS[engine].find((model) => model.id === launch.model)?.shortLabel ?? launch.model;
   const text = [launchEngineLabel(engine), short, tier, fast ? t("composer.speedFastTier") : ""].filter(Boolean).join(" · ");
   /* The account is named once the operator picked one; before that the engine's active account takes the
      launch, which the panels say in their own account line. The phone's chip names no account, as a
      conversation's does not: its sheet leads with the accounts and marks the one the launch goes to. */
-  const picked = engine !== "copilot" && launch.accountId ? nameOf(launch.launchAccountId) : "";
+  const picked = launch.accountId && launch.launchAccountId ? nameOf(launch.launchAccountId) : "";
 
   const close = useCallback(() => {
     setOpen(false);
@@ -76,7 +83,12 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
     if (open && !isMobile) place();
   }, [open, panel, isMobile, place, efforts.length]);
 
-  const accountChoice: AccountChoice | null = engine === "copilot" ? null : {
+  /* Copilot's accounts come from the draft's catalog, the ones that can take a launch; with none listed
+     there is nothing to choose and the launch runs on the CLI's own profile. */
+  const ownAccounts = useMemo(() => (engine === "copilot"
+    ? accounts.filter((account) => account.authPresent && !account.signedOut).map(({ id, label }) => ({ id, label }))
+    : null), [engine, accounts]);
+  const accountChoice: AccountChoice | null = engine === "copilot" && !ownAccounts?.length ? null : {
     runsOn: launch.launchAccountId,
     next: launch.launchAccountId,
     applying: false,
@@ -86,9 +98,9 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
     },
   };
   const panelProps = {
-    t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, efforts,
+    t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
     accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) }) : "",
-    face: { model: launch.model, effort: launch.effort, fast },
+    face: { model: launch.model, effort, fast },
     speedShown: engine === "codex",
     speedDetail: fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
     effortLocked: false, modelLocked: false, speedLocked: false, lockReason: "",
@@ -98,8 +110,11 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
     },
     onSelectModel: (key: string) => {
       const foreign = AGENT_LAUNCH_ENGINES.find((entry) => entry !== engine && key.startsWith(`${entry}/`));
+      const model = foreign ? key.slice(foreign.length + 1) : key;
       if (foreign) launch.setEngine(foreign);
-      launch.setModel(foreign ? key.slice(foreign.length + 1) : key);
+      launch.setModel(model);
+      /* A level belongs to a model's scale: one the chosen model does not have goes back to its default. */
+      if (launch.effort && !(effortScale(foreign ?? engine, model) ?? []).includes(launch.effort)) launch.setEffort("");
       if (!isMobile) close();
     },
     onSelectFast: (value: boolean) => {

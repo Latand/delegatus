@@ -317,12 +317,13 @@ const LAUNCH_CLS = SCENARIO === "launch-cls";
    that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
    press and the receipt can be read. */
 const NEW_AGENT = SCENARIO === "new-agent";
-/* Three states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
-   a tab's drafts, continuing the conversation «Worker waiting for a seat»; the engine's active account
-   signed out; and a launch the server refuses by name. */
-const NEW_AGENT_SEEDS = ["handoff", "signed-out", "refused"] as const;
+/* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
+   a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
+   folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
+   two Copilot accounts to choose between. */
+const NEW_AGENT_SEEDS = ["handoff", "handoff-lost", "signed-out", "refused", "copilot"] as const;
 const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_SEEDS.find((seed) => seed === new URLSearchParams(location.search).get("naseed")) ?? null : null;
-if (NEW_AGENT_SEED === "handoff") {
+if (NEW_AGENT_SEED === "handoff" || NEW_AGENT_SEED === "handoff-lost") {
   sessionStorage.setItem("llvDrafts:atlas", JSON.stringify(["na-handoff"]));
   sessionStorage.setItem("llvDraftPane:na-handoff:src", "/repo/pending-worker.jsonl");
 }
@@ -2566,11 +2567,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...accountsBody,
       claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
         ? { ...row, authPresent: false, loginState: "signed_out", auth: { ...row.auth, state: "signed_out" } } : row) },
+    } : NEW_AGENT_SEED === "copilot" ? {
+      ...accountsBody,
+      copilot: { active: "default", accounts: [accountRow("default", "Account H", "Pro", 22, 160), accountRow("account-k", "Account K", "Pro", 9, 190)], mutationLocked: false, migration: null, autoBalance: null },
     } : accountsBody);
   }
   if (NEW_AGENT && url.pathname === "/api/spawn" && method === "GET") {
     const images = { supported: true, reason: null, formats: ["image/png", "image/jpeg"], maxImages: 8, maxRawBytesPerImage: 5_000_000, maxEncodedBytesPerRequest: 20_000_000 };
-    return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: null, spawnTransport: "structured", imageInput: { claude: images, codex: images } });
+    /* A handoff's source names its own checkout, as the route reads it from the source transcript. */
+    const sourceCwd = url.searchParams.get("src") && NEW_AGENT_SEED !== "handoff-lost" ? "/repo/worktrees/export-csv" : null;
+    return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: sourceCwd, spawnTransport: "structured", imageInput: { claude: images, codex: images, copilot: images } });
   }
   /* Dictation in the draft's composer: no live token, so the recording is transcribed on stop, and the
      answer is the first prompt the operator spoke. */
