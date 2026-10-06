@@ -6586,15 +6586,15 @@ function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: St
     && !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin !== "external");
 }
 
-/** A harness wake can hit the same limit without an operator answering. It
-    advances the cut witness while retaining the already promised stage retry. */
+/** A harness wake or controller continuation can hit the same limit without
+    an operator answering. Advance its cut witness and retain the stage retry. */
 function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
   const wait = attempt.providerWait;
   const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs
     || newerExternalProviderPrompt(attempt, durable)
     || durable?.message && durable.message.ts > wait.turnTs && durable.message.ts !== notice.ts
-    || !durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin === "harness")
+    || !durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin !== "external")
     || classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind !== "usage_limit") return false;
   wait.turnTs = notice.ts;
   wait.text = redactBounded(notice.text, 300);

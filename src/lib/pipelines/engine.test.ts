@@ -21658,7 +21658,7 @@ for (const mode of ["running", "pinned-park", "pool-park"] as const) {
 
 
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["pipeline", "operator"] as const)(`${engine} quota continuation trusts delivered %s authorship`, async author => {
+  test.each(["pipeline", "startup-recovery", "operator"] as const)(`${engine} quota continuation trusts delivered %s authorship`, async author => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
     await tickPipelines([], f.h.ports);
     f.advance(180_000);
@@ -21667,7 +21667,7 @@ for (const engine of ["claude", "codex"] as const) {
     const text = "This stage was cut by session limit. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.";
     f.advance(1_000);
     const promptAt = f.h.ports.now();
-    const origin = author === "pipeline" ? { kind: "agent" as const, role: "pipeline" } : { kind: "operator" as const };
+    const origin = author !== "operator" ? { kind: "agent" as const, role: author } : { kind: "operator" as const };
     let records: Record<string, unknown>[];
     if (engine === "claude") {
       records = [{ type: "user", uuid: "continued-prompt", timestamp: promptAt, promptSource: "sdk", turnOrigin: "sdk", message: { role: "user", content: text } }];
@@ -21694,7 +21694,7 @@ for (const engine of ["claude", "codex"] as const) {
     await tickPipelines([], f.h.ports);
     f.advance(30 * 60_000);
     await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(author === "pipeline" ? 2 : 1);
+    expect(f.sends).toHaveLength(author !== "operator" ? 2 : 1);
     if (author === "operator") expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
     else expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(2);
   });
@@ -21796,3 +21796,46 @@ test("quota continuation waits for a decision when prompt history exceeds the re
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("prompt history is incomplete");
 });
+
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["pipeline", "startup-recovery"] as const)(`${engine} parked retry retains a delivered %s continuation`, async role => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+    savePipelines([lane]);
+    await tickPipelines([], f.h.ports);
+    f.advance(1_000);
+    const promptAt = f.h.ports.now();
+    const origin = { kind: "agent" as const, role };
+    const text = "Continue the interrupted turn from the transcript.";
+    let records: Record<string, unknown>[];
+    if (engine === "claude") records = [{ type: "user", uuid: "automatic-prompt", timestamp: promptAt, promptSource: "sdk", message: { content: text } }];
+    else {
+      const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
+      const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
+      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: null, selectedContext: null, origin });
+      records = [{ type: "event_msg", timestamp: promptAt, payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } },
+        { type: "event_msg", timestamp: promptAt, payload: { type: "task_started" } }];
+    }
+    f.advance(500);
+    records.push(engine === "claude" ? { type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+      message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete", error: { message: "You've hit your session limit", codex_error_info: "usage_limit_exceeded" } } });
+    const file = stageTranscript(`parked-controller-${engine}-${role}`, records);
+    if (engine === "claude") {
+      const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+      const ledger = new FileClaudeDeliveryLedger();
+      const session = path.basename(file, ".jsonl");
+      ledger.recordQueued(session, { id: "parked-automatic-prompt", text, origin }, "turn-started");
+      ledger.confirmDelivered(session, "parked-automatic-prompt", "automatic-prompt");
+    }
+    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+    f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
+    for (let tick = 0; tick < 8; tick++) { f.advance(30_000); await tickPipelines([], f.h.ports); }
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(f.sends).toHaveLength(0);
+  });
+}

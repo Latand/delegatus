@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { claudeUserText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 
@@ -293,7 +294,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
         try { origin = readStructuredUserMetadata(decoded.metadataRef).origin; }
         catch { origin = null; }
       }
-      return [{ ts, origin: origin?.kind === "agent" && origin.role === "pipeline" ? "pipeline" as const : "external" as const }];
+      return [{ ts, origin: origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
     }
     if (record.type !== "user") return [];
     const text = claudeUserText(recordValue(record.message)?.content).trim();
@@ -305,7 +306,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       || record.promptSource !== "sdk" && /^<(?:task-notification|wakeup)\b/.test(text))) return [{ ts, origin: "harness" as const }];
     if (!human && isClaudeTurnWindowMeta(record)) return [];
     const author = provenance[stringValue(record.uuid) ?? ""];
-    return [{ ts, origin: author?.origin === "agent" && author.senderRole === "pipeline" ? "pipeline" as const : "external" as const }];
+    return [{ ts, origin: author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
   });
 }
 
