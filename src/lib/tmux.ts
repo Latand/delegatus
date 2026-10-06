@@ -1448,7 +1448,16 @@ export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, exist
     }
     throw error;
   }
-  const receipt = existingReceipt ?? agentRegistry().beginSpawn(spec.engine, spec.cwd, spec.launchProfile);
+  let receipt = existingReceipt;
+  if (!receipt) {
+    // Workflow stages and other unreserved terminal launches must yield to
+    // local holders/waiters before any pane or delivery side effect starts.
+    const begun = await agentRegistry().beginSpawnRequestAsync({
+      engine: spec.engine, cwd: spec.cwd, launchProfile: spec.launchProfile,
+    });
+    if (begun.kind !== "created") throw new Error("could not create spawn receipt");
+    receipt = begun.receipt;
+  }
   try {
     const refusal = legacyClaudeTmuxSpawnRefusal(spec);
     if (refusal) throw new Error(refusal);

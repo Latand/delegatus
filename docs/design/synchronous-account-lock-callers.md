@@ -25,7 +25,7 @@ the lock.
 | --- | --- | --- | --- | --- |
 | `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |
 | `recordSpawnAdmissionRejection` | `src/lib/agent/spawnAdmission.ts:224` | 25 ms foreign wait; async request queue | The refusal fence must commit before its result is returned; deferred writing could race reservation. | Spawn refusal and validation await async admission (2 s), then commit reentrantly; they return only after the durable fence or an explicit unfenced outcome. |
-| `beginSpawnRequest` | `src/lib/agent/registry.ts:5434` | 25 ms wait | Returns a durable reservation or rejection synchronously; request paths already have async admission. | Request paths use beginSpawnRequestAsync / async admission; direct sync API raises safe AccountMutationBusyError, with no reservation. Caller must retry after yielding. |
+| `beginSpawnRequest` | `src/lib/agent/registry.ts:5434` | 25 ms wait; async launch queue | Returns a durable reservation or rejection synchronously; request paths have async admission. | Request paths use beginSpawnRequestAsync / async admission. Workflow stage launches (`src/lib/workflows/engine.ts:87` through `src/lib/tmux.ts:1455`) now reserve with beginSpawnRequestAsync, named `spawn`, yielding for up to 2 s before any terminal side effect. Exhaustion parks the workflow with ACCOUNT_STORE_BUSY_MESSAGE and no receipt. Direct sync API raises safe AccountMutationBusyError with no reservation; caller must retry after yielding. |
 | `runIdentityWaveMigration` | `src/lib/agent/registry.ts:5894` | 25 ms wait | The migration and its marker return together; no detached replay may claim completion. | Startup raises safe AccountMutationBusyError and retries on the next startup; no completion marker is written on refusal. |
 | `setEngineRouting` | `src/lib/agent/registry.ts:7960` | 25 ms wait | The caller needs the committed routing revision. | Account manager selection already queues asynchronously; direct sync API raises safe AccountMutationBusyError without changing the routing revision. |
 | `retireAccount` | `src/lib/agent/registry.ts:7995` | 25 ms wait | Removal needs the committed retirement report before continuing its journal. | Safe AccountMutationBusyError before retirement commits; removal/recovery must retry after yielding with fresh ownership evidence. No retirement result is returned. |
@@ -85,6 +85,15 @@ the same revalidation evidence. Credential reads remain outside the lease.
 
 Focused regression evidence:
 
+- Workflow stages use the real default spawn port and tmux receipt lifecycle
+  with simulated external terminal/CLI observations. A local 8 ms holder, a
+  foreign 8 ms holder with a local waiter, and a foreign 120 ms holder each
+  leave the workflow implementing with one prompt-delivered receipt, including
+  its next tick. All three cases fail on the preceding head. Exhausted 2 s
+  admission parks with ACCOUNT_STORE_BUSY_MESSAGE and no receipt.
+- The concurrent startup migration test checks AccountMutationBusyError and
+  ACCOUNT_STORE_BUSY_MESSAGE while retaining its unfinished-marker and intact
+  orchestrator-seat checks; its complete file passes all 24 tests.
 - All seven account-route catalog branches cover a local 8 ms holder, a foreign
   120 ms holder, a local contender behind a foreign holder and exhausted 2 s
   admission. The 21 local/foreign/timeout cases fail on the previous
