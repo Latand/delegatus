@@ -2286,7 +2286,8 @@ function mockRender(width: number, height: number, hue: number, label: string, p
    button draws, answered the way `GET` and `POST /api/tasks/:id/prototypes`
    answer them. The search task waits with four variants: new pictures, two
    original/changed pairs, forty pictures in one variant and a video. Upload
-   waits with one variant and saves into a project with no orchestrator;
+   waits with one variant, whose name is the 60 characters the schema admits and whose
+   second caption runs to its 200, and saves into a project with no orchestrator;
    export is decided and its pictures are retired; links carries a decided
    first round and a waiting second; disk is decided and its message failed.
    `&proto=elsewhere` answers the search task as a linked installation does. */
@@ -2339,9 +2340,9 @@ if (PROTO) {
     ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
   ])];
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
-    { number: 1, name: L("Progress in the composer", "Перебіг у полі вводу"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
+    { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
       { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
-      { image: image(960, 600, 190, "upload · resumed"), caption: L("resumed after a drop", "відновлено після обриву"), width: 1440, lang: "en" },
+      { image: image(960, 600, 190, "upload · resumed"), caption: L("resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.", "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає."), width: 1440, lang: "en" },
     ] },
   ])];
   protoRounds["t-export"] = [round("r-export", "t-export", L("Export presets", "Пресети експорту"), 40 * 24 * 60 * MIN, [
@@ -2599,6 +2600,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
+    /* A transcription the driver holds back, to close the review while it is awaited. */
+    const held = (window as unknown as { protoTranscribeDelay?: number }).protoTranscribeDelay;
+    if (held) await new Promise((resolve) => setTimeout(resolve, held));
     return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
   }
   if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {

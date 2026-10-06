@@ -251,6 +251,110 @@ test("a directory swapped for a link out of the roots while a path route opens i
   }
 });
 
+/**
+ * A platform that publishes no name for an open file, and the race that a
+ * second look at the path loses: the directory is a link to `outside` while
+ * `target` is opened, real again afterwards, and a link once more between a
+ * resolution of the path and the next status read of it. No status is forged.
+ */
+async function swapWithoutDescriptorNames(swapped: string,outside: string,target: string,run: () => Promise<void>) {
+  const open = fs.open.bind(fs), stat = fs.stat.bind(fs), realpath = fs.realpath.bind(fs), readlink = fs.readlink.bind(fs);
+  let state: "before" | "opening" | "opened" | "resolved" | "judged" = "before";
+  const link = async () => { await fs.rename(swapped,`${swapped}.held`); await fs.symlink(outside,swapped); };
+  const unlink = async () => { await fs.unlink(swapped); await fs.rename(`${swapped}.held`,swapped); };
+  const spies = [
+    spyOn(fs,"readlink").mockImplementation((async (file: never,...rest: never[]) => {
+      if (String(file).startsWith("/proc/self/fd/")) throw Object.assign(new Error("no such file or directory"),{ code: "ENOENT" });
+      return readlink(file,...rest);
+    }) as never),
+    spyOn(fs,"open").mockImplementation((async (file: never,...rest: never[]) => {
+      if (file !== target || state !== "before") return open(file,...rest);
+      state = "opening"; await link();
+      try { return await open(file,...rest); } finally { await unlink(); state = "opened"; }
+    }) as never),
+    spyOn(fs,"realpath").mockImplementation((async (file: never,...rest: never[]) => {
+      const resolved = await realpath(file,...rest);
+      if (file === target && state === "opened") { state = "resolved"; await link(); }
+      return resolved;
+    }) as never),
+    spyOn(fs,"stat").mockImplementation((async (file: never,...rest: never[]) => {
+      try { return await stat(file,...rest); } finally { if (file === target && state === "resolved") { state = "judged"; await unlink(); } }
+    }) as never),
+  ];
+  try { await run(); } finally {
+    for (const spy of spies) spy.mockRestore();
+    if ((state as string) === "resolved") await unlink();
+  }
+  expect(["opened","judged"]).toContain(state as string);
+}
+test("where the kernel names no open file, a directory swapped twice around the open reads nothing outside the roots on any path route", async () => {
+  const base = await directory(os.tmpdir(),"prototype-roots-");
+  const outside = path.join(base,"outside"); await fs.mkdir(outside);
+  const home = process.env.HOME, evidence = process.env.LLV_EVIDENCE_ROOTS;
+  process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
+  process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
+  try {
+    const allowed = path.join(await source(),"shot.png");
+    await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
+    await fs.writeFile(path.join(outside,"shot.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
+    for (const route of pathRoutes(allowed)) {
+      await swapWithoutDescriptorNames(path.dirname(allowed),outside,allowed,async () => {
+        const response = await route();
+        expect(Buffer.from(await response.arrayBuffer()).includes("OUTSIDE!")).toBe(false);
+        expect(response.status).toBe(403);
+      });
+      // With the kernel's names back the same picture is served.
+      const restored = await route();
+      expect(restored.status).toBe(200); expect(Buffer.from(await restored.arrayBuffer()).includes("allowed!")).toBe(true);
+    }
+  } finally {
+    process.env.HOME = home;
+    if (evidence === undefined) delete process.env.LLV_EVIDENCE_ROOTS; else process.env.LLV_EVIDENCE_ROOTS = evidence;
+  }
+});
+
+test("where the kernel names no open file, the same race publishes nothing and a stored copy answers nothing from outside", async () => {
+  const base = await directory(os.tmpdir(),"prototype-roots-");
+  const outside = path.join(base,"outside"); await fs.mkdir(outside);
+  const home = process.env.HOME, evidence = process.env.LLV_EVIDENCE_ROOTS;
+  process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
+  process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
+  try {
+    const body = await input("swap-source-unnamed");
+    const picture = body.variants[0]!.frames![0]!.path;
+    await fs.writeFile(path.join(outside,"new.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
+    await swapWithoutDescriptorNames(path.dirname(picture),outside,picture,async () => {
+      const response = await publishPOST(request("/api/prototype-reviews",body));
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toContain("Nothing was published.");
+    });
+    expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+    const copies = await fs.readdir(path.join(stateDir(),"prototype-reviews"),{ recursive: true }).catch(() => []);
+    expect(copies.filter(name => /\.(png|webm)$/.test(name))).toEqual([]);
+
+    const id = await publish(body);
+    const round = loadTasks()[0]!.prototypeReviews![0]!;
+    const elsewhere = path.join(base,"elsewhere"); await fs.mkdir(elsewhere);
+    for (const media of roundMedia(round)) {
+      const own = await fs.readFile(path.join(roundDirectory(id),mediaFilename(media)));
+      const foreign = Buffer.from(own); foreign.write("OUTSIDE",own.length - 7);
+      await fs.writeFile(path.join(elsewhere,mediaFilename(media)),foreign);
+      const kind = media.mime.startsWith("image/") ? "image" as const : "video" as const;
+      const target = path.join(await fs.realpath(roundDirectory(id)),mediaFilename(media));
+      await swapWithoutDescriptorNames(roundDirectory(id),elsewhere,target,async () => {
+        const response = await prototypeMediaGET(request("/media"),TASK,id,media.id,kind);
+        expect(Buffer.from(await response.arrayBuffer()).includes("OUTSIDE")).toBe(false);
+        expect(response.status).toBe(404);
+      });
+      const restored = await prototypeMediaGET(request("/media"),TASK,id,media.id,kind);
+      expect(restored.status).toBe(200); expect(Buffer.from(await restored.arrayBuffer())).toEqual(own);
+    }
+  } finally {
+    process.env.HOME = home;
+    if (evidence === undefined) delete process.env.LLV_EVIDENCE_ROOTS; else process.env.LLV_EVIDENCE_ROOTS = evidence;
+  }
+});
+
 const lockLeftovers = async () => (await fs.readdir(path.join(stateDir(),"prototype-reviews"))).filter(name => name.includes(".decision.lock")).sort();
 
 test("the lock queues of rounds no task holds leave with the next publication; a held round keeps its own, pictures retired or not", async () => {

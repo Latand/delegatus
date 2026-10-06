@@ -170,7 +170,7 @@
     },
     "desktop-1440-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -234,7 +234,7 @@
     },
     "desktop-1440-en-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -302,7 +302,7 @@
     },
     "desktop-1440-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -371,7 +371,7 @@
     },
     "desktop-1440-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         974,
@@ -441,7 +441,7 @@
     },
     "desktop-1440-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         974,
@@ -557,7 +557,7 @@
     },
     "desktop-1440-en-light-combination": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -658,7 +658,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:29:04 PM",
+      "time": "10/6/2026, 4:27:53 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -759,7 +759,7 @@
     },
     "desktop-1440-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         974,
@@ -778,6 +778,90 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "desktop-1440-en-light-longest-name-and-caption": {
+      "viewport": 1440,
+      "stage": [
+        365,
+        1339
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 381,
+        "right": 401,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 407,
+        "right": 748.4,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 381,
+        "right": 1067.9,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "desktop-1440-en-light-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          72
+        ],
+        "canvas": [
+          365,
+          184,
+          974,
+          486
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "desktop-1440-en-light-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -790,7 +874,7 @@
           101,
           112,
           264,
-          627
+          611.5
         ],
         "toolbar": [
           365,
@@ -802,19 +886,19 @@
           365,
           160,
           974,
-          515
+          499.5
         ],
         "strip": [
           365,
-          675,
+          659.5,
           974,
           64
         ],
         "footer": [
           101,
-          739,
+          723.5,
           1238,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -822,6 +906,10 @@
       "sideways": 0
     },
     "desktop-1440-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "desktop-1440-en-light-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "desktop-1440-en-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -1167,7 +1255,7 @@
     },
     "desktop-1440-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1231,7 +1319,7 @@
     },
     "desktop-1440-en-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1299,7 +1387,7 @@
     },
     "desktop-1440-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1368,7 +1456,7 @@
     },
     "desktop-1440-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         974,
@@ -1438,7 +1526,7 @@
     },
     "desktop-1440-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         974,
@@ -1554,7 +1642,7 @@
     },
     "desktop-1440-en-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1655,7 +1743,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:29:17 PM",
+      "time": "10/6/2026, 4:28:09 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -1756,7 +1844,7 @@
     },
     "desktop-1440-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         974,
@@ -1775,6 +1863,90 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "desktop-1440-en-dark-longest-name-and-caption": {
+      "viewport": 1440,
+      "stage": [
+        365,
+        1339
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 381,
+        "right": 401,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 407,
+        "right": 748.4,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 381,
+        "right": 1067.9,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "desktop-1440-en-dark-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          72
+        ],
+        "canvas": [
+          365,
+          184,
+          974,
+          486
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "desktop-1440-en-dark-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -1787,7 +1959,7 @@
           101,
           112,
           264,
-          627
+          611.5
         ],
         "toolbar": [
           365,
@@ -1799,19 +1971,19 @@
           365,
           160,
           974,
-          515
+          499.5
         ],
         "strip": [
           365,
-          675,
+          659.5,
           974,
           64
         ],
         "footer": [
           101,
-          739,
+          723.5,
           1238,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -1819,6 +1991,10 @@
       "sideways": 0
     },
     "desktop-1440-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "desktop-1440-en-dark-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "desktop-1440-en-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -2164,7 +2340,7 @@
     },
     "desktop-1440-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2228,7 +2404,7 @@
     },
     "desktop-1440-uk-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2296,7 +2472,7 @@
     },
     "desktop-1440-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2365,7 +2541,7 @@
     },
     "desktop-1440-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         974,
@@ -2435,7 +2611,7 @@
     },
     "desktop-1440-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         974,
@@ -2551,7 +2727,7 @@
     },
     "desktop-1440-uk-light-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2652,7 +2828,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:29:29",
+      "time": "06.10.2026, 16:28:26",
       "posts": [
         {
           "taskId": "t-search",
@@ -2753,7 +2929,7 @@
     },
     "desktop-1440-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         974,
@@ -2772,6 +2948,90 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "desktop-1440-uk-light-longest-name-and-caption": {
+      "viewport": 1440,
+      "stage": [
+        365,
+        1339
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 381,
+        "right": 401,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 407,
+        "right": 792.9,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 381,
+        "right": 1081.6,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "desktop-1440-uk-light-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          72
+        ],
+        "canvas": [
+          365,
+          184,
+          974,
+          486
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "desktop-1440-uk-light-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -2784,7 +3044,7 @@
           101,
           112,
           264,
-          627
+          611.5
         ],
         "toolbar": [
           365,
@@ -2796,19 +3056,19 @@
           365,
           160,
           974,
-          515
+          499.5
         ],
         "strip": [
           365,
-          675,
+          659.5,
           974,
           64
         ],
         "footer": [
           101,
-          739,
+          723.5,
           1238,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -2816,6 +3076,10 @@
       "sideways": 0
     },
     "desktop-1440-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "desktop-1440-uk-light-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "desktop-1440-uk-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -3161,7 +3425,7 @@
     },
     "desktop-1440-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3225,7 +3489,7 @@
     },
     "desktop-1440-uk-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3293,7 +3557,7 @@
     },
     "desktop-1440-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3362,7 +3626,7 @@
     },
     "desktop-1440-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         974,
@@ -3432,7 +3696,7 @@
     },
     "desktop-1440-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         974,
@@ -3548,7 +3812,7 @@
     },
     "desktop-1440-uk-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3649,7 +3913,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:29:41",
+      "time": "06.10.2026, 16:28:42",
       "posts": [
         {
           "taskId": "t-search",
@@ -3750,7 +4014,7 @@
     },
     "desktop-1440-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         974,
@@ -3769,6 +4033,90 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "desktop-1440-uk-dark-longest-name-and-caption": {
+      "viewport": 1440,
+      "stage": [
+        365,
+        1339
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 381,
+        "right": 401,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 407,
+        "right": 792.9,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 381,
+        "right": 1081.6,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "desktop-1440-uk-dark-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          72
+        ],
+        "canvas": [
+          365,
+          184,
+          974,
+          486
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "desktop-1440-uk-dark-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -3781,7 +4129,7 @@
           101,
           112,
           264,
-          627
+          611.5
         ],
         "toolbar": [
           365,
@@ -3793,19 +4141,19 @@
           365,
           160,
           974,
-          515
+          499.5
         ],
         "strip": [
           365,
-          675,
+          659.5,
           974,
           64
         ],
         "footer": [
           101,
-          739,
+          723.5,
           1238,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -3813,6 +4161,10 @@
       "sideways": 0
     },
     "desktop-1440-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "desktop-1440-uk-dark-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "desktop-1440-uk-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -4199,7 +4551,7 @@
     },
     "pane-1000-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4263,7 +4615,7 @@
     },
     "pane-1000-en-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4331,7 +4683,7 @@
     },
     "pane-1000-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4400,7 +4752,7 @@
     },
     "pane-1000-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         686,
@@ -4470,7 +4822,7 @@
     },
     "pane-1000-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         686,
@@ -4586,7 +4938,7 @@
     },
     "pane-1000-en-light-combination": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4687,7 +5039,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:29:53 PM",
+      "time": "10/6/2026, 4:28:58 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -4761,13 +5113,13 @@
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          334
+          328
         ],
         "strip": [
           289,
@@ -4788,16 +5140,16 @@
     },
     "pane-1000-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         686,
-        334
+        328
       ],
       "media": [
         [
-          496,
-          310
+          486,
+          304
         ]
       ],
       "mediaInside": true,
@@ -4806,6 +5158,90 @@
       "thumbs": 2,
       "chosen": [],
       "round": "r-upload"
+    },
+    "pane-1000-en-light-longest-name-and-caption": {
+      "viewport": 1000,
+      "stage": [
+        289,
+        975
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 305,
+        "right": 325,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 331,
+        "right": 672.4,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 305,
+        "right": 722.6,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "pane-1000-en-light-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          90
+        ],
+        "canvas": [
+          289,
+          190,
+          686,
+          292
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
     },
     "pane-1000-en-light-no-orchestrator-geometry": {
       "regions": {
@@ -4819,31 +5255,31 @@
           25,
           100,
           264,
-          451
+          435.5
         ],
         "toolbar": [
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          339
+          317.5
         ],
         "strip": [
           289,
-          487,
+          471.5,
           686,
           64
         ],
         "footer": [
           25,
-          551,
+          535.5,
           950,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -4851,6 +5287,10 @@
       "sideways": 0
     },
     "pane-1000-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "pane-1000-en-light-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "pane-1000-en-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -5237,7 +5677,7 @@
     },
     "pane-1000-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5301,7 +5741,7 @@
     },
     "pane-1000-en-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5369,7 +5809,7 @@
     },
     "pane-1000-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5438,7 +5878,7 @@
     },
     "pane-1000-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         686,
@@ -5508,7 +5948,7 @@
     },
     "pane-1000-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         686,
@@ -5624,7 +6064,7 @@
     },
     "pane-1000-en-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5725,7 +6165,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:30:05 PM",
+      "time": "10/6/2026, 4:29:14 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -5799,13 +6239,13 @@
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          334
+          328
         ],
         "strip": [
           289,
@@ -5826,16 +6266,16 @@
     },
     "pane-1000-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         686,
-        334
+        328
       ],
       "media": [
         [
-          496,
-          310
+          486,
+          304
         ]
       ],
       "mediaInside": true,
@@ -5844,6 +6284,90 @@
       "thumbs": 2,
       "chosen": [],
       "round": "r-upload"
+    },
+    "pane-1000-en-dark-longest-name-and-caption": {
+      "viewport": 1000,
+      "stage": [
+        289,
+        975
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 305,
+        "right": 325,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 331,
+        "right": 672.4,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 305,
+        "right": 722.6,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "pane-1000-en-dark-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          90
+        ],
+        "canvas": [
+          289,
+          190,
+          686,
+          292
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
     },
     "pane-1000-en-dark-no-orchestrator-geometry": {
       "regions": {
@@ -5857,31 +6381,31 @@
           25,
           100,
           264,
-          451
+          435.5
         ],
         "toolbar": [
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          339
+          317.5
         ],
         "strip": [
           289,
-          487,
+          471.5,
           686,
           64
         ],
         "footer": [
           25,
-          551,
+          535.5,
           950,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -5889,6 +6413,10 @@
       "sideways": 0
     },
     "pane-1000-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "pane-1000-en-dark-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "pane-1000-en-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -6275,7 +6803,7 @@
     },
     "pane-1000-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6339,7 +6867,7 @@
     },
     "pane-1000-uk-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6407,7 +6935,7 @@
     },
     "pane-1000-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6476,7 +7004,7 @@
     },
     "pane-1000-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         686,
@@ -6546,7 +7074,7 @@
     },
     "pane-1000-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         686,
@@ -6662,7 +7190,7 @@
     },
     "pane-1000-uk-light-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6763,7 +7291,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:30:17",
+      "time": "06.10.2026, 16:29:30",
       "posts": [
         {
           "taskId": "t-search",
@@ -6837,13 +7365,13 @@
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          334
+          328
         ],
         "strip": [
           289,
@@ -6864,16 +7392,16 @@
     },
     "pane-1000-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         686,
-        334
+        328
       ],
       "media": [
         [
-          496,
-          310
+          486,
+          304
         ]
       ],
       "mediaInside": true,
@@ -6882,6 +7410,90 @@
       "thumbs": 2,
       "chosen": [],
       "round": "r-upload"
+    },
+    "pane-1000-uk-light-longest-name-and-caption": {
+      "viewport": 1000,
+      "stage": [
+        289,
+        975
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 305,
+        "right": 325,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 331,
+        "right": 716.9,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 305,
+        "right": 701.3,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "pane-1000-uk-light-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          90
+        ],
+        "canvas": [
+          289,
+          190,
+          686,
+          292
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
     },
     "pane-1000-uk-light-no-orchestrator-geometry": {
       "regions": {
@@ -6895,31 +7507,31 @@
           25,
           100,
           264,
-          451
+          435.5
         ],
         "toolbar": [
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          339
+          317.5
         ],
         "strip": [
           289,
-          487,
+          471.5,
           686,
           64
         ],
         "footer": [
           25,
-          551,
+          535.5,
           950,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -6927,6 +7539,10 @@
       "sideways": 0
     },
     "pane-1000-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "pane-1000-uk-light-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "pane-1000-uk-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -7313,7 +7929,7 @@
     },
     "pane-1000-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7377,7 +7993,7 @@
     },
     "pane-1000-uk-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7445,7 +8061,7 @@
     },
     "pane-1000-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7514,7 +8130,7 @@
     },
     "pane-1000-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         686,
@@ -7584,7 +8200,7 @@
     },
     "pane-1000-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         686,
@@ -7700,7 +8316,7 @@
     },
     "pane-1000-uk-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7801,7 +8417,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:30:29",
+      "time": "06.10.2026, 16:29:45",
       "posts": [
         {
           "taskId": "t-search",
@@ -7875,13 +8491,13 @@
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          334
+          328
         ],
         "strip": [
           289,
@@ -7902,16 +8518,16 @@
     },
     "pane-1000-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         686,
-        334
+        328
       ],
       "media": [
         [
-          496,
-          310
+          486,
+          304
         ]
       ],
       "mediaInside": true,
@@ -7920,6 +8536,90 @@
       "thumbs": 2,
       "chosen": [],
       "round": "r-upload"
+    },
+    "pane-1000-uk-dark-longest-name-and-caption": {
+      "viewport": 1000,
+      "stage": [
+        289,
+        975
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 305,
+        "right": 325,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 331,
+        "right": 716.9,
+        "lines": 1,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 305,
+        "right": 701.3,
+        "lines": 3,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "pane-1000-uk-dark-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          90
+        ],
+        "canvas": [
+          289,
+          190,
+          686,
+          292
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
     },
     "pane-1000-uk-dark-no-orchestrator-geometry": {
       "regions": {
@@ -7933,31 +8633,31 @@
           25,
           100,
           264,
-          451
+          435.5
         ],
         "toolbar": [
           289,
           100,
           686,
-          48
+          54
         ],
         "canvas": [
           289,
-          148,
+          154,
           686,
-          339
+          317.5
         ],
         "strip": [
           289,
-          487,
+          471.5,
           686,
           64
         ],
         "footer": [
           25,
-          551,
+          535.5,
           950,
-          106
+          121.5
         ]
       },
       "overlaps": [],
@@ -7965,6 +8665,10 @@
       "sideways": 0
     },
     "pane-1000-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "pane-1000-uk-dark-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "pane-1000-uk-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -8214,7 +8918,7 @@
     },
     "phone-390-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8260,7 +8964,7 @@
     },
     "phone-390-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8311,7 +9015,7 @@
     },
     "phone-390-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         390,
@@ -8363,7 +9067,7 @@
     },
     "phone-390-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         390,
@@ -8443,7 +9147,7 @@
     },
     "phone-390-en-light-combination": {
       "slide": "3:f0",
-      "caption": "3Dense tabletable state 1",
+      "caption": "3Dense table table state 1",
       "position": "1 / 40",
       "canvas": [
         390,
@@ -8526,7 +9230,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:30:41 PM",
+      "time": "10/6/2026, 4:30:00 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -8591,7 +9295,7 @@
     },
     "phone-390-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         390,
@@ -8610,25 +9314,91 @@
       "chosen": [],
       "round": "r-upload"
     },
-    "phone-390-en-light-no-orchestrator-geometry": {
+    "phone-390-en-light-longest-name-and-caption": {
+      "viewport": 390,
+      "stage": [
+        0,
+        390
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 16,
+        "right": 36,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 16,
+        "right": 354.8,
+        "lines": 2,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 16,
+        "right": 368.2,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "phone-390-en-light-longest-name-and-caption-geometry": {
       "regions": {
         "header": [
           0,
-          122.9,
+          115.3,
           390,
           48
         ],
         "body": [
           0,
-          170.9,
+          163.3,
           390,
-          543.6
+          526.7
         ],
         "footer": [
           0,
-          714.5,
+          690,
           390,
-          123.5
+          148
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
+    "phone-390-en-light-no-orchestrator-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          474.2
+        ],
+        "footer": [
+          0,
+          637.5,
+          390,
+          200.5
         ]
       },
       "overlaps": [],
@@ -8636,6 +9406,10 @@
       "sideways": 0
     },
     "phone-390-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "phone-390-en-light-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "phone-390-en-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -8837,7 +9611,7 @@
     },
     "phone-390-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact listresults, desktop",
+      "caption": "1Compact list results, desktop",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8883,7 +9657,7 @@
     },
     "phone-390-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columnsresults page, before and after",
+      "caption": "2Two columns results page, before and after",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8934,7 +9708,7 @@
     },
     "phone-390-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense tabletable state 40",
+      "caption": "3Dense table table state 40",
       "position": "40 / 40",
       "canvas": [
         390,
@@ -8986,7 +9760,7 @@
     },
     "phone-390-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a previewhover and keyboard walk",
+      "caption": "4Cards with a preview hover and keyboard walk",
       "position": "3 / 3",
       "canvas": [
         390,
@@ -9066,7 +9840,7 @@
     },
     "phone-390-en-dark-combination": {
       "slide": "3:f0",
-      "caption": "3Dense tabletable state 1",
+      "caption": "3Dense table table state 1",
       "position": "1 / 40",
       "canvas": [
         390,
@@ -9149,7 +9923,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 1:30:55 PM",
+      "time": "10/6/2026, 4:30:18 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -9214,7 +9988,7 @@
     },
     "phone-390-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress in the composeruploading",
+      "caption": "1Progress under the attached file with speed, size and a stop uploading",
       "position": "1 / 2",
       "canvas": [
         390,
@@ -9233,25 +10007,91 @@
       "chosen": [],
       "round": "r-upload"
     },
-    "phone-390-en-dark-no-orchestrator-geometry": {
+    "phone-390-en-dark-longest-name-and-caption": {
+      "viewport": 390,
+      "stage": [
+        0,
+        390
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 16,
+        "right": 36,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Progress under the attached file with speed, size and a stop",
+        "left": 16,
+        "right": 354.8,
+        "lines": 2,
+        "inside": true
+      },
+      "caption": {
+        "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
+        "left": 16,
+        "right": 368.2,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "phone-390-en-dark-longest-name-and-caption-geometry": {
       "regions": {
         "header": [
           0,
-          122.9,
+          115.3,
           390,
           48
         ],
         "body": [
           0,
-          170.9,
+          163.3,
           390,
-          543.6
+          526.7
         ],
         "footer": [
           0,
-          714.5,
+          690,
           390,
-          123.5
+          148
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
+    "phone-390-en-dark-no-orchestrator-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          474.2
+        ],
+        "footer": [
+          0,
+          637.5,
+          390,
+          200.5
         ]
       },
       "overlaps": [],
@@ -9259,6 +10099,10 @@
       "sideways": 0
     },
     "phone-390-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "phone-390-en-dark-transcribed-comment-saved": {
+      "comment": "Take the header from the two columns and keep the dense rows of the table.",
+      "posts": 1
+    },
     "phone-390-en-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -9460,7 +10304,7 @@
     },
     "phone-390-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -9506,7 +10350,7 @@
     },
     "phone-390-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -9557,7 +10401,7 @@
     },
     "phone-390-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         390,
@@ -9609,7 +10453,7 @@
     },
     "phone-390-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         390,
@@ -9689,7 +10533,7 @@
     },
     "phone-390-uk-light-combination": {
       "slide": "3:f0",
-      "caption": "3Щільна таблицястан таблиці 1",
+      "caption": "3Щільна таблиця стан таблиці 1",
       "position": "1 / 40",
       "canvas": [
         390,
@@ -9772,7 +10616,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:31:09",
+      "time": "06.10.2026, 16:30:35",
       "posts": [
         {
           "taskId": "t-search",
@@ -9837,7 +10681,7 @@
     },
     "phone-390-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         390,
@@ -9856,6 +10700,72 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "phone-390-uk-light-longest-name-and-caption": {
+      "viewport": 390,
+      "stage": [
+        0,
+        390
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 16,
+        "right": 36,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 16,
+        "right": 343,
+        "lines": 2,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 16,
+        "right": 348.2,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "phone-390-uk-light-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          526.7
+        ],
+        "footer": [
+          0,
+          690,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-light-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "phone-390-uk-light-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -9868,13 +10778,13 @@
           0,
           163.3,
           390,
-          533.2
+          456.2
         ],
         "footer": [
           0,
-          696.5,
+          619.5,
           390,
-          141.5
+          218.5
         ]
       },
       "overlaps": [],
@@ -9882,6 +10792,10 @@
       "sideways": 0
     },
     "phone-390-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "phone-390-uk-light-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "phone-390-uk-light-needs-you-after": {
       "before": 6,
       "afterChoice": 5,
@@ -10083,7 +10997,7 @@
     },
     "phone-390-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний списокрезультати, десктоп",
+      "caption": "1Компактний список результати, десктоп",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -10129,7 +11043,7 @@
     },
     "phone-390-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонкисторінка результатів, до і після",
+      "caption": "2Дві колонки сторінка результатів, до і після",
       "position": "1 / 3",
       "canvas": [
         390,
@@ -10180,7 +11094,7 @@
     },
     "phone-390-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблицястан таблиці 40",
+      "caption": "3Щільна таблиця стан таблиці 40",
       "position": "40 / 40",
       "canvas": [
         390,
@@ -10232,7 +11146,7 @@
     },
     "phone-390-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядомнаведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
       "position": "3 / 3",
       "canvas": [
         390,
@@ -10312,7 +11226,7 @@
     },
     "phone-390-uk-dark-combination": {
       "slide": "3:f0",
-      "caption": "3Щільна таблицястан таблиці 1",
+      "caption": "3Щільна таблиця стан таблиці 1",
       "position": "1 / 40",
       "canvas": [
         390,
@@ -10395,7 +11309,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 13:31:24",
+      "time": "06.10.2026, 16:30:52",
       "posts": [
         {
           "taskId": "t-search",
@@ -10460,7 +11374,7 @@
     },
     "phone-390-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг у полі вводузавантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
       "position": "1 / 2",
       "canvas": [
         390,
@@ -10479,6 +11393,72 @@
       "chosen": [],
       "round": "r-upload"
     },
+    "phone-390-uk-dark-longest-name-and-caption": {
+      "viewport": 390,
+      "stage": [
+        0,
+        390
+      ],
+      "clipped": 0,
+      "number": {
+        "text": "1",
+        "left": 16,
+        "right": 36,
+        "lines": 1,
+        "inside": true
+      },
+      "name": {
+        "text": "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "left": 16,
+        "right": 343,
+        "lines": 2,
+        "inside": true
+      },
+      "caption": {
+        "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
+        "left": 16,
+        "right": 348.2,
+        "lines": 4,
+        "inside": true
+      },
+      "reachable": {
+        "number": true,
+        "name": true,
+        "caption": true
+      }
+    },
+    "phone-390-uk-dark-longest-name-and-caption-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          526.7
+        ],
+        "footer": [
+          0,
+          690,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-dark-transcribing-guard": {
+      "field": "",
+      "review": 1,
+      "guard": 1,
+      "arrived": true,
+      "guardAfterArrival": 1
+    },
     "phone-390-uk-dark-no-orchestrator-geometry": {
       "regions": {
         "header": [
@@ -10491,13 +11471,13 @@
           0,
           163.3,
           390,
-          533.2
+          456.2
         ],
         "footer": [
           0,
-          696.5,
+          619.5,
           390,
-          141.5
+          218.5
         ]
       },
       "overlaps": [],
@@ -10505,6 +11485,10 @@
       "sideways": 0
     },
     "phone-390-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "phone-390-uk-dark-transcribed-comment-saved": {
+      "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "posts": 1
+    },
     "phone-390-uk-dark-needs-you-after": {
       "before": 6,
       "afterChoice": 5,

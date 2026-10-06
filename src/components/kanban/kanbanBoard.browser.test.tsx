@@ -17962,7 +17962,8 @@ describe("prototype review on a task: the card's button, the review and the orch
    * brings the task up and opens its review; the review shows one variant or
    * four, an original beside its change, a video, forty pictures in one
    * variant, a combination chosen with a dictated comment, the saved decision
-   * and the earlier round. Measured at 1440, 1000 and 390, in English and
+   * and the earlier round; a name of 60 characters with a caption of 200 read
+   * in full, and a close while speech is still transcribed asks first. Measured at 1440, 1000 and 390, in English and
    * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "prototype review"
@@ -18443,6 +18444,65 @@ describe("prototype review on a task: the card's button, the review and the orch
           await frameCheck("one-variant");
           record("one-variant", await stageState());
           if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 1) failures.push(`${label}: the one-variant review lists more than one`);
+
+          /* 11a. The longest name and the longest caption the schema admits:
+             the number, the name and the caption are all read inside the stage. */
+          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await settle();
+          const longest = await page.evaluate(() => {
+            const stage = document.querySelector<HTMLElement>("[data-prototype-stage]")!.getBoundingClientRect();
+            const line = document.querySelector<HTMLElement>("[data-prototype-caption]")!;
+            const part = (name: string) => {
+              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`);
+              const boxes = element ? [...element.getClientRects()] : [];
+              return {
+                text: element?.textContent ?? null,
+                left: Math.round(Math.min(...boxes.map((box) => box.left)) * 10) / 10,
+                right: Math.round(Math.max(...boxes.map((box) => box.right)) * 10) / 10,
+                lines: new Set(boxes.map((box) => Math.round(box.top))).size,
+                inside: boxes.length > 0 && boxes.every((box) => box.width > 0 && box.left >= stage.left - 0.5 && box.right <= stage.right + 0.5 && box.right <= window.innerWidth + 0.5),
+              };
+            };
+            /* A point in the middle of each part's last line lands on that part: nothing covers or clips it. */
+            const reachable = (name: string) => {
+              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`)!;
+              const last = [...element.getClientRects()].at(-1)!;
+              const hit = document.elementFromPoint(last.left + last.width / 2, last.top + last.height / 2);
+              return hit === element || element.contains(hit);
+            };
+            return { viewport: window.innerWidth, stage: [Math.round(stage.left), Math.round(stage.right)], clipped: line.scrollWidth - line.clientWidth, number: part("number"), name: part("name"), caption: part("text"), reachable: { number: reachable("number"), name: reachable("name"), caption: reachable("text") } };
+          });
+          record("longest-name-and-caption", longest);
+          await shot("longest-name-and-caption");
+          await frameCheck("longest-name-and-caption");
+          if (longest.name.text?.length !== 60 || (longest.caption.text?.length ?? 0) < 190) failures.push(`${label}: the boundary case shows a name of ${longest.name.text?.length} and a caption of ${longest.caption.text?.length} characters`);
+          if (!longest.number.inside || !longest.name.inside || !longest.caption.inside || longest.clipped > 0) failures.push(`${label}: the longest name and caption leave the stage: ${JSON.stringify(longest)}`);
+          if (!longest.reachable.number || !longest.reachable.name || !longest.reachable.caption) failures.push(`${label}: part of the longest name and caption is covered: ${JSON.stringify(longest.reachable)}`);
+          await page.locator(`${REVIEW} [data-prototype-step="previous"]`).click();
+
+          /* 11b. Closing while speech is transcribed, with nothing typed, asks
+             first; the words that come back afterwards are kept and saved once. */
+          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_500; });
+          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
+          const stopSpeech = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
+          await stopSpeech.waitFor({ timeout: 10_000 });
+          await page.waitForTimeout(1_600);
+          await stopSpeech.click();
+          await stopSpeech.waitFor({ state: "detached", timeout: 5_000 });
+          const emptyWhileTranscribed = await page.locator("[data-prototype-comment-field]").inputValue();
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(300);
+          const asked = { field: emptyWhileTranscribed, review: await page.locator(REVIEW).count(), guard: await page.locator("[data-prototype-guard]").count() };
+          await shot("transcribing-guard").catch(() => {});
+          const late = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
+          const arrived = asked.review === 1 && await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, late, { timeout: 10_000 }).then(() => true, () => false);
+          const stillAsking = await page.locator("[data-prototype-guard]").count();
+          if (stillAsking) await page.locator("[data-prototype-guard-keep]").click();
+          record("transcribing-guard", { ...asked, arrived, guardAfterArrival: stillAsking });
+          if (asked.field !== "" || asked.review !== 1 || asked.guard !== 1 || !arrived || stillAsking !== 1) throw new Error(`closing while speech was transcribed read ${JSON.stringify({ ...asked, arrived, stillAsking })}`);
+          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
+
           await page.locator(`${REVIEW} [data-prototype-choose="1"]`).click();
           await page.locator("[data-prototype-save]").click();
           await page.waitForSelector(`${scope} [data-prototype-delivery="no-orchestrator"]`, { timeout: 10_000 });
@@ -18451,6 +18511,9 @@ describe("prototype review on a task: the card's button, the review and the orch
           await frameCheck("no-orchestrator");
           const unsent = await page.locator("[data-prototype-delivery]").textContent();
           record("no-orchestrator", unsent);
+          const keptSpeech = { comment: await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent(), posts: (await posts()).filter((post) => post.taskId === "t-upload").length };
+          record("transcribed-comment-saved", keptSpeech);
+          if (keptSpeech.comment !== late || keptSpeech.posts !== 1) failures.push(`${label}: the comment kept through the guard was saved as ${JSON.stringify(keptSpeech)}`);
           if (!unsent?.includes(tr("proto.delivery.no-orchestrator"))) failures.push(`${label}: with no orchestrator the review says ${unsent}`);
           await closeReview();
           if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }

@@ -168,8 +168,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const recording = dictation.phase === "rec";
   const comment = dictation.liveText ? (draft.comment ? `${draft.comment.trimEnd()} ` : "") + dictation.liveText : draft.comment;
 
-  /* Closing with a comment that was never saved asks first. */
-  const unsaved = rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || recording;
+  /* Closing with a comment that was never saved asks first. Speech counts from
+     the tap on the microphone to the last word landing in the field: while it
+     is transcribed the field may be empty, and closing then would unmount the
+     review before the answer has anywhere to go. */
+  const unsaved = rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "") || Boolean(dictation.liveText) || dictation.phase !== "idle";
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
     else if (unsaved) setGuard(true);
@@ -435,10 +438,12 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     <section data-prototype-stage={slide?.key ?? ""} aria-label={slide ? slideLabel(slide) : title} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
         {slide ? (
-          <p data-prototype-caption="" className="m-0 flex min-w-0 flex-1 basis-56 items-baseline gap-1.5 text-ui">
-            <span className="grid h-5 min-w-5 shrink-0 place-items-center self-center rounded-sm bg-sunken px-1 text-caption font-bold tabular-nums text-secondary">{slide.variant.number}</span>
-            <span className="shrink-0 font-semibold text-primary">{slide.variant.name}</span>
-            {slide.caption ? <span className="min-w-0 truncate text-secondary" title={slide.caption}>{slide.caption}</span> : null}
+          /* One run of text that wraps inside the stage: the longest name and
+             the longest caption the schema admits are both read in full. */
+          <p data-prototype-caption="" className="m-0 min-w-0 flex-1 basis-56 text-ui [overflow-wrap:anywhere]">
+            <span data-prototype-caption-number="" className="mr-1.5 inline-grid h-5 min-w-5 place-items-center rounded-sm bg-sunken px-1 align-middle text-caption font-bold tabular-nums text-secondary">{slide.variant.number}</span>
+            <span data-prototype-caption-name="" className="font-semibold text-primary">{slide.variant.name}</span>
+            {slide.caption ? <>{" "}<span data-prototype-caption-text="" className="text-secondary">{slide.caption}</span></> : null}
           </p>
         ) : <span className="flex-1" />}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">

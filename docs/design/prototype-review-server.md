@@ -26,13 +26,23 @@ routes enforce the existing origin and team fences and the caller's project.
 The roots are checked against the file that was opened. `O_NOFOLLOW` guards
 only a path's last component, so a directory above it swapped for a link
 between the check and the open would hand back a file from elsewhere. After
-the open, `openedAt` (`src/lib/artifact/localFile.ts`) asks the kernel for
-the open file's own name (`/proc/self/fd`) and requires the admitted path;
-where the platform publishes no such name the path is resolved again and must
-lead to the same inode. Publication copies and both media routes use it, and
-so do the path routes (`/api/image?path=`, `/api/artifact`, the report frame
-route) through `openAdmitted`: they keep a descriptor only when the open file
-lies at the path that was admitted, and read every byte from it. The
+the open, `openedAt` (`src/lib/artifact/localFile.ts`) establishes where the
+open file lies by a mechanism of the platform. Linux gives the kernel's own
+name for it (`/proc/self/fd`), which must be the admitted path. macOS opens
+the path once more in one call that refuses every link on the way
+(`O_NOFOLLOW_ANY`, used only after an open through a link of the process's own
+making was refused) and must arrive at the same inode. Looking at the path a
+second time is no such mechanism: the directory can be swapped around each
+look. Where neither exists the place is unknown and `openedAt` answers no, so
+a Linux without `/proc` publishes and serves nothing. Publication copies and
+both media routes use it, and so do the path routes (`/api/image?path=`,
+`/api/artifact`, the report frame route) through `openAdmitted`: they keep a
+descriptor only when the open file lies at the path that was admitted, and
+read every byte from it. Windows has neither mechanism: a review is never
+published there, so its store stays empty, and the path routes resolve the
+path once more after the open, as they did before they pinned a descriptor.
+`src/lib/artifact/localFile.test.ts` runs on Linux here and on macOS in the
+`macOS process identity` workflow. The
 store's root is resolved once and may be reached through a link (a chosen
 `LLV_STATE_DIR`); nothing below the root may be a link, and a read reports a
 copy as available by the same test the route serves it by.
@@ -168,7 +178,8 @@ pushes its screen on the phone, and opens the review over it.
 `MobileSheet` on the phone. The variants are a list beside the stage (a row of
 chips on the phone), each with its number, name and description. The stage
 shows one picture at a time under a line with the variant's number, its name
-and the picture's caption; a strip of thumbnails holds the variant's other
+and the picture's caption, which wraps inside the stage so the longest name
+(60 characters) and the longest caption (200) are read in full; a strip of thumbnails holds the variant's other
 pictures and videos and scrolls sideways. An original and its change are shown
 side by side or under a slider over one frame. A click, or the zoom button,
 opens the existing `Lightbox` over the whole round, an original right before
@@ -181,7 +192,10 @@ Earlier rounds open from the header's round buttons.
 
 Keys: Left and Right step through the round's pictures, 1 to 9 toggle a
 variant, Escape closes and asks first when a comment was typed or dictated and
-not saved. A text field and a playing video keep their own keys.
+not saved. Speech counts from the tap on the microphone until its words are in
+the field: Escape, the close button and the backdrop ask while it starts,
+records or is transcribed, the answer lands in the field behind the question,
+and only «Discard» drops it. A text field and a playing video keep their own keys.
 
 Rendered evidence comes from the two existing drivers. One `describe` block
 in `src/components/kanban/kanbanBoard.browser.test.tsx` runs the `?proto=1`
@@ -189,7 +203,9 @@ scenario of the board fixture at 1440, 1000 and 390, in English and Ukrainian,
 light and dark: the card button, the notice in the orchestrator's pane and on
 the phone's seat card with its jump, the needs-you count with the waiting
 reviews' rows and their jump (the count falls by one with each saved choice),
-and every state of the review. One `describe` block in
+and every state of the review, a 60-character name over a 200-character
+caption and a close while speech is transcribed among them. One `describe`
+block in
 `src/components/conversation/conversationWindow.browser.test.tsx` opens the
 orchestrator's composer on the phone (`?case=prototype-notice`) and reads the
 notice above the message field, the count folded behind it, the unfolded list

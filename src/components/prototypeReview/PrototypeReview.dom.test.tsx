@@ -143,3 +143,71 @@ test("nothing saves while speech is recorded or transcribed, by the button or by
   expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [1], comment: "Typed prefix and the spoken rest." }]);
   expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Typed prefix and the spoken rest.");
 });
+
+test("closing while speech is starting or transcribed asks first, with nothing typed: keeping receives the late words and saves them once, only discarding closes", async () => {
+  const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];
+  let saved: { chosen: number[]; comment: string } | undefined;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      saved = { chosen: body.chosen, comment: body.comment };
+    }
+    return new Response(JSON.stringify(reviewRead(saved)), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  let closed = 0;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => { closed += 1; }} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  const guard = () => document.querySelector("[data-prototype-guard]");
+  const dismissals: Array<[string, () => void]> = [
+    ["Escape", () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); }],
+    ["the close button", () => { document.querySelector<HTMLElement>("[data-prototype-close]")!.click(); }],
+    ["the backdrop", () => { document.querySelector<HTMLElement>("[data-prototype-review]")!.click(); }],
+  ];
+  /* Idle and empty, each of them closes: the guard below is about speech. */
+  for (const [, dismiss] of dismissals) await act(async () => { dismiss(); });
+  expect(closed).toBe(dismissals.length);
+  closed = 0;
+  for (const phase of ["starting", "busy"] as const) {
+    for (const [name, dismiss] of dismissals) {
+      heldPhase = phase;
+      await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle={`Layout task ${phase} ${name}`} onClose={() => { closed += 1; }} />); });
+      expect(guard()).toBeNull();
+      await act(async () => { dismiss(); });
+      expect([phase, name, closed, guard() !== null]).toEqual([phase, name, 0, true]);
+      await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-keep]")!.click(); });
+      expect(guard()).toBeNull();
+    }
+  }
+  /* The answer comes back while the question is still up. */
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-close]")!.click(); });
+  expect(guard()).not.toBeNull();
+  heldPhase = null;
+  await act(async () => { dictationOptions!.onUnclaimedText("Move the caption under the picture."); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(closed).toBe(0);
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-keep]")!.click(); });
+  expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("Move the caption under the picture.");
+  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")?.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [2], comment: "Move the caption under the picture." }]);
+  expect(closed).toBe(0);
+});
+
+test("discarding in the guard is what drops speech still being transcribed", async () => {
+  globalThis.fetch = (async (_url: unknown) => new Response(JSON.stringify(reviewRead()), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  let closed = 0;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  heldPhase = "busy";
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => { closed += 1; }} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-close]")!.click(); });
+  expect(closed).toBe(0);
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-discard]")!.click(); });
+  expect(closed).toBe(1);
+});

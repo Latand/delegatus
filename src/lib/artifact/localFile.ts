@@ -1,5 +1,6 @@
 import { constants as FS, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
@@ -117,26 +118,73 @@ export async function realAllowedRoots(): Promise<AllowedRoots> {
   return { home, evidence, fenced };
 }
 
+/* macOS refuses an open with this flag (`ELOOP`) when any component of the
+   path is a link, where `O_NOFOLLOW` looks at the last one only. */
+const DARWIN_O_NOFOLLOW_ANY = 0x20000000;
+
+let linklessOpen: Promise<boolean> | undefined;
+
+/**
+ * Whether this runtime's open honours `O_NOFOLLOW_ANY`, tried once against a
+ * link of its own making: a runtime or a kernel that drops the flag would turn
+ * the check built on it into an ordinary second open.
+ */
+function honoursLinklessOpen(): Promise<boolean> {
+  return linklessOpen ??= (async () => {
+    let scratch: string | undefined;
+    try {
+      scratch = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llv-linkless-")));
+      await fs.mkdir(path.join(scratch, "real"));
+      await fs.writeFile(path.join(scratch, "real", "probe"), "");
+      await fs.symlink(path.join(scratch, "real"), path.join(scratch, "link"));
+      const plain = await fs.open(path.join(scratch, "real", "probe"), FS.O_RDONLY | DARWIN_O_NOFOLLOW_ANY);
+      await plain.close();
+      const through = await fs.open(path.join(scratch, "link", "probe"), FS.O_RDONLY | DARWIN_O_NOFOLLOW_ANY).catch(() => null);
+      await through?.close();
+      return through === null;
+    } catch {
+      return false;
+    } finally {
+      if (scratch) await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+    }
+  })();
+}
+
 /**
  * Whether an open descriptor is the file at `expected`, a path whose links
- * are already resolved. `O_NOFOLLOW` guards only the last component, so a
- * directory above it swapped for a link between the check and the open hands
- * back a file from somewhere else under the same name. The kernel's own name
- * for the open file settles it where the platform publishes one
- * (`/proc/self/fd`): it names the file that was opened, whatever the path says
- * by now. Elsewhere the path is resolved again after the open and must still
- * lead to the same inode.
+ * are already resolved, or `null` where the platform has no way to tell.
+ * `O_NOFOLLOW` guards only the last component, so a directory above it swapped
+ * for a link between the check and the open hands back a file from somewhere
+ * else under the same name. Looking at the path again settles nothing: the
+ * directory can be swapped back and forth around each look. Two mechanisms do
+ * settle it. Linux publishes the kernel's own name for the open file
+ * (`/proc/self/fd`), which names what was opened whatever the path says by
+ * now. macOS opens the path once more in a single call that refuses every
+ * link on the way (`O_NOFOLLOW_ANY`) and must arrive at the same inode.
  */
-export async function openedAt(handle: fsp.FileHandle, expected: string): Promise<boolean> {
+export async function descriptorPlace(handle: fsp.FileHandle, expected: string, platform: NodeJS.Platform = process.platform): Promise<boolean | null> {
   const held = await fs.readlink(`/proc/self/fd/${handle.fd}`).catch(() => null);
   if (held !== null) return held === expected;
+  if (platform !== "darwin" || !await honoursLinklessOpen()) return null;
+  let again: fsp.FileHandle | undefined;
   try {
-    if (await fs.realpath(expected) !== expected) return false;
-    const [named, pinned] = await Promise.all([fs.stat(expected), handle.stat()]);
+    again = await fs.open(expected, FS.O_RDONLY | FS.O_NONBLOCK | DARWIN_O_NOFOLLOW_ANY);
+    const [named, pinned] = await Promise.all([again.stat(), handle.stat()]);
     return named.ino === pinned.ino && named.dev === pinned.dev;
   } catch {
     return false;
+  } finally {
+    await again?.close().catch(() => {});
   }
+}
+
+/**
+ * Whether an open descriptor is known to be the file at `expected`. A platform
+ * that cannot tell answers no: the prototype store publishes and serves a copy
+ * only where its place is established.
+ */
+export async function openedAt(handle: fsp.FileHandle, expected: string): Promise<boolean> {
+  return await descriptorPlace(handle, expected) === true;
 }
 
 /**
@@ -145,14 +193,32 @@ export async function openedAt(handle: fsp.FileHandle, expected: string): Promis
  * The roots and the fenced stores were judged on the path; this is what makes
  * that judgement hold for the bytes, and every read after it goes through the
  * descriptor. A file that turns out to lie elsewhere fails as a link at the
- * last component does (`ELOOP`). `O_NONBLOCK` keeps a pipe under the name from
- * holding the open; the caller's own check refuses anything that is no file.
+ * last component does (`ELOOP`), and so does one whose place the platform
+ * cannot establish. `O_NONBLOCK` keeps a pipe under the name from holding the
+ * open; the caller's own check refuses anything that is no file.
+ *
+ * Windows has neither mechanism and no `O_NOFOLLOW`. There the path is
+ * resolved once more after the open and must still lead to the same file,
+ * which is what these routes did before they pinned a descriptor; the store
+ * that needs the stronger fence holds nothing on Windows, because `openedAt`
+ * refuses its publications.
  */
-export async function openAdmitted(real: string): Promise<fsp.FileHandle> {
+export async function openAdmitted(real: string, platform: NodeJS.Platform = process.platform): Promise<fsp.FileHandle> {
   const handle = await fs.open(real, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
-  if (await openedAt(handle, real)) return handle;
+  const place = await descriptorPlace(handle, real, platform);
+  if (place === true || (place === null && platform === "win32" && await resolvesTo(handle, real))) return handle;
   await handle.close().catch(() => {});
   throw Object.assign(new Error("the opened file is not the admitted one"), { code: "ELOOP" });
+}
+
+async function resolvesTo(handle: fsp.FileHandle, expected: string): Promise<boolean> {
+  try {
+    if (await fs.realpath(expected) !== expected) return false;
+    const [named, pinned] = await Promise.all([fs.stat(expected), handle.stat()]);
+    return named.ino === pinned.ino && named.dev === pinned.dev;
+  } catch {
+    return false;
+  }
 }
 
 /**
