@@ -2967,3 +2967,26 @@ test.each(["before-claim", "after-claim", "serialized-control"] as const)("provi
     expect(journal.operationResult(`automatic-${timing}`)!.receipt.status).toBe(timing === "serialized-control" ? "delivered" : "failed");
   } finally { journal.close(); }
 });
+
+
+test.each([false, true])("provider recovery authority reaches termination with an owned host: %s", async ownedHost => {
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 4, writerClaim: "owner:1" };
+  let pending = true;
+  let receiptStatus = "queued";
+  let claim: import("./contracts").RuntimeRetirementClaim | undefined;
+  const terminations: unknown[][] = [];
+  const owned = host(async () => { throw new Error("no delivery expected"); });
+  owned.health = async () => idleState();
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => pending ? [{ id: "effect:provider-retire", kind: "runtime.kill", eventSeq: 1,
+      payload: { operationId: "provider-retire", conversationId: "conversation-one", sessionKey: { engine: "codex", sessionId: "generation-one" },
+        onlyIfIdle, providerRecovery } }] : [],
+    status: async () => ({ status: receiptStatus, retirementClaim: claim, revision: 1 }),
+    transition: async (_id, status, _details, options) => { receiptStatus = status; claim = options?.retirementClaim; if (status === "delivered") pending = false; },
+  }, () => ownedHost ? owned : null, async (...args) => { terminations.push(args); return true; });
+  await queue.drain();
+  expect(receiptStatus).toBe("delivered");
+  expect(terminations).toEqual([["conversation-one", { engine: "codex", sessionId: "generation-one" }, onlyIfIdle,
+    expect.objectContaining({ operationId: "provider-retire" }), providerRecovery]]);
+});

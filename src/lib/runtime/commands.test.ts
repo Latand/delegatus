@@ -189,3 +189,18 @@ test("automatic continuation parsing retains its idle fence and refuses unsafe p
   }
   expect(() => parseRuntimeCommand("steer", body)).toThrow();
 });
+
+
+test("provider recovery authority requires a valid idle-only kill", () => {
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const command = { conversationId: "conversation_fixture", idempotencyKey: "retire-fixture", sessionKey: { engine: "codex", sessionId: "fixture" },
+    onlyIfIdle: { revision: 1, writerClaim: "fixture:1" }, providerRecovery };
+  expect(parseRuntimeCommand("kill", command)).toMatchObject({ providerRecovery });
+  expect(() => parseRuntimeCommand("kill", { ...command, onlyIfIdle: undefined })).toThrow();
+  for (const invalid of [null, {}, { ...providerRecovery, attempt: 0 }, { ...providerRecovery, attempt: 1.5 },
+    { ...providerRecovery, turnTs: 0 }, { ...providerRecovery, turnTs: Infinity },
+    { ...providerRecovery, pipelineId: "" }, { ...providerRecovery, stageId: "bad id" },
+    { ...providerRecovery, controlGeneration: undefined }, { ...providerRecovery, controlGeneration: "" }]) {
+    expect(() => parseRuntimeCommand("kill", { ...command, providerRecovery: invalid })).toThrow();
+  }
+});

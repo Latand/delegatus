@@ -262,7 +262,8 @@ export interface PipelinePorts {
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
-  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle: true }): Promise<PipelineStageStopResult>;
+  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle: true;
+    providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
   stopInterruptedStageAgent?(target: PipelineStageHostRef, options?: { allowIdle?: boolean }): Promise<PipelineStageStopResult | null>;
   /** Identity-verified teardown of a stage attempt's tmux pane, for a
@@ -763,6 +764,7 @@ const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   client?: RuntimeHostClient | null;
   /** Injected into the identity-bound termination a socketless caller falls
       back to (#1501); production uses the real kernel probes and signals. */
@@ -772,6 +774,7 @@ export type StageStopProbes = {
     transcriptPath: string;
     action: "kill";
     onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
+    providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   }) => Promise<{ status: number; body: unknown }>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -898,6 +901,7 @@ export async function stopPipelineStageAgent(
   target: PipelineStageHostRef,
   probes: StageStopProbes = {},
 ): Promise<PipelineStageStopResult> {
+  if (probes.providerRecovery && !probes.onlyIfIdle) return { outcome: "deferred" };
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
@@ -909,6 +913,7 @@ export async function stopPipelineStageAgent(
     });
     const result = await applyAction({ conversationId, transcriptPath, action: "kill",
       ...(probes.onlyIfIdle ? { onlyIfIdle: probes.onlyIfIdle } : {}),
+      ...(probes.providerRecovery ? { providerRecovery: probes.providerRecovery } : {}),
     });
     const body = result.body as { ok?: boolean; error?: string; code?: string; operationId?: string; receipt?: { status?: string } };
     if (result.status === 503 && body.code === RUNTIME_HOST_UNAVAILABLE_CODE) {
@@ -1357,7 +1362,7 @@ export function defaultPipelinePorts(
       return [...observation.panes.values()].some(pane => pane.paneId === paneId);
     },
     stopStageAgent: (target, options) => options?.onlyIfIdle
-      ? retirePipelineStageAgent(target) : stopPipelineStageAgent(target),
+      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery }) : stopPipelineStageAgent(target),
     stopInterruptedStageAgent: async (target, options) => {
       const probe = await stageHostProbe(target);
       const stamp = () => {
@@ -2224,11 +2229,11 @@ async function recoverProviderCut(
       }
     } catch { /* The ordinary bounded recovery below still applies. */ }
   }
-  // A new spare keeps the chain restart budget. A reset crossed since the
-  // target's cut opens one fresh launch, fenced again by its next cut.
-  const finalSpare = condition.kind === "usage_limit" && target
-    && (wait.tries <= 3 && triedAccounts.length <= 1
-      || providerAccountHasNewWindow(pipeline, attempt, engine, target, ports));
+  // Every untried permitted account gets one launch, retaining the chain's
+  // spent attempts. A crossed reset opens one newly fenced account window.
+  const finalSpare = target && (["usage_limit", "auth_required"].includes(condition.kind)
+    && !triedAccounts.includes(target) && !wait.failedAccounts?.includes(target)
+    || condition.kind === "usage_limit" && providerAccountHasNewWindow(pipeline, attempt, engine, target, ports));
   if (bounded && !finalSpare
     || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
     parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
@@ -2299,7 +2304,8 @@ async function recoverProviderCut(
 }
 
 /** An absent registry resident does not establish that a recorded pane exited. */
-async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts, options?: { onlyIfIdle: true }): Promise<PipelineStageStopResult> {
+async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts, options?: { onlyIfIdle: true;
+  providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult> {
   const stopped = await ports.stopStageAgent(target, options);
   if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
   if (options?.onlyIfIdle) {
@@ -2356,8 +2362,13 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     return false;
   };
   if (!await confirmProviderCut()) return true;
+  // The retirement callback validates the durable attempt independently.
+  if (providerLimit) persist();
   const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, ports, providerLimit ? { onlyIfIdle: true } : undefined);
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, ports, providerLimit ? {
+      onlyIfIdle: true, providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: attempt.n,
+        turnTs: attempt.providerWait?.turnTs ?? 0, controlGeneration: pipeline.controlGeneration ?? null },
+    } : undefined);
   if (!["stopped", "not-running"].includes(stopped.outcome)) {
     const now = ports.now();
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
@@ -4999,7 +5010,7 @@ async function spawnRunStage(
       attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries,
         startedAt: providerBackoffStartedAt(attempt, ports.now()), engine,
         failedAccounts: [...new Set([...providerFailedAccountsOn(attempt, engine), ...wait.failedAccounts])] };
-      if (!attemptStage(stage, attempt).account && wait.tries < 3) {
+      if (!attemptStage(stage, attempt).account) {
         const unavailableIds = usageLimitsOn(attempt, engine)
           .filter(item => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
           .map(item => item.accountId).concat(providerSpentAccountsOn(pipeline, attempt, engine, ports), wait.failedAccounts);
@@ -5411,8 +5422,14 @@ async function tickRunStage(
         text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
     : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
-    if (attempt.providerWait && attempt.providerWait.turnTs > 0 && durable?.promptHistoryComplete === false) {
-      waitForProviderTransport(pipeline, attempt, attempt.providerWait.condition, "delivered prompt history is incomplete", ports, persist);
+    if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
+      return;
+    }
+    if (!attempt.providerWait && durable?.firstProviderCutAt
+      && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
+      park(pipeline, "provider recovery cancelled by operator control after the cut; waiting for operator decision", attempt);
+      persist();
       return;
     }
     if (newerExternalProviderPrompt(attempt, durable)) {
@@ -6609,8 +6626,8 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
 }
 
 function newerExternalProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
-  const wait = attempt.providerWait;
-  return !!wait && wait.turnTs > 0 && !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin === "external");
+  const cutAt = attempt.providerWait?.turnTs ?? durable?.firstProviderCutAt;
+  return !!cutAt && cutAt > 0 && !!durable?.prompts?.some(prompt => prompt.ts > cutAt && prompt.origin === "external");
 }
 
 function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
@@ -6739,8 +6756,12 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   }
   if (!await confirmUnchangedCut()) return true;
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(ports.now())) return false;
+  persist();
   const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, { onlyIfIdle: true });
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, {
+      onlyIfIdle: true, providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: attempt.n,
+        turnTs: wait.turnTs, controlGeneration: pipeline.controlGeneration ?? null },
+    });
   if (!["stopped", "not-running"].includes(stopped.outcome)
     || attempt.paneId && await ports.paneAgentAlive(attempt.paneId)) {
     const now = ports.now();

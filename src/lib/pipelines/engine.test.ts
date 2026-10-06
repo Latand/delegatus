@@ -20500,22 +20500,40 @@ for (const startup of [false, true]) {
     await tickPipelines([], f.h.ports);
     f.advance(60_000);
     await tickPipelines([], f.h.ports);
-    expect(f.h.calls).toContain("stop-pane:plan:1:%recorded-stage");
-    if (outcome === "stopped" || outcome === "not-running") {
-      await tickPipelines([], f.h.ports);
-      expect(f.h.spawnInputs).toHaveLength(2);
-      const paneCheck = f.h.calls.indexOf("stop-pane:plan:1:%recorded-stage");
-      const retrySpawn = f.h.calls.findIndex((call, index) => index > paneCheck && call.startsWith("spawn:"));
-      expect(retrySpawn).toBeGreaterThan(paneCheck);
-      expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
-    } else {
-      expect(f.h.spawnInputs).toHaveLength(1);
-      f.advance(11 * 60_000);
-      await tickPipelines([], f.h.ports);
-      expect(loadPipelines()[0]!.state).toBe("needs_decision");
-      expect(loadPipelines()[0]!.stateDetail).toContain(startup ? "runtime host" : "auth refresh race");
-      expect(f.h.spawnInputs).toHaveLength(1);
+    if (!startup) {
+      // A transient provider cut cannot retire a live legacy pane: its
+      // identity alone cannot exclude newer operator work.
+      expect(f.h.calls).not.toContain("stop-pane:plan:1:%recorded-stage");
+      if (outcome === "not-running") {
+        await tickPipelines([], f.h.ports);
+        expect(f.h.spawnInputs).toHaveLength(2);
+        expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
+      } else {
+        f.advance(11 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(loadPipelines()[0]!.stateDetail).toContain("auth refresh race");
+        expect(f.h.spawnInputs).toHaveLength(1);
+      }
       expect(f.h.killedPanes).toEqual([]);
+    } else {
+      expect(f.h.calls).toContain("stop-pane:plan:1:%recorded-stage");
+      if (outcome === "stopped" || outcome === "not-running") {
+        await tickPipelines([], f.h.ports);
+        expect(f.h.spawnInputs).toHaveLength(2);
+        const paneCheck = f.h.calls.indexOf("stop-pane:plan:1:%recorded-stage");
+        const retrySpawn = f.h.calls.findIndex((call, index) => index > paneCheck && call.startsWith("spawn:"));
+        expect(retrySpawn).toBeGreaterThan(paneCheck);
+        expect(f.h.spawnInputs[1]!.prompt).toContain("keeping uncommitted work");
+      } else {
+        expect(f.h.spawnInputs).toHaveLength(1);
+        f.advance(11 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(loadPipelines()[0]!.stateDetail).toContain(startup ? "runtime host" : "auth refresh race");
+        expect(f.h.spawnInputs).toHaveLength(1);
+        expect(f.h.killedPanes).toEqual([]);
+      }
     }
     expect(f.h.calls.some(call => /reset|clean/.test(call))).toBe(false);
   });
@@ -21361,7 +21379,7 @@ test.each(["before-stop", "after-stop"] as const)("quota retry requires readable
 });
 
 
-test("a large spare pool cannot remove the cut chain restart budget", async () => {
+test("a large spare pool tries each allowed account once in the cut chain", async () => {
   const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 2 * 60 * 60_000);
   const accounts = [LIMITED_ACCOUNT, ...Array.from({ length: 7 }, (_, n) => `spare-${n}`)];
   f.h.ports.allowedAccountIds = () => accounts;
@@ -21378,7 +21396,11 @@ test("a large spare pool cannot remove the cut chain restart budget", async () =
     await tickPipelines([], f.h.ports);
     f.advance(15_000);
   }
-  expect(f.h.spawnInputs.length).toBeLessThanOrEqual(4);
+  expect(f.h.spawnInputs).toHaveLength(accounts.length);
+  expect(f.h.spawnInputs.slice(1).map(input => input.requestedAccountId)).toEqual(accounts.slice(1));
+  const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(accounts.length);
+  expect(attempts.at(-1)!.providerRecoveryBudget?.triedAccounts).toEqual(accounts);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
 });
 
@@ -21438,7 +21460,7 @@ test("a reply during fresh target termination cancels failover before replacemen
   await tickPipelines([], f.h.ports);
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
-  expect(options).toEqual([{ onlyIfIdle: true }]);
+  expect(options).toEqual([{ onlyIfIdle: true, providerRecovery: { pipelineId: loadPipelines()[0]!.id, stageId: loadPipelines()[0]!.cursor!.stageId, attempt: 1, turnTs: f.now(), controlGeneration: loadPipelines()[0]!.controlGeneration ?? null } }]);
   expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
 });
 
@@ -21453,9 +21475,10 @@ for (const engine of ["claude", "codex"] as const) {
       savePipelines([lane]);
       f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: SPARE_ACCOUNT,
         kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+      const providerCutAt = f.now();
       let idleStopProbe = false;
       f.h.ports.stopStageAgent = async (_target, options) => {
-        expect(options).toEqual({ onlyIfIdle: true });
+        expect(options).toEqual({ onlyIfIdle: true, providerRecovery: { pipelineId: lane.id, stageId: lane.cursor!.stageId, attempt: 1, turnTs: providerCutAt, controlGeneration: lane.controlGeneration ?? null } });
         idleStopProbe = true;
         return { outcome: "not-running" };
       };
@@ -21490,8 +21513,9 @@ for (const engine of ["claude", "codex"] as const) {
     savePipelines([lane]);
     f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: SPARE_ACCOUNT,
       kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+    const providerCutAt = f.now();
     f.h.ports.stopStageAgent = async (_target, options) => {
-      expect(options).toEqual({ onlyIfIdle: true });
+      expect(options).toEqual({ onlyIfIdle: true, providerRecovery: { pipelineId: lane.id, stageId: lane.cursor!.stageId, attempt: 1, turnTs: providerCutAt, controlGeneration: lane.controlGeneration ?? null } });
       // A reply starts while the host lookup finds no registry resident.
       f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, lastRecordAt: f.now() + 1 });
       return { outcome: "not-running" };
@@ -21528,14 +21552,19 @@ for (const engine of ["claude", "codex"] as const) {
       throw new (await import("@/lib/accounts/manager")).AccountAuthenticationRequiredError(engine, input.requestedAccountId!);
     };
     for (let tick = 0; tick < 12; tick++) await tickPipelines([], f.h.ports);
-    expect(targets).toEqual(spares.slice(0, 3));
+    expect(targets).toEqual(spares);
     expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerRecoveryBudget?.tries).toBe(spares.length);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerRecoveryBudget?.failedAccounts).toEqual(spares);
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeDefined();
     expect(f.h.spawnInputs).toHaveLength(1);
   });
-  test.each(["auth", "tier"] as const)(`${engine} account-specific preflight failure tries a third allowed account before parking (%s)`, async cause => {
+  test.each([{ cause: "auth", tries: 0 }, { cause: "tier", tries: 0 }, { cause: "auth", tries: 3 }, { cause: "tier", tries: 3 }] as const)(`${engine} account-specific preflight failure tries a third allowed account before parking ($cause, budget=$tries)`, async ({ cause, tries }) => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
       "You've hit your session limit", 120_000);
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries, startedAt: f.h.ports.now() };
+    savePipelines([lane]);
     const third = "test-third-account";
     f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT, third];
     f.h.ports.resolveProjectSpawn = (_engine, request) => {
@@ -21556,6 +21585,7 @@ for (const engine of ["claude", "codex"] as const) {
     };
     for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
     expect(targets).toEqual([SPARE_ACCOUNT, third]);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerRecoveryBudget?.tries).toBe(tries + 2);
     expect(loadPipelines()[0]!.cursor?.state).toBe("running");
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(third);
     expect(f.h.spawnInputs).toHaveLength(2);
@@ -21673,8 +21703,9 @@ for (const engine of ["claude", "codex"] as const) {
       records = [{ type: "user", uuid: "continued-prompt", timestamp: promptAt, promptSource: "sdk", turnOrigin: "sdk", message: { role: "user", content: text } }];
     } else {
       const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
+      const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
-      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: null, selectedContext: null, origin });
+      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
       records = [{ type: "event_msg", timestamp: promptAt, payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } },
         { type: "event_msg", timestamp: promptAt, payload: { type: "task_started" } }];
     }
@@ -21813,8 +21844,9 @@ for (const engine of ["claude", "codex"] as const) {
     if (engine === "claude") records = [{ type: "user", uuid: "automatic-prompt", timestamp: promptAt, promptSource: "sdk", message: { content: text } }];
     else {
       const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
+      const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
-      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: null, selectedContext: null, origin });
+      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
       records = [{ type: "event_msg", timestamp: promptAt, payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } },
         { type: "event_msg", timestamp: promptAt, payload: { type: "task_started" } }];
     }
@@ -21951,8 +21983,208 @@ test("capacity relaunch preserves idle-only retirement and rechecks operator inp
     return { outcome: "stopped" };
   };
   await tickPipelines([], f.h.ports);
-  expect(stopOptions).toEqual({ onlyIfIdle: true });
+  expect(stopOptions).toEqual({ onlyIfIdle: true, providerRecovery: { pipelineId: loadPipelines()[0]!.id, stageId: loadPipelines()[0]!.cursor!.stageId, attempt: 1, turnTs: f.now() - 60_000, controlGeneration: loadPipelines()[0]!.controlGeneration ?? null } });
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
 });
+
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const largeTail of [false, true]) {
+    test.each(engine === "claude" ? ["operator", "pipeline", "initial", "harness"] as const : ["operator", "pipeline", "initial"] as const)(`${engine} first recovery tick respects a prior %s prompt (large tail=${largeTail})`, async author => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+      const initial = f.now();
+      const nativeNotice = (at: number) => engine === "claude"
+        ? { type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+          message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+        : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "You've hit your usage limit", codex_error_info: "usage_limit_exceeded" } } };
+      f.advance(1_000);
+      const promptTime = author === "initial" ? initial - 1_000 : f.now();
+      const text = "Continue work on this stage";
+      let prompt: Record<string, unknown>;
+      if (engine === "claude") prompt = { type: "user", uuid: "first-tick-prompt", timestamp: new Date(promptTime).toISOString(),
+        ...(author === "harness" ? { origin: { kind: "task-notification" }, turnOrigin: "task_notification", promptSource: "system" } : { turnOrigin: "sdk", promptSource: "sdk" }), message: { content: text } };
+      else {
+        const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
+        const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
+        const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
+        const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null,
+          origin: author === "pipeline" ? { kind: "agent", role: "pipeline" } : { kind: "operator" } });
+        prompt = { type: "event_msg", timestamp: new Date(promptTime).toISOString(), payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } };
+      }
+      f.advance(500);
+      const records: Record<string, unknown>[] = author === "initial" ? [prompt, nativeNotice(initial)] : [nativeNotice(initial), prompt];
+      if (largeTail) records.push({ type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(150_000) });
+      records.push(nativeNotice(f.now()));
+      const file = stageTranscript(`first-provider-tick-${engine}-${author}-${largeTail}`, records);
+      if (engine === "claude" && author === "pipeline") await stampPipelinePrompt(file, "first-tick-prompt", text);
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+      await tickPipelines([], f.h.ports);
+      f.advance(31 * 60_000);
+      await tickPipelines([], f.h.ports);
+      expect(f.sends).toHaveLength(author === "operator" ? 0 : 1);
+      expect(f.h.spawnInputs).toHaveLength(1);
+      if (author === "operator") {
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+      }
+    });
+  }
+  test(`${engine} first recovery tick bounds incomplete prompt history`, async () => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+    const notice = (at: number) => engine === "claude"
+      ? { type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit", message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
+      : { type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "You've hit your usage limit", codex_error_info: "usage_limit_exceeded" } } };
+    const first = notice(f.now());
+    f.advance(1_000);
+    const file = stageTranscript(`first-tick-history-bound-${engine}`, [first,
+      { type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(9 * 1024 * 1024) }, notice(f.now())]);
+    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+    await tickPipelines([], f.h.ports);
+    f.advance(11 * 60_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(0);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.stateDetail).toContain("prompt history is incomplete");
+  });
+}
+
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["after-cut", "before-cut"] as const)(`${engine} first recovery tick respects pause and resume %s`, async timing => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+    const initial = f.now();
+    f.advance(1_000);
+    const lane = loadPipelines()[0]!;
+    await patchPipeline(lane.id, { action: "pause" }, f.h.ports);
+    f.advance(1_000);
+    await patchPipeline(lane.id, { action: "resume" }, f.h.ports);
+    f.advance(1_000);
+    const cut = timing === "after-cut" ? initial : f.now();
+    const file = stageTranscript(`first-tick-control-${engine}-${timing}`, engine === "claude" ? [
+      { type: "assistant", timestamp: new Date(cut).toISOString(), isApiErrorMessage: true, error: "rate_limit", message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } },
+    ] : [
+      { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "You've hit your usage limit", codex_error_info: "usage_limit_exceeded" } } },
+    ]);
+    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+    await tickPipelines([], f.h.ports);
+    f.advance(31 * 60_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(timing === "after-cut" ? 0 : 1);
+    if (timing === "after-cut") {
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain("operator control");
+    }
+  });
+}
+
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each([3, 5])(`${engine} an untried allowed account remains eligible in a %i account pool after the retry budget`, async count => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 2 * 60 * 60_000);
+    const pool = [LIMITED_ACCOUNT, SPARE_ACCOUNT, "fixture-account-c", "fixture-account-d", "fixture-account-e"].slice(0, count);
+    const tried = pool.slice(0, -1);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.accountId = tried.at(-1)!;
+    attempt.providerRecoveryBudget = { tries: 4, startedAt: f.h.ports.now(), engine, triedAccounts: tried };
+    attempt.usageLimitedAccounts = tried.map(accountId => ({ accountId, engine, limitedAt: f.now() - 1_000, resetsAt: f.resetsAt }));
+    savePipelines([lane]);
+    f.h.ports.accountForTranscript = () => ({ accountId: tried.at(-1)!, label: "current account" });
+    f.h.ports.allowedAccountIds = () => pool;
+    f.h.ports.resolveProjectSpawn = (_engine, request) => {
+      const selected = selectProjectAccount({ ...request, engine, now: f.now(),
+        accounts: pool.map(id => ({ id, authPresent: true })), observations: [],
+        bindings: pool.map(accountId => ({ engine, accountId, project: lane.project, createdAt: f.h.ports.now() })),
+      });
+      return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
+        home: "/fixture-account", transcriptRoot: "/fixture-account/sessions", env: { NODE_ENV: "test" } } } : selected;
+    };
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(pool.at(-1)!);
+    const successor = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+    expect(successor.providerRecoveryBudget?.tries).toBe(5);
+    expect(successor.providerRecoveryBudget?.triedAccounts).toEqual(pool);
+    f.advance(1_000);
+    f.h.setConversationActive(false);
+    f.h.ports.accountForTranscript = () => ({ accountId: pool.at(-1)!, label: "last account" });
+    f.h.durableTurns.set(successor.agentPath!, { turn: "terminal", message: null, terminalProviderMessage: {
+      text: "You've hit your session limit", errorClass: engine === "claude" ? "rate_limit" : "usage_limit_exceeded", ts: f.now(), usageLimit: { resetsAt: f.resetsAt },
+    } });
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.stateDetail).toContain("every allowed account was tried");
+    expect(f.h.spawnInputs).toHaveLength(2);
+  });
+  if (engine === "codex") {
+    for (const parked of [false, true]) {
+      test.each(["pipeline", "startup-recovery"] as const)(`native human legacy %s marker cancels provider recovery (parked=${parked})`, async role => {
+        const f = await providerRecoveryHarness(engine, "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+        if (parked) {
+          const lane = loadPipelines()[0]!;
+          lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+          savePipelines([lane]);
+        }
+        await tickPipelines([], f.h.ports);
+        const oldCut = f.now();
+        f.advance(1_000);
+        const file = stageTranscript(`human-legacy-marker-${role}-${parked}`, [
+          { type: "event_msg", timestamp: new Date(oldCut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+          { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: `<!-- llv:structured-user origin=agent sender=${role} -->\nWait for my answer` } },
+          { type: "event_msg", timestamp: new Date(f.now() + 500).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+        ]);
+        readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+        await tickPipelines([], f.h.ports);
+        f.advance(31 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(f.sends).toHaveLength(0);
+        expect(f.h.spawnInputs).toHaveLength(1);
+        expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+      });
+    }
+  }
+}
+
+for (const parked of [false, true]) {
+  for (const shape of ["UserMessage", "userMessage", "user_message", "response_item"] as const) {
+    test.each(["operator", "pipeline", "startup-recovery", "copied-ref"] as const)(`native Codex ${shape} %s authorship controls quota recovery (parked=${parked})`, async author => {
+      const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000, true);
+      if (parked) {
+        const lane = loadPipelines()[0]!;
+        lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+        savePipelines([lane]);
+      }
+      await tickPipelines([], f.h.ports);
+      const oldCut = f.now();
+      f.h.ports.resolveProjectSpawn = () => f.now() >= f.resetsAt! * 1_000 + 60_000
+        ? { kind: "available", account: { engine: "codex", accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
+      f.advance(1_000);
+      const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+      const automatic = author === "pipeline" || author === "startup-recovery";
+      const wire = encodeCodexStructuredUserText("Continue the same stage", undefined, null,
+        { kind: "agent", role: author === "startup-recovery" ? author : "pipeline" });
+      const text = author === "operator" ? "Wait for my answer" : author === "copied-ref" ? wire.split("\n")[0] + "\nWait for my answer" : wire;
+      const prompt = shape === "user_message" ? { type: "event_msg", payload: { type: "user_message", message: text } }
+        : shape === "response_item" ? { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }
+        : { type: "event_msg", payload: { type: "item_completed", item: { type: shape, content: [{ type: "text", text: text.slice(0, 20) }, { type: "text", text: text.slice(20) }] } } };
+      const notice = (at: number) => ({ type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } });
+      const file = stageTranscript(`native-codex-author-${shape}-${author}-${parked}`, [notice(oldCut),
+        { ...prompt, timestamp: f.h.ports.now() }, { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
+        { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "token_count", info: { rate_limits: { primary: { used_percent: 100, resets_at: f.resetsAt } } } } }, notice(f.now() + 500)]);
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      await tickPipelines([], f.h.ports);
+      if (parked && automatic) expect(loadPipelines()[0]!.stateDetail).toMatch(/Automatic retry|Автоповтор/);
+      f.advance(31 * 60_000);
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(f.sends).toHaveLength(!parked && automatic ? 1 : 0);
+      expect(f.h.spawnInputs).toHaveLength(parked && automatic ? 2 : 1);
+      if (!automatic) expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+    });
+  }
+}

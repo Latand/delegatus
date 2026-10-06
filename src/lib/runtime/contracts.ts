@@ -398,6 +398,15 @@ export interface RuntimeIdleKillFence {
   writerClaim: string;
 }
 
+/** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
+export interface RuntimeProviderRecoveryRef {
+  pipelineId: string;
+  stageId: string;
+  attempt: number;
+  turnTs: number;
+  controlGeneration: string | null;
+}
+
 export function runtimeIdleKillMatches(
   session: RuntimeSession | null | undefined,
   key: RuntimeKillCommand["sessionKey"],
@@ -413,6 +422,7 @@ export function runtimeIdleKillMatches(
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
   onlyIfIdle?: RuntimeIdleKillFence;
+  providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
 }
 

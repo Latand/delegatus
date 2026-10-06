@@ -388,3 +388,23 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   expect(killed).toEqual([]);
   setAgentRegistryForTests(null);
 });
+
+
+test("provider recovery authority survives the engine idle retirement helper", async () => {
+  const fixture = hostedConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 1, writerClaim: "fixture:1" };
+  const client = { readSession: async () => ({ conversationId: fixture.conversationId, host: "hosted", turn: "idle", activeTurnId: null,
+    attentionIds: [], retirementBlocked: false, revision: 1, writerClaim: onlyIfIdle.writerClaim, artifactPath: fixture.path }) } as unknown as RuntimeHostClient;
+  const { retirePipelineStageAgent } = await import("./engine");
+  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery })).toEqual({ outcome: "stopped" });
+  expect(killed).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
+});
+
+
+test("provider recovery authority cannot select an unconditional engine stop", async () => {
+  const fixture = hostedConversation();
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
+  expect(await stopPipelineStageAgent(target(fixture.conversationId, fixture.path), { providerRecovery })).toEqual({ outcome: "deferred" });
+  expect(killed).toEqual([]);
+});

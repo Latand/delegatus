@@ -5,6 +5,7 @@ import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
+import { structuredContentDigest } from "@/lib/runtime/structuredContent";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
@@ -35,6 +36,9 @@ export type StageTurnEvidence = {
   /** Delivered prompts in this verified tail. Harness wakes and controller
       continuations retain quota recovery; external prompts withdraw it. */
   prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
+  /** Earliest native provider cut belonging to this attempt, even when its
+      first recovery tick reads a later turn. */
+  firstProviderCutAt?: number | null;
   /** False if the bounded verified read could not cover the requested cut. */
   promptHistoryComplete?: boolean;
   /** The verified read covers the complete artifact and contains only Codex's
@@ -286,12 +290,23 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     if (!ts) return [];
     if (codex) {
       const payload = recordValue(record.payload) ?? {};
-      if (payload.type !== "user_message" && !(payload.type === "message" && payload.role === "user")) return [];
-      const text = stringValue(payload.message) ?? recordsValue(payload.content).map(part => stringValue(part.text) ?? "").join("\n");
+      const item = recordValue(payload.item);
+      const user = payload.type === "user_message" || payload.type === "message" && payload.role === "user" ? payload
+        : payload.type === "item_completed" && (item?.type === "UserMessage" || item?.type === "userMessage") ? item : null;
+      if (!user) return [];
+      const text = stringValue(user.message) ?? stringValue(user.text) ?? stringValue(user.content)
+        ?? (Array.isArray(user.content) ? user.content.map(part => typeof part === "string" ? part
+          : stringValue(recordValue(part)?.text) ?? stringValue(recordValue(part)?.content) ?? "").join("") : "");
       const decoded = decodeCodexStructuredUserText(text);
-      let origin = decoded.origin;
+      // Legacy text attributes can be typed by a human. Only the durable
+      // delivery metadata can establish automatic authorship for recovery.
+      let origin = null;
       if (decoded.metadataRef) {
-        try { origin = readStructuredUserMetadata(decoded.metadataRef).origin; }
+        try {
+          const metadata = readStructuredUserMetadata(decoded.metadataRef);
+          // A copied reference with human prose carries no automatic authority.
+          if (metadata.contentDigest === structuredContentDigest({ text: decoded.text, images: [] })) origin = metadata.origin;
+        }
         catch { origin = null; }
       }
       return [{ ts, origin: origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
@@ -336,6 +351,7 @@ export async function durableStageTurnEvidence(
   const reportTime = reportAt ? Date.parse(reportAt) : NaN;
   const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
   const cutTime = afterCutAt && afterCutAt > 0 ? afterCutAt : NaN;
+  let promptBoundary = cutTime;
   let evidenceRead = read;
   let evidenceBytes = 131_072;
   let reportProse: string | null = null;
@@ -346,6 +362,13 @@ export async function durableStageTurnEvidence(
     turnRecords = providerTurnRecords(evidenceRead.records, codex);
     message = lastAssistantMessageFromRecords(turnRecords, codex ? "codex-sessions" : "claude-projects", fallbackTs);
     turn = turnStateFromRecords(turnRecords, codex ? "codex" : "claude");
+    // Before a wait has been saved, the attempt's history owns cancellation.
+    // Expand only for a native terminal provider failure; ordinary stages keep
+    // their cheap tail read.
+    if (!Number.isFinite(promptBoundary) && Number.isFinite(startedTime)
+      && turn.state === "terminal" && terminalProviderMessageFromRecords(turnRecords, codex, fallbackTs)) {
+      promptBoundary = startedTime;
+    }
     if (Number.isFinite(reportTime)) {
       reportProse = lastAssistantMessageFromRecords(
         turnRecords.filter((record) => {
@@ -360,8 +383,8 @@ export async function durableStageTurnEvidence(
     const reportCovered = !Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
       || reportProse !== null && message !== null && turn.state !== "unknown"
       || Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime;
-    const promptsCovered = !Number.isFinite(cutTime) || !evidenceRead.prefixTruncated
-      || oldestAt !== undefined && oldestAt <= cutTime;
+    const promptsCovered = !Number.isFinite(promptBoundary) || !evidenceRead.prefixTruncated
+      || oldestAt !== undefined && oldestAt <= promptBoundary;
     if (reportCovered && promptsCovered) break;
     if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
     // A JSONL line crossing the tail boundary is discarded. Grow the
@@ -378,14 +401,23 @@ export async function durableStageTurnEvidence(
   const nativeCut = terminalNotice?.errorClass === "turn_aborted";
   const newest = turnRecords.at(-1);
   const ledger = codex ? null : await readBackgroundTaskLedger(transcriptPath);
+  const firstProviderCutAt = evidenceRead.records.flatMap(record => {
+    const at = recordTs(record, 0);
+    if (!at || Number.isFinite(startedTime) && at <= startedTime) return [];
+    const failure = terminalProviderMessageFromRecords([record], codex, 0);
+    if (!failure || failure.errorClass === "turn_aborted"
+      || turnStateFromRecords([record], codex ? "codex" : "claude").state !== "terminal") return [];
+    return [at];
+  }).reduce<number | null>((earliest, at) => earliest === null ? at : Math.min(earliest, at), null);
   return {
     turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
     // Shutdown normalization may remove a human prompt whose turn was interrupted.
     // Cancellation evidence must retain that prompt even when terminal evidence does not.
     prompts: stagePrompts(evidenceRead.records, codex, transcriptPath),
-    promptHistoryComplete: !evidenceRead.prefixTruncated || Number.isFinite(cutTime)
-      && (recordTs(evidenceRead.records[0] ?? {}, 0) || Infinity) <= cutTime,
+    firstProviderCutAt,
+    promptHistoryComplete: !evidenceRead.prefixTruncated || Number.isFinite(promptBoundary)
+      && (recordTs(evidenceRead.records[0] ?? {}, 0) || Infinity) <= promptBoundary,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex

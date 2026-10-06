@@ -103,3 +103,14 @@ test("a missing or corrupted handle refuses while another card with the same rec
   expect(() => decode(wire)).toThrow("unavailable");
   expect(selectedContextArg(otherRef)?.state === "selected" && decode(other).selectedContext).toMatchObject({ conversationId: "conversation_other_fixture" });
 });
+
+for (const role of ["pipeline", "startup-recovery"] as const) {
+  test(`text-only ${role} provenance is sealed to the delivered body`, async () => {
+    const { structuredContentDigest } = await import("./structuredContent");
+    const first = encode("Continue the same stage", undefined, null, { kind: "agent", role });
+    const other = encode("Wait for my answer", undefined, null, { kind: "agent", role });
+    expect(decode(first).contentDigest).toBe(structuredContentDigest({ text: "Continue the same stage", images: [] }));
+    expect(decodeWire(first).metadataRef).not.toBe(decodeWire(other).metadataRef);
+    expect(first.split("\n")[0]!.length).toBeLessThanOrEqual(96);
+  });
+}

@@ -4038,3 +4038,29 @@ test.each(["unchanged", "active", "answered", "writer", "queued"] as const)("idl
   journal.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("provider recovery authority survives normalized kill cold journal reopen", () => {
+  const dir = sandbox("provider-retirement");
+  let journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  try {
+    const conversationId = "conversation_provider_retirement";
+    const sessionKey = { engine: "codex" as const, sessionId: "provider-generation" };
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: "fixture-control" };
+    const command = { kind: "kill" as const, conversationId, sessionKey, operationId: "provider-retire", idempotencyKey: "provider-retire",
+      onlyIfIdle: { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" }, providerRecovery };
+    expect(journal.executeOperation(command).receipt.status).toBe("queued");
+    journal.close();
+    journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+    expect(journal.effectBatch(100, ["runtime.kill"])[0]?.payload).toMatchObject({ providerRecovery });
+    expect(journal.executeOperation(command).receipt.operationId).toBe("provider-retire");
+    expect(() => journal.executeOperation({ ...command, providerRecovery: { ...providerRecovery, turnTs: 43 } })).toThrow();
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

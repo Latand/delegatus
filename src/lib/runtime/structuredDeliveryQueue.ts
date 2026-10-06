@@ -2,7 +2,7 @@ import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
-import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
+import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeProviderRecoveryRef, parseRuntimeSendSettings } from "./commands";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
@@ -198,6 +198,7 @@ interface ControlEffect {
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
+  providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
@@ -410,6 +411,7 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     return { operationId, conversationId, kind: "answer", attentionId, resolution: effect.payload.resolution, eventSeq: effect.eventSeq };
   }
   if (effect.kind === "runtime.kill") {
+    if (effect.payload.providerRecovery !== undefined && effect.payload.onlyIfIdle === undefined) return null;
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
@@ -421,6 +423,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
+      ...(effect.payload.providerRecovery !== undefined
+        ? { providerRecovery: parseRuntimeProviderRecoveryRef(effect.payload.providerRecovery) } : {}),
       eventSeq: effect.eventSeq,
     };
   }
@@ -731,6 +735,7 @@ export class StructuredDeliveryQueue {
       sessionKey: { engine: "codex" | "claude"; sessionId: string },
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
+      providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -2225,7 +2230,7 @@ export class StructuredDeliveryQueue {
       }
       if (!host) {
         try {
-          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+          if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
             if (effect.onlyIfIdle) {
               await transition("failed", { reason: "idle-retirement-deferred" });
               return { blocked: false, terminated: false };
@@ -2246,7 +2251,7 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
       try {
-        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority)) {
+        if (!await this.terminateHost(effect.conversationId, effect.sessionKey, effect.onlyIfIdle, authority, effect.providerRecovery)) {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }

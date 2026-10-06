@@ -2,6 +2,8 @@ import { readStructuredUserMetadata, persistStructuredUserMetadata } from "@/lib
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { decodeCodexStructuredUserText as decode, encodeCodexStructuredUserText as encode } from "./codexStructuredUserText";
+import { structuredContentDigest } from "./structuredContent";
+import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 /** All Codex delivery paths persist their metadata before exposing the marker
  * to the engine. The pure codec remains usable by the browser. */
@@ -12,11 +14,13 @@ export function encodeCodexStructuredUserText(
   origin?: MessageOrigin | null,
   deliveryDedup?: string | null,
 ): string {
+  const parsedOrigin = parseMessageOrigin(origin);
+  const automatic = parsedOrigin?.kind === "agent" && (parsedOrigin.role === "pipeline" || parsedOrigin.role === RECOVERY_NOTICE_ORIGIN.role);
   const metadata = {
     version: 1 as const,
-    contentDigest: contentDigest ?? null,
+    contentDigest: contentDigest ?? (automatic ? structuredContentDigest({ text, images: [] }) : null),
     selectedContext: parseSelectedContextRef(selectedContext),
-    origin: parseMessageOrigin(origin),
+    origin: parsedOrigin,
     ...(deliveryDedup && /^[a-f0-9]{64}$/.test(deliveryDedup) ? { deliveryDedup } : {}),
   };
   const ref = persistStructuredUserMetadata(metadata);
