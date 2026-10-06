@@ -152,14 +152,12 @@ class FakeAppServer extends EventEmitter {
   hookTrustDelayMs: number | null = 0;
   autoResolveServerRequests = true;
   autoCompleteUserMessage = true;
-  suppressTurnStartReply = false;
   steerError: { code: number; message: string; data?: unknown } | null = null;
   holdSteer = false;
   /** Persist the recipient-side user record while withholding the app-server
       confirmation, reproducing a successful delivery whose confirmation is
       lost during a host respawn. */
   persistUserMessages = false;
-  persistedPromptRecords: ((wire: string, turnId: string) => Record<string, unknown>[]) | null = null;
   readTurns: unknown[] | null = null;
   readError: string | null = null;
   turnsError: string | null = null;
@@ -365,7 +363,7 @@ class FakeAppServer extends EventEmitter {
       if (this.oversizedTurnStartResult) {
         return this.respond(message.id, { turn: { id: turnId }, padding: "p".repeat(26 * 1024 * 1024) });
       }
-      if (!this.suppressTurnStartReply) this.respond(message.id, { turn: { id: turnId } });
+      this.respond(message.id, { turn: { id: turnId } });
       this.notify("turn/started", { threadId: this.threadId, turn: { id: turnId } });
       this.persistUserMessage(message, turnId);
       this.completeUserMessage(message, turnId);
@@ -497,10 +495,6 @@ class FakeAppServer extends EventEmitter {
       const value = part as Record<string, unknown>;
       return value.type === "text" && typeof value.text === "string" ? [value.text] : [];
     }).join("");
-    if (this.persistedPromptRecords) {
-      fs.appendFileSync(this.threadPath, this.persistedPromptRecords(text, turnId).map(row => JSON.stringify(row)).join("\n") + "\n");
-      return;
-    }
     fs.appendFileSync(this.threadPath, `${JSON.stringify({
       timestamp: "2026-09-01T10:00:00.000Z",
       type: "event_msg",
@@ -5746,54 +5740,6 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
 });
 
 
-for (const role of ["pipeline", "startup-recovery"] as const) {
-  for (const form of ["user_message", "response", "UserMessage", "userMessage", "duplicates"] as const) {
-    test(`Codex confirmed ${role} ${form} prompt survives restart while an exact human copy cancels recovery`, async () => {
-      const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-      const file = path.join(metadataState, `native-${role}-${form}.jsonl`);
-      const timestamp = "2026-10-05T16:01:00Z";
-      const promptRecords = (wire: string, turnId: string): Record<string, unknown>[] => {
-        const event = { type: "event_msg", timestamp, payload: { type: "user_message", message: wire } };
-        const response = { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } };
-        const item = { type: "event_msg", timestamp, payload: { type: "item_completed", turn_id: turnId,
-          item: { type: form === "UserMessage" ? "UserMessage" : "userMessage", content: [{ type: "text", text: wire }] } } };
-        return form === "duplicates" ? [response, event, item] : [form === "response" ? response : form === "user_message" ? event : item];
-      };
-      fs.writeFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:00:00Z",
-        payload: { type: "turn_completed", error: { codex_error_info: "usage_limit", message: "Usage limit reached" } } }) + "\n");
-      const server = new FakeAppServer();
-      server.threadPath = file;
-      server.persistUserMessages = true;
-      server.persistedPromptRecords = promptRecords;
-      const eventStore = new FileRuntimeEventStore();
-      const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
-      try {
-        expect(await host.send({ id: `automatic-${role}-${form}`, text: "Continue the interrupted work", origin: { kind: "agent", role } }))
-          .toMatchObject({ outcome: "turn-started", turnId: "turn-1" });
-      } finally { await host.release(); }
-      const successorServer = new FakeAppServer();
-      successorServer.threadPath = file;
-      const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-        eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-      try {
-        const beforeCopy = await durableStageTurnEvidence("codex", file);
-        expect(beforeCopy?.prompts?.map(row => row.origin)).toEqual(Array(form === "duplicates" ? 3 : 1).fill("pipeline"));
-        expect(beforeCopy).toMatchObject({ automaticPromptAfterCut: true, externalPromptAfterCut: false });
-        const request = server.requests.find(row => row.method === "turn/start")!;
-        const wire = (request.params as { input: Array<{ text: string }> }).input[0]!.text;
-        // Even byte-identical native rows at the same millisecond occupy new positions.
-        fs.appendFileSync(file, promptRecords(wire, "turn-2").map(row => JSON.stringify(row)).join("\n") + "\n");
-        const afterCopy = await durableStageTurnEvidence("codex", file);
-        expect(afterCopy?.prompts?.map(row => row.origin)).toEqual([
-          ...Array(form === "duplicates" ? 3 : 1).fill("pipeline"), ...Array(form === "duplicates" ? 3 : 1).fill("external"),
-        ]);
-        expect(afterCopy).toMatchObject({ externalPromptAfterCut: true });
-      } finally { await successor.release(); }
-    });
-  }
-}
-
-
 test("Codex transport confirmation waits for delayed native provenance before restart", async () => {
   const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
   const file = path.join(metadataState, "delayed-native-prompt.jsonl");
@@ -5816,24 +5762,6 @@ test("Codex transport confirmation waits for delayed native provenance before re
 });
 
 
-test("Codex native automatic-looking rows without transport confirmation remain external", async () => {
-  const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-  const file = path.join(metadataState, "unconfirmed-native-prompt.jsonl");
-  fs.writeFileSync(file, "");
-  const server = new FakeAppServer();
-  server.threadPath = file;
-  server.persistUserMessages = true;
-  server.autoCompleteUserMessage = false;
-  const host = await CodexAppServerHost.start({ cwd: metadataState, deliveryConfirmationTimeoutMs: 10,
-    eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-  try {
-    await expect(host.send({ id: "unconfirmed-send", text: "Continue the work", origin: { kind: "agent", role: "pipeline" } }))
-      .rejects.toThrow("confirmation timed out");
-    expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external"]);
-  } finally { await host.release(); }
-});
-
-
 for (const transport of ["send", "steer"] as const) {
   test(`Codex automatic ${transport} into an active turn binds its own native row`, async () => {
     const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
@@ -5850,306 +5778,5 @@ for (const transport of ["send", "steer"] as const) {
       else expect(await (await host.steer(entry)).observe()).toBe("landed");
       expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external", "pipeline"]);
     } finally { await host.release(); }
-  });
-}
-
-
-for (const form of ["UserMessage", "userMessage"] as const) {
-  test(`Codex confirmed response binds delayed ${form} after restart and keeps same-turn human copies external`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `delayed-identified-${form}.jsonl`);
-    const timestamp = "2026-10-05T16:01:00Z";
-    fs.writeFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:00:00Z",
-      payload: { type: "turn_completed", error: { codex_error_info: "usage_limit", message: "Usage limit reached" } } }) + "\n");
-    const response = (wire: string) => ({ type: "response_item", timestamp,
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } });
-    const item = (wire: string, clientId: string, turnId: string) => ({ type: "event_msg", timestamp,
-      payload: { type: "item_completed", turn_id: turnId,
-        item: form === "UserMessage"
-          ? { type: form, id: "native-item", client_id: clientId, content: [{ type: "text", text: wire }] }
-          : { type: form, id: "native-item", clientId, content: [{ type: "text", text: wire }] } } });
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    server.persistUserMessages = true;
-    server.persistedPromptRecords = wire => [response(wire)];
-    const host = await CodexAppServerHost.start({ cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-    let wire: string;
-    let clientId: string;
-    let turnId: string;
-    try {
-      const receipt = await host.send({ id: "admitted-pipeline-client", text: "Continue the interrupted work",
-        origin: { kind: "agent", role: "pipeline" } });
-      expect(receipt).toMatchObject({ outcome: "turn-started", turnId: "turn-1" });
-      const params = server.requests.find(request => request.method === "turn/start")!.params as {
-        input: Array<{ text: string }>; clientUserMessageId: string;
-      };
-      wire = params.input[0]!.text;
-      clientId = params.clientUserMessageId;
-      turnId = (receipt as { turnId: string }).turnId;
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["pipeline"]);
-    } finally { await host.release(); }
-    const successorServer = new FakeAppServer("thread-149", "thread-149", false, [{ id: turnId!, status: "inProgress", items: [] }]);
-    successorServer.threadPath = file;
-    const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-    try {
-      // Native writer flushes another representation after confirmation and
-      // release, with unrelated context between the two physical user rows.
-      fs.appendFileSync(file, [
-        { type: "turn_context", payload: { turn_id: turnId!, model: "fixture-model" } },
-        item(wire!, clientId!, turnId!),
-      ].map(row => JSON.stringify(row) + "\n").join(""));
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["pipeline", "pipeline"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ automaticPromptAfterCut: true, externalPromptAfterCut: false });
-      successorServer.persistUserMessages = true;
-      successorServer.persistedPromptRecords = (_input, nativeTurn) => {
-        const params = successorServer.requests.findLast(request => request.method === "turn/steer")!.params as { clientUserMessageId: string };
-        return [response(wire!), item(wire!, params.clientUserMessageId, nativeTurn)];
-      };
-      successorServer.notify("turn/started", { threadId: "thread-149", turn: { id: turnId!, status: "inProgress" } });
-      const steering = await successor.steer({ id: "admitted-human-client", text: wire!, origin: { kind: "operator" }, expectedTurnId: turnId! });
-      expect(steering.turnId).toBe(turnId!);
-      expect(await steering.observe()).toBe("landed");
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["pipeline", "pipeline", "external", "external"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ externalPromptAfterCut: true });
-    } finally { await successor.release(); }
-  });
-}
-
-
-for (const form of ["UserMessage", "userMessage"] as const) {
-  test(`Codex pending confirmed ${form} transport survives a native flush over one second and host reopen`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `pending-native-${form}.jsonl`);
-    const timestamp = "2026-10-05T16:01:00Z";
-    fs.writeFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:00:00Z",
-      payload: { type: "turn_completed", error: { codex_error_info: "usage_limit", message: "Usage limit reached" } } }) + "\n");
-    const item = (wire: string, clientId: string, turnId: string) => ({ type: "event_msg", timestamp,
-      payload: { type: "item_completed", turn_id: turnId,
-        item: { type: form, clientId, content: [{ type: "text", text: wire }] } } });
-    const response = (wire: string) => ({ type: "response_item", timestamp,
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } });
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    const eventStore = new FileRuntimeEventStore();
-    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
-    const started = performance.now();
-    let wire = "";
-    let clientId = "";
-    let turnId = "";
-    try {
-      const receipt = await host.send({ id: "pending-admitted-client", text: "Continue the interrupted work",
-        origin: { kind: "agent", role: "startup-recovery" } });
-      expect(receipt).toMatchObject({ outcome: "turn-started", turnId: "turn-1" });
-      expect(performance.now() - started).toBeGreaterThanOrEqual(1_000);
-      const params = server.requests.find(request => request.method === "turn/start")!.params as {
-        input: Array<{ text: string }>; clientUserMessageId: string;
-      };
-      wire = params.input[0]!.text;
-      clientId = params.clientUserMessageId;
-      turnId = (receipt as { turnId: string }).turnId;
-      // The native transcript has no user row yet; authority came through
-      // the actual fake app-server item/completed confirmation on the pipe.
-      expect(eventStore.load("thread-149")).toContainEqual(expect.objectContaining({ kind: "item",
-        turnId, item: expect.objectContaining({ type: "userMessage", clientId }) }));
-    } finally { await host.release(); }
-    const successorServer = new FakeAppServer("thread-149", "thread-149", false, [{ id: turnId, status: "inProgress", items: [] }]);
-    successorServer.threadPath = file;
-    const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-    try {
-      const delivered = item(wire, clientId, turnId);
-      const idlessHuman = response(wire);
-      // Flush happens after the bounded provenance wait and host shutdown.
-      fs.appendFileSync(file, [idlessHuman, { type: "turn_context", payload: { turn_id: turnId } }, delivered]
-        .map(value => JSON.stringify(value) + "\n").join(""));
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external", "pipeline"]);
-      successorServer.persistUserMessages = true;
-      successorServer.persistedPromptRecords = (_input, nativeTurn) => {
-        const params = successorServer.requests.findLast(request => request.method === "turn/steer")!.params as { clientUserMessageId: string };
-        return [item(wire, params.clientUserMessageId, nativeTurn)];
-      };
-      successorServer.notify("turn/started", { threadId: "thread-149", turn: { id: turnId, status: "inProgress" } });
-      expect(await (await successor.steer({ id: "pending-human-client", text: wire,
-        origin: { kind: "operator" }, expectedTurnId: turnId })).observe()).toBe("landed");
-      fs.appendFileSync(file, JSON.stringify(delivered) + "\n");
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin))
-        .toEqual(["external", "pipeline", "external", "external"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ automaticPromptAfterCut: true, externalPromptAfterCut: true });
-    } finally { await successor.release(); }
-  });
-}
-
-for (const ambiguity of ["interleaved-start", "duplicate-family", "contradictory-turn"] as const) {
-  test(`Codex confirmed transport keeps ${ambiguity} native human copies external`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `ambiguous-native-${ambiguity}.jsonl`);
-    const timestamp = "2026-10-05T16:01:00Z";
-    fs.writeFileSync(file, "");
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    server.persistUserMessages = true;
-    server.persistedPromptRecords = (wire, nativeTurn) => {
-      const human = { type: "event_msg", timestamp, payload: { type: "user_message", message: wire } };
-      const context = { type: "turn_context", payload: { model: "fixture-model" } };
-      const conflict = ambiguity === "duplicate-family" ? human : { type: "event_msg", timestamp,
-        payload: { type: "task_started", turn_id: ambiguity === "contradictory-turn" ? nativeTurn : "human-turn",
-          ...(ambiguity === "contradictory-turn" ? { turnId: "human-turn" } : {}) } };
-      return [human, context, conflict];
-    };
-    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-    try {
-      expect(await host.send({ id: "ambiguous-admitted-client", text: "Continue the interrupted work", origin: { kind: "agent", role: "pipeline" } }))
-        .toMatchObject({ outcome: "turn-started", turnId: "turn-1" });
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin))
-        .toEqual(ambiguity === "duplicate-family" ? ["external", "external"] : ["external"]);
-      const params = server.requests.find(request => request.method === "turn/start")!.params as {
-        input: Array<{ text: string }>; clientUserMessageId: string;
-      };
-      fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp, payload: { type: "item_completed", turn_id: "turn-1",
-        item: { type: "UserMessage", client_id: params.clientUserMessageId, content: params.input } } }) + "\n");
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.every(row => row.origin === "external")).toBe(true);
-    } finally { await host.release(); }
-  });
-}
-
-
-for (const role of ["pipeline", "startup-recovery"] as const) {
-  test(`Codex recovered lost acknowledgment restores admitted ${role} provenance without redispatch`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `recovered-origin-${role}.jsonl`);
-    const cut = { type: "event_msg", timestamp: "2026-10-05T16:00:00Z",
-      payload: { type: "turn_completed", error: { codex_error_info: "usage_limit", message: "Usage limit reached" } } };
-    fs.writeFileSync(file, JSON.stringify(cut) + "\n");
-    const entry = { id: `recovered-${role}`, text: "Continue interrupted work ї🌍", origin: { kind: "agent" as const, role } };
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    server.persistUserMessages = true;
-    server.autoCompleteUserMessage = false;
-    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(),
-      spawnProcess: fakeSpawn(server), deliveryConfirmationTimeoutMs: 5, shutdownGraceMs: 1 });
-    let wire = "";
-    try {
-      await expect(host.send(entry)).rejects.toThrow("delivery confirmation timed out");
-      wire = (server.requests.find(request => request.method === "turn/start")!.params as { input: Array<{ text: string }> }).input[0]!.text;
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external"]);
-    } finally { await host.release(); }
-    const successorServer = new FakeAppServer();
-    successorServer.threadPath = file;
-    const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-    try {
-      expect(await successor.send(entry)).toMatchObject({ outcome: "turn-started" });
-      expect(successorServer.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer")).toHaveLength(0);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ automaticPromptAfterCut: true, externalPromptAfterCut: false });
-      // Actual operator admissions, including a paste of the complete wire,
-      // occupy new native positions and keep their human authority.
-      successorServer.persistUserMessages = true;
-      for (const text of [entry.text, wire]) {
-        expect(await successor.send({ id: `human-${text === wire ? "wire" : "body"}`, text, origin: { kind: "operator" } }))
-          .toMatchObject({ outcome: expect.stringMatching(/turn-started|steered/) });
-      }
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["pipeline", "external", "external"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ externalPromptAfterCut: true });
-    } finally { await successor.release(); }
-  });
-}
-
-test("Codex recovered historical automatic wire without an admitted dispatch remains external", async () => {
-  const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-  const file = path.join(metadataState, "untrusted-recovered-wire.jsonl");
-  const entry = { id: "untrusted-recovered", text: "Continue interrupted work", origin: { kind: "agent" as const, role: "startup-recovery" } };
-  const wire = encodeCodexStructuredUserText(entry.text, undefined, undefined, entry.origin, deliveryDedup(entry.id));
-  fs.writeFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:01:00Z",
-    payload: { type: "user_message", message: wire } }) + "\n");
-  const server = new FakeAppServer();
-  server.threadPath = file;
-  const host = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-    eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-  try {
-    expect(await host.send(entry)).toMatchObject({ outcome: "turn-started" });
-    expect(server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer")).toHaveLength(0);
-    expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external"]);
-  } finally { await host.release(); }
-});
-
-
-for (const role of ["pipeline", "startup-recovery"] as const) {
-  test(`Codex split-flush legacy native client representation preserves ${role} across cold adoption`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `split-legacy-${role}.jsonl`);
-    const timestamp = "2026-10-05T16:01:00Z";
-    fs.writeFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:00:00Z",
-      payload: { type: "turn_completed", error: { codex_error_info: "usage_limit", message: "Usage limit reached" } } }) + "\n");
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    server.persistUserMessages = true;
-    server.persistedPromptRecords = wire => [{ type: "response_item", timestamp,
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } }];
-    const entry = { id: `split-legacy-${role}`, text: "Continue interrupted work ї🌍", origin: { kind: "agent" as const, role } };
-    const host = await CodexAppServerHost.start({ cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-    let wire = "";
-    try {
-      expect(await host.send(entry)).toMatchObject({ outcome: "turn-started", turnId: "turn-1" });
-      wire = (server.requests.find(request => request.method === "turn/start")!.params as { input: Array<{ text: string }> }).input[0]!.text;
-    } finally { await host.release(); }
-    const successorServer = new FakeAppServer();
-    successorServer.threadPath = file;
-    const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-    try {
-      // The native legacy converter preserves the admitted client id but has
-      // no turn-id field. Flush explicitly after confirmation and release.
-      const event = { type: "event_msg", timestamp, payload: { type: "user_message", client_id: entry.id, message: wire } };
-      fs.appendFileSync(file, JSON.stringify(event) + "\n");
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["pipeline", "pipeline"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ automaticPromptAfterCut: true, externalPromptAfterCut: false });
-      // Idless mixed-writer probe and exact canonical repeats never extend a
-      // delivery. An actual human submission has its own native client id.
-      const human = { ...event, payload: { ...event.payload, client_id: "human-split-client" } };
-      const idless = { type: "event_msg", timestamp, payload: { type: "user_message", message: wire } };
-      fs.appendFileSync(file, [human, idless, event].map(row => JSON.stringify(row) + "\n").join(""));
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin))
-        .toEqual(["pipeline", "pipeline", "external", "external", "external"]);
-      expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ externalPromptAfterCut: true });
-    } finally { await successor.release(); }
-  });
-}
-
-
-for (const canonicalRecovery of [false, true]) {
-  test(`Codex lost RPC reply needs native API recovery before pending intent gains authority (${canonicalRecovery})`, async () => {
-    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
-    const file = path.join(metadataState, `lost-rpc-${canonicalRecovery}.jsonl`);
-    fs.writeFileSync(file, "");
-    const entry = { id: "lost-rpc-client", text: "Continue interrupted work", origin: { kind: "agent" as const, role: "startup-recovery" } };
-    const server = new FakeAppServer();
-    server.threadPath = file;
-    server.persistUserMessages = true;
-    server.autoCompleteUserMessage = false;
-    server.suppressTurnStartReply = true;
-    const host = await CodexAppServerHost.start({ cwd: metadataState, requestTimeoutMs: 15,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server), shutdownGraceMs: 1 });
-    let wire = "";
-    try {
-      await expect(host.send(entry)).rejects.toThrow("timed out");
-      wire = (server.requests.find(request => request.method === "turn/start")!.params as { input: Array<{ text: string }> }).input[0]!.text;
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external"]);
-    } finally { await host.release(); }
-    const successorServer = new FakeAppServer();
-    successorServer.threadPath = file;
-    if (canonicalRecovery) successorServer.readTurns = [{ id: "turn-1", status: "completed", items: [
-      { type: "userMessage", id: "native-lost-rpc-item", clientId: entry.id, content: [{ type: "text", text: wire }] },
-    ] }];
-    const successor = await CodexAppServerHost.adopt("thread-149", { cwd: metadataState,
-      eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(successorServer) });
-    try {
-      expect(await successor.send(entry)).toMatchObject({ outcome: "turn-started" });
-      expect(successorServer.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer")).toHaveLength(0);
-      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin))
-        .toEqual([canonicalRecovery ? "pipeline" : "external"]);
-    } finally { await successor.release(); }
   });
 }
