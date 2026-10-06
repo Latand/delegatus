@@ -481,3 +481,144 @@ test("compact still mints an operation id without a secure context", async () =>
     if (realRandomUUID !== undefined) cryptoObject.randomUUID = realRandomUUID;
   }
 });
+
+/* ---------------- a control's hint never outlives its click ---------------- */
+
+/* Operator report: after a click on Compact its hint stayed on screen, and it
+   was still there after switching to another orchestrator. A click focuses the
+   button; the control then disables itself while busy, the browser drops that
+   focus during React's commit, and React delivers no blur for it. The strip is
+   mounted unkeyed, so the Hint that believed itself focused was carried into
+   the next conversation. happy-dom sends no blur for a disabled button either,
+   which is the same thing the Hint gets in Chromium. */
+
+const HINT_SHOWN_MS = 200;
+const hints = () => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent);
+
+async function settleHint(): Promise<void> {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, HINT_SHOWN_MS)); });
+}
+
+/** React derives pointer enter and leave from the bubbling pair. */
+async function pointer(target: Element, type: "pointerover" | "pointerout"): Promise<void> {
+  await act(async () => { target.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event); });
+  await settleHint();
+}
+
+/** What a mouse click does to a button: focus first, then the click. */
+async function mouseClick(button: HTMLButtonElement): Promise<void> {
+  await act(async () => { button.focus(); button.click(); });
+  await settleHint();
+}
+
+/** A transport that answers only when the test lets it, so a control stays busy. */
+function heldFetch(): { release: () => Promise<void> } {
+  const waiting: (() => void)[] = [];
+  stubFetch(() => new Promise<Response>((resolve) => {
+    waiting.push(() => resolve({
+      ok: true,
+      json: () => Promise.resolve({ ok: true, structured: true, operationId: "op-held", receipt: { status: "pending" } }),
+    } as unknown as Response));
+  }));
+  return {
+    release: async () => {
+      await act(async () => {
+        for (const answer of waiting.splice(0)) answer();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    },
+  };
+}
+
+const otherClaudeRoot: FileEntry = { ...structuredClaudeRoot, path: "/claude-other.jsonl", name: "claude-other.jsonl", title: "other" };
+
+test("the Compact hint closes on the click, stays closed while the control is busy, and is gone after a conversation switch", async () => {
+  sessionView = structuredClaudeView();
+  const transport = heldFetch();
+  const { host, root } = await mount(structuredClaudeRoot);
+
+  await pointer(compactButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "strip.compactClaudeMessage")]);
+
+  /* The arming click closes it, with the pointer still on the control. */
+  await mouseClick(compactButton(host)!);
+  expect(hints()).toEqual([]);
+
+  /* The confirming click sends the command and the control disables itself. */
+  await mouseClick(compactButton(host)!);
+  expect(compactButton(host)!.disabled).toBe(true);
+  expect(hints()).toEqual([]);
+
+  await pointer(compactButton(host)!, "pointerout");
+  expect(hints()).toEqual([]);
+  await transport.release();
+  await settleHint();
+  expect(compactButton(host)!.disabled).toBe(false);
+  expect(hints()).toEqual([]);
+
+  /* The same strip instance now serves another conversation. */
+  await act(async () => root.render(<AgentControlStrip file={otherClaudeRoot} />));
+  await settleHint();
+  expect(hints()).toEqual([]);
+
+  /* The control still explains itself to a pointer that arrives anew. */
+  await pointer(compactButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "strip.compactClaudeMessage")]);
+  await pointer(compactButton(host)!, "pointerout");
+  expect(hints()).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+test("the Stop hint closes on the click that disables it and is gone after a conversation switch", async () => {
+  sessionView = structuredClaudeView();
+  const transport = heldFetch();
+  const { host, root } = await mount(structuredClaudeRoot);
+
+  await pointer(stopButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "composer.interruptTitle")]);
+
+  await mouseClick(stopButton(host)!);
+  expect(stopButton(host)!.disabled).toBe(true);
+  expect(hints()).toEqual([]);
+
+  await pointer(stopButton(host)!, "pointerout");
+  await act(async () => root.render(<AgentControlStrip file={otherClaudeRoot} />));
+  await settleHint();
+  expect(hints()).toEqual([]);
+  await transport.release();
+  await settleHint();
+  expect(hints()).toEqual([]);
+  await act(async () => root.unmount());
+  expect(hints()).toEqual([]);
+});
+
+test("a keyboard-focus hint shows, closes when its control becomes disabled, and closes on blur", async () => {
+  sessionView = structuredClaudeView();
+  const { host, root } = await mount(structuredClaudeRoot);
+
+  await act(async () => compactButton(host)!.focus());
+  await settleHint();
+  expect(hints()).toEqual([translate("en", "strip.compactClaudeMessage")]);
+
+  /* A turn starts: the control is disabled from outside, with no click. */
+  sessionView = { ...structuredClaudeView(), session: { ...structuredClaudeView().session, turn: "running" } };
+  await act(async () => root.render(<AgentControlStrip file={structuredClaudeRoot} />));
+  await settleHint();
+  expect(compactButton(host)!.getAttribute("aria-disabled")).toBe("true");
+  expect(hints()).toEqual([]);
+
+  /* A disabled control still names its reason to a pointer that arrives. */
+  await pointer(compactButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "strip.compactBusyTurn")]);
+  await pointer(compactButton(host)!, "pointerout");
+  expect(hints()).toEqual([]);
+
+  /* Keyboard focus on a live control, then focus moves on. */
+  await act(async () => stopButton(host)!.focus());
+  await settleHint();
+  expect(hints()).toEqual([translate("en", "composer.interruptTitle")]);
+  await act(async () => stopButton(host)!.blur());
+  await settleHint();
+  expect(hints()).toEqual([]);
+  await act(async () => root.unmount());
+});
