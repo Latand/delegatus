@@ -5723,7 +5723,9 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
         ? {
           present: true,
           width: box(rail).w,
-          headerText: (header?.textContent ?? "").replace(/\s+/g, " ").trim(),
+          /* The header's own words: the open menu hangs inside the header element, and its rows carry counts of their own. */
+          headerText: [...(header?.childNodes ?? [])].map((node) => (node instanceof HTMLElement ? (node.cloneNode(true) as HTMLElement) : null))
+            .map((node) => { node?.querySelector("[data-rail-menu-panel]")?.remove(); return node?.textContent ?? ""; }).join(" ").replace(/\s+/g, " ").trim(),
           headerButtons: [...(header?.querySelectorAll<HTMLElement>(":scope > button, :scope > div > button") ?? [])].map((el) => el.getAttribute("aria-label") ?? ""),
         }
         : null,
