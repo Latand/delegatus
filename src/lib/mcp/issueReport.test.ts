@@ -729,6 +729,7 @@ test.each([
 test.each([
   { name: "李", texts: ["The reviewer 李 failed.", "李看到錯誤。", "李看到錯誤。"] },
   { name: "李雷", texts: ["李雷看到錯誤。", "先請李雷查看。", "李雷看到錯誤。", "李**雷**看到錯誤。", "李<b>雷</b>看到錯誤。"] },
+  { name: "テネー", texts: ["テネーが確認した。", "先にテネーが確認した。", "テ**ネ**ーが確認した。"] },
 ])("production Telegram catalog protects $name at both report boundaries", async ({ name, texts }) => {
   const transport = new FakeBotTransport();
   const now = new Date("2026-09-24T12:00:00Z");

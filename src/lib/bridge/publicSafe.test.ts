@@ -212,7 +212,11 @@ test("strict populated server fields and named servers need no local deny list",
 });
 
 test("strict names include one character and names inside unspaced sentences", () => {
-  for (const [name, text] of [["李", "The reviewer 李 observed the failure."], ["李雷", "李雷看到錯誤。"], ["李雷", "先請李雷查看。"], ["A", "Reviewer A observed the failure."]]) {
+  for (const [name, text] of [
+    ["李", "The reviewer 李 observed the failure."], ["李雷", "李雷看到錯誤。"], ["李雷", "先請李雷查看。"],
+    ["テネー", "テネーが確認した。"], ["てねー", "先にてねーが確認した。"], ["태네", "태네가확인했다。"],
+    ["A", "Reviewer A observed the failure."],
+  ]) {
     const deny = { ...DENY, people: [name] };
     expect(privateClasses(text, deny, { strict: true })).toContain("person");
     expect(privateClasses(text, deny)).not.toContain("person");

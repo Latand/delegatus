@@ -266,8 +266,9 @@ function escape(text: string): string {
 }
 
 /* CJK names can touch sentence letters on either side without separators.
+   Script extensions include shared marks such as the Japanese long vowel.
    Relax only their edges in strict reports; Latin name edges stay bounded. */
-const CJK_NAME_CHARACTER = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_NAME_CHARACTER = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]/u;
 
 function wholeWord(name: string, strict = false): RegExp {
   const words = name.split(/\s+/u).map(escape).join("\\s+");
