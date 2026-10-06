@@ -226,5 +226,7 @@ if (mode === "spawn") {
   }
 }
 
-/* Stay the generation that owns what it wrote, until the test ends it. */
-await new Promise<never>(() => {});
+/* A referenced timer lets Bun's event loop block while this generation owns
+   what it wrote. An unresolved top-level promise with no referenced event
+   source makes Bun 1.4.0 repeatedly poll with a zero timeout. */
+for (;;) await Bun.sleep(1_000);
