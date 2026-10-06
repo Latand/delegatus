@@ -202,16 +202,17 @@ function reviewFlow(id: string, implementerPath: string, state: string, round: R
       startedAt: at, error: null, ...round }] }] as never);
 }
 
-test.each(["unbound", "bound", "unproven"] as const)("a live %s reviewer still owns a stage after its verdict queues a held relay", async (binding) => {
+test.each(["unbound", "bound", "unproven", "hosted"] as const)("a live %s reviewer still owns a stage after its verdict queues a held relay", async (binding) => {
   const previous = ended("open");
-  const reviewer = ended("open");
   const child = Bun.spawn(["sleep", "60"]);
   const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = binding === "hosted" ? hosted("open", identity) : ended("open");
+  const reviewerPid = binding === "hosted" ? null : identity.pid;
   const flowId = `flow_held_relay_${binding}`;
   const findingsPath = join(directory, `${binding}-findings.md`);
   writeFileSync(findingsPath, "VERDICT: REQUEST_CHANGES\n\nFix the bug.\n");
   reviewFlow(flowId, previous.artifactPath, "reviewing", {
-    reviewerPid: identity.pid, reviewerIdentity: binding === "unproven" ? null : identity.startIdentity,
+    reviewerPid, reviewerIdentity: binding === "unproven" || binding === "hosted" ? null : identity.startIdentity,
     ...(binding === "unbound" ? {} : { reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id }),
     findingsPath, spawnStartedAt: new Date().toISOString(),
   });
@@ -224,7 +225,7 @@ test.each(["unbound", "bound", "unproven"] as const)("a live %s reviewer still o
     expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
     await tickFlows([{ path: previous.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture" } as never]);
     const relaying = loadFlows()[0]!;
-    expect(relaying).toMatchObject({ state: "relaying", rounds: [{ verdict: "REQUEST_CHANGES", reviewerPid: identity.pid }] });
+    expect(relaying).toMatchObject({ state: "relaying", rounds: [{ verdict: "REQUEST_CHANGES", reviewerPid }] });
     expect(flowAwaitingAdmission(relaying)).toBe(true);
     expect(captureProcessIdentity(child.pid)).toMatchObject(identity);
     expect(await probeQuiet(snapshot, p, Date.now(), false)).toMatchObject({ quiet: false, blockers: { stages: 1 } });

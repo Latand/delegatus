@@ -168,14 +168,16 @@ function currentReviewRound(flow: Flow | undefined, attemptConversationId: strin
   if (!flow) return null;
   const round = flow.rounds.at(-1);
   if (!round) return null;
-  // A parked flow can still own a reviewer. Only active dispatch phases
-  // receive protection from launch markers without a recorded process.
-  const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
-  if (!recordedProcess && (round.verdict || (flow.state !== "spawning" && flow.state !== "reviewing"))) return null;
+  // A bound host can still be running after findings arrive, including a
+  // reviewer whose process is recorded only by the registry.
   if (round.reviewerConversationId) {
     return round.reviewerConversationId === attemptConversationId ? null
       : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
   }
+  // A parked flow can still own a reviewer. Only active dispatch phases
+  // receive protection from launch markers without a recorded process.
+  const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
+  if (!recordedProcess && (round.verdict || (flow.state !== "spawning" && flow.state !== "reviewing"))) return null;
   if (reviewerProcess?.(round) === "gone") return "gone";
   return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
     ? "dispatching" : null;
