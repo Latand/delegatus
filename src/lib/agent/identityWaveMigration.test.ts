@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { expect, test } from "bun:test";
 
+import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE } from "@/lib/accounts/accountMutation";
 import {
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
@@ -996,7 +997,11 @@ test("a concurrent orchestrator rotation cannot be overwritten by the startup wa
       log: () => {},
       env: {},
     };
-    expect(() => runIdentityWaveMigrationAtStartup(overrides)).toThrow("account mutation is busy");
+    let failure: unknown;
+    try { runIdentityWaveMigrationAtStartup(overrides); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(AccountMutationBusyError);
+    expect(failure).toMatchObject({ message: ACCOUNT_STORE_BUSY_MESSAGE });
     expect(registry.snapshot().identityMigrations[IDENTITY_WAVE_MIGRATION]).toBeUndefined();
     expect(orchestratorSeatFor("viewer").active).toMatchObject({
       conversationId: conversation.id,

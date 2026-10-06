@@ -8,7 +8,7 @@ import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, 
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
-import { withAccountMutationLockAsync } from "./accountMutation";
+import { isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
@@ -246,6 +246,7 @@ export async function resolveHealthySpawnAccount(
         : selected.requestedAdmission ? { requestedAdmission: selected.requestedAdmission } : {}),
     };
   } catch (error) {
+    if (isAccountAdmissionRetryable(error)) throw error;
     /* A bound project whose pool produced no launchable account. Nothing was
        named, so there is no pin to degrade and nothing outside the pool to
        reach for — what is left is to REPORT, in the one wording every other

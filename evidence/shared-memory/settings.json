@@ -3,24 +3,28 @@
     "locale": "en",
     "width": 1440,
     "fits": true,
-    "toggled": true
+    "toggled": true,
+    "pageErrors": []
   },
   {
     "locale": "en",
     "width": 390,
     "fits": true,
-    "toggled": true
+    "toggled": true,
+    "pageErrors": []
   },
   {
     "locale": "uk",
     "width": 1440,
     "fits": true,
-    "toggled": true
+    "toggled": true,
+    "pageErrors": []
   },
   {
     "locale": "uk",
     "width": 390,
     "fits": true,
-    "toggled": true
+    "toggled": true,
+    "pageErrors": []
   }
 ]

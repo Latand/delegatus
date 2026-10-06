@@ -1,3 +1,4 @@
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -21,6 +22,15 @@ import { TmuxDeliveryUncertainError } from "./tmux";
 import { resumeSpecForSession, type ResumeSpecOptions } from "./agent/cli";
 import { beginRegistryResume } from "./agent/transcriptHost";
 import { resolveAttachCommand } from "./agent/attachCommand";
+
+// Command/control tests use a fake interpreter and its explicit inventory.
+let restoreFeatureReader: () => void;
+beforeEach(() => {
+  restoreFeatureReader = setCodexFeatureReaderForTest(() => parseCodexFeatures(
+    "multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true",
+  ));
+});
+afterEach(() => restoreFeatureReader());
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-test-"));
 const failure: DeliveryFailure = { ok: false, outcome: "failed", error: "resume unavailable", status: 503 };

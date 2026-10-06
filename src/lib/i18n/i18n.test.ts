@@ -4,6 +4,11 @@ import { en } from "./en";
 import { translate } from "./index";
 import { uk } from "./uk";
 
+test("the shared cap status gives the available action in both locales", () => {
+  expect(en["memory.status.capped"]).toEndWith("Wait for next month.");
+  expect(uk["memory.status.capped"]).toEndWith("Дочекайтеся наступного місяця.");
+});
+
 describe("translation parity between en and uk", () => {
   test("both locales define exactly the same keys", () => {
     expect(Object.keys(uk).sort()).toEqual(Object.keys(en).sort());
