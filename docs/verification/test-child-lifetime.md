@@ -198,8 +198,10 @@ regression and all 43 comparison tests now pass with 225 assertions.
 ## Process-launch audit
 
 The audit searched test files and fixture/probe helpers throughout the repository
-for Node spawn/fork/exec primitives, their aliases, namespace calls and Bun
-spawn calls. The independent reference search includes dynamic imports and
+in `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` for Node
+spawn/fork/exec primitives, their aliases, namespace calls and Bun spawn calls.
+It also follows helper basenames referenced by tests, including subprocess
+script paths which are string literals rather than module imports. The independent reference search includes dynamic imports and
 primitives passed to higher-order helpers such as `promisify(execFile)`;
 requiring a primitive to be the direct callee misses these launches. Calls
 inside generated scripts inherit runner containment too. The tables record
@@ -215,22 +217,24 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 231 files: 154 with asynchronous primitives and
-77 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 244 files: 162 with asynchronous primitives and
+82 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
-An independent primitive-reference scan reconciled all 231 files with the
-inventory, with zero unlisted helpers. It found the dynamic Git launch at
-line 248 and the higher-order curl launches at lines 74, 510 and 591.
+The executable AST primitive-reference scan reconciles the helper census and
+explicit companion exclusions below. It covers JavaScript imports and Bun
+calls as well as TypeScript, dynamic imports and higher-order primitive
+references. The regression discovers the real package smoke from its test's
+script path and deliberately removes that JavaScript row to prove that a
+missing helper is detected independently of row totals.
 
-The reconciliation adds the dynamically imported Git helper and all three
-promisified curl launches. It also counts the two verifier rows whose missing
-disposition columns excluded them from the earlier 227-file total, and moves
-the asynchronous Viewer verifier into its correct table. The bounded
-`scripts/test-child-lifetime-audit.test.ts` regression checks both omitted
-helpers, complete disposition columns, unique files, verifier classification
-and counts. All three checks failed against the earlier audit and pass after
-the correction. Existing Git and curl ownership needs no source change.
+Run standalone verification or capture helpers through `scripts/gate-slot.sh`
+with isolated HOME/config/state/temp and `LLV_OWNED_RUN_TIMEOUT_MS` set for the
+campaign. A test caller already supplies this service. The JavaScript native
+Codex helpers' version probes have five-second timeouts; their imported fixture and
+Playwright launch children remain in the same owning service, including setup
+failures before local finally blocks. Native campaign execution was not
+repeated for this inventory correction.
 
 | File | Async launch sites | Disposition |
 | --- | --- | --- |
@@ -244,26 +248,32 @@ the correction. Existing Git and curl ownership needs no source change.
 | `bin/mcp-server.test.ts` | 27, 77, 133, 327, 741, 783, 830, 906 | owned |
 | `bin/server-runtime.test.ts` | 201, 262, 302 | owned |
 | `scripts/audit-with-retry.test.ts` | 68 | owned |
-| `scripts/bootstrap-runtime-host.test.ts` | 83, 113 | owned |
+| `scripts/bootstrap-runtime-host.test.ts` | 111 | owned |
 | `scripts/braces-patch.test.ts` | 66 | owned |
+| `scripts/capture-board-geometry.ts` | 368, 996, 2392, 4168 | contained helper; existing rendered-evidence driver, immediate returned handles and bounded server readiness/stop. Test imports and driver runs execute in the owning service |
+| `scripts/capture-mobile-v2.ts` | 1301 | contained helper; existing rendered-evidence driver. Test imports do not start the server; an explicit capture owns the server handle and browser and closes both in finally under the runner deadline |
+| `scripts/demo-capture.ts` | 578, 709 | contained helper; shared rendered-evidence server handles, isolated fixture home, finally cleanup and five-second TERM grace. The owning service supplies the outer KILL deadline |
 | `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
 | `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 37, 53, 55 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
 | `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 187, 204, 205, 209, 272, 285, 289, 316, 328, 329, 331, 332, 334, 378, 407, 536, 561 | owned |
-| `scripts/npm-package-smoke.test.ts` | 13, 37, 49, 77 | owned |
+| `scripts/newcomer-install.mjs` | 67 | contained helper; synchronous installers have 120-second deadlines, readiness is bounded, the launched CLI is stopped through its original handle in finally. Its standalone installation campaign is outside a test run |
+| `scripts/npm-package-smoke.mjs` | 109, 485, 520 | contained helper; commands have a 30-second handle timeout, startup/restart waits 30 seconds, observation 60 seconds, and the caller has a 150-second deadline. Direct and CLI server handles stop with bounded TERM/KILL; runtime-host restart pins the fence start identity. The owning service contains descendants on interruption |
+| `scripts/npm-package-smoke.test.ts` | 32, 34, 61 | owned |
 | `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
+| `scripts/owned-runner.ts` | 27, 29, 56, 88, 98 | contained helper; immediate original handles, private service capability, finite command and service deadlines, two-second cgroup TERM/KILL bound; portable limitations stated below |
 | `scripts/privacy-publication-gate.test.ts` | 448, 955, 2175, 2282, 2559, 2572, 2587, 2608, 2682, 2970, 3603, 3778, 3822, 3872, 3922, 3971, 4018, 4065, 4112, 4158, 4203, 4745 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
 | `scripts/probe-realtime-v3.ts` | 230, 276 | contained helper |
 | `scripts/rebuild.test.ts` | 104 | owned |
-| `scripts/runtime-host-viewer-adapter.test.ts` | 82, 107, 160, 258, 520, 598, 700, 1051, 1234, 1263, 1340 | owned |
+| `scripts/runtime-host-viewer-adapter.test.ts` | 105, 256, 518, 596, 698, 976, 1049, 1261, 1338 | owned |
 | `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
 | `scripts/verify-viewer-runtime.ts` | 200, 244, 383 | contained helper; direct Linux CLI enters containment, served probe owns a nested service and rejects unconfirmed shutdown |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
-| `src/app/api/runtime/hosts/route.test.ts` | 29, 99 | owned |
+| `src/app/api/runtime/hosts/route.test.ts` | 31, 88, 92 | owned |
 | `src/app/api/spawn/route.test.ts` | 2421, 2561 | owned |
 | `src/app/servedPayloadSecrets.test.ts` | 104 | owned |
 | `src/components/LogFeed.prependAnchor.dom.test.tsx` | 324 | owned |
@@ -273,7 +283,7 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/accounts/accountMutation.test.ts` | 39, 120, 181, 231, 247, 283, 318, 352, 389, 486 | owned |
 | `src/lib/accounts/accountsStore.sqlite.test.ts` | 100 | owned |
 | `src/lib/accounts/claude.test.ts` | 287, 590, 663 | owned |
-| `src/lib/accounts/claudeLoginIdentity.test.ts` | 178, 289 | owned |
+| `src/lib/accounts/claudeLoginIdentity.test.ts` | 164, 179, 290 | owned |
 | `src/lib/accounts/claudeProvider.test.ts` | 118, 364, 386, 438 | owned |
 | `src/lib/accounts/codex.test.ts` | 153, 162, 302, 388 | owned |
 | `src/lib/accounts/copilotLogin.test.ts` | 204 | owned |
@@ -282,7 +292,7 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/accounts/projectBindings.interprocess.test.ts` | 43 | owned |
 | `src/lib/agent/cli.integration.test.ts` | 70 | owned |
 | `src/lib/agent/cli.test.ts` | 84, 194, 206, 214, 221, 224, 532, 669 | owned |
-| `src/lib/agent/codexSpawnPolicy.test.ts` | 27, 65, 71, 99, 178, 264, 355, 397, 429 | owned |
+| `src/lib/agent/codexSpawnPolicy.test.ts` | 100, 178, 355, 429 | owned |
 | `src/lib/agent/ephemeral.probe.test.ts` | 57 | owned |
 | `src/lib/agent/identityWaveMigration.test.ts` | 976 | owned |
 | `src/lib/agent/registry.sqlite.test.ts` | 475, 951, 961, 999, 1009, 1046, 1119, 1134, 1169, 1199, 1222, 1243, 1625, 1709, 1906, 1921 | owned |
@@ -295,7 +305,7 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/externalRelay/store.test.ts` | 54, 96 | owned |
 | `src/lib/flows/decisions.test.ts` | 17, 132 | owned |
 | `src/lib/flows/engine.test.ts` | 29, 1090, 1184, 1272 | owned |
-| `src/lib/flows/exec.test.ts` | 217, 252 | owned |
+| `src/lib/flows/exec.test.ts` | 219, 257 | owned |
 | `src/lib/flows/store.test.ts` | 190 | owned |
 | `src/lib/links/boardSync.test.ts` | 50, 120, 122, 133, 135, 168 | owned |
 | `src/lib/links/pairing.test.ts` | 25 | owned |
@@ -328,8 +338,8 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/proc/windows.test.ts` | 45 | owned |
 | `src/lib/processGroup.test.ts` | 159 | owned |
 | `src/lib/resourceViewerTree.test.ts` | 150, 153 | owned |
-| `src/lib/resources.structuredHosts.test.ts` | 220, 387, 427, 498 | owned |
-| `src/lib/resources.test.ts` | 506, 551, 605, 2588 | owned |
+| `src/lib/resources.structuredHosts.test.ts` | 221, 382, 423, 494 | owned |
+| `src/lib/resources.test.ts` | 518, 563, 617, 1750, 1926, 2051, 2138, 2600, 3329, 3334, 3337 | owned |
 | `src/lib/resources.truth.test.ts` | 107 | owned |
 | `src/lib/runtime/agentMemory.scope.test.ts` | 9, 19 | owned |
 | `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
@@ -356,13 +366,13 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/runtime/startupFinalization.integration.test.ts` | 282, 519, 600 | owned |
 | `src/lib/runtime/structuredDelivery.integration.test.ts` | 41, 4327 | owned |
 | `src/lib/runtime/structuredDeliveryRebind.test.ts` | 189, 648 | owned |
-| `src/lib/runtime/structuredHostControl.test.ts` | 79, 89 | owned |
+| `src/lib/runtime/structuredHostControl.test.ts` | 80, 90 | owned |
 | `src/lib/runtime/structuredHostRetirement.test.ts` | 231 | owned |
 | `src/lib/runtime/structuredMessageDelivery.test.ts` | 562 | owned |
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | 4685, 4778, 4903, 5148 | owned |
 | `src/lib/scanner/discover.test.ts` | 40 | owned |
 | `src/lib/scanner/observe.singleFlight.test.ts` | 134 | owned |
-| `src/lib/scanner/process.test.ts` | 45, 50, 55 | owned |
+| `src/lib/scanner/process.test.ts` | 47, 52, 59 | owned |
 | `src/lib/scanner/projectDirectories.test.ts` | 101 | owned |
 | `src/lib/scanner/roots.claudeTasks.test.ts` | 55, 91 | owned |
 | `src/lib/selfUpdate/actions.test.ts` | 218, 315 | owned |
@@ -378,9 +388,11 @@ the correction. Existing Git and curl ownership needs no source change.
 | `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
 | `src/lib/telemetry/sender.test.ts` | 67, 96, 119, 158, 235, 239 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
+| `src/lib/testing/fixtureProcess.test.ts` | 8, 16, 26, 28 | owned; exited/reused root regressions and real descendant cleanup with a same-argv bystander, three/five-second test deadlines |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
+| `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
@@ -400,7 +412,9 @@ the correction. Existing Git and curl ownership needs no source change.
 | `docs/screenshots/issue-499/depth-one-evidence.test.ts` | 33, 42, 51, 72, 88, 92 | synchronous |
 | `docs/screenshots/issue-499/evidence.test.ts` | 93, 108 | synchronous |
 | `evals/roles/controls.test.ts` | 16 | synchronous |
+| `evals/roles/graders/behavior.ts` | 14 | synchronous; credential-free sandbox evaluator has a 10-second command timeout; the owning service contains interrupted descendants |
 | `evals/roles/lifecycle.test.ts` | 116 | synchronous |
+| `evals/roles/runner.ts` | 26, 50, 352, 353, 360 | synchronous; eval subprocesses have a 240-second timeout; Git/archive operations run in the owning service when exercised by tests |
 | `scripts/ci-platform-scope.test.ts` | 120 | synchronous |
 | `scripts/deploy-checkout.test.ts` | 6 | synchronous |
 | `scripts/docker-image-scope.test.ts` | 77, 162, 168 | synchronous |
@@ -410,11 +424,14 @@ the correction. Existing Git and curl ownership needs no source change.
 | `scripts/local-gate-tests.ts` | 158, 198 | synchronous |
 | `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
+| `scripts/package-revision.mjs` | 17 | synchronous; finite Git HEAD probe used by package verification; the calling test service supplies interruption and the outer deadline |
 | `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |
 | `scripts/publish-workflow.test.ts` | 189, 328 | synchronous |
 | `scripts/supply-chain-check.test.ts` | 14 | synchronous |
-| `scripts/verify-native-codex-runtime.test.ts` | 33 | synchronous |
 | `scripts/verify-bun-runtime-controls.ts` | 14 | synchronous; negative-control launches remain contained, synthetic build links verifier dependencies |
+| `scripts/verify-native-codex-delivery.mjs` | 132 | synchronous; installed Codex version probe has a five-second timeout. The separately imported native runtime fixture owns its handle; browser/runtime close in finally, 30-second scenario waits, owning verification service supplies interruption and the outer deadline |
+| `scripts/verify-native-codex-injection-races.mjs` | 96 | synchronous; installed Codex version probe has a five-second timeout. Imported native runtime fixture owns its handle; browser/runtime close in finally, 30-second scenario waits, owning verification service supplies interruption and the outer deadline |
+| `scripts/verify-native-codex-runtime.test.ts` | 33 | synchronous |
 | `src/app/api/artifact/route.test.ts` | 143 | synchronous |
 | `src/app/api/pipelines/route.test.ts` | 24 | synchronous |
 | `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
@@ -487,6 +504,50 @@ Additional launch wiring checked by text and imports:
 | `src/lib/pipelines/stageCompletion.test.ts` | A substituted launch callback creates synthetic records. |
 | `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
 
+Referenced production and operational companions are explicitly excluded from
+the 244-file test/helper census. They remain reconciled by the independent
+reference scan. Their execution by a test is contained by the same service;
+this disposition does not change their production process contract.
+
+| File | Exclusion / test ownership |
+| --- | --- |
+| `bin/claude-provider-launch.mjs` | Production provider launcher; test invocations stay in the test service, original child handle signals |
+| `bin/cli.mjs` | Public CLI entry point; package tests invoke it inside their owning service; production supervision is outside fixture cleanup |
+| `bin/forge-app-token.mjs` | Forge authentication command; subprocesses exercised by tests stay in the service; production credential flow is outside the fixture audit |
+| `bin/launcher-adoption.mjs` | Production release adoption; probes and signals are product behavior tested in the owning service |
+| `bin/launcher-credentials.mjs` | Production credential/ACL probes; test calls are contained, no independently launched long-lived test helper |
+| `bin/launcher-relaunch.mjs` | Production release relaunch; test executions are contained, live operator handoff is outside the fixture audit |
+| `bin/launcher-service-proof.mjs` | Production service proof probes; test invocations are contained synchronous queries |
+| `bin/mcp-server.mjs` | Public MCP launcher; test process stays in the owning service and uses original bundle handles |
+| `bin/oomPolicy.mjs` | Production service-policy queries; synchronous probes inside contained tests |
+| `bin/provision-telegram-connector.mjs` | Operator connector installer; test invocations contained, live installation outside the fixture audit |
+| `bin/self-update-supervisor.mjs` | Production release metadata and bounded identity probes; imported by tests, no independent long-lived fixture |
+| `bin/tailscale.mjs` | Operator tunnel utility; test queries contained, live networking outside the fixture audit |
+| `bin/windows-process-identity.mjs` | Production kernel identity probes; bounded synchronous PowerShell commands, native execution outside this Linux run |
+| `scripts/bootstrap-runtime-host.ts` | Operator bootstrap command; real test invocation contained by runner, deployment is outside fixture cleanup |
+| `scripts/ci-platform-scope.ts` | CI scope query; synchronous Git calls exercised by tests in their service |
+| `scripts/cutover-shared-claude-projects.ts` | Operator cutover command referenced in tests; live migration outside the fixture audit |
+| `scripts/docker-image-scope.cjs` | CI image scope query; synchronous Git commands contained when called by tests |
+| `scripts/eslint-changes.ts` | Publication lint tool; original bounded process handles inside gate service |
+| `scripts/local-gate.ts` | Publication entry point; launches the shared gate-slot runner, isolated per-file tests and bounded checks |
+| `scripts/merge-batch.ts` | Operational merge command; test-invoked tools contained, live forge writes outside fixture cleanup |
+| `scripts/prepack.mjs` | Package builder; its async build handles are operational packaging, excluded from the test/helper census. Package smoke uses npm pack with scripts disabled; an explicit prepack campaign runs under the gate deadline |
+| `scripts/privacy-publication-gate.ts` | Publication scanner; bounded synchronous tools contained by the gate, no long-lived fixture |
+| `scripts/rollback-runtime-host.ts` | Operator rollback command; contained rehearsal calls, deployment outside fixture cleanup |
+| `scripts/runtime-host-viewer-adapter.ts` | Production deployment adapter; real regression invocation contained by runner, live deployment outside fixture cleanup |
+| `scripts/supply-chain-check.ts` | Publication dependency checks; synchronous bounded audit commands inside gate service |
+| `src/lib/accounts/claudeCredentials.ts` | Product credential helpers exercised by tests; actual process primitive calls contained by preload/service |
+| `src/lib/agent/cli.ts` | Product CLI queries exercised by tests; bounded calls contained by preload/service |
+| `src/lib/proc/windows.ts` | Product process backend; bounded synchronous probes, native Windows execution outside this Linux run |
+| `src/lib/processIdentity.ts` | Product boot identity probes; bounded synchronous sysctl on macOS, contained test calls |
+| `src/lib/resources.ts` | Product resource commands exercised by tests; actual primitive calls contained by preload/service |
+| `src/lib/runtime/claudeStreamBrokerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
+| `src/lib/runtime/codexAppServerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
+| `src/lib/runtime/copilotAcpHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
+| `src/lib/selfUpdate/git.ts` | Product revision queries; synchronous test calls contained, no long-lived fixture |
+| `src/lib/workflows/provision.ts` | Product workflow provisioning; real test primitive calls contained by preload/service |
+| `src/runtime-host/main.ts` | Production runtime-host entry point; fixture/rehearsal/test launches contained by owning service |
+
 Long-lived fixture entry points with no spawn call of their own also bind to the recorded originating runner: `stageHostGeneration.ts`, `stateLeaseOwner.fixture.ts`, `releaseHandoverIncumbent.ts`, `seatSuccessorHost.ts`, `codexSeatSuccessor.ts`, `nativeCodexRuntime.ts`, `packagedRollback.ts`, `fakeClaudePermissionCli.ts`, and the three `claude-stream-json-*` fixtures. The runtime image writer and structured image admission writer check that identity inside their bounded blocking barriers. MCP fixtures inherit it through their shared barrier helper. Intended adoption can outlast an intermediate generation while the originating test run is alive. A zombie runner has already ended and cannot retain fixture ownership.
 
 ## Platform containment contract
@@ -507,3 +568,56 @@ passed after giving the synthetic policy environments the project's required
 NODE_ENV field. No further independent review round was started; the shared
 policy, inherited warning marker, Linux refusal and documentation received a
 focused read-only self-review.
+
+
+## Identity-safe teardown follow-up
+
+The package smoke no longer signals a historical process-group number. It
+stops the original ChildProcess handle with bounded TERM then KILL and does
+nothing after exit. Runtime-host restart uses the start identity published by
+the private host fence and refuses a mismatch immediately before signalling;
+a reboot cannot span the running smoke process. Shutdown checks use that same
+identity, so a recycled PID cannot be mistaken for a surviving owned host.
+
+The runtime-host route, scanner, structured-host control, resource collector,
+flow, account-login and Codex policy regressions now register their local root identity before
+readiness and use the shared fixture-tree cleanup. It validates the recorded
+root, current ancestry and each member's PID/start/boot identity, then retains
+those identities for bounded escalation. An exited root authorizes no new
+walk or group signal. Detached children reported by the fixture are retained
+by their identities. The bootstrap and deployment-adapter SSH/Git shims record
+the sleeping child's identity while its parent is alive; cleanup no longer
+uses its name to authorize a kill. The kernel service owns forks missed by
+local cleanup and handles cancellation or hard-kill paths.
+
+Bounded regressions exercise the real smoke stop and shared tree stop against
+exited/reused roots, TERM-resistant children and a surviving same-argv
+bystander. The actual runner and stage fixture lifetime matrix remains the
+standing coverage for interrupted owned descendants.
+
+
+Resource-fixture group queries remain diagnostic filters. Signals now target
+only individually captured PID/start/boot identities whose current cgroup is
+the admitted test service. A command line or a historical group number grants
+no kill authority. The real two-service regression confirms that cleanup
+removes its own group and preserves the same-argv group in a separate service.
+The scanner stamp regression also removes any inherited host stamp from its
+bare fixture environment, so a launched agent can exercise that assertion.
+
+
+Follow-up validation ran one named file per service with private state and a
+finite deadline. Actual runner lifetime (9), real pre-report lifetime (3),
+spawn ownership/kernel teardown (6), idle CPU (1), fixture-tree cleanup (3),
+smoke signal authority (3), package bins (1) and inventory discovery (5) pass.
+Affected route (11), scanner (4), structured control (35), resource collector
+(10), account login (14, one native skip), bootstrap (6), deployment adapter
+(34), flows (40) and installed Codex policy (17) pass. The resource head/base
+gate reports zero new failures and one flaky diagnostic case, with failures
+on base during confirmation. An initial separate head run had a timeout/exit
+diagnostic mismatch which did not recur in the comparison head. TypeScript,
+changed-file ESLint, whitespace and merge-base diff/commit/body privacy pass.
+The packed production-server campaign and full native Codex campaign were
+not repeated; the real cleanup functions, package entry points and actual
+runner matrix supply this correction's bounded coverage. A read-only review
+checked signal authority, bounds, failure paths, inventory reconciliation and
+public evidence; it started no additional independent review round.

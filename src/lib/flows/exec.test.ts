@@ -1,3 +1,5 @@
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -220,11 +222,13 @@ test("reviewer group cleanup kills a real descendant after its detached leader e
     env: { ...process.env, CHILD_PID_FILE: childPidPath },
   });
   const leaderPid = leader.pid!;
+  let orphanIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
   const leaderClosed = new Promise<void>((resolve) => { leader.once("close", () => resolve()); });
 
   try {
     await waitForFile(childPidPath);
     const childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+    orphanIdentity = captureProcessIdentity(childPid);
     await leaderClosed;
     expect(process.kill(childPid, 0)).toBeTrue();
 
@@ -236,7 +240,8 @@ test("reviewer group cleanup kills a real descendant after its detached leader e
 
     await waitForDeath(childPid);
   } finally {
-    try { process.kill(-leaderPid, "SIGKILL"); } catch { /* group cleanup completed */ }
+    if (orphanIdentity) signalFixtureIdentity(orphanIdentity, "SIGKILL");
+    if (leader.exitCode === null && leader.signalCode === null) leader.kill("SIGKILL");
   }
 });
 

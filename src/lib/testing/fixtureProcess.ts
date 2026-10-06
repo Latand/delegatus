@@ -1,4 +1,57 @@
 import type { ChildProcess } from "node:child_process";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { procBackend } from "@/lib/proc";
+import { descendantPids } from "@/lib/proc/memory";
+
+const trees = new WeakMap<ChildProcess, ProcessIdentity>();
+
+/** Record the original root before the caller can await readiness. */
+export function ownFixtureTree<T extends ChildProcess>(child: T): T {
+  if (child.pid !== undefined) trees.set(child, captureProcessIdentity(child.pid));
+  return child;
+}
+
+/** A recorded identity is the only authority for a PID signal. */
+export function signalFixtureIdentity(identity: ProcessIdentity, signal: NodeJS.Signals, send = process.kill): boolean {
+  if (processIdentityStatus(identity) !== "alive" || procBackend.processExited(identity.pid)) return false;
+  try { send(identity.pid, signal); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return false; }
+}
+
+/** Snapshot descendants only while the recorded root is still alive. Recheck
+ * every recorded member before each signal, including escalation after exit.
+ * The runner's cgroup owns forks missed by this bounded local cleanup.
+ */
+export async function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
+  const root = trees.get(child);
+  if (!root || child.exitCode !== null || child.signalCode !== null || processIdentityStatus(root) !== "alive") return;
+  const parents = procBackend.ppidMap();
+  const members = descendantPids(root.pid, parents).reverse().map(pid => captureProcessIdentity(pid));
+  if (processIdentityStatus(root) !== "alive") return;
+  // Revalidate each ancestry edge after the snapshot. A recycled intermediate
+  // must not enroll unrelated descendants under an earlier parent map.
+  const byPid = new Map(members.map(identity => [identity.pid, identity]));
+  const owned = members.filter(identity => {
+    let pid = identity.pid;
+    while (pid !== root.pid) {
+      const parent = parents.get(pid);
+      if (parent === undefined || procBackend.readPpid(pid) !== parent) return false;
+      const expected = byPid.get(parent);
+      if (!expected || processIdentityStatus(expected) !== "alive") return false;
+      pid = parent;
+    }
+    return processIdentityStatus(root) === "alive";
+  });
+  const alive = () => owned.filter(identity => processIdentityStatus(identity) === "alive" && !procBackend.processExited(identity.pid));
+  const deadline = Date.now() + timeoutMs;
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    for (const identity of owned) signalFixtureIdentity(identity, signal);
+    const until = signal === "SIGTERM" ? Math.min(deadline, Date.now() + 500) : deadline;
+    while (alive().length && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  if (alive().length) throw new Error("owned fixture tree survived bounded cleanup");
+  await stopFixtureProcess(child);
+}
 
 /** Report readiness only within a deadline. Callers register the child in the
  * same tick as spawn, then use this wait. Startup errors reap the real handle.

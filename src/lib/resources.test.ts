@@ -1,3 +1,5 @@
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -254,9 +256,19 @@ function killConfirmedFixtureProcessGroups(executable: string, groups: FixturePr
       && candidate.authorizerIdentity === group.authorizerIdentity
     ));
     if (!current) continue;
-    try {
-      process.kill(-group.pgid, "SIGKILL");
-    } catch {}
+    // A command line only selects candidates. The admitted test service is
+    // the ownership authority; never signal a historical group number which
+    // may contain another run's processes.
+    const cgroup = process.env.LLV_OWNED_TEST_RUN_CGROUP;
+    if (!cgroup) continue;
+    for (const process of procBackend.listProcesses()) {
+      if (processGroupId(process.pid) !== group.pgid) continue;
+      const identity = captureProcessIdentity(process.pid);
+      try {
+        if (!readFileSync(`/proc/${process.pid}/cgroup`, "utf8").split("\n").includes(`0::${cgroup}`)) continue;
+      } catch { continue; }
+      signalFixtureIdentity(identity, "SIGKILL");
+    }
   }
 }
 
@@ -3308,3 +3320,44 @@ describe("resource recurring reads", () => {
     expect(builds).toBe(4);
   });
 });
+
+
+test.skipIf(process.platform !== "linux")("fixture cleanup preserves a same-argv process owned by another test service", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "fixture-cleanup-authority-"));
+  const report = path.join(directory, "bystander.json");
+  const script = "sleep 30 & wait";
+  const own = Bun.spawn(["/bin/sh", "-c", script], { detached: true, stdout: "ignore", stderr: "ignore" });
+  const owned = captureProcessIdentity(own.pid);
+  const command = `import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { captureProcessIdentity } from ${JSON.stringify(path.join(process.cwd(), "src/lib/processIdentity.ts"))};
+const child = spawn("/bin/sh", ["-c", ${JSON.stringify(script)}], { detached: true, stdio: "ignore" });
+fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify(captureProcessIdentity(child.pid)));
+setInterval(() => {}, 1000);`;
+  const runner = Bun.spawn([process.execPath, path.join(process.cwd(), "scripts/owned-runner.ts"), process.execPath, "-e", command], {
+    env: { ...process.env, LLV_OWNED_RUN_TIMEOUT_MS: "8000" }, stdout: "ignore", stderr: "ignore",
+  });
+  let other: ReturnType<typeof captureProcessIdentity> | undefined;
+  const deadline = setTimeout(() => runner.kill("SIGKILL"), 10_000);
+  try {
+    const until = Date.now() + 3_000;
+    while (!existsSync(report) && Date.now() < until) await Bun.sleep(20);
+    expect(existsSync(report)).toBe(true);
+    other = JSON.parse(readFileSync(report, "utf8"));
+    const groups = confirmedFixtureProcessGroups("/bin/sh").filter(group => [own.pid, other!.pid].includes(group.pgid));
+    expect(groups.map(group => group.pgid)).toContain(own.pid);
+    expect(groups.map(group => group.pgid)).toContain(other!.pid);
+    killConfirmedFixtureProcessGroups("/bin/sh", groups);
+    await own.exited;
+    expect(processIdentityStatus(owned)).toBe("dead");
+    expect(processIdentityStatus(other!)).toBe("alive");
+  } finally {
+    clearTimeout(deadline);
+    if (processIdentityStatus(owned) === "alive") own.kill("SIGKILL");
+    await own.exited;
+    runner.kill("SIGTERM");
+    await runner.exited;
+    if (other) expect(processIdentityStatus(other)).toBe("dead");
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 12_000);

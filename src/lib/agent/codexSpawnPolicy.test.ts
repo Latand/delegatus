@@ -1,3 +1,4 @@
+import { ownFixtureTree, stopFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import zlib from "node:zlib";
@@ -97,11 +98,10 @@ test("an explicit synchronous Guardian reviewer is overridden only for denied la
       XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"),
       LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
     const child = spawn(binary, [...codexSubagentArgs(binary, allowed, env), "app-server"], { env, stdio: ["pipe", "pipe", "pipe"] });
-    const pid = child.pid;
     const lines = createInterface({ input: child.stdout });
     let reaped = false;
     const done = new Promise<void>((resolve) => { child.once("close", () => { reaped = true; resolve(); }); });
-    const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
+    const timer = setTimeout(() => { if (!reaped) child.kill("SIGKILL"); }, 10_000);
     child.stderr.resume();
     let observed = false;
     try {
@@ -123,7 +123,7 @@ test("an explicit synchronous Guardian reviewer is overridden only for denied la
     } finally {
       lines.close();
       child.stdin.end();
-      if (!reaped && pid) { try { process.kill(pid, "SIGTERM"); } catch { /* already exited */ } }
+      await stopFixtureProcess(child);
       await done;
       clearTimeout(timer);
       fs.rmSync(root, { recursive: true, force: true });
@@ -426,7 +426,7 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
       }
       return;
     }
-    const child = spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = ownFixtureTree(spawn(command, argv, { cwd: root, env: childEnv, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
     let terminalOutput = "";
     child.stdout.on("data", (bytes: Buffer) => {
       terminalOutput = (terminalOutput + bytes.toString()).slice(-4000);
@@ -435,15 +435,17 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
     child.stdin.end(stdin ?? undefined);
     let diagnostic = "";
     child.stderr.on("data", (bytes: Buffer) => { diagnostic = (diagnostic + bytes.toString()).slice(-2000); });
-    const pid = child.pid;
     let reaped = false;
     const completed = new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code) => { reaped = true; resolve(code); });
     });
-    const timer = setTimeout(() => { if (!reaped && pid) { try { process.kill(-pid, "SIGKILL"); } catch { /* already exited */ } } }, 10_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Codex ${policy} policy fixture exceeded 10000ms`)), 10_000);
+    });
     try {
-      const code = await completed;
+      const code = await Promise.race([completed, timeout]);
       if (code !== 0) throw new Error(`Codex ${policy} policy fixture exited ${code}: ${(diagnostic + terminalOutput).replaceAll(root, "<sandbox>")}`);
       expect(code).toBe(0);
       expect(requests).toBeGreaterThan(0);
@@ -453,7 +455,7 @@ for (const policy of ["old", "denied", "allowed", "headless", "ephemeral", "term
       if (policy !== "ephemeral") expect(tools.has("exec_command")).toBe(true);
     } finally {
       clearTimeout(timer);
-      if (!reaped && pid) { try { process.kill(-pid, "SIGKILL"); } catch { /* already exited */ } await completed.catch(() => {}); }
+      if (!reaped) { await stopFixtureTree(child); await completed.catch(() => {}); }
     }
   } finally {
     provider.stop(true);

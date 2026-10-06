@@ -1,8 +1,93 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import ts from "typescript";
 
 const read = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 const audit = read("docs/verification/test-child-lifetime.md").split("## Process-launch audit\n")[1];
+
+/** Discover primitive references independently of the hand-written tables.
+ * Include JavaScript and helper paths named by tests, even when a caller
+ * launches a helper through a string rather than a module import.
+ */
+function launchReferences(file: string, source: string): boolean {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  const primitives = new Set(["spawn", "fork", "exec", "execFile", "spawnSync", "execSync", "execFileSync"]);
+  const aliases = new Set<string>();
+  const namespaces = new Set<string>();
+  let found = false;
+  const collect = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
+      && /^(?:node:)?child_process$/.test(node.moduleSpecifier.text) && !node.importClause?.isTypeOnly) {
+      const bindings = node.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings)) for (const binding of bindings.elements) {
+        if (!binding.isTypeOnly && primitives.has((binding.propertyName ?? binding.name).text)) aliases.add(binding.name.text);
+      }
+      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+      if (node.importClause?.name) namespaces.add(node.importClause.name.text);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer
+      && /(?:import|require)\(["'](?:node:)?child_process["']\)/.test(node.initializer.getText(tree))) {
+      for (const binding of node.name.elements) if (ts.isIdentifier(binding.name)
+        && primitives.has((binding.propertyName ?? binding.name).getText(tree))) aliases.add(binding.name.text);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+      && /(?:import|require)\(["'](?:node:)?child_process["']\)/.test(node.initializer.getText(tree))) namespaces.add(node.name.text);
+    ts.forEachChild(node, collect);
+  };
+  collect(tree);
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node) && aliases.has(node.text)
+      && !ts.isImportSpecifier(node.parent) && !ts.isBindingElement(node.parent)) found = true;
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+      && ((node.expression.text === "Bun" && ["spawn", "spawnSync"].includes(node.name.text))
+        || (namespaces.has(node.expression.text) && primitives.has(node.name.text)))) found = true;
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return found;
+}
+
+test("launch discovery includes JavaScript aliases, CommonJS namespaces and forwarded primitives", () => {
+  expect(launchReferences("helper.js", 'import { spawn as launch } from "node:child_process"; launch("tool");')).toBe(true);
+  expect(launchReferences("helper.cjs", 'const cp = require("child_process"); cp.spawn("tool");')).toBe(true);
+  expect(launchReferences("helper.mjs", 'const cp = await import("node:child_process"); promisify(cp.execFile)("tool");')).toBe(true);
+  expect(launchReferences("helper.ts", 'import type { ChildProcess } from "node:child_process"; const spawn = () => {}; spawn();')).toBe(false);
+});
+
+function discoveredHelpers(): string[] {
+  const root = path.resolve(import.meta.dir, "..");
+  const sources = new Map<string, string>();
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
+      if (["node_modules", ".git", ".next", "dist", ".claude"].includes(entry.name)) continue;
+      const file = path.posix.join(directory, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (/\.[cm]?[jt]sx?$/.test(file)) sources.set(file, read(file));
+    }
+  };
+  walk("");
+  const tests = [...sources].filter(([file]) => /\.test\.[cm]?[jt]sx?$/.test(file)).map(([, source]) => source).join("\n");
+  const referenced = new Set([...tests.matchAll(/["'`]([^"'`\n]+?\.[cm]?[jt]sx?)["'`]/g)].map(match => path.posix.basename(match[1])));
+  return [...sources].filter(([file, source]) => {
+    const candidate = /\.test\.[cm]?[jt]sx?$/.test(file)
+      || /(?:fixture|probe|harness|verify-|test-preload|test-child|owned-runner|local-gate-tests|integrationTestHome)/i.test(file)
+      || /^scripts\/.*\.[cm]?jsx?$/.test(file)
+      || referenced.has(path.basename(file));
+    return candidate && /child_process|Bun\s*\.\s*spawn/.test(source) && launchReferences(file, source);
+  }).map(([file]) => file).sort();
+}
+
+test("the launch audit discovers JavaScript helpers rather than relying on existing row totals", () => {
+  const helpers = discoveredHelpers();
+  expect(helpers).toContain("scripts/npm-package-smoke.mjs");
+  expect(helpers).toContain("scripts/verify-native-codex-delivery.mjs");
+  expect(helpers).toContain("scripts/verify-native-codex-injection-races.mjs");
+  const missing = (body: string) => helpers.filter(file => !body.includes(`| \`${file}\` |`));
+  expect(missing(audit)).toEqual([]);
+  const removed = audit.split("\n").filter(line => !line.startsWith("| `scripts/npm-package-smoke.mjs` |")).join("\n");
+  expect(missing(removed)).toContain("scripts/npm-package-smoke.mjs");
+}, 10_000);
 
 test("the child audit includes dynamically imported synchronous Git launches", () => {
   const source = read("src/lib/boardMaintenance/run.test.ts");
