@@ -10,7 +10,11 @@ export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: 
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
-const key = (site: TestSite) => JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind]);
+// Keep the concrete identities in displayed evidence. A head/base comparison
+// of the same survivor failure must not depend on the different PIDs allocated
+// to those two isolated runs.
+const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
+  site.kind === "error" ? diagnosticName(site).replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>") : diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");

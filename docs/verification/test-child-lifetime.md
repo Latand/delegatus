@@ -143,6 +143,13 @@ a green JUnit report; its executable regression was red before the correction
 and passes afterward. Membership reads inspect only the verified owned
 cgroup and never authorize a kill by command line.
 
+Head and baseline allocate different process identities. The comparison key
+normalizes the identity list for the same survivor diagnostic while displayed
+evidence retains every concrete PID and start token. A new survivor still
+blocks; an intentional survivor on both sides is reported as pre-existing.
+Both regressions pass, and the full comparison suite passes 42 tests with
+221 assertions.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -166,31 +173,31 @@ Linux path.
 
 | File | Async launch sites | Disposition |
 | --- | --- | --- |
-| `bin/__fixtures__/cli-self-update.ts` | 281 | contained helper |
+| `bin/__fixtures__/cli-self-update.ts` | 50, 240, 281 | contained helper |
 | `bin/cli.exposure.integration.test.ts` | 262, 284, 317, 336, 355, 389, 417, 444, 469, 496 | owned |
 | `bin/cli.selfUpdate.coldRecovery.integration.test.ts` | 100 | owned |
-| `bin/cli.selfUpdate.divergedApply.integration.test.ts` | 116 | owned |
-| `bin/cli.selfUpdate.integration.test.ts` | 82, 221, 234, 262, 288, 300, 376, 506, 862, 1017, 1042, 1053, 1101, 1130, 1230, 1239, 1317, 1354, 1468, 1477, 1520, 1747 | owned |
-| `bin/launcher-credentials.test.ts` | 211, 229, 230, 265, 266, 310 | owned |
+| `bin/cli.selfUpdate.divergedApply.integration.test.ts` | 116, 153 | owned |
+| `bin/cli.selfUpdate.integration.test.ts` | 82, 221, 234, 262, 288, 300, 376, 480, 506, 862, 1017, 1042, 1053, 1101, 1130, 1230, 1239, 1317, 1354, 1468, 1477, 1520, 1747, 1791 | owned |
+| `bin/launcher-credentials.test.ts` | 211, 229, 230, 265, 266, 290, 303, 310, 341, 374, 388 | owned |
 | `bin/launcher-relaunch.test.ts` | 116, 184 | owned |
-| `bin/mcp-server.test.ts` | 27, 77, 327, 741, 783, 830, 906 | owned |
-| `bin/server-runtime.test.ts` | 201, 262 | owned |
+| `bin/mcp-server.test.ts` | 27, 77, 133, 327, 741, 783, 830, 906 | owned |
+| `bin/server-runtime.test.ts` | 201, 262, 302 | owned |
 | `scripts/audit-with-retry.test.ts` | 68 | owned |
-| `scripts/bootstrap-runtime-host.test.ts` | 113 | owned |
+| `scripts/bootstrap-runtime-host.test.ts` | 83, 113 | owned |
 | `scripts/braces-patch.test.ts` | 66 | owned |
 | `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
 | `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
-| `scripts/gate-slot.test.ts` | 33 | owned |
-| `scripts/install-mcp.test.ts` | 30, 173 | owned |
-| `scripts/local-gate-tests.test.ts` | 260 | owned |
-| `scripts/npm-package-smoke.test.ts` | 13 | owned |
+| `scripts/gate-slot.test.ts` | 17, 33, 35 | owned |
+| `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
+| `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 177, 194, 195, 199, 262, 275, 279, 306, 318, 319, 321, 322, 324, 368, 397, 526, 551 | owned |
+| `scripts/npm-package-smoke.test.ts` | 13, 37, 49, 77 | owned |
 | `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
-| `scripts/privacy-publication-gate.test.ts` | 2175 | owned |
+| `scripts/privacy-publication-gate.test.ts` | 448, 955, 2175, 2282, 2559, 2572, 2587, 2608, 2682, 2970, 3603, 3778, 3822, 3872, 3922, 3971, 4018, 4065, 4112, 4158, 4203, 4745 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
-| `scripts/probe-realtime-v3.ts` | 276 | contained helper |
+| `scripts/probe-realtime-v3.ts` | 230, 276 | contained helper |
 | `scripts/rebuild.test.ts` | 104 | owned |
-| `scripts/runtime-host-viewer-adapter.test.ts` | 107, 258, 520, 598, 700, 1051, 1263, 1340 | owned |
+| `scripts/runtime-host-viewer-adapter.test.ts` | 82, 107, 160, 258, 520, 598, 700, 1051, 1234, 1263, 1340 | owned |
 | `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
@@ -198,22 +205,22 @@ Linux path.
 | `src/app/api/spawn/route.test.ts` | 2421, 2561 | owned |
 | `src/app/servedPayloadSecrets.test.ts` | 104 | owned |
 | `src/components/LogFeed.prependAnchor.dom.test.tsx` | 324 | owned |
-| `src/components/team/passkey.browser.test.ts` | 112 | owned |
+| `src/components/team/passkey.browser.test.ts` | 98, 112 | owned |
 | `src/lib/accounts/accountMutation.callers.test.ts` | 130 | owned |
 | `src/lib/accounts/accountMutation.fixture.ts` | 12 | contained helper; bounded readiness and cleanup retained, generated child now binds to runner |
 | `src/lib/accounts/accountMutation.test.ts` | 39, 120, 181, 231, 247, 283, 318, 352, 389, 486 | owned |
 | `src/lib/accounts/accountsStore.sqlite.test.ts` | 100 | owned |
 | `src/lib/accounts/claude.test.ts` | 287, 590, 663 | owned |
 | `src/lib/accounts/claudeLoginIdentity.test.ts` | 178, 289 | owned |
-| `src/lib/accounts/claudeProvider.test.ts` | 386, 438 | owned |
+| `src/lib/accounts/claudeProvider.test.ts` | 118, 364, 386, 438 | owned |
 | `src/lib/accounts/codex.test.ts` | 153, 162, 302, 388 | owned |
 | `src/lib/accounts/copilotLogin.test.ts` | 204 | owned |
 | `src/lib/accounts/manager.interprocess.test.ts` | 76, 100, 204, 270, 310, 330, 369 | owned |
 | `src/lib/accounts/migration/coordinatorTurnAuthority.test.ts` | 212 | owned |
 | `src/lib/accounts/projectBindings.interprocess.test.ts` | 43 | owned |
 | `src/lib/agent/cli.integration.test.ts` | 70 | owned |
-| `src/lib/agent/cli.test.ts` | 84 | owned |
-| `src/lib/agent/codexSpawnPolicy.test.ts` | 99, 178, 355, 429 | owned |
+| `src/lib/agent/cli.test.ts` | 84, 194, 206, 214, 221, 224, 532, 669 | owned |
+| `src/lib/agent/codexSpawnPolicy.test.ts` | 27, 65, 71, 99, 178, 264, 355, 397, 429 | owned |
 | `src/lib/agent/ephemeral.probe.test.ts` | 57 | owned |
 | `src/lib/agent/identityWaveMigration.test.ts` | 976 | owned |
 | `src/lib/agent/registry.sqlite.test.ts` | 475, 951, 961, 999, 1009, 1046, 1119, 1134, 1169, 1199, 1222, 1243, 1625, 1709, 1906, 1921 | owned |
@@ -224,11 +231,11 @@ Linux path.
 | `src/lib/board/store.test.ts` | 77, 135, 221 | owned |
 | `src/lib/boardMaintenance/store.test.ts` | 18, 23 | owned |
 | `src/lib/externalRelay/store.test.ts` | 54, 96 | owned |
-| `src/lib/flows/decisions.test.ts` | 132 | owned |
-| `src/lib/flows/engine.test.ts` | 1090, 1184, 1272 | owned |
+| `src/lib/flows/decisions.test.ts` | 17, 132 | owned |
+| `src/lib/flows/engine.test.ts` | 29, 1090, 1184, 1272 | owned |
 | `src/lib/flows/exec.test.ts` | 217, 252 | owned |
 | `src/lib/flows/store.test.ts` | 190 | owned |
-| `src/lib/links/boardSync.test.ts` | 50 | owned |
+| `src/lib/links/boardSync.test.ts` | 50, 120, 122, 133, 135, 168 | owned |
 | `src/lib/links/pairing.test.ts` | 25 | owned |
 | `src/lib/mcp/bindings.test.ts` | 4221, 4258 | owned |
 | `src/lib/mcp/conversationAction.integration.test.ts` | 97 | owned |
@@ -242,11 +249,11 @@ Linux path.
 | `src/lib/memory/controller.test.ts` | 79, 100 | owned |
 | `src/lib/memory/hook.test.ts` | 33, 47, 72, 91, 113, 150, 198 | owned |
 | `src/lib/monitor/seatTickController.test.ts` | 826 | owned |
-| `src/lib/pipelines/engine.test.ts` | 4026, 5096, 5450, 5452, 9436, 13754, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 20520 | owned |
+| `src/lib/pipelines/engine.test.ts` | 4026, 4056, 5096, 5450, 5452, 7622, 7623, 7624, 7626, 7627, 7628, 9436, 10521, 13682, 13702, 13733, 13754, 13802, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 19189, 19206, 20520 | owned |
 | `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
 | `src/lib/pipelines/fixtures/stageHostGeneration.ts` | 63, 76 | contained helper |
-| `src/lib/pipelines/git.test.ts` | 864, 2436 | owned |
-| `src/lib/pipelines/parkedPublication.test.ts` | 1000, 1051 | owned |
+| `src/lib/pipelines/git.test.ts` | 110, 864, 2378, 2436 | owned |
+| `src/lib/pipelines/parkedPublication.test.ts` | 14, 43, 526, 675, 726, 1000, 1051 | owned |
 | `src/lib/pipelines/severedStageRetry.test.ts` | 108 | owned |
 | `src/lib/pipelines/stageHostGenerationClose.integration.test.ts` | 91, 154, 209 | owned; registration before readiness, named deadline and identity cleanup |
 | `src/lib/pipelines/stageHostGenerationIdle.integration.test.ts` | 19 | owned |
@@ -254,7 +261,7 @@ Linux path.
 | `src/lib/pipelines/stageInput.restricted.probe.test.ts` | 70 | owned |
 | `src/lib/pipelines/store.test.ts` | 102, 124, 165, 877 | owned |
 | `src/lib/pipelines/terminalReap.test.ts` | 425, 493 | owned |
-| `src/lib/pipelines/worktreeSweep.test.ts` | 201, 753 | owned |
+| `src/lib/pipelines/worktreeSweep.test.ts` | 69, 123, 129, 201, 753 | owned |
 | `src/lib/proc/darwinArgv.test.ts` | 91 | owned |
 | `src/lib/proc/windows.test.ts` | 45 | owned |
 | `src/lib/processGroup.test.ts` | 159 | owned |
@@ -262,13 +269,13 @@ Linux path.
 | `src/lib/resources.structuredHosts.test.ts` | 220, 387, 427, 498 | owned |
 | `src/lib/resources.test.ts` | 506, 551, 605, 2588 | owned |
 | `src/lib/resources.truth.test.ts` | 107 | owned |
-| `src/lib/runtime/agentMemory.scope.test.ts` | 19 | owned |
+| `src/lib/runtime/agentMemory.scope.test.ts` | 9, 19 | owned |
 | `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
 | `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 782, 858, 2276, 2351 | owned |
-| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 61 | owned |
+| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 42, 61 | owned |
 | `src/lib/runtime/codexAppServerHost.injectResponses.test.ts` | 90 | owned |
 | `src/lib/runtime/codexAppServerHost.test.ts` | 5043 | owned |
-| `src/lib/runtime/codexHistoryReader.test.ts` | 402 | owned |
+| `src/lib/runtime/codexHistoryReader.test.ts` | 402, 502, 505 | owned |
 | `src/lib/runtime/codexSteerDelivery.integration.test.ts` | 62 | owned |
 | `src/lib/runtime/fixtures/nativeCodexRuntime.ts` | 167 | contained helper |
 | `src/lib/runtime/fixtures/ownedHostProcess.ts` | 11 | contained helper; identity before spawn event, named deadline, bounded handle cleanup and parent binding |
@@ -286,7 +293,7 @@ Linux path.
 | `src/lib/runtime/startup.test.ts` | 2474, 2580, 2600 | owned |
 | `src/lib/runtime/startupFinalization.integration.test.ts` | 282, 519, 600 | owned |
 | `src/lib/runtime/structuredDelivery.integration.test.ts` | 41, 4327 | owned |
-| `src/lib/runtime/structuredDeliveryRebind.test.ts` | 648 | owned |
+| `src/lib/runtime/structuredDeliveryRebind.test.ts` | 189, 648 | owned |
 | `src/lib/runtime/structuredHostControl.test.ts` | 79, 89 | owned |
 | `src/lib/runtime/structuredHostRetirement.test.ts` | 231 | owned |
 | `src/lib/runtime/structuredMessageDelivery.test.ts` | 562 | owned |
@@ -296,25 +303,25 @@ Linux path.
 | `src/lib/scanner/process.test.ts` | 45, 50, 55 | owned |
 | `src/lib/scanner/projectDirectories.test.ts` | 101 | owned |
 | `src/lib/scanner/roots.claudeTasks.test.ts` | 55, 91 | owned |
-| `src/lib/selfUpdate/actions.test.ts` | 315 | owned |
+| `src/lib/selfUpdate/actions.test.ts` | 218, 315 | owned |
 | `src/lib/selfUpdate/pid.test.ts` | 68 | owned |
-| `src/lib/selfUpdate/quietDeadHosts.test.ts` | 48, 327, 346, 393, 494, 571, 606, 650, 684, 746, 762, 812, 847, 903, 976, 1016, 1052, 1090, 1116, 1141, 1194, 1276, 1289 | owned |
+| `src/lib/selfUpdate/quietDeadHosts.test.ts` | 48, 327, 346, 393, 494, 571, 606, 629, 650, 684, 746, 762, 812, 847, 903, 976, 1016, 1052, 1090, 1116, 1141, 1194, 1276, 1289 | owned |
 | `src/lib/selfUpdate/snapshotIdentity.test.ts` | 34 | owned |
 | `src/lib/session/titleStore.interprocess.test.ts` | 32 | owned |
 | `src/lib/state/buildPhaseGuard.test.ts` | 133 | owned |
-| `src/lib/state/durability.test.ts` | 366 | owned |
+| `src/lib/state/durability.test.ts` | 60, 69, 366, 423 | owned |
 | `src/lib/state/hotStateStores.sqlite.test.ts` | 41, 118, 235, 284, 367, 444, 808, 862, 870 | owned |
 | `src/lib/state/stateLeaseRecovery.test.ts` | 168 | owned |
 | `src/lib/tasks/store.sqlite.test.ts` | 65 | owned |
 | `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
-| `src/lib/telemetry/sender.test.ts` | 235 | owned |
+| `src/lib/telemetry/sender.test.ts` | 67, 96, 119, 158, 235, 239 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
 | `src/lib/testing/testChildren.test.ts` | 9, 10, 11 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
-| `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175 | owned |
+| `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175, 280, 318 | owned |
 | `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
 | `src/runtime-host/runtimeHostStartup.test.ts` | 175 | owned |
 | `test-preload.ts` | 19 | contained helper |
@@ -339,7 +346,7 @@ Linux path.
 | `scripts/harness-ledger.ts` | 673, 796 | synchronous |
 | `scripts/verify-viewer-runtime.ts` | Direct Linux CLI enters containment; served probe owns a nested service and rejects unconfirmed shutdown. |
 | `scripts/verify-bun-runtime-controls.ts` | Synchronous negative-control launches remain contained; synthetic build links verifier dependencies. |
-| `scripts/local-gate-tests.ts` | 143, 183 | synchronous |
+| `scripts/local-gate-tests.ts` | 158, 198 | synchronous |
 | `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
 | `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |

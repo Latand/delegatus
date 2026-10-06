@@ -141,7 +141,7 @@ test("an unnamed teardown failure remains a named blocking diagnostic without a 
   expect(f.logs.join("\n")).not.toContain("flaky confirmation");
 });
 
-test("a green JUnit report cannot hide the owned runner's survivor diagnostic", () => {
+test.skipIf(process.platform !== "linux")("a green JUnit report cannot hide the owned runner's survivor diagnostic", () => {
   const f = fixture(source(true));
   writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test";
 test("detached worker", async () => {
@@ -152,6 +152,7 @@ test("detached worker", async () => {
   expect(result.introduced).toHaveLength(1);
   expect(result.introduced[0]!.kind).toBe("error");
   expect(result.introduced[0]!.name).toContain("owned runner: surviving owned processes:");
+  expect(result.introduced[0]!.name).toMatch(/\d+ \(\d+:\d+\)/);
 });
 test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
@@ -171,6 +172,7 @@ test.skipIf(process.platform === "win32")("a surviving test helper fails the run
   const marker = path.join(gateTemporaryRoot(), `gate-helper-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test } from "bun:test"; import { spawn } from "node:child_process"; import { appendFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); appendFileSync(${JSON.stringify(marker)}, String(child.pid) + "\\n"); child.unref(); test("helper", () => {});`);
   expect(f.run().preexisting.length).toBeGreaterThan(0);
+  if (process.platform === "linux") expect(f.logs.join("\n")).toMatch(/PRE-EXISTING .+surviving owned processes: \d+ \(\d+:\d+\)/);
   for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     expect(probe.status !== 0 || probe.stdout.trim().startsWith("Z")).toBeTrue();
