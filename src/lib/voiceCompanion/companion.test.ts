@@ -48,6 +48,10 @@ describe("the explicit-request gate", () => {
     "Hi Delegatus. Ask the orchestrator to review the export plan. It is in the docs folder.",
     "Привіт. Попроси оркестратора перевірити план експорту. Він у теці з документами.",
     "Ask the orchestrator to stop the deploy and wait for the checks.",
+    /* "When" as the question itself, asked of the orchestrator. */
+    "Ask the orchestrator when the release is.",
+    "Спитай оркестратора, коли буде реліз.",
+    "Ask the orchestrator to review only the export plan.",
   ];
   const refused: Array<[string, string]> = [
     ["Hi Delegatus. Are you there?", "no_orchestrator"],
@@ -95,6 +99,19 @@ describe("the explicit-request gate", () => {
     ["Ask the orchestrator to review the plan. But only when the checks pass.", "conditional"],
     ["Попроси оркестратора перевірити план. Але тільки якщо збірка зелена.", "conditional"],
     ["Попроси оркестратора перевірити план. Лише коли перевірки пройдуть.", "conditional"],
+    /* The same condition inside the request's own sentence. */
+    ["Ask the orchestrator to review the plan, but only when the checks pass.", "conditional"],
+    ["Попроси оркестратора перевірити план, але лише коли перевірки пройдуть.", "conditional"],
+    ["Попроси оркестратора перевірити план, тільки коли перевірки пройдуть.", "conditional"],
+    ["Ask the orchestrator to merge it when the checks pass.", "conditional"],
+    ["Ask the orchestrator to merge it once the build is green.", "conditional"],
+    ["Ask the orchestrator to merge it as soon as the checks pass.", "conditional"],
+    ["Tell the orchestrator to deploy after the review ends.", "conditional"],
+    ["Ask the orchestrator only when the checks pass.", "conditional"],
+    ["Ask the orchestrator when the checks pass, to merge it.", "conditional"],
+    ["Попроси оркестратора злити, щойно перевірки пройдуть.", "conditional"],
+    ["Передай оркестратору, коли перевірки пройдуть, що можна зливати.", "conditional"],
+    ["Попроси оркестратора злити за умови, що збірка зелена.", "conditional"],
     ["Ask the orchestrator to review the plan. I am not sure about it.", "negated"],
     ["Попроси оркестратора перевірити план. Я не впевнений.", "negated"],
     ["Ask the orchestrator to review the plan. Or should I do it myself?", "question"],
@@ -139,6 +156,10 @@ describe("the simulated companion opens a confirmation only for an explicit requ
     ["a retraction in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Нічого не надсилай." }, ...propose("i1")]],
     ["a condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Only if the build is green." }, ...propose("i1")]],
     ["a condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Але тільки якщо збірка зелена." }, ...propose("i1")]],
+    ["an only-when condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. But only when the checks pass." }, ...propose("i1")]],
+    ["an only-when condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Лише коли перевірки пройдуть." }, ...propose("i1")]],
+    ["an only-when condition in the request's sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan, but only when the checks pass." }, ...propose("i1")]],
+    ["an only-when condition in the request's sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план, але лише коли перевірки пройдуть." }, ...propose("i1")]],
     ["missing input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...propose("i9")]],
     ["stale input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, { kind: "operator", itemId: "i2", text: "Actually, never mind." }, ...propose("i1")]],
   ];
@@ -317,6 +338,29 @@ describe("the simulated companion opens a confirmation only for an explicit requ
     ].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
     expect(state.delegation?.stage).toBe("refused");
     expect(state.delegation?.refusal).toBe("negated");
+  });
+
+  test("the reducer refuses a conditional request, in one sentence or two, whatever the adapter offers and confirms", () => {
+    const conditional = [
+      "Ask the orchestrator to review the plan, but only when the checks pass.",
+      "Ask the orchestrator to review the plan. But only when the checks pass.",
+      "Попроси оркестратора перевірити план, але лише коли перевірки пройдуть.",
+      "Попроси оркестратора перевірити план. Лише коли перевірки пройдуть.",
+    ];
+    for (const text of conditional) {
+      let seq = 0;
+      const at = (payload: Payload): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `e${++seq}`, seq, atMs: seq } as CompanionEvent);
+      const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan.", recipient: RECIPIENT };
+      const state = [
+        at({ type: "session.ready", mode: "official-realtime" }),
+        at({ type: "transcript.final", speaker: "operator", itemId: "i1", text }),
+        at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction: "Review the plan." }),
+        at({ type: "delegation.confirmation.required", proposal }),
+        at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }),
+        at({ type: "delegation.delivery.settled", delivery: { proposalId: "p1", callId: "c1", clientMessageId: "m1", operationId: "op1", recipient: RECIPIENT }, status: "delivered" }),
+      ].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+      expect([text, state.delegation?.stage, state.delegation?.refusal, state.delegation?.delivery ?? null]).toEqual([text, "refused", "conditional", null]);
+    }
   });
 });
 

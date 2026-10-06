@@ -20,8 +20,8 @@ import type { Id } from "./contract";
  * The whole completed input is read, every sentence of it. A sentence beside
  * the request that takes it back ("Actually, do not send anything."), makes it
  * conditional ("Only if the build is green."), negates or asks something
- * refuses the input, and so does a retraction after a comma in the request's
- * own sentence.
+ * refuses the input, and so does a retraction or a condition after the request
+ * in its own sentence ("…review the plan, but only when the checks pass").
  *
  * Admission is checked again whenever the operator speaks and once more
  * before the send: a proposal lives only while its source is still the
@@ -54,10 +54,18 @@ const QUOTES = /["“”„«»]/u;
 /* A condition anywhere in the sentence makes the request conditional. */
 const CONDITION = /\b(?:if|unless|maybe|perhaps|in case|whether)\b|(?:^|[\s,])(?:якщо|якби|можливо|мабуть|раптом|чи)(?=[\s,]|$)/u;
 const NEGATION = /\b(?:not|no|nobody|nothing|never|don't|dont|do not)\b|n't\b|(?:^|[\s,])(?:не|ні|нікому|нічого|ніколи)(?=[\s,]|$)/u;
-/* Beside the request a looser condition counts too: "only when…", "лише коли…".
-   The request's own sentence keeps the narrow list, where "коли" and "when"
-   are ordinary words of the instruction ("запитай у оркестратора, коли реліз"). */
+/* Beside the request a looser condition counts too: "only when…", "лише коли…". */
 const FOLLOWUP_CONDITION = /\b(?:when|once|only|provided|assuming)\b|(?:^|[\s,])(?:коли|лише|тільки|хіба|за умови)(?=[\s,]|$)/u;
+/* After the request in its own sentence, a clause that says when to send makes
+   it conditional: "…review the plan, but only when the checks pass",
+   "…перевірити план, але лише коли перевірки пройдуть". */
+const TRAILING_CONDITION = /\b(?:when|once|after|until|provided|assuming|as soon as|as long as)\b|(?:^|[\s,])(?:коли|щойно|як тільки|після того|доки|поки|хіба|за умови)(?=[\s,]|$)/u;
+/* The one "when" that is the instruction itself: an asking verb whose question
+   opens right after the orchestrator and runs to the end of the sentence
+   ("ask the orchestrator when the release is", "запитай у оркестратора, коли
+   буде реліз"). */
+const ASKING_VERB = /(?:^|\s)(?:ask|запитай|запитати|спитай|спитати)(?=\s)/u;
+const ASKED_WHEN = /^[\s,:]*(?:when|коли)\s[^,;:—–]*$/u;
 /* The operator takes the request back: a retraction marker anywhere, a halt at
    the start of a clause, or a negated sending verb. */
 const RETRACTION = new RegExp([
@@ -118,7 +126,9 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
     }
     if (sentence.includes("?") && !request.groups?.ask) return { admit: false, reason: "question" };
     /* Taken back in the same breath: "ask the orchestrator to review it, actually don't send anything". */
-    if (RETRACTION.test(sentence.slice(request[0].length))) return { admit: false, reason: "retracted" };
+    const tail = sentence.slice(request[0].length);
+    if (RETRACTION.test(tail)) return { admit: false, reason: "retracted" };
+    if (TRAILING_CONDITION.test(tail) && !(ASKING_VERB.test(request[0]) && ASKED_WHEN.test(tail))) return { admit: false, reason: "conditional" };
   }
   /* The rest of the input is read too. Whatever stands beside the request and
      takes it back, hedges it or cannot be read as part of it refuses the whole
