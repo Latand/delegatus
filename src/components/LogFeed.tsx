@@ -2,6 +2,7 @@
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
 import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -23,6 +24,7 @@ import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from 
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
+import { isOwnMessageStepKey, OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -379,9 +381,12 @@ interface Props {
   /** The seat's deputies to draw as blocks. Absent: read from the seat's own
       poll for this conversation, which is empty for every non-seat feed. */
   deputies?: readonly SeatDeputyView[];
+  /** The slot the pane keeps between the feed and its composer for the row
+      that steps between the operator's own messages. Absent: no such row. */
+  stepsMount?: HTMLElement | null;
 }
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -578,13 +583,21 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const filePathRef = useRef(tailPath);
   const controlledFollowRef = useRef(follow);
+  /* Ends an own-message step that is still in flight; the step hook, mounted
+     further down, fills it in. */
+  const releaseOwnStep = useRef<() => void>(() => undefined);
 
   const setMagnet = (value: boolean, withPulse = false) => {
     pendingRestoreRef.current = null;
     magnetRef.current = value;
     setMagnetState(value);
     setFollow(value);
-    if (value) setNewCount(0);
+    if (value) {
+      setNewCount(0);
+      /* The feed is going back to its tail: a step between own messages
+         that is still landing, or waiting for older history, is over. */
+      releaseOwnStep.current();
+    }
     if (memoryKey) {
       const remembered = scrollMemory.get(memoryKey);
       rememberScroll(memoryKey, {
@@ -773,6 +786,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       setMagnetState(follow);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (follow) setNewCount(0);
+      if (follow) releaseOwnStep.current();
     }
   }, [follow]);
   useEffect(
@@ -1043,7 +1057,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const request = {};
       olderRequestRef.current = request;
       void tail.loadOlder().then((added) => {
-        if (historyOwnerRef.current === owner && added > 0) {
+        if (historyOwnerRef.current === owner && added > 0 && !magnetRef.current) {
           growVisibleBy(revealStep, true);
         }
       }).finally(() => {
@@ -1755,9 +1769,105 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const forwardPillVerticalDelta = (row: HTMLElement | null, deltaY: number): void => {
     const el = scroller.current;
     if (!el || !deltaY || (row && canScrollVertically(row, deltaY))) return;
+    releaseOwnStep.current();
     markUserScroll(deltaY);
     el.scrollTop += deltaY;
   };
+
+  /* Stepping between the operator's own messages
+     (docs/design/own-message-steps.md). A delivered Claude record is a system
+     row until the ledger names its sender, so while one is unanswered the
+     count is not final. */
+  const sendersPending = useMemo(() => feed.items.some(({ item }) => item.kind === "sysmsg"
+    && Boolean(item.deliveredMessage?.engineMessageId)
+    && !provenanceLookup.forItem(item)
+    && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [feed.items, provenanceLookup]);
+  const stepsHost = file && logFeedDependencies().ownMessageSteps ? stepsMount : null;
+  /* The page shows the last rows of what is loaded, and that window slides
+     on while the agent works. The own messages above it are counted from
+     their records, by the verdict that marks a row on the page, so neither
+     the count nor the row depends on how much history is on the page. */
+  const mandateRecord = holdsMandate && heldMandate ? firstMandateRecord : null;
+  const submittedMessages = useMemo(() => new Map(outbox.map((entry) => [entry.id, entry])), [outbox]);
+  /* The transcript of a file-only send can contain a generated inbox path.
+     Where its submission still supplies the authored text, use that same
+     evidence on the page and above it. Older unproven bubbles inherit the
+     feed's verdict, as the design's known limits describe. */
+  const ownRecord = useCallback((item: FeedSnapshot["items"][number]["item"], sourceId: string): boolean => {
+    if (item === mandateRecord) return false;
+    const kind = resolveDeliveredItem(item, provenanceLookup).kind;
+    if (kind === "voice") return true;
+    if (kind !== "user") return false;
+    const bound = echoBindings.get(transcriptEchoObservationId({ generation: transcriptGeneration ?? undefined, id: sourceId, text: "" }));
+    const entry = bound ? submittedMessages.get(bound) : undefined;
+    return entry ? Boolean(entry.text.trim()) : true;
+  }, [mandateRecord, provenanceLookup, echoBindings, transcriptGeneration, submittedMessages]);
+  const ownBeforePage = useMemo(() => {
+    if (!stepsHost || !hiddenLocal) return 0;
+    let own = 0;
+    for (let index = 0; index < hiddenLocal; index += 1) {
+      const { item, anchorKey, key } = feed.items[index]!;
+      if (ownRecord(item, anchorKey ?? `key:${key}`)) own += 1;
+    }
+    return own;
+  }, [stepsHost, hiddenLocal, feed.items, ownRecord]);
+  const ownSteps = useOwnMessageSteps({
+    scroller,
+    mount: stepsHost,
+    identity: memoryKey && tailPath ? `${memoryKey}\0${tailPath}` : null,
+    phone,
+    atTail: magnet,
+    olderOwn: ownBeforePage,
+    olderUnloaded: tail.hasMore,
+    operatorWrote: file?.userAuthored === true,
+    sendersPending,
+    revision: conversationRows,
+    markReaderScroll: markUserScroll,
+    restoreTail: () => {
+      /* The abandoned step no longer needs to reveal more rows. A slow ramp
+         must not keep prepending after the tail has been restored. */
+      rampTargetRef.current = null;
+      if (rampHandleRef.current !== null) {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(rampHandleRef.current);
+        else clearTimeout(rampHandleRef.current);
+        rampHandleRef.current = null;
+      }
+      /* The history request's upward tag has no gesture behind it. Retiring
+         it prevents a late layout scroll from releasing the restored tail. */
+      scrollCauseRef.current = { kind: "programmatic" };
+      gestureRestPending.current = false;
+      readerAnchor.current = null;
+      setMagnet(true);
+      glue();
+    },
+    revealOlder: () => revealOlder("explicit"),
+  });
+  const releaseStep = ownSteps.release;
+  useEffect(() => { releaseOwnStep.current = releaseStep; }, [releaseStep]);
+  const awayFromTail = Boolean(file && feed.items.length && !magnet);
+  /* On the phone the way back shares the step row while both are needed, so
+     only one row is spent under the feed. */
+  const wayBackInStepRow = phone && ownSteps.shown && stepsMount !== null;
+  const wayBack = (shared: boolean) => (
+    <button
+      className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
+      aria-label={t("feed.backToLive")}
+      data-own-step-control={shared ? "latest" : undefined}
+      onClick={jumpToTail}
+    >
+      <span
+        data-feed-jump-pill
+        className={`inline-flex h-8 items-center whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 flex-col justify-center px-1" : "gap-1 px-3"}`}
+      >
+        <ArrowDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        {/* The shared cell is 44 px wide, so the arrow keeps its size and the
+            count of new rows goes under it, short. */}
+        {shared
+          ? newCount ? <span data-feed-jump-count className="font-mono text-[10px] leading-none tabular-nums">{newCount > 99 ? "99+" : newCount}</span> : null
+          : <>{" "}{newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}</>}
+      </span>
+    </button>
+  );
 
   return (
     <RawLineProvider value={getRawLine}>
@@ -1861,6 +1971,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         }}
         onTouchCancelCapture={() => { feedTouchRef.current = null; }}
         onKeyDownCapture={(event) => {
+          if (isOwnMessageStepKey(event)) return;
           if (["ArrowUp", "Home", "PageUp"].includes(event.key)) markUserScroll(-1);
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
@@ -2013,6 +2124,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     key={row.key}
                     data-feed-key={row.anchorKey}
                     data-feed-kind="user"
+                    /* Attachment-only submissions draw a generated caption;
+                       only words the operator sent make this row a step. */
+                    data-own-message={(row.entry ? row.entry.text.trim() : row.canonical?.text.trim()) ? "" : undefined}
                     className={rowsSkipOffscreen ? "feed-cv" : undefined}
                   >
                     <FeedMessageRow
@@ -2045,6 +2159,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                   key={row.key}
                   data-feed-key={anchorKey ?? undefined}
                   data-feed-kind={row.live ? undefined : item.kind}
+                  /* A step of the own-message row: what the feed draws as the
+                     operator's bubble, whatever the record parsed as. */
+                  data-own-message={!row.live && ownRecord(item, anchorKey ?? `key:${row.key}`) ? "" : undefined}
                   data-live-turn={row.live ? "" : undefined}
                   data-live-turn-item-id={row.live?.itemId ?? undefined}
                   data-tts-answer-index={speechIndex}
@@ -2164,22 +2281,16 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         feed, never over it. It exists only while the reader is away from the
         tail, which is exactly when a line of text would sit under a floating
         control. When it appears the feed's viewport ends 44 px higher and the
-        line being read, anchored at the top, stays where it is. */}
-    {file && feed.items.length && !magnet ? (
+        line being read, anchored at the top, stays where it is. On the phone,
+        beside the own-message step row, it is a cell of that row. */}
+    {awayFromTail && !wayBackInStepRow ? (
       <div data-feed-jump-strip className="flex h-11 shrink-0 items-center justify-center border-t border-border">
-        <button
-          className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
-          aria-label={t("feed.backToLive")}
-          onClick={jumpToTail}
-        >
-          <span
-            data-feed-jump-pill
-            className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-3 text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40"
-          >
-            <ArrowDown className="h-3.5 w-3.5" aria-hidden /> {newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
-          </span>
-        </button>
+        {wayBack(false)}
       </div>
+    ) : null}
+    {ownSteps.shown && stepsMount ? createPortal(
+      <OwnMessageStepRow steps={ownSteps} phone={phone} wayBack={awayFromTail ? wayBack(true) : null} />,
+      stepsMount,
     ) : null}
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
         Completed totals stay beside their response rows in the scroller. Not on
