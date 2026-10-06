@@ -73,16 +73,18 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         origin = queued.entry.origin?.kind ?? "unknown"; requestId = queued.entry.id;
       }
     }
-    // Some Codex transports stamp their default operator origin onto launch
-    // scaffolds. The durable admission receipt identifies that machine turn;
-    // later human messages in the same conversation remain eligible.
+    // A launch brief is delivered with operator origin whatever started it.
+    // The receipt names the initiator: a launching conversation, a container
+    // membership, a delegated depth or a board maintenance run. Drafts from
+    // the new-agent form carry none of them, with or without a role or parent.
+    // Later human messages in the same conversation remain eligible.
     const delivery = deliveryKey ? Object.values(snapshot.deliveryOperationOwners).find(owner =>
       owner.conversationId === conversationId && deliveryDedupToken(owner.command.operationId) === deliveryKey) : undefined;
     if (delivery?.command.origin?.kind === "agent") { possibleOperator = false; return ""; }
     const humanSubmission = delivery?.command.origin?.kind === "operator" && !delivery.command.operationId.startsWith("spawn_message_");
     const containerLaunch = snapshot.memberships[conversationId]?.some(entry => entry.kind === "pipeline" || entry.kind === "flow");
     if (!humanSubmission && receipt?.launchDisplay?.echo === prompt && (containerLaunch || (receipt.delegationDepth ?? 0) > 0
-      || receipt.parentConversationId || (receipt.agentRole && receipt.agentRole !== "orchestrator"))) {
+      || receipt.launcher || receipt.clientAttemptId?.startsWith("maint_"))) {
       possibleOperator = false; return "";
     }
     if (requestId && origin !== "operator") { possibleOperator = origin === "unknown"; return ""; }

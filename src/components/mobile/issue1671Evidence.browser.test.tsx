@@ -176,7 +176,8 @@ describe("shared memory settings", () => {
       lines.push(line("fixture-current", prompt)); fs.appendFileSync(transcript, lines.at(-1)! + "\n"); ledger.confirmDelivered(session, "fixture-operator", "fixture-current");
       const stagePrompt = "You are a fresh-context Reviewer. Review widget parser.";
       const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
-        role: "reviewer", origin: { kind: "container", container: "pipeline", containerId: "synthetic-stage", creatorConversationId: null }, transport: "structured",
+        role: "reviewer", reviewsConversationId: receipt.conversationId, origin: { kind: "operator" }, transport: "structured",
+        launcher: { conversationId: receipt.conversationId, notify: true },
         launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
         launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });
       if (stage.kind === "conflict") throw Error("fixture stage conflict");

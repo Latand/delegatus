@@ -49,11 +49,12 @@ test("a full scope table refuses new historical ownership and still selects cano
   })));
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   try {
-    db.transaction(() => { for (let i = 0; i < 256; i++) db.query("INSERT INTO memory_project_scopes VALUES (?, ?, ?, NULL)").run(`synthetic-scope-${i}`, `other-${i}`, Number.MAX_SAFE_INTEGER); })();
+    db.transaction(() => { for (let i = 0; i < 256; i++) db.query("INSERT INTO memory_project_scopes VALUES (?, ?, NULL)").run(`synthetic-scope-${i}`, `other-${i}`); })();
     const candidates = await index.injectionCandidates("widget", project, "claude", "scope-capacity", Infinity, { cwd: root });
     expect(candidates.map(item => item.title)).toEqual(["Widget current"]);
     expect((await index.search({ query: "widget", project })).items.map(item => item.title)).toEqual(["Widget current"]);
     expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count).toBe(256);
+    expect(db.query<{ name: string }, []>("PRAGMA table_info(memory_project_scopes)").all().map(column => column.name)).toEqual(["key", "project", "proof"]);
   } finally { db.close(); index.close(); }
 });
 test("a resolved shared-store project wins over an earlier unresolved account slug", async () => {
@@ -1150,4 +1151,23 @@ test("candidate deadline reports retrieval timeout separately from an empty inde
       { reason: value => { reason = value; } }))).toEqual([]);
     expect(reason).toBe("candidateTimeout");
   } finally { index.close(); }
+});
+test("a contended scope update keeps keys an earlier turn recorded and drops only the new claim", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-contended-")); roots.push(root);
+  fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
+  const project = projectInfoFromCwd(root)!.project;
+  await index.refresh([["directory", directoryProjectId(root)], ["local", localRepositoryProjectId(root)!]].map(([name, key]) => ({
+    path: fixture(`${name}.md`, `---\nname: Widget ${name}\ndescription: Widget ${name} delimiter rule.\ntype: project\n---\nWidget ${name} delimiter rule.\n`),
+    engine: "claude" as const, sourceKind: "claude_memory" as const, project: key,
+  })));
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite")); let locked = false;
+  try {
+    expect((await index.injectionCandidates("widget", project, "claude", "first-turn", Infinity, { cwd: root })).map(item => item.title).sort()).toEqual(["Widget directory", "Widget local"]);
+    // The next turn must claim the local key again while another writer holds the index.
+    db.query("DELETE FROM memory_project_scopes WHERE key = ?").run(localRepositoryProjectId(root)!);
+    db.exec("BEGIN IMMEDIATE"); locked = true;
+    expect((await index.injectionCandidates("widget", project, "claude", "second-turn", Infinity, { cwd: root })).map(item => item.title)).toEqual(["Widget directory"]);
+  } finally { if (locked) db.exec("ROLLBACK"); db.close(); index.close(); }
 });

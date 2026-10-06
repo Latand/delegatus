@@ -56,9 +56,10 @@ export class MemoryIndex {
   private scopeKeys(project: string, includeSlugProofs = true): Set<string> {
     const canonical = canonicalProject(project), keys = new Set([canonical]);
     for (const key of Object.keys(projectAliasSnapshot().aliases)) if (canonicalProject(key) === canonical) keys.add(key);
+    // Writes hold each project to six rows, so the alias family read stays bounded.
     const family = JSON.stringify([...keys]);
     const proofs = this.database().query<{ key: string; proof: string | null }, [string]>(
-      "SELECT key, proof FROM memory_project_scopes WHERE project IN (SELECT value FROM json_each(?)) LIMIT 6",
+      "SELECT key, proof FROM memory_project_scopes WHERE project IN (SELECT value FROM json_each(?)) ORDER BY key",
     ).all(family);
     for (const entry of proofs) {
       if (entry.proof) {
@@ -93,8 +94,7 @@ export class MemoryIndex {
       for (const change of changes) {
         const previous = owner.get(change.key);
         if ((!previous && total >= 256) || (previous?.project !== project && scoped >= 6)) { keys.delete(change.key); continue; }
-        db.query("INSERT OR REPLACE INTO memory_project_scopes (key, project, expires, proof) VALUES (?, ?, ?, ?)")
-          .run(change.key, project, Number.MAX_SAFE_INTEGER, change.proof);
+        db.query("INSERT OR REPLACE INTO memory_project_scopes (key, project, proof) VALUES (?, ?, ?)").run(change.key, project, change.proof);
         if (!previous) total++;
         if (previous?.project !== project) scoped++;
       }
@@ -130,7 +130,7 @@ export class MemoryIndex {
       this.db.exec(`
         PRAGMA busy_timeout = 0;
         PRAGMA journal_mode = WAL;
-        CREATE TABLE IF NOT EXISTS memory_project_scopes (key TEXT PRIMARY KEY, project TEXT NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS memory_project_scopes (key TEXT PRIMARY KEY, project TEXT NOT NULL, proof TEXT);
         CREATE TABLE IF NOT EXISTS memory_files (path TEXT PRIMARY KEY, identity TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS memory_entries (
           id TEXT PRIMARY KEY, engine TEXT, kind TEXT, scope TEXT, project TEXT,
@@ -164,18 +164,6 @@ export class MemoryIndex {
         );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
       `);
-      if (!this.db.query<{ name: string }, []>("PRAGMA table_info(memory_project_scopes)").all().some(column => column.name === "proof")) {
-        this.db.transaction(() => {
-          this.db!.exec(`ALTER TABLE memory_project_scopes ADD COLUMN proof TEXT;
-            DELETE FROM memory_project_scopes WHERE expires != ${Number.MAX_SAFE_INTEGER};`);
-          const count = this.db!.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count;
-          if (count > 256) {
-            // Preserve a full capacity fence after pruning legacy per-cwd rows:
-            // keys dropped here can never be re-claimed by another origin.
-            this.db!.exec("DELETE FROM memory_project_scopes WHERE key NOT IN (SELECT key FROM memory_project_scopes ORDER BY key LIMIT 256)");
-          }
-        })();
-      }
       this.db.exec("CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)");
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
@@ -358,6 +346,9 @@ export class MemoryIndex {
       // derivative independently. Only first verified scope ownership is saved.
       const canonical = canonicalProject(project);
       const keys = this.scopeKeys(canonical, false);
+      // Ownership already recorded for this project stays valid whatever
+      // happens to this turn's update.
+      const recorded = new Set(keys);
       const folderIdentities = new Set<string>();
       check();
       // These earlier identities are provably the caller's exact folder,
@@ -390,7 +381,7 @@ export class MemoryIndex {
           const stored = db.query<{ project: string; proof: string | null }, [string]>("SELECT project, proof FROM memory_project_scopes WHERE key = ?").get(slug);
           let directories: ClaudeMemoryDirectoryProof | undefined;
           try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = JSON.parse(stored.proof); } catch { /* walk again */ }
-          if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); proofs.set(slug, directories); continue; }
+          if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); recorded.add(slug); proofs.set(slug, directories); continue; }
           const walkDeadline = performance.now() + (deadline - performance.now()) / 2;
           try {
             const proof = await claudeMemoryScopeProof(slug, walkDeadline); check();
@@ -401,9 +392,9 @@ export class MemoryIndex {
         check();
         try { this.rememberScope(canonical, keys, folderIdentities, proofs); }
         catch {
-          // A failed ownership update cannot authorize historical keys.
-          keys.clear(); keys.add(canonical);
-          for (const key of Object.keys(projectAliasSnapshot().aliases)) if (canonicalProject(key) === canonical) keys.add(key);
+          // A failed ownership update cannot authorize keys it would have
+          // claimed. Keys recorded by an earlier turn remain in scope.
+          keys.clear(); for (const key of recorded) keys.add(key);
         }
       }
       check();

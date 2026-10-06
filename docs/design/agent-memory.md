@@ -519,7 +519,8 @@ Linked topic paths use discovery's canonical filesystem identity; scope and
 retirement still apply after resolution.
 Retrieval reads the canonical alias family and the scanner's cached, verified
 project identity. It considers the directory, local-repository and Claude slug keys derived
-from its exact cwd and recovered repository root. A deleted worktree whose root
+from the recovered repository root, or from the cwd when no root is known, so
+every worktree of one repository shares the same few keys. A deleted worktree whose root
 is known to the scanner's durable map uses that root. A key derived from a
 different, absent checkout path needs a trusted alias into this family; similar
 folder names supply no link. A lossy Claude slug needs a trusted alias or a fresh,
@@ -548,8 +549,22 @@ predecessor proof. The private derivative retains each key's first verified
 repository ownership across Viewer replacement. Verified directory/local-path
 ownership can advance to the folder's first origin. A subsequent conflicting
 origin cannot take that history; moving its owner requires trusted succession aliases. The same durable verified scope serves recall,
-project-scoped search and opening an offer. Search/open recheck lossy slug proofs
-with bounded asynchronous reads, including when the feed is opened later.
+project-scoped search and opening an offer. Search and open walk nothing: they
+read the recorded keys of the alias family and keep a slug key only while a
+stat of each directory its proof recorded still matches the recorded signature.
+A slug whose proof went stale returns to scope at the next hook that walks it
+again. The scope table holds at most six keys per project and 256 overall.
+A key past either limit is refused, never evicted, and recall falls back to
+the keys already recorded. When the write itself fails, the turn keeps the
+keys an earlier turn recorded and drops only the ones it was claiming.
+
+A launch brief reaches the hook with operator origin whatever started it. It
+counts as the operator's turn only when the receipt names no other initiator:
+a turn whose text is the launch echo is skipped without a decision, a last-turn
+row or a counter when its conversation was launched by another conversation,
+holds a pipeline or flow membership, has a delegation depth above 0, or belongs to a board
+maintenance run. A draft from the new-agent form, with or without a role or a
+handed-over conversation, is the operator's turn.
 
 Read-only review of the installation's 7,701-row snapshot found 438 Claude
 entries and zero Codex entries under the current key. The three earlier keys
