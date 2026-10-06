@@ -6574,6 +6574,7 @@ async function fencedResumeRecovery(
     pendingAction: null,
   });
   let allowed = true;
+  let admissionWithdrawn = false;
   let publishing = false;
   let busy = false;
   const counts = { start: 0, publish: 0 };
@@ -6582,7 +6583,10 @@ async function fencedResumeRecovery(
     ...inner,
     command: async (command) => {
       const result = await inner.command(command);
-      if (command.kind === "spawn" && revokeAt === "admission") allowed = false;
+      if (command.kind === "spawn" && revokeAt === "admission" && !admissionWithdrawn) {
+        allowed = false;
+        admissionWithdrawn = true;
+      }
       return result;
     },
     /* The registration's own journal read: the account is withdrawn while the
@@ -6597,7 +6601,7 @@ async function fencedResumeRecovery(
   const host = new RoundTripHost(engine, artifactPath, sessionId);
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
   const hostKind = engine === "codex" ? "codex-app-server" as const : "claude-broker" as const;
-  const recovering = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+  const recover = () => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
     registry,
     client,
     transport: () => "structured",
@@ -6665,7 +6669,9 @@ async function fencedResumeRecovery(
   });
   const receipt = () => Object.values(registry.readOnlySnapshot().receipts)
     .find((item) => item.purpose === "resume-successor" && item.conversationId === conversation.id);
-  return { recovering, counts, host, registry, journal, key, conversation, artifactPath, receipt };
+  const recovering = recover();
+  const retry = () => { allowed = true; return recover(); };
+  return { recovering, retry, counts, host, registry, journal, key, conversation, artifactPath, receipt };
 }
 
 for (const engine of ["claude", "codex"] as const) {
@@ -6674,7 +6680,47 @@ for (const engine of ["claude", "codex"] as const) {
     await expect(run.recovering).rejects.toThrow("no longer allowed on this project");
     expect(run.counts).toEqual({ start: 0, publish: 0 });
     expect(run.receipt()).toMatchObject({ state: "failed", error: expect.stringContaining("no longer allowed") });
-    expect(run.registry.snapshot().entries[`${engine}:${run.key.sessionId}`]?.structuredHost ?? null).toBeNull();
+    expect(run.registry.snapshot().entries[`${engine}:${run.key.sessionId}`]).toMatchObject({
+      status: "dead",
+      host: null,
+      claimOwner: null,
+      claimEpoch: 1,
+      structuredHost: {
+        endpoint: "stdio:released",
+        process: null,
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+    });
+    expect(hasStructuredDeliveryHost(run.key)).toBe(false);
+    expect(run.host.releaseCount).toBe(0);
+    expect(run.journal.snapshot().sessions.find((session) => session.conversationId === run.conversation.id)?.host).not.toBe("hosted");
+  });
+
+  test(`a ${engine} resume can retry the released admission claim after its account is allowed again`, async () => {
+    const run = await fencedResumeRecovery(engine, "admission");
+    await expect(run.recovering).rejects.toThrow("no longer allowed on this project");
+    const refused = run.receipt()!;
+    expect(refused).toMatchObject({ state: "failed", error: expect.stringContaining("no longer allowed") });
+    expect(run.counts).toEqual({ start: 0, publish: 0 });
+    expect(run.registry.snapshot().entries[`${engine}:${run.key.sessionId}`]?.claimOwner).toBeNull();
+
+    await expect(run.retry()).resolves.toMatchObject({ conversationId: run.conversation.id, path: run.artifactPath, spawned: true });
+    expect(run.counts).toEqual({ start: 1, publish: 1 });
+    expect(run.host.releaseCount).toBe(0);
+    const snapshot = run.registry.snapshot();
+    expect(snapshot.entries[`${engine}:${run.key.sessionId}`]).toMatchObject({
+      claimEpoch: 2,
+      structuredHost: { writerClaimEpoch: 2 },
+    });
+    expect(snapshot.entries[`${engine}:${run.key.sessionId}`]?.structuredHost?.process).not.toBeNull();
+    const receipts = Object.values(snapshot.receipts)
+      .filter((item) => item.purpose === "resume-successor" && item.conversationId === run.conversation.id);
+    expect(receipts).toHaveLength(2);
+    expect(receipts.find((item) => item.launchId === refused.launchId)).toMatchObject({ state: "failed" });
+    expect(receipts.find((item) => item.launchId !== refused.launchId)).toMatchObject({ state: "completed" });
   });
 
   test(`a ${engine} resume publishes no host and retires the one it started when its account is withdrawn during setup`, async () => {
