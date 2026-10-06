@@ -1,6 +1,6 @@
 import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry, resolveConversationAlias } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
@@ -368,6 +368,13 @@ function hostEvidence(
   if (structuredEvidence?.state === "alive") return structuredEvidence;
   const survivor = entry.structuredTerminationSurvivors?.find((identity) => identityAlive(identity, probe));
   if (survivor) return { state: "alive", kind: "structured", pid: survivor.pid };
+  // An admitted resume claims the old row before awaiting host setup. Its
+  // controller owns that setup even while the row still says dead and has
+  // no host process. The matching writer epoch makes this a current claim.
+  if (entry.claimOwner && entry.claimEpoch > 0 && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch) {
+    const owner = structuredClaimIdentity(entry.claimOwner);
+    if (owner && identityAlive(owner, probe)) return { state: "alive", kind: "structured", pid: owner.pid };
+  }
   if (!hosted) {
     const recorded = tmux ?? structuredEvidence;
     return recorded ? { ...recorded, state: "gone" } : { state: "gone", kind: "none", pid: null };

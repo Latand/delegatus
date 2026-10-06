@@ -314,6 +314,11 @@ Two consequences shape the rule:
    termination. `conversationRegistryHost` derives its process verdict from
    that same host projection, so readable transcripts and missing transcripts
    agree about ownership.
+   An admitted structured resume also owns its setup interval through the
+   registry claim's exact live process identity and matching writer epoch.
+   This evidence protects a `registering` journal row while host startup is
+   awaited, even when the resumed registry row still says `dead`. A released,
+   stale, dead or reused claim provides no live ownership.
    Corpus selection also retains bound headless PIDs whose identity is
    unproven, using the same `headlessRoundProcess` verdict before filtering
    the completed inventory. It follows conversation aliases when only a bound

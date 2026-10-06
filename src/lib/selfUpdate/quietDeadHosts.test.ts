@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { newRound, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import { agentLivenessSnapshot, livenessRecordIsLive, productionLivenessSources } from "@/lib/lifecycle/liveness";
@@ -17,11 +19,12 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { spawnStructuredConversation } from "@/lib/runtime/structuredSpawn";
 import { RuntimeJournal } from "../../runtime-host/journal";
 
 import { productionDeps, turnEvidenceReader } from "./instance";
 import { flowAwaitingAdmission } from "./drain";
-import { probeQuiet, type QuietPorts } from "./quiet";
+import { probeQuiet, quietDispatchVersion, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
 const snapshot = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
@@ -119,6 +122,75 @@ test("a conversation whose host is gone and whose turn settled does not block th
   expect(await agentActivity(gone.conversation.id)).toMatchObject([{ lifecycle: "gone", turnState: "idle", host: { state: "gone" } }]);
   const result = await probeQuiet(snapshot, ports([row(gone, "unhosted")]), Date.now(), true);
   expect(result).toMatchObject({ quiet: true, blockers: { turns: 0, turnList: [], discounted: 1 } });
+});
+
+test("an admitted resume remains protected while its live claim owner starts the host", async () => {
+  const fixture = ended("settled");
+  const launchProfile = emptyLaunchProfile({ cwd: directory });
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+  registry.upsert({ ...entry, launchProfile, structuredHost: {
+    kind: "codex-app-server", endpoint: "stdio:released", process: null,
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+  } });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: directory, transport: "structured", accountId: "fixture",
+    conversationId: fixture.conversation.id, purpose: "resume-successor", expectedArtifactPath: fixture.artifactPath, launchProfile });
+  if (begun.kind !== "created") throw new Error("resume receipt unavailable");
+  const journal = new RuntimeJournal(join(directory, "admitted-resume.sqlite"), { structuredHosts: true });
+  const client = {
+    snapshot: async () => journal.snapshot(),
+    readSession: async (query: Parameters<RuntimeJournal["readSession"]>[0]) => journal.readSession(query),
+    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    operation: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    transitionOperation: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => journal.transitionOperation(...args),
+    effectBatch: async () => [],
+  } as unknown as RuntimeHostClient;
+  let entered!: () => void;
+  const reached = new Promise<void>((resolve) => { entered = resolve; });
+  let rejectHost!: (error: Error) => void;
+  const held = new Promise<never>((_resolve, reject) => { rejectHost = reject; });
+  const launch = spawnStructuredConversation({ engine: "codex", receipt: begun.receipt,
+    spec: { command: "codex", cwd: directory, windowName: "resume", engine: "codex", transcript: fixture.artifactPath, launchProfile },
+    account: { engine: "codex", accountId: "fixture", kind: "managed", home: directory, transcriptRoot: directory, env: { NODE_ENV: "test" } },
+    "prompt": "", registry, client,
+  } as Parameters<typeof spawnStructuredConversation>[0], { startHost: async () => { entered(); return held; } });
+  const outcome = launch.catch((error: unknown) => error);
+  const p = { ...ports([]), runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    await reached;
+    expect(journal.snapshot().sessions).toMatchObject([{ host: "registering", turn: "unknown" }]);
+    const claimed = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+    expect(claimed).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: null, writerClaimEpoch: 1 } });
+    expect(claimed.claimOwner).toBeTruthy();
+    const now = Date.now();
+    const before = quietDispatchVersion(p, now);
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0 } });
+    expect(quietDispatchVersion(p, now)).toBe(before);
+    expect((await agentActivity(fixture.conversation.id)).filter(livenessRecordIsLive)).toHaveLength(1);
+  } finally {
+    rejectHost(new Error("owned test startup cleanup"));
+    await outcome;
+    journal.close();
+  }
+  expect(registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!.claimOwner).toBeNull();
+  expect(await probeQuiet(snapshot, ports([row(fixture, "registering", "unknown")]), Date.now(), true))
+    .toMatchObject({ quiet: true, blockers: { turns: 0, discounted: 1 } });
+});
+
+test.each(["dead", "reused"] as const)("a %s structured claim owner releases an abandoned registering turn", async (kind) => {
+  const fixture = ended("open");
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+  registry.upsert({ ...entry, structuredHost: {
+    kind: "codex-app-server", endpoint: "stdio:released", process: null,
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+  } });
+  const self = captureProcessIdentity(process.pid)!;
+  const owner = kind === "dead" ? deadProcess : { ...self, startIdentity: `${self.startIdentity}-reused` };
+  expect(registry.claimStructuredHost(fixture.key, owner, { allowUnhosted: true })).toMatchObject({ claimEpoch: 1 });
+  expect((await agentActivity(fixture.conversation.id)).filter(livenessRecordIsLive)).toHaveLength(0);
+  expect(await probeQuiet(snapshot, ports([row(fixture, "registering", "unknown")]), Date.now(), true))
+    .toMatchObject({ quiet: true, blockers: { turns: 0, discounted: 1 } });
 });
 
 test("a dead host is discounted whether or not its registry row was ended", async () => {

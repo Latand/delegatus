@@ -785,6 +785,16 @@ test("a conversation's registry row says who hosts it without a transcript to re
   expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
   const reused = { ...survivor, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "previous-process" }] };
   expect(conversationRegistryHost(registry(reused), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
+  /* A current writer can own admitted setup before any host is published. */
+  const claimed = { ...ended, claimEpoch: 1,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 4243, startIdentity: "start-token-of-a-dead-host" })}`,
+    structuredHost: { ...hosted.structuredHost!, process: null, writerClaimEpoch: 1 } };
+  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const staleClaim = { ...claimed, structuredHost: { ...claimed.structuredHost, writerClaimEpoch: 0 } };
+  expect(conversationRegistryHost(registry(staleClaim), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
+  expect(conversationRegistryHost(registry({ ...claimed, claimOwner: "foreign-owner" }), "conversation_host", probe(true)))
+    .toEqual({ state: "gone", processAlive: false });
   /* A hosted row with no process yet is a launch inside its grace, then rot. */
   const launching = { ...hosted, structuredHost: null, status: "starting", updatedAt: new Date(NOW - 60_000).toISOString() } as AgentRegistryEntry;
   expect(conversationRegistryHost(registry(launching), "conversation_host", probe(false))).toEqual({ state: "unknown", processAlive: false });

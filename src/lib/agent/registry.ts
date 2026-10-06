@@ -149,7 +149,7 @@ function structuredClaimOwner(identity: ProcessIdentity): string {
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
-function structuredClaimIdentity(owner: string): ProcessIdentity | null {
+export function structuredClaimIdentity(owner: string): ProcessIdentity | null {
   if (!owner.startsWith(STRUCTURED_CLAIM_PREFIX)) return null;
   try {
     const identity = JSON.parse(owner.slice(STRUCTURED_CLAIM_PREFIX.length)) as Partial<ProcessIdentity>;
