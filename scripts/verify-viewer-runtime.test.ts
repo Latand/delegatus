@@ -2,6 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 
 import {
   BUILT_SERVER_DIR,
@@ -93,3 +96,47 @@ test("verification of a directory with no build fails, and says that is what hap
   expect(report.modules.probed).toBe(0);
   expect(report.served).toBeNull();
 });
+
+test.skipIf(process.platform !== "linux")("verification reaps its served process and detached worker before reporting success", async () => {
+  const root = fixtureRoot([
+    "package.json", "node_modules/next/dist/server/node-environment.js",
+    path.join(COMPILED_SERVER_DIR, REQUIRED_SERVER_RUNTIME),
+    path.join(BUILT_SERVER_DIR, "middleware.js"), "node_modules/.bin/next",
+  ]);
+  fs.writeFileSync(path.join(root, "package.json"), "{}");
+  fs.symlinkSync(import.meta.dir, path.join(root, "scripts"), "dir");
+  fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": [path.resolve(import.meta.dir, "../src/*")] } } }));
+  const server = path.join(root, "node_modules/.bin/next");
+  fs.writeFileSync(server, `
+    import fs from "node:fs";
+    import { spawn } from "node:child_process";
+    import { captureProcessIdentity } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/lib/processIdentity.ts"))};
+    const port = Number(process.argv.at(-1));
+    const record = ${JSON.stringify(path.join(root, "served.json"))};
+    const worker = spawn("/bin/sh", ["-c", "exec sleep 300"], { detached: true, stdio: "ignore" });
+    fs.writeFileSync(record, JSON.stringify({ identity: captureProcessIdentity(process.pid), worker: captureProcessIdentity(worker.pid) }));
+    Bun.serve({ port, fetch: () => new Response("synthetic viewer") });
+    process.on("SIGTERM", () => setTimeout(() => process.exit(0), 300));
+  `);
+  const bystander = spawn("/bin/sh", ["-c", "exec sleep 300"], { detached: true, stdio: "ignore" });
+  const other = captureProcessIdentity(bystander.pid!);
+  let owned: ProcessIdentity | undefined;
+  let worker: ProcessIdentity | undefined;
+  try {
+    const report = await verifyViewerRuntime(root);
+    if (!report.ok) throw new Error(JSON.stringify(report));
+    ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
+    expect(processIdentityStatus(owned!)).toBe("dead");
+    expect(processIdentityStatus(worker!)).toBe("dead");
+    expect(processIdentityStatus(other)).toBe("alive");
+  } finally {
+    if (!owned && fs.existsSync(path.join(root, "served.json"))) ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
+    for (const identity of [owned, worker]) if (identity && processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");
+    const deadline = Date.now() + 2_000;
+    while ([owned, worker].some(identity => identity && processIdentityStatus(identity) === "alive") && Date.now() < deadline) await Bun.sleep(20);
+    await stopFixtureProcess(bystander);
+    if (owned) expect(processIdentityStatus(owned)).toBe("dead");
+    if (worker) expect(processIdentityStatus(worker)).toBe("dead");
+    expect(processIdentityStatus(other)).toBe("dead");
+  }
+}, 10_000);

@@ -37,6 +37,8 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 
 const USAGE = "usage: bun scripts/verify-viewer-runtime.ts [--load-modules]";
 
@@ -167,6 +169,7 @@ function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
     TMPDIR: path.join(sandbox, "tmp"),
     LLV_STATE_DIR: path.join(sandbox, "state"),
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   };
 }
 
@@ -233,11 +236,24 @@ async function probeModules(root: string, sandbox: string): Promise<{ failures: 
 async function serveOnce(root: string, sandbox: string): Promise<{ status: number; bytes: number; readyMs: number; log: string[]; detail?: string }> {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const child = spawn(
-    process.execPath,
-    ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
-    { cwd: root, env: { ...sandboxEnvironment(sandbox), PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const contained = process.platform === "linux" && Boolean(process.env.LLV_OWNED_TEST_RUN_CGROUP);
+  const command = [process.execPath, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)];
+  // A serving Viewer starts background workers. Within a gate, give this
+  // deliberate probe lifetime its own service so stopping it ends those forks
+  // too, without concealing leftovers from the enclosing run's standing guard.
+  const child = spawn(process.execPath, contained ? [path.join(import.meta.dir, "owned-runner.ts"), ...command] : command.slice(1), {
+    cwd: root,
+    env: {
+      ...sandboxEnvironment(sandbox), PORT: String(port),
+      ...(contained ? {
+        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+        DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
+        LLV_OWNED_RUN_TIMEOUT_MS: String(START_BUDGET_MS + 10_000),
+        LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+      } : {}),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const log = collector(child, "server");
   let exited = false;
   child.once("exit", () => { exited = true; });
@@ -246,7 +262,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
     for (;;) {
       if (exited) return { status: 0, bytes: 0, readyMs: Date.now() - started, log: log(), detail: "the served application exited before it answered" };
       try {
-        const probe = await fetch(origin, { redirect: "manual" });
+        const probe = await fetch(origin, { redirect: "manual", signal: AbortSignal.timeout(5_000) });
         await probe.arrayBuffer();
         break;
       } catch {
@@ -264,7 +280,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
     }
     const readyMs = Date.now() - started;
     try {
-      const response = await fetch(origin, { headers: { accept: "text/html" } });
+      const response = await fetch(origin, { headers: { accept: "text/html" }, signal: AbortSignal.timeout(5_000) });
       const body = await response.text();
       return { status: response.status, bytes: body.length, readyMs, log: log() };
     } catch (error) {
@@ -274,7 +290,9 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       return { status: 0, bytes: 0, readyMs, log: log(), detail: `the served application dropped GET /: ${firstLine(error)}` };
     }
   } finally {
-    child.kill("SIGTERM");
+    // The service's TERM/KILL budget is two seconds. Its original outer handle
+    // waits for systemd-run and the exact-unit stop before it exits.
+    await stopFixtureProcess(child, contained ? 4_000 : 500, contained ? 6_000 : 2_000);
   }
 }
 

@@ -34,15 +34,15 @@ export async function fixtureReport<Report>(child: ChildProcess, name: string, r
 }
 
 /** ChildProcess.kill targets its original handle, and refuses after exit. */
-export async function stopFixtureProcess(child: ChildProcess): Promise<void> {
+export async function stopFixtureProcess(child: ChildProcess, termMs = 500, timeoutMs = 2_000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
   child.kill("SIGTERM");
-  const forced = setTimeout(() => child.kill("SIGKILL"), 500);
+  const forced = setTimeout(() => child.kill("SIGKILL"), termMs);
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([exited, new Promise<never>((_, reject) => {
-      deadline = setTimeout(() => reject(new Error(`owned fixture ${child.pid} survived TERM and KILL`)), 2_000);
+      deadline = setTimeout(() => reject(new Error(`owned fixture ${child.pid} survived TERM and KILL`)), timeoutMs);
     })]);
   } finally { clearTimeout(forced); clearTimeout(deadline); }
 }

@@ -71,7 +71,11 @@ the caller's start identity every 100 milliseconds. Normal command exit
 checks its owned cgroup for survivors and fails before systemd reaps them.
 Per-file comparison uses the same runner on head and base. Stage prompts
 prescribe that path; the merger's tests and privacy gate use it too. Linux
-refuses admission without the user manager. Direct and nested Bun test runners re-enter a private service before loading test modules, preserving their exact command line. Admission is bound to the command PID and real cgroup; the service also watches the original redirecting test process, including an unreaped zombie. Linux starts no polling guardian. Direct and nested Bun test runners re-enter a private service before loading test modules, preserving their exact command line. Admission is bound to the command PID and real cgroup; the service also watches the original redirecting test process, including an unreaped zombie. Linux starts no polling guardian.
+refuses admission without the user manager. Direct and nested Bun test runners
+re-enter a private service before loading test modules, preserving their exact
+command line. Admission checks the command PID and real cgroup. The service
+also watches the redirecting test process, including an unreaped zombie.
+Linux starts no polling guardian.
 
 Fixture parent binding uses the existing kernel start-identity probes on
 Linux and macOS. Windows uses process creation FILETIME in the same backend.
@@ -83,10 +87,24 @@ have no Linux service cgroup and were not executed on this Linux machine.
 Actual-fixture checks cover a stall before the first report, normal parent
 exit before the report, and hard parent death. Actual gate-path checks cover
 normal exit with a survivor, Bun's test timeout, TERM cancellation, wrapper
-SIGKILL, test-process SIGKILL, and the runner deadline. Three more checks cover a nested direct test exiting, receiving TERM or receiving KILL after a short-lived helper detached a descendant between observations. Three more checks cover a nested direct test exiting, receiving TERM or receiving KILL after a short-lived helper detached a descendant between observations. Each check is bounded,
+SIGKILL, test-process SIGKILL, and the runner deadline. Three more checks cover
+a nested direct test exiting, receiving TERM or receiving KILL after a
+short-lived helper detached a descendant between observations. Each check is bounded,
 retains recovery identities, verifies zero owned survivors, and preserves
 unrelated same-argv fixture and/or detached sleep bystanders before cleaning
 up those bystanders itself.
+
+The normal pre-push survivor guard caught a served-build verification leak:
+the server was signalled without awaiting exit, and its background migration
+worker and authentication helper survived it. The verifier now waits for a
+bounded stop and, inside a Linux gate, runs the served probe in its own existing
+containment service, bound to the verifier identity. The real built Viewer
+loads 23 modules and answers GET / with 200, with no outer-run survivors. A
+synthetic slow-shutdown server with a detached worker is reaped before success
+is returned, while an unrelated same-argv worker survives. Per-run ownership
+descriptors are excluded from baseline cache inputs, and the cache version
+invalidates results from earlier containment semantics. Both regressions
+failed against the earlier behavior and pass after the fixes.
 
 ## Process-launch audit
 
@@ -105,19 +123,12 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The syntax census contains 224 files: 150 with asynchronous primitives and 74 with only synchronous primitives. These dispositions describe the verified Linux path.
-
-The syntax census contains 225 files: 151 with asynchronous primitives and 74 with only synchronous primitives. These dispositions describe the verified Linux path.
+The syntax census contains 226 files: 152 with asynchronous primitives and
+74 with only synchronous primitives. These dispositions describe the verified
+Linux path.
 
 | File | Async launch sites | Disposition |
 | --- | --- | --- |
-| `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
-| `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
-| `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
-| `scripts/owned-runner.integration.test.ts` | 23, 26, 31, 70, 72 | owned |
-| `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
-| `src/lib/pipelines/stageHostGenerationLifetime.integration.test.ts` | 36, 64, 67 | owned |
-| `src/lib/testing/testChildren.test.ts` | 9, 10, 11 | owned |
 | `bin/__fixtures__/cli-self-update.ts` | 281 | contained helper |
 | `bin/cli.exposure.integration.test.ts` | 262, 284, 317, 336, 355, 389, 417, 444, 469, 496 | owned |
 | `bin/cli.selfUpdate.coldRecovery.integration.test.ts` | 100 | owned |
@@ -130,15 +141,20 @@ The syntax census contains 225 files: 151 with asynchronous primitives and 74 wi
 | `scripts/audit-with-retry.test.ts` | 68 | owned |
 | `scripts/bootstrap-runtime-host.test.ts` | 113 | owned |
 | `scripts/braces-patch.test.ts` | 66 | owned |
+| `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
+| `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
+| `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 33 | owned |
 | `scripts/install-mcp.test.ts` | 30, 173 | owned |
-| `scripts/local-gate-tests.test.ts` | 221 | owned |
+| `scripts/local-gate-tests.test.ts` | 236 | owned |
 | `scripts/npm-package-smoke.test.ts` | 13 | owned |
+| `scripts/owned-runner.integration.test.ts` | 23, 26, 31, 70, 72 | owned |
 | `scripts/privacy-publication-gate.test.ts` | 2175 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
 | `scripts/probe-realtime-v3.ts` | 276 | contained helper |
 | `scripts/rebuild.test.ts` | 104 | owned |
 | `scripts/runtime-host-viewer-adapter.test.ts` | 107, 258, 520, 598, 700, 1051, 1263, 1340 | owned |
+| `scripts/verify-viewer-runtime.test.ts` | 121 | owned |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 29, 99 | owned |
@@ -190,12 +206,14 @@ The syntax census contains 225 files: 151 with asynchronous primitives and 74 wi
 | `src/lib/memory/hook.test.ts` | 33, 47, 72, 91, 113, 150, 198 | owned |
 | `src/lib/monitor/seatTickController.test.ts` | 826 | owned |
 | `src/lib/pipelines/engine.test.ts` | 4026, 5096, 5450, 5452, 9436, 13754, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 20520 | owned |
+| `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
 | `src/lib/pipelines/fixtures/stageHostGeneration.ts` | 63, 76 | contained helper |
 | `src/lib/pipelines/git.test.ts` | 864, 2436 | owned |
 | `src/lib/pipelines/parkedPublication.test.ts` | 1000, 1051 | owned |
 | `src/lib/pipelines/severedStageRetry.test.ts` | 108 | owned |
 | `src/lib/pipelines/stageHostGenerationClose.integration.test.ts` | 91, 154, 209 | owned; registration before readiness, named deadline and identity cleanup |
 | `src/lib/pipelines/stageHostGenerationIdle.integration.test.ts` | 19 | owned |
+| `src/lib/pipelines/stageHostGenerationLifetime.integration.test.ts` | 36, 64, 67 | owned |
 | `src/lib/pipelines/stageInput.restricted.probe.test.ts` | 70 | owned |
 | `src/lib/pipelines/store.test.ts` | 102, 124, 165, 877 | owned |
 | `src/lib/pipelines/terminalReap.test.ts` | 425, 493 | owned |
@@ -254,6 +272,7 @@ The syntax census contains 225 files: 151 with asynchronous primitives and 74 wi
 | `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
 | `src/lib/telemetry/sender.test.ts` | 235 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
+| `src/lib/testing/testChildren.test.ts` | 9, 10, 11 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
@@ -281,6 +300,7 @@ The syntax census contains 225 files: 151 with asynchronous primitives and 74 wi
 | `scripts/dockerfile-permissions.test.ts` | 56 | synchronous |
 | `scripts/eslint-changes.test.ts` | 13 | synchronous |
 | `scripts/harness-ledger.ts` | 673, 796 | synchronous |
+| `scripts/verify-viewer-runtime.ts` | Served probe owns a nested service when admitted by a Linux gate; bounded awaited stop ends its background descendants. |
 | `scripts/local-gate-tests.ts` | 143, 183 | synchronous |
 | `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import path from "node:path";
 import { compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -190,6 +191,20 @@ test("an incomplete cached baseline is rebuilt before it can certify a compariso
   writeFileSync(entry, JSON.stringify(contents)); f.logs.length = 0;
   expect(f.run().introduced).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("baseline run");
+});
+
+test("fresh kernel ownership descriptors preserve a warm baseline", () => {
+  const f = fixture(source(true));
+  expect(f.run().introduced).toHaveLength(0);
+  Object.assign(f.env, {
+    LLV_OWNED_TEST_RUNNER_PID: "synthetic-next-runner",
+    LLV_OWNED_TEST_RUN_CGROUP: "/synthetic-next-service",
+    LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+    LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+  });
+  f.logs.length = 0;
+  expect(f.run().introduced).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("baseline cache hit");
 });
 
 test.each(["changed failure identity", "missing integrity"])("a cached baseline with %s cannot hide a newly failing test", corruption => {

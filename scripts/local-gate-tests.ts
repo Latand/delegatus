@@ -264,8 +264,8 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     // Scope ids and journal descriptors change on each gate-slot invocation;
     // they do not change the test inputs. Keep semantic environment in the key.
-    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v5-occurrence-aware-green-only", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
+    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
+    const identity = digest(JSON.stringify(["per-file-junit-v6-kernel-owned-runners", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment]));
     const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
     prepareCache(cache);
     const entry = path.join(cache, `${identity}.json`);
