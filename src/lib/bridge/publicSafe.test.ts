@@ -20,6 +20,23 @@ const DENY: PublicDenyList = {
   ],
 };
 
+test.each(["account", "person", "host", "project", "repository"])("strict known %s names match equivalent Unicode forms", (kind) => {
+  const name = kind === "repository" ? "group/PrivateCafé" : "Private Café";
+  const wide = name.replace(/[A-Za-z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 0xfee0));
+  for (const [source, reading] of [[name.normalize("NFD"), name], [name, name.normalize("NFD")], [wide, name], [name, wide]]) {
+    const deny: PublicDenyList = {
+      accounts: kind === "account" ? [source] : [],
+      people: kind === "person" ? [source] : [],
+      local: kind === "host" ? [source] : [],
+      projects: kind === "project" ? [{ repository: null, names: [source] }]
+        : kind === "repository" ? [{ repository: source, names: [] }] : [],
+    };
+    expect(privateClasses(`${reading} encountered the failure.`, deny, { strict: true })).toContain(kind === "repository" ? "project" : kind);
+    if (kind !== "repository") expect(privateClasses(`${reading}Suffix encountered the failure.`, deny, { strict: true })).not.toContain(kind);
+  }
+  expect(privateClasses(name, { accounts: [], people: [name.normalize("NFD")], local: [], projects: [] })).not.toContain("person");
+});
+
 const FOUND: readonly [string, string][] = [
   [`the checkout at ${HOME_PATH} is dirty`, "path"],
   ["the build reads /srv/build/checkout", "path"],

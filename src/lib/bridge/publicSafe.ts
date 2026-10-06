@@ -282,8 +282,15 @@ function repositoryShaped(name: string): boolean {
   return /[-_.\d]/.test(name);
 }
 
-function namesHit(text: string, names: readonly string[], usable: (name: string) => boolean = usableName): boolean {
-  return names.some((name) => usable(name) && wholeWord(name.trim()).test(text));
+function namesHit(text: string, names: readonly string[], strict = false): boolean {
+  const usable = strict ? strictName : usableName;
+  /* Strict reports and their known names share the same Unicode reading,
+     including composed accents and compatibility characters. */
+  const reading = strict ? text.normalize("NFKC") : text;
+  return names.some((name) => {
+    const value = strict ? name.normalize("NFKC") : name;
+    return usable(value) && wholeWord(value.trim()).test(reading);
+  });
 }
 
 /** Every private class found in `text`, each once, in a stable order. */
@@ -295,7 +302,6 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (!found.has(kind) && pattern.test(text)) found.add(kind);
   }
   if (portMatches(text, DOTTED_PORT)) found.add("port");
-  const usable = options.strict ? strictName : usableName;
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
     if (NAMED_HOST.test(text)) found.add("host");
@@ -305,16 +311,17 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
     if (portMatches(text, STRICT_PORT) || STRICT_PORT_FIELD.test(text)) found.add("port");
   }
-  if (namesHit(text, deny.accounts, usable)) found.add("account");
-  if (namesHit(text, deny.people, usable)) found.add("person");
-  if (namesHit(text, deny.local, usable)) found.add("host");
-  const lower = text.toLowerCase();
+  if (namesHit(text, deny.accounts, options.strict)) found.add("account");
+  if (namesHit(text, deny.people, options.strict)) found.add("person");
+  if (namesHit(text, deny.local, options.strict)) found.add("host");
+  const lower = (options.strict ? text.normalize("NFKC") : text).toLowerCase();
   for (const project of deny.projects) {
-    if (project.repository && project.repository.includes("/") && lower.includes(project.repository.toLowerCase())) {
+    const repository = options.strict ? project.repository?.normalize("NFKC") : project.repository;
+    if (repository && repository.includes("/") && lower.includes(repository.toLowerCase())) {
       found.add("project");
       break;
     }
-    if (namesHit(text, options.strict ? project.names : project.names.filter(repositoryShaped), usable)) {
+    if (namesHit(text, options.strict ? project.names : project.names.filter(repositoryShaped), options.strict)) {
       found.add("project");
       break;
     }

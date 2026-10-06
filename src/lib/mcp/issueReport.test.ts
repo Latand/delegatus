@@ -696,6 +696,35 @@ test.each(["preview", "publish"])("retained names from an inactive Telegram chat
   }
 });
 
+const personName = "Person Café";
+const widePersonName = personName.replace(/[A-Za-z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 0xfee0));
+test.each([
+  [personName.normalize("NFD"), personName],
+  [personName, personName.normalize("NFD")],
+  [widePersonName, personName],
+  [personName, widePersonName],
+])("equivalent Unicode people names refuse both boundaries: %s / %s", async (source, reading) => {
+  const h = harness({ controlRead: async (url) => new URLSearchParams(url.split("?")[1]).get("op") === "chats"
+    ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
+    : { messages: [{ fromName: source }], hasMore: false, nextCursor: null },
+  });
+  const body = `${reading} observed the failed launch.`;
+  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encoded });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("person");
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encoded }, REPORTER.conversationId!, { directory: sandbox });
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+});
+
 test.each(["truncated chats", "missing cursor", "repeated cursor"])("incomplete %s refuses both privacy boundaries", async (mode) => {
   const h = harness({ controlRead: async (url) => new URLSearchParams(url.split("?")[1]).get("op") === "chats"
     ? { chats: [{ chat: "allowed-chat", postAllowed: true }], ...(mode === "truncated chats" ? { truncated: 1 } : {}) }
