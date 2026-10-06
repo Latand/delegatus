@@ -723,14 +723,18 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
     },
   }, designatedSeat);
 
+  /* `/repo` is no project of this seat's, so the launch quotes the operator's
+     request for it (#2518); the quote never reaches the spawn route. */
   await bindings.spawn_agent({
     clientRequestId: "spawn-http-control",
     cwd: "/repo",
     ["prompt"]: "implement",
     title: "Implement durable identity",
     mcpServers: ["viewer", "agent-browser"],
+    crossProjectRequest: "Start the builder in that repository yourself.",
   });
   expect(requests[0]?.body.title).toBe("Implement durable identity");
+  expect(requests[0]?.body).not.toHaveProperty("crossProjectRequest");
   const exactMessage = " \tcontinue\nПривіт 🌍\n ";
   await bindings.send_message({
     clientRequestId: "send-http-control",

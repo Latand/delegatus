@@ -168,6 +168,11 @@ export class CodexReplayFrameReducer {
       this.escapeCarry = "";
     }
     let index = 0;
+    /* The next backslash is searched again only once the previous one is
+       consumed. Searching per string rescanned the rest of a whole frame fed
+       as one chunk for every string, and a 25 MB envelope with no escape in it
+       took tens of seconds per pass. */
+    let backslash = -2;
     while (index < chunk.length) {
       if (!this.inString) {
         const quote = chunk.indexOf('"', index);
@@ -181,7 +186,7 @@ export class CodexReplayFrameReducer {
         continue;
       }
       const quote = chunk.indexOf('"', index);
-      const backslash = chunk.indexOf("\\", index);
+      if (backslash !== -1 && backslash < index) backslash = chunk.indexOf("\\", index);
       const stop = quote === -1 ? backslash : backslash === -1 ? quote : Math.min(quote, backslash);
       if (stop === -1) {
         this.appendToString(chunk.slice(index));

@@ -62,26 +62,29 @@ function stringRecord(value: unknown): Record<string, string> | null {
     : null;
 }
 
-function readSnapshot(): ProjectAliasSnapshot {
+function readSnapshot(requireComplete = false): ProjectAliasSnapshot {
   const file = aliasesFile();
   let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
-  } catch {
+  } catch (error) {
+    if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     cache = { file, mtimeMs: -1, size: -1, snapshot: { aliases: {}, displayNames: {} } };
     return cache.snapshot;
   }
-  if (cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
+  if (!requireComplete && cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
     return cache.snapshot;
   }
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectAliasFile>;
     const aliases = parsed.schemaVersion === 1 ? stringRecord(parsed.aliases) : null;
     const displayNames = parsed.schemaVersion === 1 ? stringRecord(parsed.displayNames) : null;
+    if (requireComplete && (!aliases || !displayNames)) throw new Error("Project aliases are unreadable");
     const snapshot = aliases && displayNames ? { aliases, displayNames } : { aliases: {}, displayNames: {} };
     cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
     return snapshot;
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     const snapshot = { aliases: {}, displayNames: {} };
     cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
     return snapshot;
@@ -102,8 +105,8 @@ export function canonicalProject(project: string): string {
   return resolveAlias(project, readSnapshot().aliases);
 }
 
-export function projectAliasSnapshot(): ProjectAliasSnapshot {
-  const snapshot = readSnapshot();
+export function projectAliasSnapshot(options: { strict?: boolean } = {}): ProjectAliasSnapshot {
+  const snapshot = readSnapshot(options.strict);
   return {
     aliases: { ...snapshot.aliases },
     displayNames: { ...snapshot.displayNames },
@@ -349,23 +352,27 @@ function remotesFile(): string {
   return statePath("project-remotes.json");
 }
 
-function readRemotes(): Record<string, string> {
+function readRemotes(requireComplete = false): Record<string, string> {
   const file = remotesFile();
   let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
-  } catch {
+  } catch (error) {
+    if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     remoteCache = { file, mtimeMs: -1, size: -1, remotes: {} };
     return remoteCache.remotes;
   }
-  if (remoteCache && remoteCache.file === file && remoteCache.mtimeMs === stat.mtimeMs && remoteCache.size === stat.size) {
+  if (!requireComplete && remoteCache && remoteCache.file === file && remoteCache.mtimeMs === stat.mtimeMs && remoteCache.size === stat.size) {
     return remoteCache.remotes;
   }
   let remotes: Record<string, string> = {};
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectRemoteFile>;
-    remotes = (parsed.schemaVersion === 1 ? stringRecord(parsed.remotes) : null) ?? {};
-  } catch {
+    const valid = parsed.schemaVersion === 1 ? stringRecord(parsed.remotes) : null;
+    if (requireComplete && !valid) throw new Error("Project remotes are unreadable");
+    remotes = valid ?? {};
+  } catch (error) {
+    if (requireComplete) throw error;
     remotes = {};
   }
   remoteCache = { file, mtimeMs: stat.mtimeMs, size: stat.size, remotes };
@@ -384,8 +391,8 @@ export function recordedProjectRemote(project: string): string | null {
 }
 
 /** Known remote identities, for the operator's linked-project chooser. */
-export function recordedProjectRemotes(): Readonly<Record<string, string>> {
-  return { ...readRemotes() };
+export function recordedProjectRemotes(options: { strict?: boolean } = {}): Readonly<Record<string, string>> {
+  return { ...readRemotes(options.strict) };
 }
 
 /**
