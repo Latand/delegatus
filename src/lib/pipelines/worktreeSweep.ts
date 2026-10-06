@@ -511,7 +511,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     report.kept.push(kept);
     report.keptCounts[kept.reason] = (report.keptCounts[kept.reason] ?? 0) + 1;
   };
-  const previouslySettled = new Map((ports.previous?.kept ?? []).flatMap((kept) => kept.firstSettledAt ? [[kept.path, kept.firstSettledAt] as const] : []));
+  const previouslyKept = new Map((ports.previous?.kept ?? []).map(kept => [kept.path, kept] as const));
   const tempRoots = (ports.tempRoots ?? []).filter(Boolean).map((root) => path.resolve(root));
   const resolve = (entry: string) => path.resolve(entry);
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
@@ -618,12 +618,15 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
          retention rule; a checkout the operator made by hand never does. */
       const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : tempRoots.some((temp) =>
         inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
-      const firstSettledAt = finished ? previouslySettled.get(worktree) ?? report.at : undefined;
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
       const terminal = owners.flatMap((owner) => [owner.closedAt, ...(owner.runs ?? []).flatMap((run) => run.attempts.map((attempt) => attempt.completedAt))])
         .map((date) => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
-      const settledSince = terminal.length ? Math.max(...terminal) : Date.parse(firstSettledAt ?? report.at);
+      const previous = previouslyKept.get(worktree);
+      const terminalAt = terminal.length ? new Date(Math.max(...terminal)).toISOString() : report.at;
+      const firstSettledAt = finished ? previous?.firstSettledAt
+        ?? (previous && BUSY_REASONS.has(previous.reason) ? report.at : terminalAt) : undefined;
+      const settledSince = Math.max(terminal.length ? Math.max(...terminal) : 0, Date.parse(firstSettledAt ?? report.at));
       const retained = finished && now() - settledSince >= FINISHED_WORKTREE_RETENTION_MS;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
       if (initial.open.some((open) => inside(open, worktree))) {
@@ -636,6 +639,13 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       if (entry.prunable || !fs.existsSync(accessible(worktree))) {
         keep({ ...base, reason: "missing" });
+        continue;
+      }
+      // Activity also resets retention while a checkout is still young or
+      // has no matching PR. It must be observed before either early return.
+      const busy = heldBy(initial, worktree);
+      if (busy) {
+        keep({ ...busy, ...base });
         continue;
       }
       /* Past retention the remote proof stands without the forge. */
@@ -660,11 +670,6 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const nested = [...remaining].find((other) => other !== worktree && inside(other, worktree));
       if (nested) {
         keep({ ...base, reason: "holds-worktree", detail: nested });
-        continue;
-      }
-      const busy = heldBy(initial, worktree);
-      if (busy) {
-        keep({ ...busy, ...base });
         continue;
       }
       const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);

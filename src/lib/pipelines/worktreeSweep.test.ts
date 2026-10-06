@@ -1207,3 +1207,22 @@ test("Git reporting an ignored evidence descendant directly still preserves its 
   expect(report.kept[0]!.reason).toBe("ignored-files");
   expect(fs.readFileSync(capture, "utf8")).toBe("retained failure");
 });
+
+test.each(["role", "pipeline"])("activity while a %s checkout is young restarts its retention clock", async kind => {
+  const root = repository(); remoteRepository(root);
+  const temp = path.join(caseDir, "tmp");
+  const dir = kind === "role" ? path.join(temp, "llv-review-export/checkout") : path.join(caseDir, "widgets-pipeline-retained");
+  git(["worktree", "add", "-q", "--detach", dir, "main"], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "", closedAt: new Date(RETAIN_NOW).toISOString() });
+  const options = ports({ repositories: [root], pipelines: kind === "pipeline" ? [owner] : [], tempRoots: [temp], now: () => RETAIN_NOW });
+  const first = await sweepMergedWorktrees(options);
+  const busy = await sweepMergedWorktrees({ ...options, previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS - 60_000 });
+  expect(busy.kept[0]!.reason).toBe("live-conversation");
+  expect(busy.kept[0]!.firstSettledAt).toBeUndefined();
+  const quietAt = RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS;
+  const quiet = await sweepMergedWorktrees({ ...options, previous: busy, now: () => quietAt });
+  expect(quiet.removed).toEqual([]);
+  expect(quiet.kept[0]!.reason).toBe("retention");
+  expect(quiet.kept[0]!.firstSettledAt).toBe(new Date(quietAt).toISOString());
+  expect((await sweepMergedWorktrees({ ...options, previous: quiet, now: () => quietAt + FINISHED_WORKTREE_RETENTION_MS })).removed).toHaveLength(1);
+});
