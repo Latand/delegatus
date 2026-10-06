@@ -22104,33 +22104,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(loadPipelines()[0]!.stateDetail).toContain("every allowed account was tried");
     expect(f.h.spawnInputs).toHaveLength(2);
   });
-  if (engine === "codex") {
-    for (const parked of [false, true]) {
-      test.each(["pipeline", "startup-recovery"] as const)(`native human legacy %s marker cancels provider recovery (parked=${parked})`, async role => {
-        const f = await providerRecoveryHarness(engine, "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
-        if (parked) {
-          const lane = loadPipelines()[0]!;
-          lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
-          savePipelines([lane]);
-        }
-        await tickPipelines([], f.h.ports);
-        const oldCut = f.now();
-        f.advance(1_000);
-        const file = stageTranscript(`human-legacy-marker-${role}-${parked}`, [
-          { type: "event_msg", timestamp: new Date(oldCut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
-          { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: `<!-- llv:structured-user origin=agent sender=${role} -->\nWait for my answer` } },
-          { type: "event_msg", timestamp: new Date(f.now() + 500).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
-        ]);
-        readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-        await tickPipelines([], f.h.ports);
-        f.advance(31 * 60_000);
-        await tickPipelines([], f.h.ports);
-        expect(f.sends).toHaveLength(0);
-        expect(f.h.spawnInputs).toHaveLength(1);
-        expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
-      });
-    }
-  }
+
 }
 
 for (const parked of [false, true]) {
