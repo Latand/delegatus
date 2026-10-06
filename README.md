@@ -25,6 +25,8 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
   account and switch before a usage limit stops you.
 - **Agents talk to each other.** A Claude Code agent can message a Codex agent
   and the other way round.
+- **Shared memory.** Claude and Codex agents can look up what either engine
+  learned, and a message you send can carry the memories that fit it.
 - **Telegram built in.** Agents post to chats you allow through a bot, and
   read your own Telegram account through a read-only MCP server.
 - **Made for a team.** People sign in as themselves, and two machines can
@@ -145,7 +147,7 @@ task's card up to date. Delegatus wakes it whenever something is owed: a new
 pipeline event, a stage waiting on a decision, a task nobody started. It
 answers in its chat and can move your screen to the card where something
 landed. A decision it cannot make alone reaches you in its chat and on the
-board's **Waiting** counter. While it is busy with a turn, **Ask in
+board's **Needs you** counter. While it is busy with a turn, **Ask in
 parallel** in its composer sends a side question to a copy of it, which
 answers in its own block inside the same chat.
 Each time an orchestrator takes its seat, including after a rotation, it
@@ -157,6 +159,13 @@ agent per project on a timer, every 3 hours by default and off until you
 switch it on. The panel's text reaches the orchestrator on every wake as
 your standing instructions. [docs/orchestrator.md](docs/orchestrator.md)
 covers the rest.
+
+When a Delegatus tool fails, the orchestrator offers in its chat to prepare a
+bug report. If you agree, a reporter agent gathers the evidence, writes the
+report and checks it for private details. The chat then shows the exact
+title and body with the agent's privacy judgment, and nothing is filed until
+you approve that text. Work for another project goes to that project's
+orchestrator, so each board stays with its own seat.
 
 The **Reports** log beside its chat lists what it reported, newest first: a
 stage that passed or failed, a review verdict, a blocked pipeline, a
@@ -181,17 +190,16 @@ pipeline with its stages and pull request. A state line under the title says
 whether the task is moving, waiting or stopped; the status menu sets the
 reason for a wait, such as your decision, another task or a usage limit. A
 status note of up to 280 characters, written by an agent, the orchestrator
-or a parked pipeline, says what is happening now. Cards with a working
-agent sit at
-the top of their column. A task can be high, normal or low priority, and high
-tasks lead the Inbox. **Images** on a card opens every screenshot and render
+or a parked pipeline, says what is happening now. Cards order themselves by
+that state, with stopped tasks under a divider. A task can be high, normal
+or low priority, and high tasks lead the Inbox. **Images** on a card opens every screenshot and render
 its agents made. Ctrl+Z undoes your own moves, edits and hides on the board,
 and Ctrl+Shift+Z redoes them.
 
 When a task needs you, the foot of its card says why. It can be a question
 from an agent, a plan to approve, a permission prompt, a message that did not
 arrive, or a stage waiting on your decision. ✓ clears it until something new
-comes up. **Waiting** at the top of the board counts what waits across all
+comes up. **Needs you** at the top of the board counts what waits across all
 projects. Its panel lists each item by project, with the waiting agent's
 role, and lets you dismiss an item or answer a permission prompt in place.
 While something waits, the funnel (or the F key) dims every card
@@ -206,7 +214,15 @@ the columns lists the agents you have open in cards; click one to jump to
 it, or press Alt+J and Alt+K to step between them. You can also add tasks
 and start agents on them yourself.
 
-![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, a card that says why it needs you, and account limits in the sidebar](docs/media/readme/board.svg)
+The left sidebar is one panel. Pinned projects come first, then the rest,
+then an Archive fold, each section with its count. A project takes one row:
+its name, how many items wait on you, how many agents are working and how
+long ago something last happened. Below the list, a compact system block
+gives one line each to free memory and swap, every account with what is left
+of its tightest usage window, Copilot and Telegram. **All windows** in the
+block's header adds each account's plan and every window with its reset time.
+
+![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages and a card that says why it needs you; on the left, the projects and the system block](docs/media/readme/board.svg)
 
 ### Pipelines and review loops
 
@@ -240,7 +256,7 @@ orchestrator tells you it is ready. Turn it on and Delegatus merges each
 pipeline whose reviews passed, one at a time per repository, once every
 check on the head has finished green. It updates a branch that fell behind
 and leaves conflicts to you. The pipeline shows "waiting for checks", "merge
-stopped" or "merged". A stopped merge appears under **Waiting** with **Try
+stopped" or "merged". A stopped merge appears under **Needs you** with **Try
 the merge again**. The orchestrator can also hand several reviewed pull
 requests to one **merger** stage, which lands them as a single batch pull
 request with one commit per original;
@@ -280,7 +296,10 @@ project** switched on in Settings, each message you send to a Claude or
 Codex agent also carries the memories selected as relevant to it. Selection
 needs an OpenRouter key, entered in the same dialog, sends redacted context
 to that provider and shares the Asks-you monthly cap. Settings shows the
-month's counts and says why injection is not running.
+month's counts and says why injection is not running. Under a message that
+received memories, a chip such as **Memory · 3** opens to their titles, and
+each title opens that memory's file. When memory found nothing that fits, a
+quiet line says **Memory: nothing relevant**.
 
 Agents commit with the Delegatus machine identity, so a personal Git
 identity stays out of their commits. For a repository listed in
@@ -288,9 +307,10 @@ identity stays out of their commits. For a repository listed in
 requests and merges go out as the Delegatus GitHub App.
 
 Add as many Claude, Codex and Copilot accounts as you like, each with its own
-login. The sidebar shows the active account's usage windows: five-hour and
-weekly for Claude and Codex, the monthly allowance for Copilot. Each window
-shows the share left and when it resets. Switch to another account before
+login. The sidebar's system block shows each account with what is left of
+its tightest usage window; **All windows** lists every window: five-hour and
+weekly for Claude and Codex, the monthly allowance for Copilot, each with the
+share left and when it resets. Switch to another account before
 one runs out, or move a single agent to a different account. Agents you
 start after a switch use the new active account. When a Claude pipeline
 stage hits a usage limit, Delegatus moves it to another of the project's
@@ -310,8 +330,9 @@ On a phone Delegatus opens a layout built for a small screen.
 
 The board's four columns become tabs you swipe between. Cards that need you
 come first, and each card starts with its task's icon in the task's colour.
-Long-press a card to move, hide or dismiss it. The Overview works the same
-way across every project.
+Hold a card and it lifts with a dock of the four columns: let go over one to
+move the task, or in place for the card's menu, where you hide or dismiss
+it. The Overview works the same way across every project.
 
 A task, a pipeline or a conversation opens full screen. A pipeline shows its
 list of stages, and you answer a decision inside the stage that stopped on
@@ -337,8 +358,10 @@ background shell tasks, and Copilot sessions.
 
 Each tool call is a card. An edit shows as a diff, a command shows with its
 output, and an image the agent looked at shows as a thumbnail you can open
-full size. A summary line groups the calls ("wrote 1 file · patched 1 file ·
-ran 1 command"); expand it to see each one. Next to a call's duration, such as
+full size. In the preview the wheel zooms about the cursor and a drag pans;
+on a phone two fingers zoom and one pans, and a sideways swipe steps to the
+next picture. A summary line groups the calls ("wrote 1 file · patched 1
+file · ran 1 command"); expand it to see each one. Next to a call's duration, such as
 `352ms · 12.4k`, a number shows how many context tokens its result added, in
 four colour bands from quiet under 1 000 to red from 20 000. New output streams in live, and
 every conversation has its own link. Press `/` to search your messages
@@ -351,6 +374,12 @@ A card reads *working* while the agent is mid-turn and *done* once its final
 answer lands, so you can tell a busy agent from one waiting for you. When an
 agent stops on a question, you see the question with its options, and your
 answer goes straight back to the agent.
+
+A row above the composer steps between your own messages (**Previous mine**,
+**Next mine**, or Alt+Up and Alt+Down), passing over wakes, notices and
+relays. When Delegatus cannot confirm that a message you sent arrived, a
+compact card above the composer says so and offers **Retry** and
+**Discard**.
 
 ## Phone access
 
@@ -413,8 +442,8 @@ Delegatus can take your messages by voice and read answers aloud.
 
 ## Telegram
 
-Delegatus connects to Telegram in two ways, both from the **Telegram** row
-at the foot of the sidebar.
+Delegatus connects to Telegram in two ways, both from the **Telegram** line
+in the sidebar's system block.
 
 - **A bot.** Paste a bot token from @BotFather and choose which chats agents
   may post to. Agents post to those chats and read what the bot receives
@@ -432,6 +461,13 @@ at the foot of the sidebar.
   Code and Codex, so your agents can read your chats and cannot write to
   them. The session stays on this machine. The same panel can have an agent
   write a daily report on the chats you pick.
+
+Telegram never stops an agent from starting. If the connection is only down,
+the start reconnects it, waiting at most twenty seconds. If Telegram was
+never set up or you signed out, agents start without the Telegram tool and
+nothing asks you. If Telegram needs you, the agent starts without the tool,
+and the orchestrator's seat shows one line with what to do; the tool returns
+on the next start after you reconnect.
 
 ## Team
 

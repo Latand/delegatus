@@ -8,27 +8,115 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-07
+
+### Added
+- **Memory on a message shows what it added.** When shared memory adds
+  memories to a message you sent, a chip under the message reads
+  **Memory · 3**, with the count. A click, a tap or Enter opens it to the
+  titles, each in full on its own row, and a title opens its memory file in
+  the document preview. When memory looked and found nothing that fits, a
+  muted line reads **Memory: nothing relevant**; an ordinary turn shows
+  nothing. The chip appears once the delivery is confirmed and moves only
+  what is below your message. It works in Claude, Codex and orchestrator
+  conversations, and on a phone it is a 44 px target ([#2556]).
+- **Pinch to zoom in the image preview on a phone.** In the file preview and
+  in the fullscreen viewer, two fingers zoom about the point between them,
+  one finger pans a zoomed picture and a double tap goes between fit and
+  zoomed, while the page itself stays still. At fit, the fullscreen viewer
+  steps to the next or previous picture with a sideways swipe and closes
+  with a drag up or down ([#2553]).
+- **The orchestrator offers a bug report when a Delegatus tool fails.** It
+  asks in its chat, with suggested replies, whether to prepare a report. An
+  `issue-reporter` agent gathers the evidence, looks for a duplicate among
+  the open issues, writes the report, runs the privacy hint tool and makes
+  its own privacy judgment of the whole text. The chat shows the exact title
+  and body beside that judgment and a short list of the hints that remain. A
+  hint can be a false alarm and never blocks a preview. You decide last, and
+  `issue_report` files the report only with your approval of that exact text
+  ([#2530]).
+
+### Changed
+- **The left sidebar is one tidy panel with a compact system block.** Every
+  project name, section label and line of the system block starts on one
+  left edge. A project row is one line: the name, the count waiting on you,
+  the count working and a short age such as `11m`; the conversation count
+  moved to the row's tooltip. Sections read "Pinned 2", "Projects 4" and
+  "Archive 2", with the archive folding under the list. The list takes the
+  height the old footer used: about 649 px of a 900 px window, where it had
+  336. The system block has one line per reading: free RAM and swap, each
+  account with its engine and what is left of its tightest window, Copilot
+  and Telegram, and every bar draws what is left. **All windows** in the
+  block's header adds each account's plan and every limit window with its
+  reset time, and the choice is remembered. The phone keeps its own project
+  sheet ([#2554]).
+- **Work for another project goes from seat to seat.** An orchestrator's
+  `create_task`, `create_pipeline` or `spawn_agent` aimed at another project
+  is refused before anything starts, with a pointer to
+  `send_message_to_orchestrator`, so each project's orchestrator keeps its
+  own board. When you asked for the work directly, the seat quotes your
+  request in `crossProjectRequest` and the call goes through ([#2530]).
+- **A merge batch lands its healthy pull requests.** The merger compares the
+  batch's tests with main by name, lets through the failures main already
+  has, confirms each new failure and finds the pull request behind it by
+  taking candidates out one at a time. The healthy pull requests land in
+  their order; the one that broke a test keeps its reviewed head, and the
+  report names the failing tests ([#2549]).
+
 ### Fixed
 - **Telegram never stops an agent from starting, and a connection that can be
   restored is restored by the start itself.** A conversation that holds the
   Telegram tool and whose agent was not running used to refuse every message
-  whenever the Telegram connection did not read connected, and a new agent that
-  asked for the tool was refused outright. Now the start looks at why. If you are signed in and the connection is only down (after a restart
-  or an update, or after one failed check), it reconnects, waiting at most
+  whenever the Telegram connection did not read connected, and a new agent
+  that asked for the tool was refused outright. Now the start looks at why.
+  If you are signed in and the connection is only down (after a restart or
+  an update, or after one failed check), it reconnects, waiting at most
   twenty seconds, and the agent starts with the tool. If Telegram was never
-  connected on this machine, or you signed out, the tool is left out and nothing
-  is asked of you; an agent started there is no longer given the tool on paper.
-  If Telegram needs you (it ended your session, or the reconnect failed), the
-  agent starts without the tool, is told so in one line, and the orchestrator
-  seat shows one line with what to do. The tool returns on the next start after
-  you reconnect. Access you withdrew still refuses the start. After a restart
-  the connection now comes back on its own even with daily reports switched
-  off. After an update, the new version takes over the Telegram process the
-  previous version left running; it used to refuse that process on every check,
-  so Telegram stayed in an error until the machine was restarted and signing out
-  failed too. A start that arrives while the connection is being checked waits
-  for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
-  the interface language, one line per cause, each with what to do.
+  connected on this machine, or you signed out, the tool is left out and
+  nothing is asked of you; an agent started there is no longer given the
+  tool on paper. If Telegram needs you (it ended your session, or the
+  reconnect failed), the agent starts without the tool, is told so in one
+  line, and the orchestrator seat shows one line with what to do. The tool
+  returns on the next start after you reconnect. Access you withdrew still
+  refuses the start. After a restart the connection now comes back on its
+  own even with daily reports switched off. After an update, the new version
+  takes over the Telegram process the previous version left running; it used
+  to refuse that process on every check, so Telegram stayed in an error until
+  the machine was restarted and signing out failed too. A start that arrives
+  while the connection is being checked waits for that check and gets the
+  tool only once it is confirmed. The rotation banner and the "not
+  delivered" reasons on this path read in the interface language, one line
+  per cause, each with what to do ([#2517]).
+- **The delivery check card can be discarded, and says when the check is
+  over.** **Discard** on a send whose arrival was never verified answered
+  "delivery discard could not be recorded durably" for an older failure, or
+  for one whose reservation had been compacted. It now removes the card, and
+  the discard holds through a restart and a late acknowledgement. Once the
+  delivery check has ended, the card reads "Delivery unconfirmed"; it used
+  to read "Checking delivery…" indefinitely. The card is compact: the status
+  is said once, the message takes two lines with **Show all**, Retry and
+  Discard are the size of the receipt chips (44 px on a phone), and a relay
+  from another orchestrator reads "Agent relay · project" with its full
+  wording on hover. During an account handover, Discard is disabled and says
+  when it becomes available ([#2545]).
+- **A right click on a zoomed picture leaves it in place.** In the file
+  preview and the fullscreen viewer, a right click, a middle click or a
+  click with a modifier captured the pointer, so after **Copy image** the
+  picture followed the mouse. Such a click now moves nothing, and the
+  browser's menu opens on the picture itself. A pan ends on release, on a
+  lost capture and when the window loses focus. The wheel and a trackpad
+  pinch zoom about the cursor, and zooming out stops at fit ([#2553]).
+- **Resuming a large Codex conversation is quick again.** The step that trims
+  an oversized replay searched to the end of a line once for every string in
+  it, which cost tens of seconds of CPU on each resume of a large thread. It
+  now reads each frame once ([#2569]).
+
+### Maintainer notes
+- Main and release-tag image builds run in a publication slot of their own,
+  so they no longer queue behind pull request builds; at most one pull
+  request build and one publication build run at once ([#2560]).
+- The oversized replay envelope test in `codexAppServerHost.test.ts` is back
+  on the default timeout, which fails it if the slow scan returns ([#2569]).
 
 ## [1.10.0] — 2026-10-06
 
@@ -352,10 +440,6 @@ guarantees for the 1.x series.
   and status polling. The client connects only to a validated loopback address,
   refuses redirects, and keeps credentials out of arguments and output. Receipt
   replay and deployment exit codes are preserved ([#2495]).
-- **Bun-only MCP startup checks use the shipped launcher modules.** The macOS
-  newcomer fixture and the hermetic MCP fixtures now copy the published `bin`
-  directory, including platform identity and launcher helpers, so new imports
-  are covered automatically ([#2495]).
 - **An automatic update's final check compares admitted work by identity.**
   Journal writes of a turn that is already running no longer refuse the
   restart, so **Deploy now** reaches it; a turn or a stage that starts during
@@ -376,6 +460,11 @@ guarantees for the 1.x series.
 - Two dependencies were updated for published security advisories:
   `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h) and `source-map-js` to 1.2.2
   (GHSA-68fv-2mgg-jv7q).
+- The installed `braces` dependency carries the runtime mitigation from
+  upstream tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST
+  and parent-cycle regressions in the release gates. The locally fixed
+  advisory metadata expires on 2026-10-10; [#2496] tracks removal after an
+  upstream release ([#2495]).
 
 ### Maintainer notes
 - The local hooks now compare with the merge base: touched tests run one
@@ -412,12 +501,10 @@ guarantees for the 1.x series.
   restart no longer reads as a failed deploy. `docs/deploy-checkout.md`
   describes the plan and where the verdicts are kept, and the deployer role
   names the procedure ([#2546]).
-- The installed `braces` dependency carries the runtime mitigation from upstream
-  tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
-  parent-cycle regressions in the release gates. The locally fixed advisory
-  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream release.
-- Release-pointer reads and update admission retain main's asynchronous Git
-  checks together with durable drain custody.
+- The macOS newcomer fixture and the hermetic MCP fixtures copy the published
+  `bin` directory, platform identity and launcher helpers included, so the
+  Bun-only MCP startup checks cover new launcher imports on their own
+  ([#2495]).
 
 ## [1.9.0] — 2026-10-01
 
@@ -2126,7 +2213,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Latand/delegatus/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Latand/delegatus/compare/v1.7.1...v1.8.0
@@ -2435,3 +2523,12 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2536]: https://github.com/Latand/delegatus/pull/2536
 [#2546]: https://github.com/Latand/delegatus/pull/2546
 [#2550]: https://github.com/Latand/delegatus/pull/2550
+[#2517]: https://github.com/Latand/delegatus/pull/2517
+[#2530]: https://github.com/Latand/delegatus/pull/2530
+[#2545]: https://github.com/Latand/delegatus/pull/2545
+[#2549]: https://github.com/Latand/delegatus/pull/2549
+[#2553]: https://github.com/Latand/delegatus/pull/2553
+[#2554]: https://github.com/Latand/delegatus/pull/2554
+[#2556]: https://github.com/Latand/delegatus/pull/2556
+[#2560]: https://github.com/Latand/delegatus/pull/2560
+[#2569]: https://github.com/Latand/delegatus/pull/2569
