@@ -8,6 +8,28 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Fixed
+- **Telegram never stops an agent from starting, and a connection that can be
+  restored is restored by the start itself.** A conversation that holds the
+  Telegram tool and whose agent was not running used to refuse every message
+  whenever the Telegram connection did not read connected, and a new agent that
+  asked for the tool was refused outright. Now the start looks at why. If you are signed in and the connection is only down (after a restart
+  or an update, or after one failed check), it reconnects, waiting at most
+  twenty seconds, and the agent starts with the tool. If Telegram was never
+  connected on this machine, or you signed out, the tool is left out and nothing
+  is asked of you; an agent started there is no longer given the tool on paper.
+  If Telegram needs you (it ended your session, or the reconnect failed), the
+  agent starts without the tool, is told so in one line, and the orchestrator
+  seat shows one line with what to do. The tool returns on the next start after
+  you reconnect. Access you withdrew still refuses the start. After a restart
+  the connection now comes back on its own even with daily reports switched
+  off. After an update, the new version takes over the Telegram process the
+  previous version left running; it used to refuse that process on every check,
+  so Telegram stayed in an error until the machine was restarted and signing out
+  failed too. A start that arrives while the connection is being checked waits
+  for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
+  the interface language, one line per cause, each with what to do.
+
 ## [1.10.0] — 2026-10-06
 
 ### Added

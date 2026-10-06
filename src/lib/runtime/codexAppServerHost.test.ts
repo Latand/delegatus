@@ -13,7 +13,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
-import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
@@ -28,6 +28,7 @@ import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { lifecycleEventId, queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
@@ -132,19 +133,29 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
   }
 });
 
-test("fresh and adopted app-server hosts enforce native delegation at process and thread boundaries", async () => {
-  for (const allowed of [false, true]) for (const resumed of [false, true]) {
+test("fresh and adopted app-server hosts enforce native delegation with Telegram connected or left out", async () => {
+  for (const connected of [false, true]) for (const allowed of [false, true]) for (const resumed of [false, true]) {
+    clearTelegramConnection();
+    const session = connected ? saveTelegramSession("placeholder-session-for-policy-grant-test") : null;
+    if (session) writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+      identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
     const server = new FakeAppServer("policy-thread");
     server.features = { memory_tool: true, telepathy: true, connectors: true, unlisted_worker: true };
-    const captured: { args?: string[] } = {};
-    const options = { cwd: "/repo", allowSubagents: allowed, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    server.mcpServers.telegram = { url: "http://127.0.0.1:8809/mcp", enabled: true };
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const options = { cwd: "/repo", allowSubagents: allowed, mcpServers: ["viewer", "telegram"],
+      env: { NODE_ENV: "test" as const, [TELEGRAM_CONNECTOR_TOKEN_ENV]: "B".repeat(43) },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
     const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
     try {
       expect(captured.args).toContain(`agents.enabled=${allowed}`);
       expect(captured.args?.includes('approvals_reviewer="user"')).toBe(!allowed);
       const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
       const config = params?.config;
-      expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed } });
+      expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed },
+        mcp_servers: { viewer: { enabled: true }, telegram: { enabled: connected } } });
+      expect(captured.options?.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session?.connectorToken);
+      if (!connected) expect(params?.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
       if (!allowed) {
         expect(config).toMatchObject({ approvals_reviewer: "user" });
         expect(config).toMatchObject({ features: { memory_tool: false, telepathy: false, connectors: false, unlisted_worker: false } });

@@ -331,7 +331,7 @@ test("the recommendation is structurally incapable of acting: plain data, bounde
   const recommendation = recommendationFor(900_000);
   expect(recommendation.reasons.length).toBeLessThanOrEqual(4);
   /* Only words and numbers — no callbacks, no targets, no side effects. */
-  expect(Object.keys(recommendation).sort()).toEqual(["advisory", "level", "reasons", "recommended", "threshold", "thresholdUnknown"]);
+  expect(Object.keys(recommendation).sort()).toEqual(["advisory", "causes", "level", "reasons", "recommended", "threshold", "thresholdUnknown"]);
   expect(JSON.parse(JSON.stringify(recommendation))).toEqual(recommendation);
 });
 
@@ -351,4 +351,20 @@ test("a healthy incumbent gets no recommendation at all", () => {
   const context = contextReading({ policy, facts: healthy });
   expect(rotationRecommendation({ context, facts: healthy, activity: "live", policy }))
     .toMatchObject({ recommended: false, level: "none", advisory: null, reasons: [] });
+});
+
+test("every reason has its cause as data, in the same order, for a surface that words it itself", () => {
+  const policy = contextWindowPolicyFor("claude", "opus-4-8");
+  const worn = facts({ reportedContextTokens: 620_000, compactionCount: 3, transcriptBytes: 9 * 1024 * 1024 });
+  const context = contextReading({ policy, facts: worn });
+  const recommendation = rotationRecommendation({ context, facts: worn, activity: "dead", policy });
+  expect(recommendation.causes).toEqual([
+    { kind: "context", tokens: 620_000, estimated: false, thresholdTokens: policy!.rotationThresholdTokens, windowTokens: policy!.windowTokens },
+    { kind: "compactions", count: 3, threshold: 2 },
+    { kind: "transcript", megabytes: 9, thresholdMegabytes: 8 },
+    { kind: "host_gone" },
+  ]);
+  expect(recommendation.causes).toHaveLength(recommendation.reasons.length);
+  /* The agent's sentence keeps naming its tool; the cause carries no words. */
+  expect(recommendation.reasons.at(-1)).toContain("send_message_to_orchestrator");
 });

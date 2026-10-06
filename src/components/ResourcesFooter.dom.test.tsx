@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, DiskPressureNotice, stickySnap } from "./ResourcesFooter";
+import { CleanupPanel, DiskPressureNotice, ResourcesFooter, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -374,3 +374,47 @@ test("the System panel names the low volume, the largest consumers first, and th
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ ...pressure.volumes[0]!, freeBytes: 11 * GiB, level: "ok" as const }] }} />); });
   expect(element.querySelector("[data-disk-pressure]")).toBeNull();
 });
+
+/* The desktop sidebar's drawings (docs/design/sidebar-redesign.md): the amber dot of an aged reading says why,
+   on the one-line block and behind "All windows", as the phone's full block does. */
+for (const density of ["line", "detail"] as const) {
+  test(`a ${density} footer names why its memory reading is stale`, async () => {
+    const realTimeout = globalThis.setTimeout;
+    const realFetch = globalThis.fetch;
+    /* The footer's first probe waits 1.5 s and the next 30 s; the test keeps the order and drops the wait. */
+    globalThis.setTimeout = ((handler: () => void, delay?: number) => realTimeout(handler, Math.min(delay ?? 0, 10))) as typeof setTimeout;
+    let polls = 0;
+    globalThis.fetch = (async () => {
+      polls += 1;
+      if (polls > 1) return new Response("{}", { status: 503 });
+      return Response.json({
+        system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: new Date().toISOString() },
+        sessions: [],
+      });
+    }) as unknown as typeof fetch;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    try {
+      flushSync(() => { root.render(<ResourcesFooter density={density} />); });
+      for (let waited = 0; waited < 100 && !element.querySelector('[data-testid="resources-stale-dot"]'); waited += 1) await new Promise((resolve) => realTimeout(resolve, 20));
+
+      const dot = element.querySelector<HTMLElement>('[data-testid="resources-stale-dot"]')!;
+      expect(dot.title).toContain("resource data is stale");
+      expect(element.querySelector("button")!.title).toContain("resource data is stale");
+      /* What is left, in words: the bar beside it draws the same share. */
+      expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
+      expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
+      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
+      expect(element.textContent).toContain("9.0 GiB free");
+      /* How old the reading is stands on the screen only behind "All windows". */
+      expect(element.querySelector("[data-meter-note]")?.textContent ?? "").toContain(density === "detail" ? "captured" : "");
+      expect(Boolean(element.querySelector("[data-meter-note]"))).toBe(density === "detail");
+    } finally {
+      flushSync(() => { root.unmount(); });
+      element.remove();
+      globalThis.setTimeout = realTimeout;
+      globalThis.fetch = realFetch;
+    }
+  });
+}
