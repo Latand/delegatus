@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
+import { readStructuredUserMetadata, readStructuredUserProvenance } from "@/lib/selection/structuredUserMetadata";
 import { selectedContextArg } from "@/lib/mcp/selectedContextTarget";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 import { decodeCodexStructuredUserText as decodeWire, structuredUserReferenceKey } from "./codexStructuredUserText";
@@ -47,6 +47,16 @@ test("production delivery markers fit 96 characters with selected, empty, absent
     expect(decode(wire)).toMatchObject({ text: "Fixture message", selectedContext: context, origin, deliveryDedup: dedup(name) });
     expect(decodeWire(wire).deliveryDedup).toBe(dedup(name));
   }
+});
+
+test("voice channel survives the compact production marker and the feed metadata read", () => {
+  const origin = { kind: "operator" as const, channel: "voice-delegatus" as const };
+  const wire = encode("Review the plan", undefined, null, origin, dedup("voice-send"));
+  expect(decode(wire).origin).toEqual(origin);
+  const ref = decodeWire(wire).metadataRef!;
+  expect(readStructuredUserProvenance([ref])[ref]).toEqual({ origin: "operator", channel: "voice-delegatus" });
+  const agent = encode("An agent relay", undefined, null, { kind: "agent", channel: "voice-delegatus" }, dedup("agent-send"));
+  expect(decode(agent).origin).toEqual({ kind: "agent" });
 });
 
 test("legacy long ctx, digest-only and bare markers retain exactly their decoded values", () => {

@@ -6,6 +6,79 @@ Originating requirement, 2026-10-05, controller assignment for [issue #2519](htt
 
 # Floating voice companion: research and simulator contract
 
+## Operator amendment 2026-10-06
+
+Verbatim amendment, overriding point F where they differ:
+
+> Orchestrator, amendment from the operator (2026-10-06). It overrides point F of the specification where they differ. Apply it in this stage, and record it verbatim in docs/design/voice-companion-research.md (a section "Operator amendment 2026-10-06") and in the PR body, because later stages read those.
+>
+> 1. TOOLS. The voice model has more than one tool. Besides the delegation proposal it gets READ-ONLY board tools, so that it answers about the work by itself without delegating: the state of the tasks on the board of the project in view (the list, and one task with its note, hold and steps); the pipelines and the state of their stages; who is running now (agent activity); and the recent messages of an agent running on the board (a bounded tail of one conversation). Rules: read-only; same project only; an explicit allowlist implemented server-side over the existing Delegatus read paths, never the whole MCP inventory; each answer bounded and shaped for speech (counts, titles, states, short excerpts; no ids read aloud); no write tool other than the delegation proposal. The function-call elements show these calls with their real names and outcomes. Delegation stays explicit-only with a tap; a question such as "what is on the board" or "what did the reviewer say" is answered from the read tools and never becomes a delegation. Tests: each read tool at the production seam with fixtures, the allowlist refusing everything else, another project's data refused, output bounds.
+>
+> 2. SPEAKING STYLE. Add to the voice model's instructions: speak without hurry at an even pace; when there is a lot to say, do not speed up, say it calmly, in order, with short pauses between points, and prefer a short spoken summary with an offer to go deeper over racing through a long text. If the provider has a speed or pacing parameter, set it to a normal, unhurried value and say which. The operator's complaint about today's voice is that it rushes when the text is long.
+>
+> 3. API GENERATION. "Realtime API" in the specification means the NEWEST official OpenAI live voice API (the operator calls it the live API, the third version), and must not be the earlier realtime generation. Before writing the adapter, verify against the official OpenAI documentation which API and which model are current for live speech-to-speech with tool calls, and put the API version, the model id and the documentation links in the PR body. docs/realtime-v3/BLOCKED.md records what Codex's own spoken model was on 2026-09-10; treat it as context, verify today's state yourself. If the documentation cannot be reached or leaves the choice open, stop and report with the candidates instead of guessing.
+>
+> Everything else in the specification stands. No paid call, no real key.
+
+Verified against official documentation on 2026-10-06: the current generation is
+the [GPT-Live API](https://developers.openai.com/api/docs/guides/live),
+[`POST /v1/live/sessions`](https://developers.openai.com/api/reference/resources/live/methods/create),
+with spoken model [`gpt-live-1`](https://developers.openai.com/api/docs/models/gpt-live-1).
+Tools run in its [delegated backend](https://developers.openai.com/api/docs/guides/live-delegation).
+The [WebRTC media configuration](https://github.com/openai/openai-python/blob/main/src/openai/types/live/media_session_config_param.py)
+exposes voice, with no numeric speed parameter; pacing belongs in the Live instructions.
+The shared adapter mode `official-realtime` remains the contract's existing name.
+The older API discussion below is the dated research snapshot.
+
+Completion constraint discovered before writing the adapter: the official
+[input transcript contract](https://github.com/openai/openai-python/blob/main/src/openai/types/live/input_transcript_delta_event.py)
+explicitly has no complete turns or transcript-done event. Its fragment offsets
+and a delegation offset do not prove a completed operator request. Delivery must
+remain closed until the application establishes that completion; provider arrival
+order or silence alone cannot confer delegation authority.
+
+### Server stage handoff
+
+This draft contains the settings and owner-only key routes, UTC monthly usage
+reservations, the explicit server read allowlist over existing board paths,
+completed-input admission, durable voice relay provenance through Claude and
+Codex, correlated report replay, and the candidate GPT-Live configuration with
+calm speech instructions. It incorporates the prototype's placement and rise
+fixes from its moved base. No provider call or real credential access was used.
+
+The Live session minting, media adapter, documented-event fake provider and
+provider usage settlement remain unfinished pending the input-completion
+decision. The configuration is currently unmounted. Terminal queue receipts
+must also be observed by that integration; a queued admission alone establishes
+neither completed delivery nor a reply. This stage supplies no new rendered
+evidence; the next visual stage owns the final look and its measurements.
+
+The completion options are an explicit end-input gesture plus separately
+completed transcription (recommended), disabling Live delegation until a
+completion contract exists, or an operator-approved silence heuristic. The first
+option adds a UI control and transcription charges to the spend accounting.
+It preserves ordinary hands-free Live conversation and gives the server a
+completed input to inspect before offering delegation.
+
+The next visual stage can consume these typed hooks:
+
+- `useVoiceCompanionSettings(open)` exposes settings, key availability and
+  environment precedence, usage/reservations, busy/error state, `refresh`,
+  `update` and write-only `saveKey`. The settings form clears its key input after
+  a successful save. Mounting the hook opens no voice session.
+- `useVoiceCompanion(adapter)` exposes the shared `CompanionState`, explicit
+  `start({ project, locale })`, typed `command` and awaited `stop`. It subscribes
+  to normalized events and releases adapter ownership on unmount. It already
+  accepts the demo simulator. The official adapter is pending the decision above.
+
+Focused isolated checks cover key permissions/no echo/env precedence, cap
+reservations/restart/month rollover, malformed state, gate refusals and input
+ordering, tap-only confirmation, seat rotation, response-loss retry through both
+engines, project succession, report correlation under concurrent messages, read
+allowlist/project fences/output bounds at the persistence/liveness/transcript
+seams, normalized receipt recovery and hook ownership. Publication checks are
+recorded in the draft PR; this text claims no live voice or final UI acceptance.
+
 ## Verdict and scope
 
 **Proposal — viability verdict: proceed with the simulated prototype.** The official Realtime API supplies the conversation and tool primitives; Delegatus already delivers messages to an engine-independent orchestrator and records correlated reports. A thin adapter can connect these seams. Explicit delegation needs a server admission gate, confirmation and durable delivery identity. Shipping a paid voice integration remains outside this issue's approval. No live voice session, microphone, key lookup, CLI update, product edit or rendered capture was performed in this research stage.

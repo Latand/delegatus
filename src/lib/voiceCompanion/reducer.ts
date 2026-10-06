@@ -315,7 +315,8 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
          the recipient frozen in it, and a queued or delivered one names its operation. */
       const { delivery } = result;
       const proposal = current.proposal;
-      if (current.stage !== "sending" || !proposal || delivery.proposalId !== proposal.proposalId || delivery.callId !== proposal.callId
+      const recovering = current.stage === "unknown" && result.status !== "unknown" && settles(current.delivery, delivery);
+      if ((current.stage !== "sending" && !recovering) || !proposal || delivery.proposalId !== proposal.proposalId || delivery.callId !== proposal.callId
         || event.callId !== proposal.callId || !sameRecipient(delivery.recipient, proposal.recipient) || !validId(delivery.clientMessageId)
         || (result.status !== "unknown" && !validId(delivery.operationId))) return next({});
       return next({ delegation: { ...current, stage: result.status, delivery } });

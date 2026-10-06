@@ -62,13 +62,13 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function actor(project?: string, role = "builder") {
-  const spawn = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex") {
+  const spawn = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project,
     launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
   if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
   const receipt = spawn.receipt;
   registry.completeSpawn(receipt.launchId, {
-    key: { engine: "codex", sessionId: receipt.conversationId.slice("conversation_".length) },
+    key: { engine, sessionId: receipt.conversationId.slice("conversation_".length) },
     artifactPath: path.join(root, `${receipt.conversationId}.jsonl`), cwd: root, accountId: null,
     status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
   });
@@ -231,6 +231,42 @@ test("the operator browser still sends its own words", async () => {
   expect(delivered[0]).toMatchObject({ text: "Please investigate this issue.", origin: { kind: "operator" } });
 });
 
+for (const engine of ["claude", "codex"] as const) test(`voice confirmation reaches ${engine} through the real relay once across a lost receipt and restart`, async () => {
+  const recipient = actor("voice-project", "orchestrator", engine);
+  realAdmission();
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { orchestratorSeatFor } = await import("./seats");
+  let loseReply = true;
+  const paths = {
+    recipient: () => ({ project: "voice-project", conversationId: recipient.id, seatEpoch: orchestratorSeatFor("voice-project").active!.seatEpoch, engine }),
+    send: async (binding: { sessionId: string; proposalId: string; delivery: { clientMessageId: string; recipient: { conversationId: string } }; text: string }) => {
+      const response = await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: binding.delivery.recipient.conversationId,
+        clientMessageId: binding.delivery.clientMessageId, text: binding.text, voiceDelegatus: { sessionId: binding.sessionId, proposalId: binding.proposalId } }, { "sec-fetch-site": "same-origin" }));
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.code);
+      if (loseReply) { loseReply = false; throw new Error("fixture lost response"); }
+      return { status: "queued" as const, operationId: body.operationId as string };
+    },
+    reports: () => [],
+  };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "voice-project", locale: "en" });
+  admission.input(session.id, { itemId: "source", text: "Ask the orchestrator to review the plan.", final: true });
+  const proposal = admission.propose(session.id, "call", "source", "Review the plan")!;
+  const confirm = { type: "confirmation" as const, proposalId: proposal.proposalId, decision: "send" as const, via: "tap" as const };
+  await admission.confirm(session.id, confirm);
+  expect(delivered).toHaveLength(1);
+  expect(admission.session(session.id).proposals[proposal.proposalId].status).toBe("unknown");
+  const reopened = new CompanionAdmission(new CompanionStorage(), paths);
+  await Promise.all([reopened.confirm(session.id, confirm), reopened.confirm(session.id, confirm)]);
+  expect(delivered).toHaveLength(1);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)[0].command.origin).toEqual({ kind: "operator", channel: "voice-delegatus" });
+  expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("queued");
+  expect((await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: recipient.id, clientMessageId: "forged", text: "forged",
+    voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
+});
+
 /** Keep the HTTP handler and durable reservation real; only the runtime peer
  * is private. A busy peer leaves the admitted command on the delivery queue. */
 function realAdmission() {
@@ -238,8 +274,8 @@ function realAdmission() {
     readSession: async ({ conversationId }: { conversationId: string }) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`)!;
       const generation = conversation.generations.at(-1)!;
-      return { conversationId, sessionKey: { engine: "codex", sessionId: generation.id },
-        hostKind: "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
+      return { conversationId, sessionKey: { engine: conversation.engine, sessionId: generation.id },
+        hostKind: conversation.engine === "claude" ? "claude-broker" : "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
         artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
         capabilities: { steer: true, structuredAttention: true } };
     },

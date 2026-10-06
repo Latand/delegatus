@@ -626,6 +626,15 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
     expect(reduceCompanion(base, at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery: { ...delivery, operationId: null } } })).delegation).toEqual(base.delegation);
   });
 
+  test("an unknown send recovers its queued receipt through the adapter result and rejects another binding", () => {
+    const unknown = run([at({ type: "delegation.tool.result", callId: "c1", result: { status: "unknown", delivery: { ...delivery, operationId: null } } })], confirmed());
+    const forged = reduceCompanion(unknown, at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery: { ...delivery, clientMessageId: "different" } } }));
+    expect(forged.delegation).toEqual(unknown.delegation);
+    const recovered = reduceCompanion(unknown, at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery } }));
+    expect(recovered.delegation).toMatchObject({ stage: "queued", delivery: { operationId: "o1" } });
+    expect(reduceCompanion(recovered, at({ type: "orchestrator.answer", delivery, reportId: "recovered", status: "result", text: "Checked" })).delegation?.stage).toBe("answered");
+  });
+
   test("a tool call alone delivers nothing", () => {
     const state = run([
       at({ type: "delegation.tool.called", callId: "c2", sourceItemId: "i1", instruction: "Review" }),

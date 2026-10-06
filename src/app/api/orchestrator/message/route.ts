@@ -32,9 +32,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
   }
   const project = canonicalOrchestratorProject(body.project);
+  const voice = body.voiceDelegatus as { sessionId?: unknown; proposalId?: unknown } | undefined;
+  if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
+    return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });
   const admitted = admitOrchestratorRelay(req, project,
     typeof body.conversationId === "string" ? body.conversationId : undefined,
-    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined);
+    body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
+    voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
   if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
   return conversationHostPOST(new NextRequest(req.url, {
     method: "POST", headers: req.headers,
@@ -43,6 +47,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       conversationId: admitted.recipient,
       clientMessageId: body.clientMessageId,
       text: body.text,
+      ...(voice ? { voiceDelegatus: voice } : {}),
       policy: "steer-or-queue",
       images: [],
     }),
