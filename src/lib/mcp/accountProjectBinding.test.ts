@@ -50,6 +50,22 @@ test("a list of an unconfigured project reports every account allowed, and no bi
   });
 });
 
+test("a binding refusal behind a foreign holder carries the safe public account-store message", async () => {
+  const { foreignAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const tool = bindingsFor();
+  const holder = await foreignAccountHolder();
+  try {
+    holder.releaseAfter(120);
+    const error = await tool.account_project_binding({
+      clientRequestId: "binding-held-public-message", action: "add", engine: "claude", accountId: RESERVED, project: ATLAS,
+    }).then(() => null, (caught: unknown) => caught);
+    expect(error).toMatchObject({ message: `BUSY: ${ACCOUNT_STORE_BUSY_MESSAGE}` });
+    expect((error as Error).message).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+    expect(accountProjectBindings()).toEqual([]);
+  } finally { await holder.close(); }
+});
+
 test("add and remove are confirmed by the record read back, and an independent read agrees", async () => {
   const tool = bindingsFor();
   /* Other rows in the table, which a write's answer no longer repeats (#1845). */

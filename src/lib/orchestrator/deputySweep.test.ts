@@ -1,3 +1,5 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +14,7 @@ import {
   deputySeatNoteRequest,
   deputyVerdict,
   readDeputyOwnLines,
+  finishDeputy,
   sweepDeputies,
   type DeputyRuntimeFacts,
   type DeputySweepPorts,
@@ -285,3 +288,38 @@ test("a cut ghost whose host never came back ends host-died, never done", () => 
     .toEqual({ kind: "end", outcome: "host-died", interrupt: false });
   expect(deputyVerdict(deputy, { nowMs: at, seat, runtime: hosted("idle"), answered: false })).toEqual({ kind: "wait" });
 });
+
+for (const scenario of ["local-queued", "local-held"] as const) {
+  test(`deputy settlement and note wait for a short ${scenario} holder`, async () => {
+    const deputy = liveDeputy();
+    const neighbors: Promise<unknown>[] = [];
+    const holders: Awaited<ReturnType<typeof foreignAccountHolder>>[] = [];
+    const contend = async () => {
+      const holder = scenario === "local-queued" ? await foreignAccountHolder() : null;
+      if (holder) holders.push(holder);
+      let entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const neighbor = withAccountMutationLockAsync(async () => {
+        entered();
+        if (scenario === "local-held") await Bun.sleep(8);
+      });
+      neighbors.push(neighbor);
+      if (scenario === "local-held") await ready;
+      holder?.releaseAfter(8);
+    };
+    try {
+      const result = await finishDeputy(deputy, "done", false, {
+        now: () => new Date(START + 5_000),
+        deputies: readDeputies,
+        activeSeat: () => seat,
+        ownLines: () => [],
+        runtime: async () => hosted("idle"),
+        interrupt: async () => {},
+        release: contend,
+        noteSeat: async () => { await contend(); return "queued"; },
+      });
+      expect(result).toMatchObject({ state: "ended", outcome: "done", note: { outcome: "queued" } });
+      expect(readDeputies()[0]).toMatchObject({ state: "ended", note: { outcome: "queued" } });
+    } finally { await Promise.all(neighbors); for (const holder of holders) await holder.close(); }
+  });
+}

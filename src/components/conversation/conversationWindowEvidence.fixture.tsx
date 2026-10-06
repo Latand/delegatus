@@ -21,7 +21,11 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
+import { BranchPane } from "@/components/BranchPane";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
+import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
+import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
@@ -36,6 +40,8 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
 
+import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
+import { readStepState } from "./OwnMessageSteps";
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -91,7 +97,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
-  | "agent-images";
+  | "agent-images"
+  | "own-message-steps";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -932,6 +939,15 @@ function mountLifecycle(root: HTMLElement): void {
       loadOlder: async () => 0, prependGen: 0,
     }),
   });
+  installFakeComposerHost();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(<LifecycleFixture />);
+}
+
+/** The composer's side of the fake host: a hosted structured session, its
+    receipts and the transport behind Send. */
+function installFakeComposerHost(): void {
   setTmuxComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
@@ -957,9 +973,6 @@ function mountLifecycle(root: HTMLElement): void {
      forgetting them — the language seeded into localStorage stays. */
   try { sessionStorage.clear(); } catch { /* opaque origin */ }
   resetOutboxForTests();
-  fakeHost.lines = [LIFE_OPENING];
-  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
 }
 
 /* #2075: one conversation per engine, each viewing pictures the way that
@@ -1244,6 +1257,205 @@ function mountLongHistory(root: HTMLElement): void {
   );
 }
 
+/* The own-message step row (docs/design/own-message-steps.md) in the
+   production pane, over an orchestrator's day. `row=0` is the same pane
+   without the row, the baseline every measurement compares against;
+   `surface=orchestrator` is the dock's conversation; `pane` is a board-node
+   width. The loaded window starts two own messages in, and the feed's own
+   older-history load brings the rest, after `older` ms. `days` repeats the
+   day into one long conversation, loaded whole. `window.ownSteps` lets a
+   driver raise the phone's keyboard, make rows arrive at the tail and time
+   the reading a scroll frame takes. */
+interface OwnStepsControls {
+  keyboard: (px: number) => void;
+  settleSenders: () => void;
+  arrive: (kind: OwnStepsArrival, count: number) => void;
+  /** Median and mean ms of one reading across `runs` places in the feed, and
+      how many selector passes over the feed those readings made. */
+  readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+}
+
+const noop = () => undefined;
+
+function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator"; paneWidth: number }) {
+  const phone = useIsMobile();
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    /* The on-screen keyboard's overlap, as the phone shell pads it away. */
+    (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.keyboard = setKeyboard;
+  }, []);
+  if (phone) {
+    return (
+      <div
+        data-testid="mobile-chat-shell"
+        className="relative flex h-dvh min-h-0 min-w-0 max-w-[100dvw] flex-col overflow-hidden overflow-x-clip bg-canvas text-primary"
+        style={keyboard > 0 ? { paddingBottom: keyboard } : undefined}
+      >
+        <MobileShell
+          screen="chat"
+          screenId={file.conversationId ?? file.path}
+          title={<MobileBarTitle meta={<span className="truncate text-label text-muted">idle</span>}>{file.title}</MobileBarTitle>}
+          back
+          renderSheet={() => null}
+        >
+          <BranchPane file={file} tasks={[]} isRoot chromeInMenu onClose={noop} />
+        </MobileShell>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 self-center p-3" style={{ width: paneWidth ? paneWidth + 24 : "100%" }}>
+        {surface === "orchestrator" ? (
+          <div data-link-path={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-card">
+            <OrchestratorConversation file={file} projectName="delegatus" />
+          </div>
+        ) : (
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function mountOwnMessageSteps(root: HTMLElement): void {
+  const lang = params.get("lang") === "uk" ? "uk" : "en";
+  const days = Math.max(1, Number(params.get("days") ?? 1));
+  const claude = params.get("engine") === "claude";
+  const first = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
+  const messages: Record<string, { origin: "operator" | "agent" }> = {};
+  if (claude) {
+    const converted: string[] = [];
+    let loadedFrom = 0;
+    for (const [index, line] of first.lines.entries()) {
+      if (index === first.loadedFrom) loadedFrom = converted.length;
+      const record = JSON.parse(line);
+      if (record.payload?.role === "user") {
+        const text = record.payload.content[0].text as string;
+        const uuid = ["8a4e7610", "1c2d", "4e3f", "9a5b", index.toString(16).padStart(12, "0")].join("-");
+        messages[uuid] = { origin: text.includes("origin=operator") ? "operator" : "agent" };
+        converted.push(JSON.stringify({ type: "user", uuid, timestamp: record.timestamp, promptSource: "sdk",
+          message: { role: "user", content: text.replace(/<!-- llv:structured-user[^>]*-->\n?/, "") } }));
+      } else if (record.payload?.type === "agent_message") {
+        converted.push(JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+          message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }));
+      }
+    }
+    first.lines = converted;
+    first.loadedFrom = loadedFrom;
+  }
+  const all = [...first.lines];
+  for (let day = 1; day < days; day += 1) all.push(...ownStepsTranscript(lang, OWN_STEPS_TOTAL, day).lines);
+  const trailing = Number(params.get("trailing") ?? 0);
+  for (const line of ownStepsArrival(lang, "replies", trailing, 0)) {
+    const record = JSON.parse(line);
+    all.push(claude ? JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }) : line);
+  }
+  const olderLatency = Number(params.get("older") ?? 40);
+  let start = params.has("tailOnly") ? all.length - trailing : params.has("full") || days > 1 ? 0 : first.loadedFrom;
+  const trimLimit = Number(params.get("cap") ?? 0);
+  let capped = true;
+  let sendersSettled = false;
+  const heldSender = Object.keys(messages).find((id) => messages[id]!.origin === "operator"
+    && first.lines.slice(first.loadedFrom).some((line) => line.includes(id)));
+  let arrivals = 0;
+  let prependGen = 0;
+  let loadingOlder = false;
+  const listeners = new Set<() => void>();
+  let snapshot: LogTailState | null = null;
+  const announce = () => { snapshot = null; for (const listener of listeners) listener(); };
+  const loadOlder = async (): Promise<number> => {
+    if (loadingOlder || start <= 0) return 0;
+    loadingOlder = true;
+    announce();
+    await new Promise((resolve) => setTimeout(resolve, olderLatency));
+    const take = start;
+    start = 0;
+    prependGen += 1;
+    loadingOlder = false;
+    announce();
+    return take;
+  };
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps = {
+    settleSenders: () => { sendersSettled = true; },
+    arrive: (kind, count) => {
+      all.push(...ownStepsArrival(lang, kind, count, arrivals += 1));
+      /* Model useLogTail's append cap: prepends survive only after the feed
+         releases its magnet and passes cap=0 to the hook. */
+      if (trimLimit && capped) start = Math.max(start, all.length - trimLimit);
+      announce();
+    },
+    readCost: (runs) => {
+      const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+      const select = scroller.querySelectorAll;
+      let selectorPasses = 0;
+      scroller.querySelectorAll = ((selector: string) => { selectorPasses += 1; return select.call(scroller, selector); }) as typeof scroller.querySelectorAll;
+      const was = scroller.scrollTop;
+      const span = scroller.scrollHeight - scroller.clientHeight;
+      const times: number[] = [];
+      /* Warm: the first reading after a change of rows is the one that scans. */
+      readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+      selectorPasses = 0;
+      for (let run = 0; run < runs; run += 1) {
+        scroller.scrollTop = Math.round(span * (run / runs));
+        void scroller.getBoundingClientRect();
+        const from = performance.now();
+        readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+        times.push(performance.now() - from);
+      }
+      delete (scroller as unknown as { querySelectorAll?: unknown }).querySelectorAll;
+      scroller.scrollTop = was;
+      times.sort((a, b) => a - b);
+      const mean = times.reduce((sum, ms) => sum + ms, 0) / Math.max(1, times.length);
+      return { medianMs: times[times.length >> 1] ?? 0, meanMs: Math.round(mean * 1000) / 1000, selectorPasses };
+    },
+  };
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: start > 0, loadingOlder, loadOlder, prependGen,
+  };
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({
+    useLogTail: (_file, _paused, cap) => {
+      capped = Boolean(cap);
+      return useSyncExternalStore(
+        (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        read,
+        read,
+      );
+    },
+    ownMessageSteps: params.get("row") !== "0",
+  });
+  installFakeComposerHost();
+  if (claude) {
+    const transport = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (!url.startsWith("/api/log/provenance")) return transport(input, init);
+      await new Promise((resolve) => setTimeout(resolve, Number(params.get("ledger") ?? 2500)));
+      const answered = { ...messages };
+      if (params.has("partial") && !sendersSettled && heldSender) delete answered[heldSender];
+      return Response.json({ messages: answered });
+    }) as typeof fetch;
+  }
+  const file = {
+    ...((claude ? LIFE_CLAUDE_FILE : LIFE_CODEX_FILE) as unknown as Record<string, unknown>),
+    title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
+    model: claude ? "claude" : "gpt-6.1-sol",
+    userAuthored: true,
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 120,
+  } as unknown as FileEntry;
+  createRoot(root).render(
+    <OwnMessageStepsPane
+      file={file}
+      surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
+      paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
+    />,
+  );
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1252,4 +1464,5 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
+else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) createRoot(root).render(<Fixture id={requested} />);
