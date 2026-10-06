@@ -331,12 +331,12 @@ type PrView = {
   headRepository: { name: string } | null;
 };
 export type BatchRow = ReviewedPr & {
-  head: string; view: PrView; patch: string; status: "clean" | "deferred" | "culprit" | "head-moved" | "merged" | "needs-review";
+  head: string; reviewBase: string; view: PrView; patch: string; status: "clean" | "deferred" | "culprit" | "head-moved" | "merged" | "needs-review";
   commit: string; paths: string[]; detail: string; resolution?: string;
 };
 export type Gate = { id: string; args: string[]; report?: boolean };
 export type RunState = {
-  version: 2; repo: string; work: string; branch: string; base: string; tip: string;
+  version: 3; repo: string; work: string; branch: string; base: string; tip: string;
   rows: BatchRow[]; gated: Validation | null; batch: { number: number; url: string } | null;
   published: string | null; refreshes: number; landed: boolean; gates: Gate[];
   resolving?: { number: number; work: string; main: string };
@@ -411,7 +411,7 @@ export class MergeBatch {
 
   read(): RunState {
     const state = JSON.parse(readFileSync(this.stateFile, "utf8")) as RunState;
-    if (state.version !== 2 || realpathSync(state.repo) !== realpathSync(this.repo)
+    if (state.version !== 3 || realpathSync(state.repo) !== realpathSync(this.repo)
       || !/^merge-batch\/[a-f0-9-]{36}$/.test(state.branch)
       || git(state.work, ["rev-parse", "--path-format=absolute", "--git-common-dir"]) !== git(this.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"])) {
       throw new Error("Batch state does not belong to this repository");
@@ -499,7 +499,7 @@ export class MergeBatch {
     const branch = `merge-batch/${randomUUID()}`;
     const work = join(root, "checkout");
     git(this.repo, ["worktree", "add", "-b", branch, work, base]);
-    const state: RunState = { version: 2, repo: realpathSync(this.repo), work, branch, base, tip: base,
+    const state: RunState = { version: 3, repo: realpathSync(this.repo), work, branch, base, tip: base,
       rows: [], gated: null, batch: null, published: null, refreshes: 0, landed: false, gates: [], attributionLog: [] };
     // Save ownership before any batch mutation, so failures remain inspectable.
     this.save(state);
@@ -509,11 +509,12 @@ export class MergeBatch {
       // Even an ineligible PR supplies detectors from its reviewed commit.
       // Resolve abbreviations once; the reviewed head never follows the forge.
       const head = git(work, ["rev-parse", `${pair.reviewed}^{commit}`]);
-      const row: BatchRow = { ...pair, head, view, patch: "", status: "head-moved", commit: "", paths: [], detail: "" };
+      const reviewBase = git(work, ["merge-base", base, head]);
+      const row: BatchRow = { ...pair, head, reviewBase, view, patch: "", status: "head-moved", commit: "", paths: [], detail: "" };
       state.rows.push(row);
       if (view.state !== "OPEN" || view.isDraft || view.baseRefName !== "main" || !view.headRefOid.startsWith(pair.reviewed)) continue;
       if (git(work, ["rev-parse", "FETCH_HEAD"]) !== view.headRefOid) continue;
-      row.patch = patchId(work, git(work, ["merge-base", base, row.head]), row.head);
+      row.patch = patchId(work, reviewBase, row.head);
       row.status = "clean";
     }
     await this.rebuild(state);
@@ -686,25 +687,33 @@ export class MergeBatch {
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
-  private treeTests(state: RunState, revision: string): Record<string, string> {
+  private treeTests(state: RunState, revision: string, paths: string[]): Record<string, string> {
     const entries = git(state.work, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
+    const tree = new Map(entries.map(entry => {
+      const tab = entry.indexOf("\t");
+      return [entry.slice(tab + 1), entry.slice(0, tab)];
+    }));
     const corpus: Record<string, string> = {};
-    for (const entry of entries) {
-      const tab = entry.indexOf("\t"), metadata = entry.slice(0, tab), file = entry.slice(tab + 1);
-      if (!file || !/[._](?:test|spec)\.[cm]?[jt]sx?$/.test(file)) continue;
-      if (!/^100(?:644|755) blob /.test(metadata!)) throw new Error("Test file must be a regular tracked file");
-      const blob = metadata!.split(" ")[2]!;
+    for (const file of touchedTests(paths, path => tree.has(path))) {
+      const metadata = tree.get(file)!;
+      if (!/^100(?:644|755) blob /.test(metadata)) throw new Error("Test file must be a regular tracked file");
+      const blob = metadata.split(" ")[2]!;
       corpus[file] = execFileSync("git", ["cat-file", "blob", blob], { cwd: state.work, maxBuffer: 16 * 1024 * 1024 }).toString("base64");
     }
     return corpus;
   }
 
   private detectors(state: RunState): Detector[] {
+    // Scope comes from immutable reviewed patches plus this candidate's diff.
+    // Never use row.paths: omissions reset them and can restore native tests.
+    const changed = (base: string, head: string) => git(state.work, ["diff", "--name-only", "-z", base, head, "--"]).split("\0").filter(Boolean);
+    const paths = [...new Set([...changed(state.base, state.tip),
+      ...state.rows.flatMap(row => changed(row.reviewBase, row.head))])];
     // Contents come only from immutable Git objects. Deduplication is local to
     // this validation; a rebuilt candidate starts with an empty set again.
     const seen = new Set<string>();
-    return [{ source: "native candidate", corpus: this.treeTests(state, state.tip) },
-      ...state.rows.map(row => ({ source: `#${row.number}@${row.head}`, pr: row.number, corpus: this.treeTests(state, row.head) }))]
+    return [{ source: "native candidate", corpus: this.treeTests(state, state.tip, paths) },
+      ...state.rows.map(row => ({ source: `#${row.number}@${row.head}`, pr: row.number, corpus: this.treeTests(state, row.head, paths) }))]
       .map(detector => ({ ...detector, corpus: Object.fromEntries(Object.entries(detector.corpus).filter(([file, contents]) => {
         const key = JSON.stringify([file, contents]);
         if (seen.has(key)) return false;

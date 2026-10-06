@@ -34,9 +34,12 @@ runs TypeScript, comparative ESLint, tests and the trusted publication gate
 through `/var/tmp/llv-gate`. Commands use isolated state; tests also use isolated
 home, config and temp roots and run one file at a time with JUnit reports.
 
-Every validation starts from Git snapshots. Its test inventory contains every
-native test file in the candidate tree, plus every test file at each input PR's
-reviewed head, including withheld, moved and deferred PRs. Identical file versions
+Every validation rebuilds the touched-path union from the current candidate diff
+and every input PR's immutable reviewed patch base and head, including withheld,
+moved and deferred PRs. The existing `touchedTests` selector chooses changed test
+files and adjacent `.test.ts` / `.test.tsx` files in each Git tree. The inventory
+contains those native candidate files plus their versions at every reviewed head;
+unrelated repository tests are outside this gate. Identical file versions
 are sampled once within that validation. Different versions run separately;
 removing a PR cannot hide a detector or a restored native assertion. Relative
 module load failures for withheld detectors are reported as not applicable only
@@ -44,10 +47,10 @@ when the missing module was introduced at that reviewed head, is absent from
 main and is absent from the candidate. Runtime exceptions, missing packages and
 incomplete runs stay hard failures.
 
-The baseline is a fresh sample of native main tests at that candidate's main
-SHA. Candidate-only files and assertions supply no baseline evidence. A test
-failing on both main and the candidate is pre-existing, reported separately and
-permitted regardless of main's nonzero test exit. Between-test errors and a gate
+The baseline is a fresh sample of the selected native main tests at that
+candidate's main SHA. Candidate-only files and assertions supply no baseline
+evidence. A test failing on both main and the candidate is pre-existing, reported
+separately and permitted regardless of main's nonzero test exit. Between-test errors and a gate
 that cannot run, including installation or type checking, stop with their own
 cause.
 
@@ -74,13 +77,14 @@ as not applicable to the remaining implementation. Other assertions and every
 healthy reviewed detector continue to judge the candidate. Historical attribution
 never supplies an exemption or a passing observation.
 
-The script holds three kinds of state: immutable reviewed heads, one completed
-validation receipt, and an append-only attribution log. The receipt names the
-candidate tuple and built tip, current decisions and applicability reasons.
+The script holds three kinds of state: immutable reviewed patch bases and heads,
+one completed validation receipt, and an append-only attribution log. The receipt
+names the candidate tuple and built tip, current decisions and applicability
+reasons.
 Removing a culprit, main movement, head movement or rebuilding a changed patch
-voids it completely. All gates, detector discovery and baseline sampling restart;
-no corpus, baseline, pass list or detector selection survives as evidence. There
-is no validation cache. Publication and merge require the receipt's tuple and
+voids it completely. All gates, scoped detector discovery and baseline sampling
+restart; no corpus, baseline, pass list or detector selection survives as evidence.
+There is no validation cache. Publication and merge require the receipt's tuple and
 tip to match, with fresh main and head checks at both boundaries.
 
 Each attribution entry records its establishing tuple, detector source, failing

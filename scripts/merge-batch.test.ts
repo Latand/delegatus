@@ -718,6 +718,7 @@ function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   mkdirSync(join(f.repo, "scripts"));
   mkdirSync(join(f.repo, "src", "lib"), { recursive: true });
   copyFileSync(join(import.meta.dir, "privacy-publication-gate.ts"), join(f.repo, "scripts/privacy-publication-gate.ts"));
+  copyFileSync(join(import.meta.dir, "privacy-text-preparation.ts"), join(f.repo, "scripts/privacy-text-preparation.ts"));
   copyFileSync(join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), join(f.repo, "scripts/generate-privacy-known-value-fingerprints.ts"));
   copyFileSync(join(import.meta.dir, "privacy-known-value-fingerprints.json"), join(f.repo, "scripts/privacy-known-value-fingerprints.json"));
   copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
@@ -1334,16 +1335,16 @@ test("round 1 landing confirms a newly discovered failure before publishing a fr
   let runs = 0;
   const f = landingFixture("green", async (cwd, args, env) => {
     if (args[1] === "bun" && args[2] === "test") {
-      const bad = existsSync(join(cwd, "bad.txt"));
+      const bad = existsSync(join(cwd, "check.js"));
       return realTests(cwd, args, { ...(env ?? process.env), SAMPLE: bad && ++runs === 1 ? "first" : "later" });
     }
     return successfulCommand(args);
   });
   f.seed("check.test.ts", "const { test, expect } = require('bun:test');\nconst fs = require('node:fs');\n"
     + "test('initial intermittent', () => expect(process.env.SAMPLE).not.toBe('first'));\n"
-    + "test('later regression', () => expect(fs.existsSync('bad.txt') && process.env.SAMPLE !== 'first').toBe(false));\n");
+    + "test('later regression', () => expect(fs.existsSync('check.js') && process.env.SAMPLE !== 'first').toBe(false));\n");
   const healthy = f.addPr(12, "healthy.txt", "healthy");
-  const bad = f.addPr(13, "bad.txt", "regression");
+  const bad = f.addPr(13, "check.js", "regression");
   await f.batch.build(`12@${healthy},13@${bad}`);
   await f.batch.gate();
   const state = await f.batch.land();
@@ -1408,6 +1409,40 @@ test("round 4 main refresh revalidates a withheld reviewed detector before any n
   await reviewedDetectorsGreen(f, [detector, bad, healthy]);
 }, 30_000);
 
+test("reviewed patch scope survives main incorporating and then deleting its detector", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("config.js", "exports.adjust = x => x;\n");
+  f.seed("b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(1);\n");
+  f.addPr(12, "config.js", "exports.adjust = x => x / 2;\n");
+  const detector = extendPr(f, 12, { "reviewed.test.ts": "const { test, expect } = require('bun:test');\n"
+    + "const b = require('./b.js');\ntest('B', () => expect(b.value).toBe(1));\n" });
+  const bad = f.addPr(13, "b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(2);\n");
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  let refreshed = false;
+  const gh = async (args: string[]): Promise<string> => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
+      refreshed = true;
+      git(f.repo, ["merge", "--ff-only", detector]);
+      rmSync(join(f.repo, "reviewed.test.ts"));
+      f.seed("config.js", "exports.adjust = x => x;\n");
+      f.views.get(12)!.isDraft = true;
+      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+    }
+    return f.batch.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  await batch.build(`12@${detector},13@${bad},14@${healthy}`);
+  const originalBase = batch.read().rows[0]!.reviewBase;
+  await batch.gate();
+  const state = await batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "merged"]);
+  expect(state.rows[0]!.reviewBase).toBe(originalBase);
+  expect(git(f.repo, ["merge-base", state.base, detector])).toBe(detector);
+  expect(state.attributionLog[0]!.test.file).toBe("reviewed.test.ts");
+  unchangedCulprit(f, 13, bad);
+  await reviewedDetectorsGreen(f, [detector, bad, healthy]);
+}, 30_000);
+
 test("main refresh appends attribution without erasing withheld PR evidence", async () => {
   const f = landingFixture("green", realTests);
   const healthy = f.addPr(12, "healthy.txt", "healthy");
@@ -1452,7 +1487,7 @@ test("random event sequences publish only the last fully validated candidate tup
       const state = batch.read();
       if (cwd === state.work || args.includes("--paths")) event();
       if (args[1] === "bun" && args[2] === "test") {
-        const fails = failureFound && existsSync(join(cwd, "bad.txt"));
+        const fails = failureFound && existsSync(join(cwd, "property.js"));
         return testResult("property.test.ts", fails ? ["regression"] : [], fails ? [] : ["regression"]);
       }
       return successfulCommand(args);
@@ -1460,7 +1495,7 @@ test("random event sequences publish only the last fully validated candidate tup
     f.seed("property.test.ts", "synthetic detector");
     const healthy = f.addPr(12, "healthy.txt", "healthy");
     const moving = f.addPr(13, "moving.txt", "moving");
-    const bad = f.addPr(14, "bad.txt", "bad");
+    const bad = f.addPr(14, "property.js", "bad");
     const event = () => {
       const next = events.shift();
       if (next === "main") { f.seed(`advance-${++mainMoves}.txt`, "main advanced"); totals.main++; }
@@ -1569,17 +1604,23 @@ test("a retained PR deleting a main module cannot make a withheld detector not a
 }, 30_000);
 
 
-test("native inventory includes an untouched spec detector before publishing", async () => {
-  const f = landingFixture("green", realTests);
-  f.seed("unchanged.spec.ts", "const { test, expect } = require('bun:test');\nconst fs = require('node:fs');\n"
-    + "test('regression', () => expect(fs.existsSync('bad.txt')).toBe(false));\n");
-  const bad = f.addPr(12, "bad.txt", "regression");
-  const healthy = f.addPr(13, "healthy.txt", "healthy");
-  await f.batch.build(`12@${bad},13@${healthy}`);
+test("a scoped batch lands in order despite an unrelated test load error on main", async () => {
+  const sampled: string[] = [];
+  const f = landingFixture("green", async (cwd, args, env) => {
+    if (args[1] === "bun" && args[2] === "test") sampled.push(args[3]!);
+    return realTests(cwd, args, env);
+  });
+  f.seed("unrelated.test.ts", "throw new Error('unrelated fixture load error');\n");
+  f.seed("healthy.test.ts", "const { test, expect } = require('bun:test');\ntest('healthy', () => expect(1).toBe(1));\n");
+  const first = f.addPr(12, "healthy.test.ts", readFileSync(join(f.repo, "healthy.test.ts"), "utf8") + "// reviewed detector\n");
+  const second = f.addPr(13, "healthy.js", "exports.healthy = true;\n");
+  await f.batch.build(`12@${first},13@${second}`);
   await f.batch.gate();
   const state = await f.batch.land();
-  expect(state.rows.map(row => row.status)).toEqual(["culprit", "merged"]);
-  expect(state.attributionLog[0]!.test.file).toBe("unchanged.spec.ts");
-  unchangedCulprit(f, 12, bad);
-  expect((await commandRunner(f.repo, [process.execPath, "test", "./unchanged.spec.ts"])).code).toBe(0);
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "merged"]);
+  expect(git(f.repo, ["log", "--reverse", "--format=%s", `${state.base}..HEAD`]).split("\n"))
+    .toEqual(["Feature 12 (#12)", "Feature 13 (#13)"]);
+  expect(sampled.length).toBeGreaterThan(0);
+  expect(new Set(sampled)).toEqual(new Set(["./healthy.test.ts"]));
+  expect((await commandRunner(f.repo, [process.execPath, "test", "./healthy.test.ts"])).code).toBe(0);
 }, 30_000);
