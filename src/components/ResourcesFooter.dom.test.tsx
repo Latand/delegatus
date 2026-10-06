@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, stickySnap } from "./ResourcesFooter";
+import { CleanupPanel, ResourcesFooter, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -341,3 +341,46 @@ test("the rail keeps the table's stamp and the Viewer section between polls", ()
   const first = stickySnap(null, { system: null, sessions: [], sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER }, NOW);
   expect(first.data).toMatchObject({ sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER });
 });
+
+/* The compact drawings of the sidebar design prototypes (docs/design/sidebar-redesign.md): the amber dot of an
+   aged reading says why, on a line and on a gauge, as today's full block does. */
+for (const density of ["line", "gauge"] as const) {
+  test(`a ${density} footer names why its memory reading is stale`, async () => {
+    const realTimeout = globalThis.setTimeout;
+    const realFetch = globalThis.fetch;
+    /* The footer's first probe waits 1.5 s and the next 30 s; the test keeps the order and drops the wait. */
+    globalThis.setTimeout = ((handler: () => void, delay?: number) => realTimeout(handler, Math.min(delay ?? 0, 10))) as typeof setTimeout;
+    let polls = 0;
+    globalThis.fetch = (async () => {
+      polls += 1;
+      if (polls > 1) return new Response("{}", { status: 503 });
+      return Response.json({
+        system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: new Date().toISOString() },
+        sessions: [],
+      });
+    }) as unknown as typeof fetch;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    try {
+      flushSync(() => { root.render(<ResourcesFooter density={density} />); });
+      for (let waited = 0; waited < 100 && !element.querySelector('[data-testid="resources-stale-dot"]'); waited += 1) await new Promise((resolve) => realTimeout(resolve, 20));
+
+      const dot = element.querySelector<HTMLElement>('[data-testid="resources-stale-dot"]')!;
+      expect(dot.title).toContain("resource data is stale");
+      expect(element.querySelector("button")!.title).toContain("resource data is stale");
+      /* What is left, in words: the bar beside it draws the same share. */
+      expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
+      expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
+      if (density === "line") {
+        expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
+        expect(element.textContent).toContain("9.0 GiB free");
+      }
+    } finally {
+      flushSync(() => { root.unmount(); });
+      element.remove();
+      globalThis.setTimeout = realTimeout;
+      globalThis.fetch = realFetch;
+    }
+  });
+}

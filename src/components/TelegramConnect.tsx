@@ -12,7 +12,7 @@ import { handleOverlayEscape } from "@/lib/overlay";
 import type { TelegramErrorCode, TelegramPhase, TelegramStatusPayload } from "@/lib/telegram/contracts";
 
 import { Loader2, Trash2, X } from "./icons";
-import { GAUGE_BUTTON, type RailFooterDensity } from "./railFooterDensity";
+import { GAUGE_BUTTON, LINE_EDGE, type RailFooterDensity } from "./railFooterDensity";
 import { TelegramBotSection } from "./TelegramBot";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
 import { TelegramReportsSection } from "./TelegramReports";
@@ -460,7 +460,7 @@ export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDe
         className={density === "gauge"
           ? `relative h-9 w-10 ${GAUGE_BUTTON}`
           : density === "line"
-            ? "flex h-[26px] w-full items-center gap-1.5 px-3 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            ? `flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`
             : "flex min-h-[44px] w-full items-center gap-2 px-3.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[36px]"}
       >
         <Send className={`shrink-0 text-muted ${density === "line" ? "h-3 w-3" : "h-3.5 w-3.5"}`} aria-hidden />

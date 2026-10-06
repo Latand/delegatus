@@ -1,6 +1,6 @@
 "use client";
 
-import { Gauge, LayoutGrid, PanelLeftClose, PanelLeftOpen, Rows3, Search, User } from "lucide-react";
+import { Gauge, LayoutGrid, PanelLeftClose, PanelLeftOpen, Search, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { attentionId } from "@/components/attention";
@@ -31,10 +31,12 @@ import { useLocale } from "@/lib/i18n";
  * panels, and the summaries `buildProjectSummaries` computes. What a variant
  * changes is where those parts sit and how a project row reads.
  *
- *   1  the full sidebar, tidied: one-line rows with named marks, labelled
- *      sections, and a system block of one line per reading;
- *   2  a narrow rail of project tiles and gauges that opens over the board on
- *      hover and docks on request;
+ *   1  the full sidebar, tidied: one-line rows with each mark in its own
+ *      column, labelled sections on one left edge, and a system block of one
+ *      line per reading; `?railask=1` adds variant 3's question line to it,
+ *      which is the note's recommendation;
+ *   2  a narrow rail of project tiles and gauges; the full sidebar opens beside
+ *      it on hover, so the rail stays under the pointer, and docks on request;
  *   3  rows that say what waits on the operator and which engines are working,
  *      with quiet projects folded to one line.
  */
@@ -54,13 +56,15 @@ const TITLES: Record<Lang, Record<RailVariant, string>> = {
 const COPY = {
   en: {
     pinned: "Pinned", projects: "Projects", system: "System", needsYou: "{n} need you", needsYouOne: "1 needs you", working: "{n} working",
-    conversations: "{n} conversations", conversationsOne: "1 conversation", updated: "updated {age}", detail: "Every limit window", compact: "One line per reading",
-    open: "Open the sidebar", dock: "Keep the sidebar open", undock: "Fold the sidebar to a rail", find: "Find a project", quiet: "Quiet", asks: "Asks",
+    conversations: "{n} conversations", conversationsOne: "1 conversation", updated: "updated {age}", detail: "Every limit window and its reset", compact: "One line per reading",
+    detailShort: "All windows", compactShort: "Compact", withAsk: "with the question line from 3",
+    open: "Open the sidebar", dock: "Keep the sidebar open", undock: "Fold the sidebar to a rail", find: "Find a project",
   },
   uk: {
     pinned: "Закріплені", projects: "Проєкти", system: "Система", needsYou: "{n} чекають на вас", needsYouOne: "1 чекає на вас", working: "{n} працює",
-    conversations: "розмов: {n}", conversationsOne: "1 розмова", updated: "оновлено {age}", detail: "Усі вікна лімітів", compact: "Один рядок на показник",
-    open: "Відкрити панель", dock: "Тримати панель відкритою", undock: "Згорнути панель до рейки", find: "Знайти проєкт", quiet: "Тихі", asks: "Питає",
+    conversations: "розмов: {n}", conversationsOne: "1 розмова", updated: "оновлено {age}", detail: "Усі вікна лімітів і час скидання", compact: "Один рядок на показник",
+    detailShort: "Усі вікна", compactShort: "Коротко", withAsk: "із рядком питання з варіанта 3",
+    open: "Відкрити панель", dock: "Тримати панель відкритою", undock: "Згорнути панель до рейки", find: "Знайти проєкт",
   },
 } as const;
 type CopyKey = keyof (typeof COPY)["en"];
@@ -136,7 +140,7 @@ function NeedsMark({ count }: { count: number }) {
   const { c } = useCopy();
   if (count <= 0) return null;
   return (
-    <span data-rail-needs="" title={count === 1 ? c("needsYouOne") : c("needsYou", { n: count })} className="inline-flex h-[18px] shrink-0 items-center gap-[3px] rounded-full bg-warning-soft px-1.5 text-[10.5px] font-bold tabular-nums text-warning">
+    <span data-rail-needs="" title={count === 1 ? c("needsYouOne") : c("needsYou", { n: count })} className="inline-flex h-[18px] shrink-0 items-center gap-[3px] rounded-full bg-warning-soft px-1 text-[10.5px] font-bold tabular-nums text-warning">
       <User className="h-2.5 w-2.5" strokeWidth={2.6} aria-hidden />
       {count > 99 ? "99+" : count}
     </span>
@@ -155,12 +159,29 @@ function LiveMark({ count }: { count: number }) {
   );
 }
 
+/**
+ * The two marks of a one-line row, each in a column of its own, so "waiting"
+ * and "working" are read down the list. A column exists while some project
+ * carries its mark; a row without the mark keeps the column empty.
+ */
+function MarkColumns({ needs, live, model }: { needs: number; live: number; model: RailModel }) {
+  return (
+    <>
+      {model.totalAttention ? <span data-rail-slot="needs" className={SLOT_NEEDS}><NeedsMark count={needs} /></span> : null}
+      {model.totalLive ? <span data-rail-slot="live" className="flex w-6 shrink-0 items-center"><LiveMark count={live} /></span> : null}
+    </>
+  );
+}
+const SLOT_NEEDS = "flex w-8 shrink-0 items-center";
+const SLOT_AGE = "w-[30px] shrink-0 text-right text-[10.5px] tabular-nums text-muted";
+
+/* Every label in the list starts where a project's name starts: 11 px inside the list's own 8 px. */
 function SectionLabel({ children, count, icon }: { children: ReactNode; count?: number; icon?: ReactNode }) {
   return (
-    <div className="flex h-6 items-center gap-1.5 px-2.5 text-[11px] font-bold text-muted">
-      {icon}
-      {children}
+    <div className="flex h-6 items-center gap-1.5 px-[11px] text-[11px] font-bold text-muted">
+      <span data-rail-label="">{children}</span>
       {count === undefined ? null : <span className="font-semibold tabular-nums">{count}</span>}
+      {icon}
     </div>
   );
 }
@@ -181,21 +202,20 @@ function CrownToggle({ crowned, onToggle }: { crowned: boolean; onToggle: () => 
   );
 }
 
-type RowKind = "line" | "rich";
+/** `line` is variant 1's row, `ask` adds the question under a row that waits, `rich` is variant 3's row. */
+type RowKind = "line" | "ask" | "rich";
 
-function ProjectRow({ row, kind, props, crowned }: { row: RowFacts; kind: RowKind; props: ProjectRailProps; crowned: boolean }) {
+function ProjectRow({ row, kind, props, model, crowned }: { row: RowFacts; kind: RowKind; props: ProjectRailProps; model: RailModel; crowned: boolean }) {
   const { c, lang } = useCopy();
   const active = props.selected === row.project;
   const age = shortAge(row.smt, props.now, lang);
   const total = row.conversations === 1 ? c("conversationsOne") : c("conversations", { n: row.conversations });
+  const rich = kind === "rich";
   const busy = row.attentionCount > 0 || row.liveCount > 0;
-  const title = [row.displayName, row.attentionCount ? (row.attentionCount === 1 ? c("needsYouOne") : c("needsYou", { n: row.attentionCount })) : null, row.liveCount ? c("working", { n: row.liveCount }) : null, total, age ? c("updated", { age }) : null].filter(Boolean).join(" · ");
-  const name = (
-    <span className="flex min-w-0 flex-1 items-center gap-1">
-      <span className={`min-w-0 text-[13px] leading-[18px] ${active ? "line-clamp-2 font-bold" : "truncate font-semibold"} ${row.catalogOnly ? "text-muted" : ""}`}>{row.displayName}</span>
-    </span>
-  );
-  const ageMark = age ? <span className="w-[30px] shrink-0 text-right text-[10.5px] tabular-nums text-muted">{age}</span> : null;
+  const waits = row.attentionCount ? (row.attentionCount === 1 ? c("needsYouOne") : c("needsYou", { n: row.attentionCount })) : null;
+  /* The question is cut after two lines in the row, so the tooltip carries all of it. */
+  const question = kind !== "line" && row.attentionCount ? row.asks : null;
+  const title = [row.displayName, waits && question ? `${waits}: ${question}` : waits, row.liveCount ? c("working", { n: row.liveCount }) : null, total, age ? c("updated", { age }) : null].filter(Boolean).join(" · ");
   return (
     <div data-flip-key={row.project} className="group relative">
       <button
@@ -206,25 +226,25 @@ function ProjectRow({ row, kind, props, crowned }: { row: RowFacts; kind: RowKin
         onClick={() => props.onSelect(row.project)}
         className={`mb-px block w-full rounded-[10px] border px-2.5 text-left ${FOCUS} ${active ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"} ${row.catalogOnly ? "opacity-70" : ""}`}
       >
-        <span className={`flex items-center gap-2 ${kind === "rich" && busy ? "pt-1.5" : "min-h-[30px] py-1.5"}`}>
-          {name}
-          {kind === "line" ? <NeedsMark count={row.attentionCount} /> : null}
-          {kind === "line" ? <LiveMark count={row.liveCount} /> : null}
-          {ageMark}
+        <span className={`flex items-center gap-1.5 ${rich && busy ? "pt-1.5" : "min-h-[30px] py-1.5"}`}>
+          {/* A name longer than its column takes a second line before it is cut. */}
+          <span data-rail-name="" className={`line-clamp-2 min-w-0 flex-1 break-words text-[13px] leading-[18px] ${active ? "font-bold" : "font-semibold"} ${row.catalogOnly ? "text-muted" : ""}`}>{row.displayName}</span>
+          {rich ? null : <MarkColumns needs={row.attentionCount} live={row.liveCount} model={model} />}
+          <span data-rail-slot="age" className={SLOT_AGE}>{age}</span>
         </span>
-        {kind === "rich" && busy ? (
+        {kind === "ask" && question ? <span data-rail-ask="" className="-mt-0.5 block pb-1.5 text-[11.5px] leading-[15px] text-warning line-clamp-2">{question}</span> : null}
+        {rich && busy ? (
           <span className="block pb-1.5 pt-0.5">
             {row.attentionCount ? (
-              <span className="flex h-5 items-center gap-1.5">
-                <NeedsMark count={row.attentionCount} />
-                <span className="min-w-0 truncate text-[11.5px] text-warning">{row.asks ?? (row.attentionCount === 1 ? c("needsYouOne") : c("needsYou", { n: row.attentionCount }))}</span>
+              <span className="flex min-h-5 items-start gap-1.5 py-px">
+                <span className={SLOT_NEEDS}><NeedsMark count={row.attentionCount} /></span>
+                <span data-rail-ask="" className="min-w-0 pt-px text-[11.5px] leading-[15px] text-warning line-clamp-2">{question ?? waits}</span>
               </span>
             ) : null}
             {row.liveCount ? (
               <span className="flex h-5 items-center gap-1.5">
-                <span className="flex h-[18px] shrink-0 items-center gap-1 px-1.5">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" />
-                </span>
+                {/* The dot stands under the person glyph of the mark above it. */}
+                <span className={`${SLOT_NEEDS} pl-[6px]`}><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" /></span>
                 <span className="text-[11.5px] font-semibold tabular-nums text-success">{c("working", { n: row.liveCount })}</span>
                 <span className="flex items-center gap-1">{row.engines.map((engine) => <EngineMark key={engine} engine={engine} size={12} label={engine} />)}</span>
               </span>
@@ -283,13 +303,14 @@ function SystemBlock({ gauges = false }: { gauges?: boolean }) {
   return (
     <div className="shrink-0" data-rail-footer={folded ? "folded" : "open"}>
       <div className="flex items-center border-t border-border">
-        <button type="button" data-rail-footer-toggle="" aria-expanded={!folded} aria-label={t(folded ? "rail.footerShow" : "rail.footerHide")} title={t(folded ? "rail.footerShow" : "rail.footerHide")} onClick={toggleFold} className={`flex h-7 min-w-0 flex-1 items-center gap-1.5 px-3 text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS}`}>
+        <button type="button" data-rail-footer-toggle="" aria-expanded={!folded} aria-label={t(folded ? "rail.footerShow" : "rail.footerHide")} title={t(folded ? "rail.footerShow" : "rail.footerHide")} onClick={toggleFold} className={`flex h-7 min-w-0 flex-1 items-center gap-1.5 pl-[19px] pr-2 text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS}`}>
+          <span data-rail-label="">{t("rail.footerLabel")}</span>
           <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${folded ? "" : "rotate-90"}`} aria-hidden />
-          {t("rail.footerLabel")}
         </button>
         {folded ? null : (
-          <button type="button" data-rail-footer-detail="" aria-pressed={detail} aria-label={c(detail ? "compact" : "detail")} title={c(detail ? "compact" : "detail")} onClick={toggleDetail} className={`mr-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}>
-            <Rows3 className="h-3 w-3" aria-hidden />
+          /* The only way to every window and its reset time, so it is named in words. */
+          <button type="button" data-rail-footer-detail="" aria-pressed={detail} title={c(detail ? "compact" : "detail")} onClick={toggleDetail} className={`mr-1.5 flex h-[22px] shrink-0 items-center rounded-[7px] px-1.5 text-[10.5px] font-semibold text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}>
+            {c(detail ? "compactShort" : "detailShort")}
           </button>
         )}
       </div>
@@ -303,12 +324,13 @@ function SystemBlock({ gauges = false }: { gauges?: boolean }) {
   );
 }
 
-function RailHeader({ onHide, children }: { onHide?: () => void; children?: ReactNode }) {
+/** `beside` is the header of the sidebar opened next to the narrow rail, which already carries the mark and the menu. */
+function RailHeader({ onHide, children, beside = false }: { onHide?: () => void; children?: ReactNode; beside?: boolean }) {
   const { t } = useLocale();
   return (
-    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2 text-[13.5px] font-bold">
+    <header className={`flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 text-[13.5px] font-bold ${beside ? "pl-[19px]" : "pl-2"}`}>
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <DelegatusMark size={20} />
+        {beside ? null : <DelegatusMark size={20} />}
         <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
       </span>
       {children}
@@ -317,13 +339,13 @@ function RailHeader({ onHide, children }: { onHide?: () => void; children?: Reac
           <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
         </button>
       ) : null}
-      <RailHeaderMenu />
+      {beside ? null : <RailHeaderMenu />}
     </header>
   );
 }
 
 /** The whole rail at full width: header, filter and create, the project list, the system block. */
-function FullRail({ props, model, kind, headerExtra, start }: { props: ProjectRailProps; model: RailModel; kind: RowKind; headerExtra?: ReactNode; start?: "filter" | "create" | "archive" | null }) {
+function FullRail({ props, model, kind, headerExtra, start, beside = false }: { props: ProjectRailProps; model: RailModel; kind: RowKind; headerExtra?: ReactNode; start?: "filter" | "create" | "archive" | null; beside?: boolean }) {
   const { c, t } = useCopy();
   const [createOpen, setCreateOpen] = useState(start === "create");
   const [archiveOpen, setArchiveOpen] = useState(start === "archive");
@@ -332,11 +354,11 @@ function FullRail({ props, model, kind, headerExtra, start }: { props: ProjectRa
     if (start === "filter") filter.current?.focus();
   }, [start]);
   const { crowned, rest, archived, crowns, query, setQuery, firstRun } = model;
-  const row = (entry: RowFacts) => <ProjectRow key={entry.project} row={entry} kind={kind} props={props} crowned={crowns.has(entry.project)} />;
+  const row = (entry: RowFacts) => <ProjectRow key={entry.project} row={entry} kind={kind} props={props} model={model} crowned={crowns.has(entry.project)} />;
   const overview = props.selected === OVERVIEW;
   return (
     <>
-      <RailHeader onHide={props.onHide}>{headerExtra}</RailHeader>
+      <RailHeader onHide={props.onHide} beside={beside}>{headerExtra}</RailHeader>
       <div className="flex gap-1.5 px-2 pb-1 pt-2">
         <label className={`flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-[9px] border border-border bg-canvas px-2 focus-within:ring-2 focus-within:ring-accent/40`}>
           <Search className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
@@ -366,12 +388,14 @@ function FullRail({ props, model, kind, headerExtra, start }: { props: ProjectRa
           data-rail-overview=""
           aria-current={overview ? "page" : undefined}
           onClick={() => props.onSelect(OVERVIEW)}
-          className={`mb-1 flex min-h-[32px] w-full items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-left ${FOCUS} ${overview ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"}`}
+          className={`mb-1 flex min-h-[32px] w-full items-center gap-1.5 rounded-[10px] border px-2.5 py-1.5 text-left ${FOCUS} ${overview ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"}`}
         >
-          <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-          <span className={`min-w-0 flex-1 truncate text-[13px] ${overview ? "font-bold" : "font-semibold"}`}>{t("rail.overview")}</span>
-          <NeedsMark count={model.totalAttention} />
-          <LiveMark count={model.totalLive} />
+          {/* The grid follows the word, so Overview starts on the edge every name starts on. */}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span data-rail-label="" className={`min-w-0 truncate text-[13px] ${overview ? "font-bold" : "font-semibold"}`}>{t("rail.overview")}</span>
+            <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          </span>
+          {kind === "rich" ? <><NeedsMark count={model.totalAttention} /><LiveMark count={model.totalLive} /></> : <><MarkColumns needs={model.totalAttention} live={model.totalLive} model={model} /><span className={SLOT_AGE} /></>}
         </button>
         {crowned.length ? <SectionLabel icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden />}>{c("pinned")}</SectionLabel> : null}
         <FlipRow>
@@ -381,13 +405,12 @@ function FullRail({ props, model, kind, headerExtra, start }: { props: ProjectRa
         </FlipRow>
         {archived.length ? (
           <>
-            <button type="button" data-rail-archive="" className={`mt-1.5 flex h-6 w-full items-center gap-1.5 rounded-[8px] px-2.5 text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS}`} aria-expanded={archiveOpen} onClick={() => setArchiveOpen((value) => !value)}>
-              <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${archiveOpen ? "rotate-90" : ""}`} aria-hidden />
-              <Archive className="h-3 w-3 shrink-0" aria-hidden />
-              {t("rail.archive")}
+            <button type="button" data-rail-archive="" className={`mt-1.5 flex h-6 w-full items-center gap-1.5 rounded-[8px] px-[11px] text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS}`} aria-expanded={archiveOpen} onClick={() => setArchiveOpen((value) => !value)}>
+              <span data-rail-label="">{t("rail.archive")}</span>
               <span className="font-semibold tabular-nums">{archived.length}</span>
+              <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${archiveOpen ? "rotate-90" : ""}`} aria-hidden />
             </button>
-            {archiveOpen ? archived.map((entry) => <ProjectRow key={entry.project} row={entry} kind="line" props={{ ...props, onToggleCrown: undefined }} crowned={crowns.has(entry.project)} />) : null}
+            {archiveOpen ? archived.map((entry) => <ProjectRow key={entry.project} row={entry} kind={kind === "rich" ? "rich" : "line"} props={{ ...props, onToggleCrown: undefined }} model={model} crowned={crowns.has(entry.project)} />) : null}
           </>
         ) : null}
         {!model.active.length && !archived.length ? (
@@ -401,11 +424,14 @@ function FullRail({ props, model, kind, headerExtra, start }: { props: ProjectRa
   );
 }
 
+/** `?railask=1`: variant 1 with the question line of variant 3, the combination the note recommends. */
+const WITH_ASK = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("railask") === "1";
+
 function Variant1(props: ProjectRailProps) {
   const model = useRailModel(props);
   return (
     <aside data-rail-variant="1" className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
-      <FullRail props={props} model={model} kind="line" />
+      <FullRail props={props} model={model} kind={WITH_ASK() ? "ask" : "line"} />
     </aside>
   );
 }
@@ -452,10 +478,13 @@ function Tile({ row, props }: { row: RowFacts; props: ProjectRailProps }) {
 }
 
 /**
- * The narrow rail. At rest it is 56 px of tiles and gauges; resting the
- * pointer on it, or any of its three "open" controls, lays the full rail over
- * the board without moving the board, and the dock control keeps it open in
- * the layout. `?railopen=1` holds it open for a frame.
+ * The narrow rail. At rest it is 56 px of tiles and gauges. Resting the pointer
+ * on it, or any of its three "open" controls, lays the full sidebar beside it,
+ * over the board and without moving the board. The rail itself is never
+ * covered, so a click that follows the pause lands on the tile or the gauge
+ * under the pointer; that click also closes the sidebar, since the choice is
+ * made. The dock control keeps the sidebar open in the layout.
+ * `?railopen=1` holds it open for a frame.
  */
 function Variant2(props: ProjectRailProps) {
   const { c, t } = useCopy();
@@ -464,14 +493,23 @@ function Variant2(props: ProjectRailProps) {
   const held = typeof location !== "undefined" && new URLSearchParams(location.search).get("railopen") === "1";
   const [peek, setPeek] = useState<null | "hover" | "filter" | "create" | "archive">(held ? "hover" : null);
   const shell = useRef<HTMLElement | null>(null);
+  /* The rail's own tiles, gauges and menu: they act in place. */
+  const acting = useRef<HTMLDivElement | null>(null);
+  const flyout = useRef<HTMLDivElement | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const later = (next: typeof peek, delay: number) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setPeek((current) => {
-      /* A menu, a form or a panel the operator opened from the rail keeps it open. */
-      if (next === null && (held || shell.current?.querySelector('[aria-expanded="true"]:not([data-rail-footer-toggle]):not([data-rail-archive]), form, [data-rail-filter]:focus'))) return current;
+      /* A form or a panel the operator opened inside the sidebar keeps it open. */
+      if (next === null && (held || flyout.current?.querySelector('[aria-expanded="true"]:not([data-rail-footer-toggle]):not([data-rail-archive]), form, [data-rail-filter]:focus'))) return current;
+      /* A panel or the menu opened from the rail uses the space beside the rail. */
+      if (next !== null && current === null && acting.current?.querySelector('[aria-expanded="true"]:not([data-rail-footer-toggle])')) return current;
       return next;
     }), delay);
+  };
+  const shut = () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (!held) setPeek(null);
   };
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   useEffect(() => {
@@ -506,36 +544,38 @@ function Variant2(props: ProjectRailProps) {
       onPointerEnter={() => later(peek ?? "hover", 140)}
       onPointerLeave={() => later(null, 260)}
     >
-      <style>{'[data-rail-variant="2"] > div > div > [data-rail-menu-panel]{left:0;right:auto;top:auto;bottom:30px}'}</style>
+      <style>{"[data-rail-menu-slot] [data-rail-menu-panel]{left:100%;right:auto;top:auto;bottom:0;margin-left:14px}"}</style>
       <div className="flex h-10 shrink-0 items-center justify-center border-b border-border"><DelegatusMark size={20} /></div>
       <div className="flex shrink-0 flex-col items-center gap-0.5 pb-1 pt-1.5">
         <button type="button" data-rail-open="" className={railButton} title={c("open")} aria-label={c("open")} aria-expanded={peek !== null} onClick={() => setPeek("hover")}><PanelLeftOpen className="h-4 w-4" aria-hidden /></button>
         <button type="button" data-rail-open-filter="" className={railButton} title={c("find")} aria-label={c("find")} onClick={() => setPeek("filter")}><Search className="h-4 w-4" aria-hidden /></button>
         {props.onCreateProject ? <button type="button" data-rail-open-create="" className={railButton} title={t("rail.createProject")} aria-label={t("rail.createProject")} onClick={() => setPeek("create")}><FolderPlus className="h-4 w-4" aria-hidden /></button> : null}
       </div>
-      <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto border-t border-border px-1 pb-2 pt-2 [scrollbar-width:none]" aria-label={t("rail.projects")}>
-        <button type="button" data-rail-overview="" title={t("rail.overview")} aria-label={t("rail.overview")} aria-current={overview ? "page" : undefined} onClick={() => props.onSelect(OVERVIEW)} className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border ${FOCUS} ${overview ? "border-strong bg-canvas text-primary shadow-1" : "border-transparent text-muted hover:bg-canvas hover:text-primary"}`}>
-          <LayoutGrid className="h-4 w-4" aria-hidden />
-        </button>
-        <span className="my-0.5 h-px w-6 shrink-0 bg-border" />
-        <FlipRow className="flex flex-col items-center gap-1">
-          {model.crowned.length ? <Crown data-flip-key="__crown-label__" className="h-3 w-3 shrink-0 fill-crown text-crown" aria-label={c("pinned")} data-testid="crown-marker" /> : null}
-          {model.crowned.map((row) => <Tile key={row.project} row={row} props={props} />)}
-          {model.crowned.length && model.rest.length ? <span data-flip-key="__crown-divider__" className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
-          {model.rest.map((row) => <Tile key={row.project} row={row} props={props} />)}
-        </FlipRow>
-        {model.archived.length ? (
-          <button type="button" data-rail-archive="" title={`${t("rail.archive")} ${model.archived.length}`} aria-label={`${t("rail.archive")} ${model.archived.length}`} onClick={() => setPeek("archive")} className={`relative mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}>
-            <Archive className="h-4 w-4" aria-hidden />
-            <span className="absolute -right-1 -top-1 text-[9.5px] font-bold tabular-nums text-muted">{model.archived.length}</span>
+      <div ref={acting} className="flex min-h-0 flex-1 flex-col" onClickCapture={shut}>
+        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto border-t border-border px-1 pb-2 pt-2 [scrollbar-width:none]" aria-label={t("rail.projects")}>
+          <button type="button" data-rail-overview="" title={t("rail.overview")} aria-label={t("rail.overview")} aria-current={overview ? "page" : undefined} onClick={() => props.onSelect(OVERVIEW)} className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border ${FOCUS} ${overview ? "border-strong bg-canvas text-primary shadow-1" : "border-transparent text-muted hover:bg-canvas hover:text-primary"}`}>
+            <LayoutGrid className="h-4 w-4" aria-hidden />
           </button>
-        ) : null}
-      </nav>
-      <SystemBlock gauges />
-      <div data-rail-menu-slot="" className="flex shrink-0 items-center justify-center border-t border-border py-1.5"><RailHeaderMenu /></div>
+          <span className="my-0.5 h-px w-6 shrink-0 bg-border" />
+          <FlipRow className="flex flex-col items-center gap-1">
+            {model.crowned.length ? <Crown data-flip-key="__crown-label__" className="h-3 w-3 shrink-0 fill-crown text-crown" aria-label={c("pinned")} data-testid="crown-marker" /> : null}
+            {model.crowned.map((row) => <Tile key={row.project} row={row} props={props} />)}
+            {model.crowned.length && model.rest.length ? <span data-flip-key="__crown-divider__" className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
+            {model.rest.map((row) => <Tile key={row.project} row={row} props={props} />)}
+          </FlipRow>
+          {model.archived.length ? (
+            <button type="button" data-rail-archive="" title={`${t("rail.archive")} ${model.archived.length}`} aria-label={`${t("rail.archive")} ${model.archived.length}`} onClick={() => setPeek("archive")} className={`relative mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}>
+              <Archive className="h-4 w-4" aria-hidden />
+              <span className="absolute -right-1 -top-1 text-[9.5px] font-bold tabular-nums text-muted">{model.archived.length}</span>
+            </button>
+          ) : null}
+        </nav>
+        <SystemBlock gauges />
+        <div data-rail-menu-slot="" className="flex shrink-0 items-center justify-center border-t border-border py-1.5"><RailHeaderMenu /></div>
+      </div>
       {peek ? (
-        <div data-rail-flyout="" className={`absolute inset-y-0 left-0 flex w-[264px] flex-col border-r border-border bg-card shadow-2 ${Z.popover}`}>
-          <FullRail key={peek} props={props} model={model} kind="line" headerExtra={dock} start={peek === "hover" ? null : peek} />
+        <div ref={flyout} data-rail-flyout="" className={`absolute inset-y-0 left-full flex w-[248px] flex-col border-r border-border bg-card shadow-2 ${Z.popover}`}>
+          <FullRail key={peek} props={props} model={model} kind="line" headerExtra={dock} start={peek === "hover" ? null : peek} beside />
         </div>
       ) : null}
     </aside>
@@ -551,7 +591,7 @@ export function RailPrototypeFrame({ variant, children }: { variant: RailVariant
     <div className="flex h-full min-h-0 flex-col">
       <div data-rail-variant-strip={variant} className="flex shrink-0 items-center gap-2.5 bg-brand px-3 text-on-brand" style={{ height: RAIL_STRIP_HEIGHT }}>
         <span className="text-[17px] font-bold tabular-nums leading-none">{variant}</span>
-        <span className="text-[12.5px] font-semibold">{TITLES[lang][variant]}</span>
+        <span className="text-[12.5px] font-semibold">{TITLES[lang][variant]}{variant === 1 && WITH_ASK() ? `, ${COPY[lang].withAsk}` : ""}</span>
       </div>
       <div className="min-h-0 flex-1">
         <RailPrototypeContext.Provider value={variant === 0 ? null : DRAWINGS[variant]}>{children}</RailPrototypeContext.Provider>

@@ -17,6 +17,420 @@
       "missing": []
     }
   ],
+  "pointer": [
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "acme-ledger",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "harbor-docs",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "atlas",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "river-mesh",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "lantern-api",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "northwind-customer-data-platform-migration",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "tidal-forecast",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "copper-relay",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "marble-index",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "tile",
+      "name": "delta-sync",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "overview",
+      "name": "Огляд",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "gauge",
+      "name": "Сесії агентів і пам'ять",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "gauge",
+      "name": "Акаунти Claude — змінити або додати",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "gauge",
+      "name": "Акаунти Codex — змінити або додати",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "gauge",
+      "name": "Підключення Telegram",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1440x900",
+      "target": "menu",
+      "name": "Ще",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "tile",
+      "name": "acme-ledger",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "tile",
+      "name": "harbor-docs",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "tile",
+      "name": "atlas",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "tile",
+      "name": "river-mesh",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "tile",
+      "name": "lantern-api",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "overview",
+      "name": "Огляд",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "gauge",
+      "name": "Сесії агентів і пам'ять",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "gauge",
+      "name": "Акаунти Claude — змінити або додати",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "gauge",
+      "name": "Акаунти Codex — змінити або додати",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "gauge",
+      "name": "Підключення Telegram",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    },
+    {
+      "size": "1000x700",
+      "target": "menu",
+      "name": "Ще",
+      "sidebarOpenAtClick": true,
+      "targetUnderPointer": true,
+      "sidebar": {
+        "left": 55,
+        "right": 303
+      },
+      "done": true
+    }
+  ],
+  "covered": [
+    {
+      "size": "1440x900",
+      "from": 56,
+      "to": 304,
+      "mainLeft": 56,
+      "texts": [
+        "Огляд @72,41",
+        "15 гілок працюють у 4 проєктах · 2 в архіві · Ті @123,43",
+        "11 агентів працюють @89,100",
+        "· @209,100",
+        "5 чекають на вас @232,100",
+        "Вхідні @89,176",
+        "0 з 3 @137,176",
+        "Без задачі · 9 @150,211",
+        "Acme Ledger @110,254",
+        "Випускати експорт з виправленням округлення чи б @126,278",
+        "Потрібні ви @102,323",
+        "Випускати експорт з виправленням округлення чи б @120,359",
+        "чекає на вас @202,359",
+        "4 хв тому @227,375",
+        "Розмова без задачі @102,401",
+        "4 хв тому @102,433",
+        "запит дозволу @169,433",
+        "1 розмова @134,467",
+        "River Mesh @110,529",
+        "Яка з двох сіток зберігає старі ідентифікатори? @126,553",
+        "Потрібні ви @102,598",
+        "Яка з двох сіток зберігає старі ідентифікатори? @120,634",
+        "чекає на вас @202,634",
+        "11 хв тому @222,650",
+        "Розмова без задачі @102,677",
+        "11 хв тому @102,709",
+        "запит дозволу @174,709",
+        "1 розмова @134,743",
+        "Lantern API @110,804",
+        "Залишити маршрути v1 ще на один випуск? @126,829",
+        "Потрібні ви @102,874",
+        "Залишити маршрути v1 ще на один випуск? @120,910",
+        "чекає на вас @202,910",
+        "2 год тому @222,925"
+      ]
+    },
+    {
+      "size": "1000x700",
+      "from": 56,
+      "to": 304,
+      "mainLeft": 56,
+      "texts": [
+        "Огляд @72,41",
+        "15 гілок працюють у 4 проєктах · 2 в архіві · Ті @123,43",
+        "11 агентів працюють @85,82",
+        "· @205,82",
+        "5 чекають на вас @228,82",
+        "Потрібні ви @201,146",
+        "Без причини @271,146",
+        "Приховані @72,122",
+        "2 @174,129",
+        "Вхідні @72,187",
+        "3 @122,194",
+        "У роботі @144,187",
+        "8 @206,194",
+        "Очікують @228,187",
+        "2 @295,194",
+        "Вхідні @85,245",
+        "0 з 3 @133,246",
+        "Без задачі · 9 @176,280",
+        "Acme Ledger @106,323",
+        "Випускати експорт з виправленням округлення чи б @122,347",
+        "Потрібні ви @98,392",
+        "Випускати експорт з виправленням округлення чи б @116,428",
+        "чекає на вас @258,428",
+        "4 хв тому @283,444",
+        "Розмова без задачі @98,471",
+        "4 хв тому @219,473",
+        "запит дозволу @109,509",
+        "1 розмова @227,509",
+        "River Mesh @106,570",
+        "Яка з двох сіток зберігає старі ідентифікатори? @122,595",
+        "Потрібні ви @98,640",
+        "Яка з двох сіток зберігає старі ідентифікатори? @116,676",
+        "чекає на вас @258,676",
+        "11 хв тому @278,692",
+        "Розмова без задачі @98,718",
+        "11 хв тому @219,720"
+      ]
+    }
+  ],
   "readings": [
     {
       "frame": "v0-overview-1440x900-light-en",
@@ -26,6 +440,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -55,6 +481,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -84,6 +522,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -113,6 +563,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -142,6 +604,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -171,6 +645,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -200,6 +686,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -229,6 +727,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -258,6 +768,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -287,6 +809,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -316,6 +850,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -345,6 +891,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -374,6 +932,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -403,6 +973,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -432,6 +1014,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -461,6 +1055,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -490,6 +1096,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 787,
@@ -519,6 +1137,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 787,
@@ -548,6 +1178,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 787,
@@ -577,6 +1219,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 787,
@@ -606,6 +1260,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 587,
@@ -635,6 +1301,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 587,
@@ -664,6 +1342,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 587,
@@ -693,6 +1383,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 587,
@@ -722,6 +1424,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -751,6 +1465,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -780,6 +1506,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -809,6 +1547,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -838,6 +1588,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -867,6 +1629,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -896,6 +1670,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -925,6 +1711,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 136,
@@ -954,6 +1752,22 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 232,
+        "height": 437,
+        "inside": true
+      },
       "rail": {
         "width": 248,
         "listHeight": 336,
@@ -983,6 +1797,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 212,
@@ -1012,6 +1838,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1041,6 +1906,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1070,6 +1974,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1099,6 +2042,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1128,6 +2110,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1157,6 +2178,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1186,6 +2246,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1215,6 +2314,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1244,6 +2382,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1273,6 +2450,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1302,6 +2518,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1331,6 +2586,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1360,6 +2654,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1389,6 +2722,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1418,6 +2790,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1447,6 +2858,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
@@ -1476,6 +2926,24 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 789,
@@ -1505,6 +2973,24 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 789,
@@ -1534,6 +3020,24 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 789,
@@ -1563,6 +3067,24 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 789,
@@ -1592,6 +3114,24 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 589,
@@ -1621,6 +3161,24 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 589,
@@ -1650,6 +3208,24 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 589,
@@ -1679,6 +3255,24 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 589,
@@ -1708,12 +3302,51 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 16,
+        "rowsInView": 15,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1737,12 +3370,51 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 16,
+        "rowsInView": 15,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1766,12 +3438,51 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 16,
+        "rowsInView": 15,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1795,12 +3506,51 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 16,
+        "rowsInView": 15,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1824,12 +3574,51 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 10,
+        "rowsInView": 9,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1853,12 +3642,51 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 10,
+        "rowsInView": 9,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1882,12 +3710,51 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 10,
+        "rowsInView": 9,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1911,12 +3778,51 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 10,
+        "rowsInView": 9,
         "clippedNames": 1,
         "overflowX": false
       },
@@ -1940,6 +3846,49 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 232,
+        "height": 437,
+        "inside": true
+      },
       "rail": {
         "width": 248,
         "listHeight": 649,
@@ -1969,6 +3918,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 248,
         "listHeight": 525,
@@ -1991,6 +3979,1839 @@
       "pageErrors": []
     },
     {
+      "frame": "v1-ask-1440x900-light-en",
+      "variant": 1,
+      "state": "ask",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1440x900-light-uk",
+      "variant": 1,
+      "state": "ask",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1440x900-dark-en",
+      "variant": 1,
+      "state": "ask",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1440x900-dark-uk",
+      "variant": 1,
+      "state": "ask",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1000x700-light-en",
+      "variant": 1,
+      "state": "ask",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1000x700-light-uk",
+      "variant": 1,
+      "state": "ask",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1000x700-dark-en",
+      "variant": 1,
+      "state": "ask",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-1000x700-dark-uk",
+      "variant": 1,
+      "state": "ask",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1440x900-light-en",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 12,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1440x900-light-uk",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 12,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1440x900-dark-en",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 12,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1440x900-dark-uk",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 12,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1000x700-light-en",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1000x700-light-uk",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1000x700-dark-en",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-ask-many-1000x700-dark-uk",
+      "variant": 1,
+      "state": "ask-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-copilot-1440x900-light-uk",
+      "variant": 1,
+      "state": "copilot",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        },
+        {
+          "label": "CopilotAccount H",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 623,
+        "footerHeight": 195,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 26,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-copilot-accounts-1440x900-light-uk",
+      "variant": 1,
+      "state": "copilot-accounts",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        },
+        {
+          "label": "CopilotAccount H",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 247,
+        "height": 165,
+        "inside": true
+      },
+      "rail": {
+        "width": 248,
+        "listHeight": 459,
+        "footerHeight": 360,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 28,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-stale-1440x900-light-uk",
+      "variant": 1,
+      "state": "stale",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account BПровайдер обмежує частоту запитів. Наступна спроба о 11:58.",
+          "value": "",
+          "bar": null
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-detail-1440x900-light-uk",
+      "variant": 1,
+      "state": "detail",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 338,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-panel-accounts-1440x900-light-uk",
+      "variant": 1,
+      "state": "panel-accounts",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 400,
+        "height": 581,
+        "inside": true
+      },
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-panel-burndown-1440x900-light-uk",
+      "variant": 1,
+      "state": "panel-burndown",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 430,
+        "height": 278,
+        "inside": true
+      },
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 28,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-panel-cleanup-1440x900-light-uk",
+      "variant": 1,
+      "state": "panel-cleanup",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 430,
+        "height": 276,
+        "inside": true
+      },
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 30,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-panel-telegram-1440x900-light-uk",
+      "variant": 1,
+      "state": "panel-telegram",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [
+          130
+        ],
+        "live": [
+          168
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 320,
+        "height": 466,
+        "inside": true
+      },
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 29,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-empty-1440x900-light-uk",
+      "variant": 1,
+      "state": "empty",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 0,
+        "rowsInView": 0,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 13,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-loading-1440x900-light-uk",
+      "variant": 1,
+      "state": "loading",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 0,
+        "rowsInView": 0,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 13,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-unreachable-1440x900-light-uk",
+      "variant": 1,
+      "state": "unreachable",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 0,
+        "rowsInView": 0,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 14,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
       "frame": "v2-overview-1440x900-light-en",
       "variant": 2,
       "state": "overview",
@@ -1998,6 +5819,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2027,6 +5860,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2056,6 +5901,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2085,6 +5942,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2114,6 +5983,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2143,6 +6024,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2172,6 +6065,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2201,6 +6106,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2230,6 +6147,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2259,6 +6188,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2288,6 +6229,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2317,6 +6270,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2346,6 +6311,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2375,6 +6352,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2404,6 +6393,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2433,6 +6434,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2462,6 +6475,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 674,
@@ -2491,6 +6516,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 674,
@@ -2520,6 +6557,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 674,
@@ -2549,6 +6598,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 674,
@@ -2578,6 +6639,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 474,
@@ -2607,6 +6680,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 474,
@@ -2636,6 +6721,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 474,
@@ -2665,6 +6762,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 474,
@@ -2694,6 +6803,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2723,6 +6844,18 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2752,6 +6885,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2781,6 +6926,18 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2810,6 +6967,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2839,6 +7008,18 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2868,6 +7049,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2897,6 +7090,18 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -2926,6 +7131,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2939,7 +7183,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -2955,6 +7199,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2968,7 +7251,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -2984,6 +7267,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -2997,7 +7319,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3013,6 +7335,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3026,7 +7387,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3042,6 +7403,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3055,7 +7455,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3071,6 +7471,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3084,7 +7523,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3100,6 +7539,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3113,7 +7591,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3129,6 +7607,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3142,7 +7659,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 42,
+        "inRail": 41,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3158,6 +7675,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3171,7 +7727,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3187,6 +7743,45 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3200,7 +7795,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3216,6 +7811,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3229,7 +7863,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3245,6 +7879,45 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3258,7 +7931,7 @@
         "width": 1384
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3274,6 +7947,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3287,7 +7999,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3303,6 +8015,45 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3316,7 +8067,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3332,6 +8083,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3345,7 +8135,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3361,6 +8151,45 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 56,
         "listHeight": 318,
@@ -3374,7 +8203,7 @@
         "width": 944
       },
       "controls": {
-        "inRail": 74,
+        "inRail": 73,
         "smallest": {
           "width": 22,
           "height": 22
@@ -3390,64 +8219,49 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
-      "rail": {
-        "width": 56,
-        "listHeight": 518,
-        "footerHeight": 193,
-        "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 0,
-        "overflowX": true
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
       },
-      "main": {
-        "width": 1384
-      },
-      "controls": {
-        "inRail": 55,
-        "smallest": {
-          "width": 22,
-          "height": 22
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
         }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
       },
-      "pageErrors": []
-    },
-    {
-      "frame": "v2-create-1440x900-light-en",
-      "variant": 2,
-      "state": "create",
-      "width": 1440,
-      "height": 900,
-      "scheme": "light",
-      "lang": "en",
-      "rail": {
-        "width": 56,
-        "listHeight": 518,
-        "footerHeight": 193,
-        "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 0,
-        "overflowX": true
+      "panel": {
+        "width": 232,
+        "height": 437,
+        "inside": true
       },
-      "main": {
-        "width": 1384
-      },
-      "controls": {
-        "inRail": 46,
-        "smallest": {
-          "width": 22,
-          "height": 22
-        }
-      },
-      "pageErrors": []
-    },
-    {
-      "frame": "v2-rail-menu-1440x900-light-en",
-      "variant": 2,
-      "state": "rail-menu",
-      "width": 1440,
-      "height": 900,
-      "scheme": "light",
-      "lang": "en",
       "rail": {
         "width": 56,
         "listHeight": 518,
@@ -3470,6 +8284,381 @@
       "pageErrors": []
     },
     {
+      "frame": "v2-create-1440x900-light-en",
+      "variant": 2,
+      "state": "create",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [
+          74
+        ],
+        "needs": [
+          185
+        ],
+        "live": [
+          223
+        ]
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-rail-menu-1440x900-light-en",
+      "variant": 2,
+      "state": "rail-menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 232,
+        "height": 437,
+        "inside": true
+      },
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 29,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-copilot-1440x900-light-uk",
+      "variant": 2,
+      "state": "copilot",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 56,
+        "listHeight": 480,
+        "footerHeight": 231,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 17,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-copilot-accounts-1440x900-light-uk",
+      "variant": 2,
+      "state": "copilot-accounts",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 280,
+        "height": 166,
+        "inside": true
+      },
+      "rail": {
+        "width": 56,
+        "listHeight": 480,
+        "footerHeight": 231,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 19,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-stale-1440x900-light-uk",
+      "variant": 2,
+      "state": "stale",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-panel-accounts-1440x900-light-uk",
+      "variant": 2,
+      "state": "panel-accounts",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 400,
+        "height": 581,
+        "inside": true
+      },
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 37,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-panel-cleanup-1440x900-light-uk",
+      "variant": 2,
+      "state": "panel-cleanup",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 430,
+        "height": 276,
+        "inside": true
+      },
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 21,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-panel-telegram-1440x900-light-uk",
+      "variant": 2,
+      "state": "panel-telegram",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "edges": {
+        "text": [],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 0,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 320,
+        "height": 466,
+        "inside": true
+      },
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 20,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
       "frame": "v3-overview-1440x900-light-en",
       "variant": 3,
       "state": "overview",
@@ -3477,13 +8666,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3506,13 +8730,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3535,13 +8794,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3564,13 +8858,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3593,13 +8922,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 5,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3622,13 +8986,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 5,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3651,13 +9050,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 5,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3680,13 +9114,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 5,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3709,13 +9178,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3738,13 +9242,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3767,13 +9306,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3796,13 +9370,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3825,13 +9434,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3854,13 +9498,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3883,13 +9562,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3912,13 +9626,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 6,
-        "rowsInView": 6,
-        "clippedNames": 4,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3941,13 +9690,27 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 789,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3970,13 +9733,27 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 789,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -3999,13 +9776,27 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 789,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4028,13 +9819,27 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 789,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4057,13 +9862,27 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 589,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4086,13 +9905,27 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 589,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4115,13 +9948,27 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 589,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4144,13 +9991,27 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [],
+      "asks": {
+        "shown": 3,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 589,
         "footerHeight": 29,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4173,13 +10034,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 11,
-        "clippedNames": 5,
+        "rowsInView": 8,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4202,13 +10098,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 11,
-        "clippedNames": 5,
+        "rowsInView": 8,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4231,13 +10162,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 11,
-        "clippedNames": 5,
+        "rowsInView": 8,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4260,13 +10226,48 @@
       "height": 900,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 11,
-        "clippedNames": 5,
+        "rowsInView": 8,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4289,13 +10290,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 5,
-        "clippedNames": 5,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4318,13 +10354,48 @@
       "height": 700,
       "scheme": "light",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 5,
-        "clippedNames": 5,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4347,13 +10418,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 5,
-        "clippedNames": 5,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4376,13 +10482,48 @@
       "height": 700,
       "scheme": "dark",
       "lang": "uk",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB вільно",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB вільно",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "лишилось 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "лишилось 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 4,
+        "cut": 1,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 449,
         "footerHeight": 169,
         "rows": 16,
-        "rowsInView": 5,
-        "clippedNames": 5,
+        "rowsInView": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4405,13 +10546,52 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": {
+        "width": 232,
+        "height": 437,
+        "inside": true
+      },
       "rail": {
         "width": 264,
         "listHeight": 649,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {
@@ -4434,13 +10614,48 @@
       "height": 900,
       "scheme": "light",
       "lang": "en",
+      "edges": {
+        "text": [
+          19
+        ],
+        "needs": [],
+        "live": []
+      },
+      "meters": [
+        {
+          "label": "RAM",
+          "value": "9.0 GiB free",
+          "bar": 28.1
+        },
+        {
+          "label": "Swap",
+          "value": "7.0 GiB free",
+          "bar": 87.5
+        },
+        {
+          "label": "Account A",
+          "value": "left 12%",
+          "bar": 12
+        },
+        {
+          "label": "Account B",
+          "value": "left 65%",
+          "bar": 65
+        }
+      ],
+      "asks": {
+        "shown": 3,
+        "cut": 0,
+        "cutWithoutTooltip": 0
+      },
+      "panel": null,
       "rail": {
         "width": 264,
         "listHeight": 525,
         "footerHeight": 169,
         "rows": 6,
         "rowsInView": 6,
-        "clippedNames": 4,
+        "clippedNames": 0,
         "overflowX": false
       },
       "main": {

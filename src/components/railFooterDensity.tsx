@@ -9,22 +9,30 @@ import type { ReactNode } from "react";
  */
 export type RailFooterDensity = "full" | "line" | "gauge";
 
-/** The share of a resource already spent: fuller is worse in every block. */
-export function PressureBar({ percent, color, className = "w-10" }: { percent: number | null; color: string; className?: string }) {
+/** Where a footer line starts: the left edge the rail's project names and section labels share. */
+export const LINE_EDGE = "pl-[19px] pr-3";
+
+/**
+ * The share of a resource still left: a shorter bar is worse in every block.
+ * It always stands beside a reading that names the same share ("9.0 GiB free",
+ * "left 12%"), so the number and the bar say one thing.
+ */
+export function ReserveBar({ percent, color, className = "w-10" }: { percent: number | null; color: string; className?: string }) {
+  const share = percent === null ? null : Math.max(0, Math.min(100, percent));
   return (
-    <span aria-hidden className={`block h-[4px] shrink-0 overflow-hidden rounded-full bg-sunken ${className}`}>
-      {percent === null ? null : <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, percent))}%`, backgroundColor: color }} />}
+    <span aria-hidden data-meter-bar={share === null ? "" : Math.round(share)} className={`block h-[4px] shrink-0 overflow-hidden rounded-full bg-sunken ${className}`}>
+      {share === null ? null : <span className="block h-full rounded-full" style={{ width: `${share}%`, backgroundColor: color }} />}
     </span>
   );
 }
 
-/** One footer line: a name in the first column, a reading and its bar at the right edge. */
+/** One footer line: a name in the first column, what is left and its bar at the right edge. */
 export function MeterLine({ label, value, percent, color }: { label: ReactNode; value: ReactNode; percent: number | null; color: string }) {
   return (
-    <span className="flex h-[22px] items-center gap-2">
+    <span data-meter-line="" className="flex h-[22px] items-center gap-2">
       <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{label}</span>
-      <span className="shrink-0 text-[11px] tabular-nums text-muted">{value}</span>
-      <PressureBar percent={percent} color={color} />
+      <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{value}</span>
+      <ReserveBar percent={percent} color={color} />
     </span>
   );
 }
@@ -34,8 +42,8 @@ export function MeterGauge({ mark, percent, color, second }: { mark: ReactNode; 
   return (
     <span className={`flex w-10 flex-col items-center justify-center ${second ? "h-10 gap-[3px]" : "h-9 gap-[5px]"}`}>
       <span className="flex h-3.5 items-center text-[9.5px] font-bold leading-none text-secondary">{mark}</span>
-      <PressureBar percent={percent} color={color} className="w-6" />
-      {second ? <PressureBar percent={second.percent} color={second.color} className="w-6" /> : null}
+      <ReserveBar percent={percent} color={color} className="w-6" />
+      {second ? <ReserveBar percent={second.percent} color={second.color} className="w-6" /> : null}
     </span>
   );
 }

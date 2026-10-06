@@ -18,7 +18,7 @@ import { formatQuotaAsOf, localeBcp47 as bcp47, windowLabel } from "./rateLimit"
 import { engineTintOf, fmtAge } from "./utils";
 import { barColor, LimitRow } from "./LimitRow";
 import { EngineMark } from "./EngineMark";
-import { GAUGE_BUTTON, MeterGauge, PressureBar, type RailFooterDensity } from "./railFooterDensity";
+import { GAUGE_BUTTON, MeterGauge, ReserveBar, type RailFooterDensity } from "./railFooterDensity";
 
 const POLL_MS = 60_000;
 
@@ -271,8 +271,11 @@ function EngineLimitsBlock({
       accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
       ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
     ].filter(Boolean).join(" · ") : "";
-    const summary = [label, activeLabel, accountLimits?.plan, windows || visibleFailureReason || (accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), effectiveStaleHint].filter(Boolean).join(" · ");
-    const spent = effective ? 100 - effective.percent : null;
+    /* Why the line is dimmed or carries the amber dot: an old reading, or a read that failed. */
+    const staleReason = [effectiveStaleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
+    const summary = [label, activeLabel, accountLimits?.plan, windows || (visibleFailureReason ? null : accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), staleReason].filter(Boolean).join(" · ");
+    /* The line says what is left of the tightest window, and the bar draws that same share. */
+    const left = effective ? effective.percent : null;
     const color = effective ? barColor(effective.percent, tint.color) : tint.color;
     const panels = (
       <>
@@ -283,8 +286,9 @@ function EngineLimitsBlock({
     if (gauge) {
       return (
         <div ref={containerRef} className="relative" data-engine-limits={engine}>
-          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`${GAUGE_BUTTON} ${anyStale ? "opacity-60" : ""}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
-            <MeterGauge mark={<EngineMark engine={engine} size={14} />} percent={spent} color={color} />
+          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`relative ${GAUGE_BUTTON} ${anyStale ? "opacity-60" : ""}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+            <MeterGauge mark={<EngineMark engine={engine} size={14} />} percent={left} color={color} />
+            {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warning" /> : null}
           </button>
           {panels}
         </div>
@@ -292,21 +296,21 @@ function EngineLimitsBlock({
     }
     return (
       <div ref={containerRef} className="relative" data-engine-limits={engine}>
-        <div className={`flex h-[26px] items-center gap-1 px-1.5 ${anyStale ? "opacity-60" : ""}`}>
+        <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
           <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className="flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
             {/* The mark names the engine here, as it does on a card; the words go to the account. */}
             <EngineMark engine={engine} size={12} label={label} />
             <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
             {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
-            {stale || visibleFailureReason ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : null}
+            {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : null}
           </button>
           {hasWindows && effective ? (
-            <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-2 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
-              <span className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
-              <PressureBar percent={spent} color={color} />
+            <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
+              <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
+              <ReserveBar percent={left} color={color} />
             </button>
           ) : (
-            <span className="shrink-0 truncate px-1.5 text-[10px] text-muted">{accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet")}</span>
+            <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 max-w-[60%] shrink-0 truncate px-1.5 text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
           )}
         </div>
         {panels}

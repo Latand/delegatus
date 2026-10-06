@@ -17976,7 +17976,9 @@ describe("the left sidebar, numbered design variants", () => {
   const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
   const CROP = 320;
 
-  interface State { name: string; query: string; folded?: boolean; click?: string; variants?: readonly number[]; everywhere: boolean }
+  /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest once, at 1440x900 light, in `lang`. */
+  interface State { name: string; query: string; folded?: boolean; click?: string; first?: boolean; bare?: boolean; variants?: readonly number[]; everywhere: boolean; lang?: "en" | "uk" }
+  const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
   const STATES: readonly State[] = [
     { name: "overview", query: "rail=few&railview=overview", everywhere: true },
     { name: "selected", query: "rail=few", everywhere: true },
@@ -17987,11 +17989,36 @@ describe("the left sidebar, numbered design variants", () => {
     { name: "menu", query: "rail=few&railopen=1", click: "[data-rail-menu]", everywhere: false },
     { name: "create", query: "rail=few&railopen=1", click: '[data-testid="rail-create-project"]', everywhere: false },
     { name: "rail-menu", query: "rail=few", click: "[data-rail-menu-slot] [data-rail-menu]", variants: [2], everywhere: false },
+    /* Variant 1 with the question line of variant 3: the combination the note recommends. */
+    { name: "ask", query: "rail=few&railask=1", variants: [1], everywhere: true },
+    { name: "ask-many", query: "rail=many&railask=1", variants: [1], everywhere: true },
+    /* The states "every function is kept" rests on: in variant 1's lines and on variant 2's gauges. */
+    { name: "copilot", query: "rail=few&railstate=copilot", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "copilot-accounts", query: "rail=few&railstate=copilot", click: '[data-engine-limits="copilot"] button', first: true, variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "stale", query: "rail=few&railstate=stale", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "detail", query: "rail=few", click: "[data-rail-footer-detail]", variants: [1], everywhere: false, lang: "uk" },
+    { name: "panel-accounts", query: "rail=few", click: ACCOUNT, first: true, variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "panel-burndown", query: "rail=few", click: ACCOUNT, variants: [1], everywhere: false, lang: "uk" },
+    { name: "panel-cleanup", query: "rail=few", click: "[data-resources-footer] > button", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "empty", query: "rail=few&railstate=empty&railview=overview", variants: [1], everywhere: false, lang: "uk" },
+    { name: "loading", query: "rail=few&railstate=loading", bare: true, variants: [1], everywhere: false, lang: "uk" },
+    { name: "unreachable", query: "rail=few&railstate=unreachable", bare: true, variants: [1], everywhere: false, lang: "uk" },
   ];
+  /* The fixture's machine: what a memory line's amount is a share of. */
+  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8 };
 
   interface Reading {
     frame: string; variant: number; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
     rail: { width: number; listHeight: number; footerHeight: number; rows: number; rowsInView: number; clippedNames: number; overflowX: boolean };
+    /** The left edge of every name and label, and of each mark column: one value each when they line up. */
+    edges: { text: number[]; needs: number[]; live: number[] };
+    /** A footer line: the share its bar draws, and the reading beside the bar. */
+    meters: { label: string; value: string; bar: number | null }[];
+    /** The question lines: how many are cut, and how many of the cut ones the row's tooltip does not complete. */
+    asks: { shown: number; cut: number; cutWithoutTooltip: number };
+    /** A panel opened in this frame, and whether all of it is inside the window. */
+    panel: { width: number; height: number; inside: boolean } | null;
     main: { width: number };
     controls: { inRail: number; smallest: { width: number; height: number } | null };
     pageErrors: string[];
@@ -18003,17 +18030,33 @@ describe("the left sidebar, numbered design variants", () => {
     const footer = rail.querySelector<HTMLElement>("[data-rail-footer]");
     const listBox = list?.getBoundingClientRect() ?? null;
     const rows = list ? [...list.querySelectorAll<HTMLElement>("[data-flip-key]:not([data-flip-key^='__'])")] : [];
-    const names = list ? [...list.querySelectorAll<HTMLElement>(".truncate")] : [];
+    const names = list ? [...list.querySelectorAll<HTMLElement>("[data-rail-name], .truncate")] : [];
     const controls = [...rail.querySelectorAll<HTMLElement>("button, a, input")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
     const smallest = controls.reduce<DOMRect | null>((least, box) => (!least || box.width * box.height < least.width * least.height ? box : least), null);
+    const lefts = (selector: string) => [...new Set([...rail.querySelectorAll<HTMLElement>(selector)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => Math.round(box.left * 2) / 2))].sort((a, b) => a - b);
+    const asks = [...rail.querySelectorAll<HTMLElement>("[data-rail-ask]")];
+    const cut = asks.filter((ask) => ask.scrollHeight > ask.clientHeight + 1 || ask.scrollWidth > ask.clientWidth + 1);
+    const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [data-rail-menu-panel], [data-resources-panel]')].map((element) => element.getBoundingClientRect()).find((box) => box.width > 0) ?? null;
     return {
+      edges: { text: lefts("nav [data-rail-name], nav [data-rail-label], [data-rail-footer] [data-rail-label]"), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]') },
+      meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
+        const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+        const fill = track?.firstElementChild as HTMLElement | null;
+        return {
+          label: (line.querySelector("[data-meter-value]") ? line.textContent!.replace(line.querySelector("[data-meter-value]")!.textContent!, "") : line.textContent!).trim(),
+          value: line.querySelector("[data-meter-value]")?.textContent?.trim() ?? "",
+          bar: track && fill ? Math.round((1000 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width) / 10 : null,
+        };
+      }),
+      asks: { shown: asks.length, cut: cut.length, cutWithoutTooltip: cut.filter((ask) => !(ask.closest("button")?.title ?? "").includes(ask.textContent ?? "\u0000")).length },
+      panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
       rail: {
         width: Math.round(rail.getBoundingClientRect().width),
         listHeight: Math.round(listBox?.height ?? 0),
         footerHeight: Math.round(footer?.getBoundingClientRect().height ?? 0),
         rows: rows.length,
         rowsInView: listBox ? rows.filter((row) => { const box = row.getBoundingClientRect(); return box.top >= listBox.top - 1 && box.bottom <= listBox.bottom + 1; }).length : 0,
-        clippedNames: names.filter((name) => name.scrollWidth > name.clientWidth + 1).length,
+        clippedNames: names.filter((name) => name.scrollWidth > name.clientWidth + 1 || name.scrollHeight > name.clientHeight + 1).length,
         overflowX: rail.scrollWidth > rail.clientWidth + 1,
       },
       main: { width: Math.round(document.querySelector<HTMLElement>("main")?.getBoundingClientRect().width ?? 0) },
@@ -18133,11 +18176,13 @@ describe("the left sidebar, numbered design variants", () => {
     const browser = await chromium.connect(browserServer.wsEndpoint());
     const readings: Reading[] = [];
     const critiques: Awaited<ReturnType<typeof critique>>[] = [];
+    const pointer: { size: string; target: string; name: string; sidebarOpenAtClick: boolean; targetUnderPointer: boolean; sidebar: { left: number; right: number } | null; done: boolean }[] = [];
+    const covered: { size: string; from: number; to: number; mainLeft: number; texts: string[] }[] = [];
     const failures: string[] = [];
     try {
       for (const variant of [0, 1, 2, 3]) for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (state.variants && !state.variants.includes(variant)) continue;
-        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && lang === "en")) continue;
+        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && lang === (state.lang ?? "en"))) continue;
         const frame = `v${variant}-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
         if (ONLY && !ONLY.test(frame)) continue;
         const context = await browser.newContext({ viewport: { width: size.width, height: size.height + STRIP }, colorScheme: scheme, reducedMotion: "reduce" });
@@ -18153,21 +18198,114 @@ describe("the left sidebar, numbered design variants", () => {
         try {
           await page.goto(`${server.base}?scenario=tier-limits&railv=${variant}&${state.query}`);
           await page.waitForSelector("aside:not([data-orchestrator-dock])", { timeout: 20_000 });
-          await page.waitForSelector("main", { timeout: 20_000 });
+          /* A list that never loads or cannot be reached has no board to wait for. */
+          if (!state.bare) await page.waitForSelector("main", { timeout: 20_000 });
           /* The resources probe starts 1.5 s after mount by design; an open footer is read once its blocks are drawn. */
           if (!state.folded) await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
           await page.waitForSelector("[data-engine-limits], [data-rail-footer] button[aria-haspopup='dialog']", { state: state.folded ? "detached" : "attached", timeout: 20_000 });
-          await page.waitForTimeout(state.folded ? 2_200 : 700);
+          await page.waitForTimeout(state.folded ? 2_200 : state.bare ? 2_500 : 700);
           if (state.click) {
-            await page.locator(state.click).last().click();
-            await page.waitForTimeout(250);
+            const target = page.locator(state.click);
+            await (state.first ? target.first() : target.last()).click();
+            await page.waitForTimeout(600);
           }
           await page.screenshot({ path: path.join(OUT, `${frame}.png`) });
-          readings.push({ frame, variant, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page)), pageErrors });
+          const reading: Reading = { frame, variant, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page)), pageErrors };
+          readings.push(reading);
           if (pageErrors.length) failures.push(`${frame}: ${pageErrors.join(" | ")}`);
+          if (variant > 0) {
+            /* Names and labels share one left edge, and each mark has one column. */
+            for (const [what, values] of Object.entries(reading.edges)) if (values.length > 1) failures.push(`${frame}: ${what} starts at ${values.join(", ")} px`);
+            /* A bar draws the share the reading beside it names. */
+            for (const meter of reading.meters) {
+              if (meter.bar === null) continue;
+              const percent = /(\d+(?:[.,]\d+)?)\s*%/.exec(meter.value);
+              const amount = /(\d+(?:[.,]\d+)?)\s*GiB/.exec(meter.value);
+              const named = percent ? Number(percent[1]!.replace(",", ".")) : amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null;
+              if (named === null) failures.push(`${frame}: the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
+              else if (Math.abs(named - meter.bar) > 2) failures.push(`${frame}: "${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
+            }
+            if (reading.asks.cutWithoutTooltip) failures.push(`${frame}: ${reading.asks.cutWithoutTooltip} cut question(s) the tooltip does not complete`);
+            /* A panel and the narrow rail's opened sidebar lie outside the sidebar's box by design. */
+            if (reading.rail.overflowX && !reading.panel && !(variant === 2 && state.query.includes("railopen"))) failures.push(`${frame}: the sidebar is wider than its box`);
+            if (state.click && state.name !== "detail" && state.name !== "create" && !reading.panel) failures.push(`${frame}: nothing opened`);
+            if (reading.panel && !reading.panel.inside) failures.push(`${frame}: the opened panel leaves the window`);
+          }
         } catch (error) {
           failures.push(`${frame}: ${(error as Error).message.split("\n")[0]}`);
           await page.screenshot({ path: path.join(OUT, `${frame}.failed.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+      /* Variant 2 with a pointer: resting on the rail opens the sidebar beside it, and the click that follows still lands on what is under the pointer. */
+      if (!ONLY || ONLY.test("pointer")) for (const size of SIZES) {
+        const context = await browser.newContext({ viewport: { width: size.width, height: size.height + STRIP }, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(() => { try { localStorage.setItem("llv_lang", "uk"); localStorage.setItem("llv:rail-footer:v1", "open"); } catch { /* defaults */ } });
+        const page = await context.newPage();
+        try {
+          await page.goto(`${server.base}?scenario=tier-limits&railv=2&rail=many`);
+          await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
+          await page.waitForSelector("[data-engine-limits]", { timeout: 20_000 });
+          await page.waitForTimeout(700);
+          const targets = await page.evaluate(() => {
+            const rail = document.querySelector<HTMLElement>('[data-rail-variant="2"]')!;
+            const nav = rail.querySelector("nav")!.getBoundingClientRect();
+            const mark = (elements: Element[], kind: string) => elements.map((element, index) => {
+              element.setAttribute("data-pointer-target", `${kind}-${index}`);
+              const box = element.getBoundingClientRect();
+              return { id: `${kind}-${index}`, kind, name: element.getAttribute("data-rail-project") ?? element.getAttribute("aria-label") ?? kind, x: box.left + box.width / 2, y: box.top + box.height / 2, top: box.top, bottom: box.bottom };
+            });
+            return [
+              ...mark([...rail.querySelectorAll("nav [data-rail-project]")], "tile").filter((target) => target.top >= nav.top && target.bottom <= nav.bottom),
+              ...mark([...rail.querySelectorAll("nav [data-rail-overview]")], "overview"),
+              ...mark([...rail.querySelectorAll("nav [data-rail-archive]")], "archive").filter((target) => target.top >= nav.top && target.bottom <= nav.bottom),
+              ...mark([...rail.querySelectorAll("[data-rail-footer] button:not([data-rail-footer-toggle])")], "gauge"),
+              ...mark([...rail.querySelectorAll("[data-rail-menu-slot] [data-rail-menu]")], "menu"),
+            ];
+          });
+          for (const target of targets) {
+            /* Leave the rail, come back onto the target, rest 300 ms, click. */
+            await page.mouse.move(size.width - 200, 400);
+            await page.waitForTimeout(350);
+            await page.mouse.move(target.x, target.y, { steps: 4 });
+            await page.waitForTimeout(300);
+            const before = await page.evaluate(({ id, x, y }) => ({
+              open: document.querySelector('[data-rail-variant="2"]')!.getAttribute("data-rail-state") === "open",
+              under: document.elementFromPoint(x, y)?.closest("[data-pointer-target]")?.getAttribute("data-pointer-target") === id,
+              flyout: (() => { const box = document.querySelector("[data-rail-flyout]")?.getBoundingClientRect(); return box ? { left: Math.round(box.left), right: Math.round(box.right) } : null; })(),
+            }), target);
+            await page.mouse.click(target.x, target.y);
+            await page.waitForTimeout(350);
+            const after = await page.evaluate(({ id, kind }) => {
+              const element = document.querySelector<HTMLElement>(`[data-pointer-target="${id}"]`);
+              const rail = document.querySelector<HTMLElement>('[data-rail-variant="2"]')!;
+              if (kind === "tile" || kind === "overview") return { done: element?.getAttribute("aria-current") === "page", selected: [...rail.querySelectorAll('nav [aria-current="page"]')].length };
+              if (kind === "archive") return { done: rail.querySelector("[data-rail-flyout] [data-rail-archive]")?.getAttribute("aria-expanded") === "true", selected: 1 };
+              const panel = [...(kind === "menu" ? rail.querySelectorAll<HTMLElement>("[data-rail-menu-panel]") : (element?.parentElement?.querySelectorAll<HTMLElement>('[role="dialog"], [data-resources-panel]') ?? []))].map((entry) => entry.getBoundingClientRect()).find((box) => box.width > 0);
+              const top = panel ? document.elementFromPoint(panel.left + panel.width / 2, panel.top + 12) : null;
+              return { done: element?.getAttribute("aria-expanded") === "true" && Boolean(panel) && Boolean(top?.closest('[role="dialog"], [data-rail-menu-panel], [data-resources-panel]')) && !rail.querySelector("[data-rail-flyout]"), selected: 1 };
+            }, target);
+            pointer.push({ size: `${size.width}x${size.height}`, target: target.kind, name: target.name, sidebarOpenAtClick: before.open, targetUnderPointer: before.under, sidebar: before.flyout, done: after.done });
+            if (!before.open || !before.under || !after.done || after.selected !== 1) failures.push(`pointer ${size.width}x${size.height}: ${target.kind} "${target.name}" open=${before.open} under=${before.under} done=${after.done}`);
+            /* A panel or a menu is closed the way it was opened before the next target. */
+            if (target.kind === "gauge" || target.kind === "menu") { await page.mouse.click(target.x, target.y); await page.waitForTimeout(150); }
+          }
+          /* What the opened sidebar lies over, by the text it hides. */
+          await page.mouse.move(size.width - 200, 400);
+          await page.waitForTimeout(350);
+          const hidden = await page.evaluate(() => {
+            const texts: string[] = [];
+            for (const element of document.querySelectorAll<HTMLElement>("main *, [data-orchestrator-dock] *")) {
+              const own = [...element.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent!.trim()).join(" ").trim();
+              const box = element.getBoundingClientRect();
+              if (own && box.width > 0 && box.left < 56 + 248 && box.top < innerHeight) texts.push(`${own.slice(0, 48)} @${Math.round(box.left)},${Math.round(box.top)}`);
+            }
+            return { from: 56, to: 56 + 248, mainLeft: Math.round(document.querySelector("main")!.getBoundingClientRect().left), texts: texts.slice(0, 40) };
+          });
+          covered.push({ size: `${size.width}x${size.height}`, ...hidden });
+        } catch (error) {
+          failures.push(`pointer ${size.width}x${size.height}: ${(error as Error).message.split("\n")[0]}`);
         } finally {
           await context.close();
         }
@@ -18211,8 +18349,16 @@ describe("the left sidebar, numbered design variants", () => {
         }
         await sheet(path.join(OUT, `sheet-variant-${variant}.png`), combos.length, cells);
         const extras = [];
-        for (const state of STATES.filter((entry) => !entry.everywhere)) extras.push(await cell(`${variant} · ${state.name} · 1440x900 · light · en`, `v${variant}-${state.name}-1440x900-light-en`, 0.6));
+        for (const state of STATES.filter((entry) => !entry.everywhere && !entry.lang && (!entry.variants || entry.variants.includes(variant)))) extras.push(await cell(`${variant} · ${state.name} · 1440x900 · light · en`, `v${variant}-${state.name}-1440x900-light-en`, 0.6));
         await sheet(path.join(OUT, `sheet-variant-${variant}-menu-and-create.png`), extras.length, extras);
+        /* The states behind "every function is kept": the left part of each frame at full size. */
+        const kept = [];
+        for (const state of STATES.filter((entry) => entry.lang && entry.variants?.includes(variant))) {
+          const file = path.join(OUT, `v${variant}-${state.name}-1440x900-light-${state.lang}.png`);
+          const data = fs.existsSync(file) ? await sharp(file).extract({ left: 0, top: 0, width: 760, height: 900 + STRIP }).png().toBuffer() : null;
+          kept.push({ label: `${variant} · ${state.name} · 1440x900 · light · ${state.lang}`, picture: data, width: 760, height: data ? 900 + STRIP : 60 });
+        }
+        if (kept.length) await sheet(path.join(OUT, `sheet-variant-${variant}-states.png`), 4, kept);
       }
       /* Today beside all three: whole frames for one combination, then the rails alone at full size for every combination. */
       const columns = [[0, ""], [1, ""], [2, ""], [2, "open"], [3, ""]] as const;
@@ -18232,7 +18378,7 @@ describe("the left sidebar, numbered design variants", () => {
         await sheet(path.join(OUT, `sheet-compare-rails-${size.width}x${size.height}-${scheme}-${lang}.png`), columns.length, rails);
       }
       fs.mkdirSync(path.resolve("evidence/sidebar-redesign"), { recursive: true });
-      fs.writeFileSync(path.resolve("evidence/sidebar-redesign/measurements.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", strip: STRIP, critiques, readings, failures }, null, 2)}\n`);
+      fs.writeFileSync(path.resolve("evidence/sidebar-redesign/measurements.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", strip: STRIP, critiques, pointer, covered, readings, failures }, null, 2)}\n`);
     }
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);

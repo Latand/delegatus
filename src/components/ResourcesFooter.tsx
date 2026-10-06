@@ -7,7 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
-import { GAUGE_BUTTON, MeterGauge, MeterLine, type RailFooterDensity } from "./railFooterDensity";
+import { GAUGE_BUTTON, LINE_EDGE, MeterGauge, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -191,10 +191,23 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
 
-  /* The share of memory spent, so a compact bar reads like every other compact bar: fuller is worse. */
-  const reading = system
-    ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}${system.swapTotal > 0 ? ` · ${t("resources.swap")} ${t("resources.used", { amount: fmtBytes(system.swapUsed) })}` : ""}${viewer ? ` · ${t("resources.viewer")} ${viewerAmount(viewer, t)}` : ""} · ${t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}`
-    : t("resources.title");
+  /* Why the amber dot is lit: the readings are old, or the session list is. */
+  const staleReason = snap.staleSince
+    ? t("resources.stale", { stale: fmtAge(snap.staleSince) })
+    : sessionsStale
+      ? sessionsCapturedAt
+        ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
+        : t("resources.sessionsUnavailable")
+      : null;
+  /* A compact line names what is left and draws that same share, so the number and the bar agree. */
+  const swapFree = system ? system.swapTotal - system.swapUsed : 0;
+  const reading = [
+    system ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}` : t("resources.title"),
+    system && system.swapTotal > 0 ? `${t("resources.swap")} ${t("resources.free", { amount: fmtBytes(swapFree) })}` : null,
+    system && viewer ? `${t("resources.viewer")} ${viewerAmount(viewer, t)}` : null,
+    system ? t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) }) : null,
+    staleReason,
+  ].filter(Boolean).join(" · ");
   const cleanup = open ? (
     <CleanupPanel
       sessions={sessions}
@@ -208,6 +221,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   ) : null;
   if (density !== "full") {
     const gauge = density === "gauge";
+    /* On a line the dot follows the name it qualifies; a gauge has only its corner. */
+    const staleDot = staleReason ? <span className={`h-1.5 w-1.5 rounded-full bg-warning ${gauge ? "absolute right-1 top-1" : "ml-1.5 inline-block align-middle"}`} data-testid="resources-stale-dot" title={staleReason} /> : null;
     return (
       <div ref={panelRef} className={`relative shrink-0 ${gauge ? "" : "border-t border-border"}`} data-resources-footer>
         <button
@@ -216,19 +231,19 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
           aria-label={t("resources.openAria")}
           title={reading}
           onClick={() => setOpen((value) => !value)}
-          className={gauge ? GAUGE_BUTTON : "block w-full px-3 py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
+          className={gauge ? GAUGE_BUTTON : `block w-full ${LINE_EDGE} py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
         >
           {gauge ? (
-            <MeterGauge mark={t("resources.ram")} percent={system ? ramUsedPct : null} color={ramColor(ramAvailPct)} second={system && system.swapTotal > 0 ? { percent: swapUsedPct, color: swapColor(swapUsedPct) } : undefined} />
+            <MeterGauge mark={t("resources.ram")} percent={system ? ramAvailPct : null} color={ramColor(ramAvailPct)} second={system && system.swapTotal > 0 ? { percent: 100 - swapUsedPct, color: swapColor(swapUsedPct) } : undefined} />
           ) : system ? (
             <>
-              <MeterLine label={t("resources.ram")} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramUsedPct} color={ramColor(ramAvailPct)} />
-              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.used", { amount: fmtBytes(system.swapUsed) })} percent={swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
             </>
           ) : (
-            <MeterLine label={t("resources.title")} value={sessions.length} percent={null} color="var(--color-muted)" />
+            <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
           )}
-          {snap.staleSince || sessionsStale ? <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warning" data-testid="resources-stale-dot" /> : null}
+          {gauge ? staleDot : null}
         </button>
         {cleanup}
       </div>

@@ -552,6 +552,9 @@ const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the mig
    projects in every state a row has (waiting on the operator, working, quiet, known to the catalog only, crowned,
    archived, a name longer than the row), and `?railv=1|2|3` draws that list in one of the numbered variants. */
 const RAIL = new URLSearchParams(location.search).get("rail");
+/* The states a frame of the default list cannot show: `copilot` signs a Copilot account in, `stale` ages the memory
+   and Claude readings and fails the Codex read, `empty`, `loading` and `unreachable` are the list's own three notices. */
+const RAIL_STATE = RAIL ? new URLSearchParams(location.search).get("railstate") : null;
 const RAIL_VARIANT = parseRailVariant(location.search);
 const railCatalog: { project: string; displayName: string; conversations: number; smt: number }[] = [];
 const RAIL_LONG = "northwind-customer-data-platform-migration";
@@ -2631,7 +2634,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(MIN) },
       lastTurn: { startedAt: (now - 2 * MIN) * 1_000, endedAt: (now - MIN) * 1_000 },
     } as unknown as FileEntry)) : [];
-    const scoped = OVERVIEW_EMPTY
+    if (RAIL_STATE === "unreachable") return json({ error: "the catalog is unreachable in the evidence fixture" }, 503);
+    if (RAIL_STATE === "loading") await new Promise(() => {});
+    const scoped = OVERVIEW_EMPTY || RAIL_STATE === "empty"
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
@@ -2964,6 +2969,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ pipeline: record });
     }
   }
+  /* An account's own reading would stand in for the aged one, so the stale state has none. */
+  if (ACCOUNTS && RAIL_STATE === "stale" && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row) => ({ ...row, limits: null })) }, codex: { ...accountsBody.codex, accounts: accountsBody.codex.accounts.map((row) => ({ ...row, limits: null })) } });
+  }
   if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(TIER_LIMITS ? {
     ...accountsBody,
     claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
@@ -3085,9 +3094,40 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
   if (url.pathname.startsWith("/api/resources")) {
+    const host = (target: string, title: string, over: Record<string, unknown>) => ({
+      target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
+      rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
+    });
     return json({
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
-      sessions: [],
+      sessions: RAIL ? [
+        host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
+        host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),
+      ] : [],
+      ...(RAIL_STATE === "stale" ? { sessionsStale: true, sessionsCapturedAt: iso(40 * MIN) } : {}),
+    });
+  }
+  if (RAIL_STATE === "copilot" && url.pathname === "/api/accounts/copilot") {
+    return json({ cli: { present: true, reason: null }, active: "copilot-main", accounts: [{ id: "copilot-main", label: "Account H", kind: "managed", active: true, auth: "signed_in", user: null, loginCommand: null, login: null }] });
+  }
+  if (RAIL && url.pathname === "/api/limits/history") {
+    const series = (windowSeconds: number, spentShare: number, left: number) => {
+      const windowStart = now - Math.round(windowSeconds * spentShare);
+      return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: Array.from({ length: 12 }, (_, index) => ({ t: windowStart + Math.round(((now - windowStart) * index) / 11), remaining: Math.round(100 - ((100 - left) * index) / 11) })) };
+    };
+    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: "default", codexAccountId: null, historySince: iso(3 * 24 * 60 * MIN) });
+  }
+  if (RAIL_STATE === "stale" && url.pathname === "/api/limits") {
+    return json({
+      claude: { ...tierLimits, capturedAt: now - 45 * MIN },
+      codex: null,
+      claudeAccountId: "default",
+      codexAccountId: null,
+      provenance: {
+        claude: { source: "cache", reason: null, staleSince: iso(45 * MIN) },
+        codex: { source: "unavailable", reason: "oauth-rate-limited", staleSince: iso(10 * MIN), retryAt: new Date((now + 20 * MIN) * 1_000).toISOString() },
+      },
+      staleSince: iso(45 * MIN),
     });
   }
   if (url.pathname === "/api/limits") {
@@ -3096,7 +3136,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       codex: { session: { usedPercent: 40, resetsAt: now + 3_600, windowMinutes: 300 }, weekly: { usedPercent: 10, resetsAt: now + 172_800, windowMinutes: 10_080 }, plan: "pro", capturedAt: now },
       claudeAccountId: TIER_LIMITS ? "default" : null,
       codexAccountId: null,
-      provenance: { claude: { source: TIER_LIMITS ? "live" : "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
+      ...(RAIL_STATE === "copilot" ? { copilot: { session: null, weekly: { usedPercent: 35, resetsAt: now + 12 * 86_400, windowMinutes: 43_200 }, plan: "pro", capturedAt: now }, copilotAccountId: "copilot-main" } : {}),
+      provenance: { claude: { source: TIER_LIMITS ? "live" : "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null }, ...(RAIL_STATE === "copilot" ? { copilot: { source: "live", reason: null, staleSince: null } } : {}) },
       staleSince: null,
     });
   }
