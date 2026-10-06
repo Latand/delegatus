@@ -187,6 +187,14 @@ that timeout on clean main. The production source and test match the merge
 base. This is a confirmed inherited native-check failure; publication evidence
 distinguishes it from the cleanup defects above.
 
+The final helper comparison exposed a completed, green baseline JUnit report
+whose enclosing service found survivors. That is a completed ownership
+failure, so repairing it on head now reports FIXED with concrete identities.
+It remains a blocking NEW failure when introduced on head. Unexpected exits
+and genuinely incomplete reports retain the stricter baseline gate error.
+The actual helper comparison was red before the correction; the executable
+regression and all 43 comparison tests now pass with 225 assertions.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -227,7 +235,7 @@ Linux path.
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 17, 33, 35 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
-| `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 177, 194, 195, 199, 262, 275, 279, 306, 318, 319, 321, 322, 324, 368, 397, 526, 551 | owned |
+| `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 187, 204, 205, 209, 272, 285, 289, 316, 328, 329, 331, 332, 334, 378, 407, 536, 561 | owned |
 | `scripts/npm-package-smoke.test.ts` | 13, 37, 49, 77 | owned |
 | `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
 | `scripts/privacy-publication-gate.test.ts` | 448, 955, 2175, 2282, 2559, 2572, 2587, 2608, 2682, 2970, 3603, 3778, 3822, 3872, 3922, 3971, 4018, 4065, 4112, 4158, 4203, 4745 | owned |

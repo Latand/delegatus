@@ -205,8 +205,13 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       if (result.signalCode || result.exitedDueToTimeout || ![0, 1].includes(result.exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? result.exitCode}${result.exitedDueToTimeout ? "; timed out" : ""})`);
       const output = readFileSync(log, "utf8");
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
+      const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+      // The report is complete; the service guard adds a distinct failure.
+      // Retain it so cleanup fixed on head can recover a broken baseline.
+      if (survivors && result.exitCode !== 0) {
+        parsed.failures.push({ file, suite: "", name: `<ownership error> ${survivors}`, kind: "error" });
+      }
       if ((result.exitCode === 0) !== (parsed.failures.length === 0)) {
-        const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
         throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
       }
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);

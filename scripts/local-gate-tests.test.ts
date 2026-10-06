@@ -154,6 +154,16 @@ test("detached worker", async () => {
   expect(result.introduced[0]!.name).toContain("owned runner: surviving owned processes:");
   expect(result.introduced[0]!.name).toMatch(/\d+ \(\d+:\d+\)/);
 });
+test.skipIf(process.platform !== "linux")("a completed baseline's owned survivor is FIXED when head reaps it", () => {
+  const f = fixture(source(true) + `\nimport { spawn } from "node:child_process";
+spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).unref();`);
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
+  const result = f.run();
+  expect(result.introduced).toHaveLength(0);
+  expect(result.fixed).toHaveLength(1);
+  expect(result.fixed[0]!.kind).toBe("error");
+  expect(f.logs.join("\n")).toMatch(/FIXED .+surviving owned processes: \d+ \(\d+:\d+\)/);
+});
 test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
   const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
