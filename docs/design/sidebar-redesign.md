@@ -157,7 +157,7 @@ The readings each frame is judged by are committed in `evidence/sidebar-redesign
 
 - `critique-today-light-en.png`, `critique-today-light-uk.png`: today's rail with the twelve marks
 - `sheet-variant-0.png` … `sheet-variant-3.png`: one contact sheet per drawing; `sheet-variant-N-menu-and-create.png` beside each
-- `sheet-variant-1-states.png`, `sheet-variant-2-states.png`: the states of the paragraph above
+- `sheet-variant-0-states.png` … `sheet-variant-3-states.png`: the states of the paragraph above (today has the empty list only)
 - `sheet-compare-all.png`: today and all three, whole frames
 - `sheet-compare-rails-<size>-<scheme>-<lang>.png`: the rails alone at full size, one sheet per combination
 - `v<N>-<state>-<size>-<scheme>-<lang>.png`: the frames
