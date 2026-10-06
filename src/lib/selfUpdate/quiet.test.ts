@@ -29,7 +29,8 @@ const UNRESOLVED: TurnEvidence = { record: null, registryHost: null };
 
 function ports(turn = "idle", host = "hosted", cursor = "pending", ageMinutes = 11): QuietPorts {
   return {
-    runtimeSnapshot: async () => ({ sessions: [{ turn, host }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
+    runtimeSnapshot: async () => ({ sessions: [{ conversationId: "conversation_fixture", turn, host, activeTurnId: null }] }) as Awaited<ReturnType<QuietPorts["runtimeSnapshot"]>>,
+    turnLiveness: async () => ["running", "interrupt_requested"].includes(turn) ? RUNNING : SETTLED_LIVE,
     pipelines: () => [{ state: "running", cursor: { state: cursor } }] as unknown as ReturnType<QuietPorts["pipelines"]>,
     presence: () => [{ lastInteractionAt: NOW - ageMinutes * 60_000 }] as unknown as ReturnType<QuietPorts["presence"]>,
     registryHealth: () => [],

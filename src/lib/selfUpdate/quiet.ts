@@ -102,11 +102,19 @@ export function currentHostTurnIdle(current: Pick<HostState, "status" | "activeT
 
 type TurnVerdict = "blocks" | "discounted" | "unresolved";
 
-function judgeTurn(evidence: TurnEvidence): TurnVerdict {
+function judgeTurn(evidence: TurnEvidence, session: Pick<RuntimeSession, "host" | "turn" | "activeTurnId">): TurnVerdict {
   // Current host work wins over transcript and registry evidence read before
   // a replacement host was admitted for this conversation.
   if (evidence.currentTurnIdle === false || evidence.headlessReviewerProcess === "alive" || evidence.headlessReviewerProcess === "unproven") return "blocks";
   const { record, registryHost } = evidence;
+  // An old idle host cannot settle a resume still owned by its setup process.
+  if (registryHost?.turnPending === "setup") return "blocks";
+  // A settled journal and a settled shared reading agree there is no turn.
+  // A journal claim or current host work still protects a newly admitted turn
+  // whose transcript has not recorded its start yet.
+  const claimsOpenTurn = ["running", "interrupt_requested"].includes(session.turn) || !!session.activeTurnId
+    || ["registering", "recovering"].includes(session.host);
+  if (!claimsOpenTurn && !registryHost?.turnPending && record?.turnState === "idle" && record.reason === "host_alive_turn_idle") return "discounted";
   // A replacement host wins over proof that the recorded reviewer is gone.
   if (registryHost?.processAlive || record?.host.state === "alive") {
     if (record?.turnState === "idle" && evidence.currentTurnIdle === true) return "discounted";
@@ -285,9 +293,10 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       const awaitingAdmission = draining && !!flow && flowAwaitingAdmission(flow);
       // Reserved custody has no engine yet. The drain holds it before claiming
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
-      if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
-        && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
-      if (["running", "reviewing"].includes(cursor.state)) {
+      const heldReservation = draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
+        && !attempt.activation.owner && !attempt.launchId && !conversationId;
+      if (heldReservation && !attempt?.agentPath) continue;
+      if (["running", "reviewing"].includes(cursor.state) || heldReservation) {
         const { owners, dispatching, currentRoundGone, relayInFlight } = flowCustody(flow, conversationId, ports.reviewerProcess);
         if (flow) checkedFlows.add(flow.id);
         const attemptOwnerId = conversationId ?? `stage:${pipeline.id}:${cursor.stageId}:attempt:${attempt?.n ?? 0}`;
@@ -345,12 +354,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const turns: BlockingTurn[] = [];
     const seen = new Set<string>();
     for (const session of runtime.sessions) {
-      if (!["running", "interrupt_requested"].includes(session.turn) && !["registering", "recovering"].includes(session.host)) continue;
       // The journal's own words cannot settle this either way: a fallback can
-      // publish unhosted/running over a live process, and a row can keep
-      // hosted/running for days after its host died.
+      // publish unknown/idle over a live turn, and a row can keep hosted/running
+      // for days after its host died. Every row reaches the shared verdict.
       const reading = await evidence(session);
-      const verdict = reading ? judgeTurn(reading) : "blocks";
+      const verdict = reading ? judgeTurn(reading, session) : "blocks";
       if (verdict === "discounted") { blockers.discounted!++; continue; }
       if (seen.has(session.conversationId)) continue;
       seen.add(session.conversationId);

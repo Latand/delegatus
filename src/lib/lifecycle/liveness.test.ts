@@ -20,6 +20,7 @@ import {
   livenessRecordIsLive,
   STARTING_GRACE_MS,
   type AgentLivenessSources,
+  type ConversationRegistryHost,
 } from "./liveness";
 import { projectLivenessEvents } from "./projector";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
@@ -773,6 +774,9 @@ test("a conversation's registry row says who hosts it without a transcript to re
 
   /* A hosted row whose process answers under its recorded identity. */
   expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  const active = { ...hosted, structuredHost: { ...hosted.structuredHost!, activeTurnRef: "active-turn" } };
+  expect(conversationRegistryHost(registry(active), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true, turnPending: "turn" });
+  expect(conversationRegistryHost(registry(active), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
   /* The same row once the process is gone, and after the registry ended it. */
   expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
   const ended = { ...hosted, status: "dead", structuredHost: null } as AgentRegistryEntry;
@@ -789,8 +793,9 @@ test("a conversation's registry row says who hosts it without a transcript to re
   const claimed = { ...ended, claimEpoch: 1,
     claimOwner: `structured-host:${JSON.stringify({ pid: 4243, startIdentity: "start-token-of-a-dead-host" })}`,
     structuredHost: { ...hosted.structuredHost!, process: null, writerClaimEpoch: 1 } };
-  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true, turnPending: "setup" });
   expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  expect(conversationRegistryHost(registry({ ...claimed, status: "idle" }), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
   const staleClaim = { ...claimed, structuredHost: { ...claimed.structuredHost, writerClaimEpoch: 0 } };
   expect(conversationRegistryHost(registry(staleClaim), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
   expect(conversationRegistryHost(registry({ ...claimed, claimOwner: "foreign-owner" }), "conversation_host", probe(true)))
@@ -1143,6 +1148,18 @@ test.each([
   },
 );
 
+test("an older completed receipt cannot hide newer pending setup custody", () => {
+  const process = { pid: 4242, startIdentity: "start" };
+  const previous = { launchId: "previous", conversationId: "conversation_host", transport: "structured",
+    state: "completed", verifiedHost: { agent: process }, admissionOwner: null } as unknown as SpawnReceipt;
+  const pending = { ...previous, launchId: "pending", state: "starting", verifiedHost: null, admissionOwner: process } as SpawnReceipt;
+  const registry = { entries: {}, receipts: { previous, pending }, conversationAliases: {}, conversations: {} } as unknown as RegistryFile;
+  const probe = { now: () => NOW, pidAlive: () => true, processIdentity: () => "start" };
+  expect(conversationRegistryHost(registry, "conversation_host", probe)).toEqual({ state: "alive", processAlive: true, turnPending: "setup" });
+  delete registry.receipts.pending;
+  expect(conversationRegistryHost(registry, "conversation_host", probe)).toEqual({ state: "alive", processAlive: true });
+});
+
 test.each([
   { owner: "admission", state: "starting", alive: true, saved: "start", held: true },
   { owner: "admission", state: "starting", alive: true, saved: null, held: true },
@@ -1167,8 +1184,10 @@ test.each([
       conversations: { conversation_canonical: { id: "conversation_canonical", engine: "codex", generations: [{ id: "session", path: candidate }] } },
     } as unknown as RegistryFile;
     const probe = { now: () => NOW, pidAlive: () => alive, processIdentity: () => "start" };
-    expect(conversationRegistryHost(registry, "conversation_canonical", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
-    expect(conversationRegistryHost(registry, "conversation_old", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
+    const expected: ConversationRegistryHost = { state: held ? "alive" : "gone", processAlive: held,
+      ...(held && state !== "completed" ? { turnPending: "setup" } : {}) };
+    expect(conversationRegistryHost(registry, "conversation_canonical", probe)).toEqual(expected);
+    expect(conversationRegistryHost(registry, "conversation_old", probe)).toEqual(expected);
     const generation = publishedGeneration(present ? [fileEntry({ path: candidate, conversationId: "conversation_canonical", activity: "stalled" })] : []);
     const shared = corpusSources(generation, {
       probe, registrySnapshot: () => registry,

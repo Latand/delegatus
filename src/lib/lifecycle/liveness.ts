@@ -1,4 +1,4 @@
-import { identityAlive, livenessProbe, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
+import { identityAlive, livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
@@ -362,7 +362,7 @@ function entryForPath(
 function hostEvidence(
   entry: AgentRegistryEntry | null,
   probe: LivenessProbe,
-): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null } {
+): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null; turnPending?: true } {
   if (!entry) return { state: "unknown", kind: "none", pid: null };
   const hosted = entry.status === "starting" || entry.status === "live" || entry.status === "idle" || entry.status === "handoff";
   const structured = entry.structuredHost?.process ?? null;
@@ -393,7 +393,9 @@ function hostEvidence(
   // no host process. The matching writer epoch makes this a current claim.
   if (entry.claimOwner && entry.claimEpoch > 0 && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch) {
     const owner = structuredClaimIdentity(entry.claimOwner);
-    if (owner && identityAlive(owner, probe)) return { state: "alive", kind: "structured", pid: owner.pid };
+    if (owner) return identityAlive(owner, probe)
+      ? { state: "alive", kind: "structured", pid: owner.pid, turnPending: true }
+      : { state: "gone", kind: "structured", pid: owner.pid };
   }
   if (!hosted) {
     const recorded = tmux ?? structuredEvidence;
@@ -608,23 +610,32 @@ export interface ConversationRegistryHost {
   /** A process the row records still answers under its recorded identity,
       whatever status word the row carries. */
   processAlive: boolean;
+  /** An active turn reference, writer setup or open launch receipt owns work, even
+      when the transcript contains only the previous turn's completion. */
+  turnPending?: "turn" | "setup";
 }
 
 /** Setup owns a conversation before its first transcript or host entry exists. */
 function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId: string | null, probe: LivenessProbe, artifactPath?: string) {
   const ownerId = conversationId ? canonicalConversationId(registry, conversationId) : null;
+  let alive: { state: "alive"; kind: "structured" | "tmux"; pid: number; turnPending: boolean } | null = null;
   let gone = false;
   let unresolved = false;
   for (const receipt of Object.values(registry.receipts ?? {})) {
     if ((!ownerId || canonicalConversationId(registry, receipt.conversationId) !== ownerId)
       && (!artifactPath || receipt.artifactPath !== artifactPath)) continue;
     const evidence = receiptProcessEvidence(receipt, probe);
-    if (evidence?.state === "alive") return { state: "alive" as const,
-      kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid };
+    if (evidence?.state === "alive") {
+      const candidate = { state: "alive" as const,
+        kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid,
+        turnPending: receiptIsLive(registry as RegistryFile, receipt, probe) };
+      if (candidate.turnPending) return candidate;
+      alive ??= candidate;
+    }
     if (evidence?.state === "gone") gone = true;
     else unresolved = true;
   }
-  return gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null;
+  return alive ?? (gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null);
 }
 
 /**
@@ -648,12 +659,16 @@ export function conversationRegistryHost(
     ? registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] ?? entryForPath(registry, generation.path)
     : null;
   const registered = entry ? hostEvidence(entry, probe) : null;
+  const receipt = receiptHostEvidence(registry, conversationId, probe);
   const host = registered?.state === "alive" ? registered
-    : receiptHostEvidence(registry, conversationId, probe) ?? registered;
+    : receipt ?? registered;
   if (!host) return null;
+  const pending = registered?.turnPending || (receipt?.state === "alive" && receipt.turnPending) ? "setup" as const
+    : entry?.host?.kind !== "tmux" && entry?.structuredHost?.activeTurnRef ? "turn" as const : null;
   return {
     state: host.state,
     processAlive: host.state === "alive",
+    ...(host.state === "alive" && pending ? { turnPending: pending } : {}),
   };
 }
 
