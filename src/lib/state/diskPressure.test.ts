@@ -14,6 +14,7 @@ import {
   observeDiskPressure,
   observeDiskPressureReport,
   probeDisk,
+  readDiskPressure,
   worktreeDiskWait,
   type DiskProbe,
 } from "./diskPressure";
@@ -86,6 +87,30 @@ test("independent readers with a pre-episode cache join the persisted episode ac
     expect(restarted.episode).toBe(first.episode);
     expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBe(first.episode);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("resources readers with independent stale caches and a restart preserve one episode", async () => {
+  // The preload supplies an isolated state root; no production roots are read.
+  const roots = [{ role: "state", directory: process.env.LLV_STATE_DIR! }];
+  const cachesA = new Map();
+  const cachesB = new Map();
+  let clock = Date.parse("2026-10-06T10:00:00Z");
+  let freeBytes = 20 * GiB;
+  const shared = { roots, now: () => clock, probe: () => ({ volume: "fixture", freeBytes }) };
+  const healthy = await readDiskPressure({ ...shared, caches: cachesA });
+  expect(healthy.episode).toBeNull();
+  freeBytes = GiB;
+  clock += 20 * 60_000;
+  const first = await readDiskPressure({ ...shared, caches: cachesB });
+  clock += 20 * 60_000;
+  const stale = await readDiskPressure({ ...shared, caches: cachesA });
+  expect(stale.episode).toBe(first.episode);
+  clock += 20 * 60_000;
+  const restartCache = new Map();
+  const restarted = await readDiskPressure({ ...shared, caches: restartCache });
+  expect(restarted.episode).toBe(first.episode);
+  // Let only these readers' background measurements settle before cleanup.
+  await Promise.all([...cachesA.values(), ...cachesB.values(), ...restartCache.values()].map(row => row.measuring));
 });
 
 test("a new worktree waits only below the critical threshold, naming the volume", () => {

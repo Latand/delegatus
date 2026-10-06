@@ -242,6 +242,9 @@ const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_St
 function rebuildable(ignored: string): boolean {
   const segments = ignored.replace(/\/+$/, "").split("/");
   const name = segments.at(-1) ?? "";
+  // Git can also report an artifact's ignored descendant directly. Output
+  // directory names inside evidence do not establish regenerability.
+  if (segments.includes(".artifacts")) return segments.some(segment => segment === "node_modules" || segment === ".next" || segment === "__pycache__") || name.endsWith(".pyc");
   if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
 }

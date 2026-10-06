@@ -1193,3 +1193,17 @@ test("a recycled host namespace anchor cannot redirect Git or filesystem access"
   expect((await access.git(["worktree", "remove", "/tmp/llv-role/checkout"], caseDir)).code).toBe(1);
   expect(called).toBe(false);
 });
+
+test("Git reporting an ignored evidence descendant directly still preserves its capture", async () => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/run/test-results/\n");
+  const { dir, tip } = lane(root, path.join(caseDir, "direct-evidence"), "topic/direct-evidence");
+  const capture = path.join(dir, ".artifacts/run/test-results/failure.png");
+  fs.mkdirSync(path.dirname(capture), { recursive: true });
+  fs.writeFileSync(capture, "retained failure");
+  const status = git(["status", "--porcelain=v1", "--ignored=matching"], dir);
+  expect(status).toContain("!! .artifacts/run/test-results/");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(151, "topic/direct-evidence", tip)] }));
+  expect(report.kept[0]!.reason).toBe("ignored-files");
+  expect(fs.readFileSync(capture, "utf8")).toBe("retained failure");
+});

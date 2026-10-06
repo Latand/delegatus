@@ -19,6 +19,8 @@ import { withFileTransactionSync } from "@/lib/state/fileTransaction";
  * warning. Below `DISK_CRITICAL_BYTES` a new worktree waits before `git
  * worktree add` with the reason on its lane, and retries by itself; nothing
  * that is already running is stopped.
+ * Volumes smaller than 100 GiB use 10%, 12% and 2% of their capacity for
+ * warning, recovery and admission, capped by the byte thresholds above.
  */
 export const DISK_WARNING_BYTES = 10 * 1024 ** 3;
 export const DISK_RECOVERY_BYTES = 12 * 1024 ** 3;
@@ -116,7 +118,8 @@ export function diskPressureWakeReady(pressure: DiskPressure, now = Date.now()):
   return pressure.consumers.length > 0 || now - Date.parse(pressure.episode) >= CONSUMER_WAKE_WAIT_MS;
 }
 
-const caches = new Map<string, { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void> }>();
+type PressureCache = { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void> };
+const caches = new Map<string, PressureCache>();
 
 function readReport(file: string): DiskPressure | null {
   try { return JSON.parse(fs.readFileSync(file, "utf8")) as DiskPressure; }
@@ -142,39 +145,47 @@ export function observeDiskPressureReport(file: string, probe: () => DiskVolume[
 }
 /** The current pressure, read from the volumes at most every 30 s. The
     consumer sizes are walked in the background and arrive on a later read. */
-export async function readDiskPressure(): Promise<DiskPressure> {
+export async function readDiskPressure(ports: {
+  /** Independent reader state and observation seams for sandbox checks. */
+  caches?: Map<string, PressureCache>;
+  roots?: DiskRoot[];
+  probe?: DiskProbe;
+  now?: () => number;
+} = {}): Promise<DiskPressure> {
+  const now = ports.now ?? Date.now;
+  const readers = ports.caches ?? caches;
   const directory = stateDir();
   const file = statePath("disk-pressure-report.json");
-  let cached = caches.get(directory);
+  let cached = readers.get(directory);
   if (!cached) {
     const prior = readReport(file);
-    cached = { pressure: prior ?? observeDiskPressure([], null, new Date().toISOString()), observedAt: 0, consumersAt: 0 };
-    caches.set(directory, cached);
+    cached = { pressure: prior ?? observeDiskPressure([], null, new Date(now()).toISOString()), observedAt: 0, consumersAt: 0 };
+    readers.set(directory, cached);
   }
-  if (Date.now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
-  cached.observedAt = Date.now();
+  if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
+  cached.observedAt = now();
   /* Loaded here: the pipeline engine imports this module for its admission check. */
   const [{ loadPipelinesForList }, { exclusiveBytes, readWorktreeSweepReport }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
-  const pipelines = loadPipelinesForList();
-  const sweep = readWorktreeSweepReport();
+  const pipelines = ports.roots ? [] : loadPipelinesForList();
+  const sweep = ports.roots ? null : readWorktreeSweepReport();
   const worktrees = [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
-  const tempRoots = sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
-  const roots: DiskRoot[] = [{ role: "state", directory },
+  const tempRoots = ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
+  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory },
     ...worktrees.map(directory => ({ role: "worktrees", directory })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;
-  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots), new Date().toISOString());
+  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString());
   if (previousEpisode !== cached.pressure.episode) {
     cached.consumersAt = 0;
   }
-  if (cached.pressure.episode && Date.now() - cached.consumersAt > CONSUMER_CACHE_MS && !cached.measuring) {
+  if (cached.pressure.episode && now() - cached.consumersAt > CONSUMER_CACHE_MS && !cached.measuring) {
     const target = cached;
     const episode = cached.pressure.episode;
     target.measuring = (async () => {
-      const measuredAt = new Date().toISOString();
+      const measuredAt = new Date(now()).toISOString();
       const stateBytes = await exclusiveBytes(directory);
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
@@ -194,7 +205,7 @@ export async function readDiskPressure(): Promise<DiskPressure> {
       }
       if (target.pressure.episode !== episode) return;
       target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
-      target.consumersAt = Date.now();
+      target.consumersAt = now();
       withFileTransactionSync(file, "disk pressure report is busy", () => {
         const latest = readReport(file);
         if (latest?.episode !== episode) return;
