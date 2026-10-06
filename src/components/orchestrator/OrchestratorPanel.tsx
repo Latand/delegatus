@@ -51,6 +51,8 @@ import {
   seatRequestSettled,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
+  rotationBannerLines,
+  telegramActionLine,
   type RotationHint,
   type SeatBadge,
   type SeatBindFailure,
@@ -251,6 +253,7 @@ export function OrchestratorPanel({
      describes the predecessor — showing that as «the incumbent» would put the
      retired orchestrator's model and context in the successor's header. */
   const incumbent = read && read.conversationId === seatConversationId ? read : null;
+  const telegramLine = telegramActionLine(t, incumbent?.telegram);
   /* The DURABLE id is the key, and the status read's `transcriptPath` is that id
      resolved through the registry's current generation — which is what binds a
      seat whose recorded path was replaced by a re-host (issue #1182). The
@@ -718,6 +721,11 @@ export function OrchestratorPanel({
               a retry and once without, so the draft's own block is the one. */}
           {state.transition && !rotating ? <TransitionBanner transition={state.transition} /> : null}
           {state.rotation ? <RotationBanner rotation={state.rotation} /> : null}
+          {telegramLine ? (
+            <p className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-ui text-warning" role="status" data-orchestrator-telegram={incumbent?.telegram ?? undefined}>
+              {telegramLine}
+            </p>
+          ) : null}
           {rotating ? null : (
             <>
               {orchestratorQuietBannerEligible(state, file) ? (
@@ -1357,24 +1365,21 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
  * and does not start here.
  */
 function RotationBanner({ rotation }: { rotation: RotationHint }) {
-  const { t } = useLocale();
-  const summary = rotation.reasons.map((reason) => (
-    reason === "context"
-      ? t("orchPanel.rotationContext", { percent: String(rotation.contextPercent ?? 0) })
-      : t("orchPanel.rotationDead")
-  )).join(" · ");
+  const { t, locale } = useLocale();
+  const lines = rotationBannerLines(t, locale, rotation);
   return (
     <div className="shrink-0 border-b border-warning/45 bg-warning-soft px-3 py-1.5" role="status" data-orchestrator-rotation={rotation.level}>
       <p className="text-ui font-semibold text-warning">
         {t(rotation.level === "strongly_recommend" ? "orchPanel.rotationStrong" : "orchPanel.rotation")}
       </p>
-      {summary ? <p className="mt-0.5 text-caption leading-4 text-secondary">{summary}</p> : null}
-      {/* The server's own reasons, verbatim: each names the threshold it crossed
-          and whether the number behind it is an estimate. Re-wording them here is
-          how the panel and `get_orchestrator` would start disagreeing. */}
-      {rotation.notes?.length ? (
-        <ul className="mt-0.5 list-disc pl-3.5 text-caption leading-4 text-muted marker:text-muted/60">
-          {rotation.notes.map((note) => <li key={note}>{note}</li>)}
+      {/* One line per cause, in the interface language, each with what to do
+          about it. The numbers are the server's own: the threshold it applied
+          and whether the count behind it is an estimate. */}
+      {lines.length === 1 ? (
+        <p className="mt-0.5 text-caption leading-4 text-secondary" data-orchestrator-rotation-cause>{lines[0]}</p>
+      ) : lines.length ? (
+        <ul className="mt-0.5 list-disc pl-3.5 text-caption leading-4 text-secondary marker:text-muted/60">
+          {lines.map((line) => <li key={line} data-orchestrator-rotation-cause>{line}</li>)}
         </ul>
       ) : null}
     </div>

@@ -226,6 +226,7 @@ import {
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 
 import {
   accountLimitRows,
@@ -1482,7 +1483,9 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     throw new McpToolRefusal(error, details);
   }
   validateExplicitMcpLaunchModel(args);
-  if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
+  /* Where Telegram is not set up the launch leaves the server out and grants
+     nothing, so no caller is refused over it. */
+  if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram") && telegramSetUp()) {
     const caller = dependencies ? attributionOf(dependencies) : null;
     if (caller?.kind === "manager") {
       if (caller.via?.deputy) {

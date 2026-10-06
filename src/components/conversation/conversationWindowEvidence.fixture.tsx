@@ -29,6 +29,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
+import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
@@ -95,7 +97,10 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
+  | "dead-host-telegram-refused"
+  | "telegram-refused-composer"
   | "agent-images"
+  | "image-viewers"
   | "own-message-steps";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -337,9 +342,20 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+  "dead-host-telegram-refused": { host: "unhosted", turn: "unknown" },
 };
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
+const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
+const TELEGRAM_CONFLICT = "structured host recovery failed: telegram MCP account definition conflicts with operator connector";
+
+/** `?cause=withdrawn` is the refusal that stays a refusal; `?cause=conflict`
+    is the account's own entry that blocks the tool. */
+function telegramRefusal(): string {
+  const cause = params.get("cause");
+  return cause === "withdrawn" ? TELEGRAM_WITHDRAWN : cause === "conflict" ? TELEGRAM_CONFLICT : TELEGRAM_REFUSAL;
+}
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -349,7 +365,41 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
      over, which is what separates this chip from the resuming one above. */
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  /* The sentence the queue recorded when a restart was refused for Telegram. */
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: telegramRefusal() } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
+}
+
+/**
+ * The composer's own notice for the same refusal: one message that failed
+ * twice, each attempt carrying the sentence behind a different wrapper, as the
+ * send route and the queue's drain record it.
+ */
+function TelegramComposerNoticeFixture() {
+  const refusal = telegramRefusal();
+  const attempt = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `telegram-refused-${n}`, idempotencyKey: `telegram-refused-key-${n}`,
+    conversationId: DEAD_CARD, kind: "send", status: "failed", text: DEAD_SENT,
+    at: new Date(ADMITTED_AT + n * 1_000).toISOString(), revision: 1, reason,
+  });
+  return (
+    <div data-evidence-case="telegram-refused-composer" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <RuntimeComposerReceipts
+        receipts={[
+          attempt(2, refusal),
+          attempt(1, `conversation host was reclaimed; automatic resume did not establish a deliverable host: ${refusal.split(": ")[1]}`),
+        ]}
+        nowMs={ADMITTED_AT + 60_000}
+        session={{ host: "unhosted", turn: "unknown" }}
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+        onDismiss={() => undefined}
+      />
+    </div>
+  );
 }
 
 function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
@@ -1068,6 +1118,70 @@ function AgentImagesFixture() {
   );
 }
 
+/* The two image viewers under real input: `?viewer=pane` mounts the file
+   preview's pane over one invented capture, anything else the fullscreen
+   viewer over three. The page below the viewer is taller than the window, so
+   a gesture that leaks to the page shows as a scroll or a page zoom. The
+   pane's bytes are answered in the page from the same canvas drawing, a
+   lettered grid, so a frame shows which part of the picture is on screen. */
+function inventedGrid(width: number, height: number, hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d")!;
+  context.font = "28px sans-serif";
+  for (let row = 0; row * 100 < height; row += 1) {
+    for (let column = 0; column * 100 < width; column += 1) {
+      context.fillStyle = `hsl(${hue} 45% ${(row + column) % 2 ? 30 : 38}%)`;
+      context.fillRect(column * 100, row * 100, 100, 100);
+      context.fillStyle = "rgba(255,255,255,0.9)";
+      context.fillText(`${String.fromCharCode(65 + column)}${row + 1}`, column * 100 + 28, row * 100 + 60);
+    }
+  }
+  context.fillStyle = "rgba(255,255,255,0.92)";
+  context.fillRect(width * 0.3, height * 0.42, width * 0.4, height * 0.16);
+  context.font = `${Math.round(height * 0.09)}px sans-serif`;
+  context.fillStyle = "#111";
+  context.fillText(label, width * 0.33, height * 0.535);
+  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
+}
+
+const PANE_META = { name: "capture.png", kind: "image", mime: "image/png", size: 1, mtimeMs: 1, etag: '"capture"' } as const;
+
+function ImageViewersFixture() {
+  const pane = params.get("viewer") === "pane";
+  const phone = useIsMobile();
+  const [closed, setClosed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [images] = useState<GalleryImage[]>(() => [210, 140, 20].map((hue, at) => ({
+    src: `data:image/png;base64,${inventedGrid(1600, 1000, hue, `capture ${at + 1}`)}`, alt: `capture ${at + 1}`,
+  })));
+  const [gallery] = useState(() => () => images);
+  return (
+    <div data-evidence-case="image-viewers" data-viewer-closed={closed ? "" : undefined} data-pane-failure={failure ?? undefined} className="bg-canvas text-primary">
+      <div className="flex h-dvh flex-col">
+        {pane ? <ImagePane path="/w/capture.png" meta={PANE_META} mobile={phone} onFailure={setFailure} /> : null}
+      </div>
+      <div className="h-[60dvh]" />
+      {pane || closed ? null : (
+        <ImageGalleryProvider value={gallery}>
+          <Lightbox src={images[0]!.src} alt={images[0]!.alt} onClose={() => setClosed(true)} />
+        </ImageGalleryProvider>
+      )}
+    </div>
+  );
+}
+
+function installCaptureBytes(): void {
+  const transport = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (!url.startsWith("/api/artifact?")) return transport(input, init);
+    const bytes = Uint8Array.from(atob(inventedGrid(1600, 1000, 210, "capture")), (char) => char.charCodeAt(0));
+    return new Response(bytes, { headers: { "content-type": "image/png" } });
+  }) as typeof fetch;
+}
+
 function DeliverySettlementFixture() {
   const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
   const [sends, setSends] = useState(0);
@@ -1094,9 +1208,11 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
+  if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
+  if (id === "telegram-refused-composer") return <TelegramComposerNoticeFixture />;
   if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (
@@ -1403,4 +1519,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
-else if (root) createRoot(root).render(<Fixture id={requested} />);
+else if (root) {
+  if (requested === "image-viewers") installCaptureBytes();
+  createRoot(root).render(<Fixture id={requested} />);
+}
