@@ -12,6 +12,7 @@ import { containsGitCheckout, isOwnedTempName, ownTempRoots, scanProcesses, swee
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
+import { pipelineLiteralGitEnv } from "./git";
 
 /**
  * Removes the worktrees whose work is merged (#2202), and finished ones whose
@@ -1105,7 +1106,18 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   }
   const seenKept = new Set<string>();
   for (const kept of [...report.kept].sort((a, b) => a.path.split(path.sep).length - b.path.split(path.sep).length)) {
-    kept.bytes = await exclusiveBytes(accessible(kept.path), [], seenKept);
+    const nested = report.kept.filter(other => other !== kept && inside(other.path, kept.path) && other.path !== kept.path);
+    const reached = accessible(kept.path);
+    let rootBytes = 0;
+    // Parent walks exclude nested roots. Attribute their directory blocks to
+    // the nested decision too, once, along with its files.
+    if (report.kept.some(other => other.path !== kept.path && inside(kept.path, other.path))) {
+      try {
+        const stat = fs.statSync(reached);
+        if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
+      } catch { /* Unavailable directories contribute no measured blocks. */ }
+    }
+    kept.bytes = rootBytes + await exclusiveBytes(reached, nested.map(row => accessible(row.path)), seenKept);
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;
@@ -1150,15 +1162,15 @@ export function worktreeSweepStatus(report: WorktreeSweepReport | null = readWor
 
 const GIT_TIMEOUT_MS = 120_000;
 
-/** Git without prompts and without optional locks, so a status read never
-    rewrites a checkout's index. */
+/** Literal Git objects without prompts or optional locks, so history
+    overrides cannot authorize deletion and status never rewrites the index. */
 function runGitCommand(command: string, args: string[], cwd: string): Promise<ExecResult> {
   return new Promise((resolveRun) => {
     execFile(command, args, {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+      env: { ...process.env, ...pipelineLiteralGitEnv(), GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
     }, (error, stdout, stderr) => {
       /* A non-zero exit carries its status in `code`; a spawn failure or a
          timeout carries a string or nothing, which reads as no status at all. */

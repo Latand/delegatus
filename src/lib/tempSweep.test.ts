@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -354,4 +354,55 @@ test("an empty .git marker a cache writes is not a checkout, and its stale root 
   const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
   expect(report.removed.map((removal) => path.basename(removal.path))).toEqual(["llv-stage-cache"]);
   expect(fs.existsSync(directory)).toBe(false);
+});
+
+test.each(["gitdir", "unrecognized metadata", ""])("damaged Git metadata %j keeps a role checkout and its source", async marker => {
+  const root = tempRoot();
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(repo);
+  const git = (args: string[]) => execFileSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: repo, stdio: "ignore" });
+  git(["init", "-q", "-b", "main"]);
+  fs.writeFileSync(path.join(repo, "input.txt"), "preserved input");
+  git(["add", "."]); git(["commit", "-qm", "initial"]);
+  const role = path.join(root, "llv-review-export");
+  const checkout = path.join(role, "checkout");
+  git(["worktree", "add", "-q", "-b", "topic/export", checkout]);
+  const source = path.join(checkout, "unique-source.ts");
+  fs.writeFileSync(source, "export const privateWork = 42;\n");
+  fs.writeFileSync(path.join(checkout, ".git"), marker);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: role, reason: "git-checkout" })]);
+  expect(fs.readFileSync(source, "utf8")).toBe("export const privateWork = 42;\n");
+});
+
+test.skipIf(process.platform !== "linux")("temp holds count one physical checkout through namespace aliases once", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-aliased-export", 3 * DAY);
+  fs.writeFileSync(path.join(directory, ".git"), "gitdir: retained repository metadata");
+  fs.writeFileSync(path.join(directory, "unique.log"), Buffer.alloc(256 * 1024, 1));
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: root, via: "/proc/self/root" }] });
+  expect(report.held).toHaveLength(1);
+  expect(report.kept.worktree).toBe(1);
+  expect(tempSweepStatus(report)?.heldBytes).toEqual(tempSweepStatus(single)?.heldBytes);
+  expect(fs.existsSync(directory)).toBe(true);
+});
+
+test("overlapping temp roots partition retained allocations", async () => {
+  const root = tempRoot();
+  const parent = aged(root, "llv-outer-export", 3 * DAY);
+  const jobs = path.join(parent, "jobs");
+  fs.mkdirSync(jobs);
+  const child = aged(jobs, "llv-inner-export", 3 * DAY);
+  for (const directory of [parent, child]) fs.writeFileSync(path.join(directory, ".git"), "gitdir: retained metadata");
+  fs.writeFileSync(path.join(child, "unique.log"), Buffer.alloc(256 * 1024, 1));
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }] });
+  expect(report.held).toHaveLength(2);
+  expect(report.held?.find(row => row.path === child)?.bytes).toBeGreaterThanOrEqual(256 * 1024);
+  expect(tempSweepStatus(report)?.heldBytes).toEqual(tempSweepStatus(single)?.heldBytes);
+  expect(fs.existsSync(child)).toBe(true);
 });

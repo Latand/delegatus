@@ -31,6 +31,7 @@ import {
   stopWorktreeSweep,
   sweepMergedWorktrees,
   worktreeSweepMode,
+  worktreeSweepStatus,
   type MergedPullRequest,
   type SweptPipeline,
   type WorktreeSweepPorts,
@@ -946,6 +947,22 @@ function remoteRepository(root: string): string {
   return remote;
 }
 
+test.each(["replacement", "graft"].flatMap(override => ["remote", "merged"].map(proof => [override, proof])))("a %s history override cannot prove an unpublished tip preserved by %s", async (override, proof) => {
+  const root = repository(); remoteRepository(root);
+  const advertised = git(["rev-parse", "HEAD"], root);
+  const { dir, tip } = lane(root, path.join(caseDir, "literal-history"), "pipeline/literal-history");
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/literal-history", closedAt: OLD_TERMINAL });
+  if (override === "replacement") git(["replace", "--graft", advertised, tip], root);
+  else fs.writeFileSync(path.join(root, ".git/info/grafts"), `${advertised} ${tip}\n`);
+  // The altered graph invents ancestry which the advertised object lacks.
+  expect(git(["merge-base", "--is-ancestor", tip, advertised], root)).toBe("");
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: proof === "merged" ? [merged(176, owner.branch, advertised)] : [], now: () => RETAIN_NOW }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
+  expect(git(["rev-parse", `refs/heads/${owner.branch}`], root)).toBe(tip);
+});
+
 test.each(["completed", "closed"] as const)("a retained %s lane without a PR frees a tip equal to its base", async state => {
   const root = repository();
   const dir = path.join(caseDir, "widgets-pipeline-base");
@@ -1337,6 +1354,23 @@ test("kept nested checkouts contribute their allocated bytes once", async () => 
   expect(report.kept.reduce((sum, row) => sum + (row.bytes ?? 0), 0)).toBe(physical);
   expect(Object.values(report.keptBytes).reduce((sum, bytes) => sum + (bytes ?? 0), 0)).toBe(physical);
   expect(fs.existsSync(inner.dir)).toBe(true);
+});
+
+test("nested evidence contributes bytes to its own decision hold", async () => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
+  const outer = lane(root, path.join(caseDir, "outer-evidence-report"), "topic/outer-evidence-report");
+  const inner = lane(root, path.join(outer.dir, "node_modules/inner"), "topic/inner-evidence-report");
+  const capture = path.join(inner.dir, ".artifacts/capture.png");
+  fs.mkdirSync(path.dirname(capture));
+  fs.writeFileSync(capture, Buffer.alloc(256 * 1024, 1));
+  const physical = await exclusiveBytes(outer.dir);
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(174, "topic/outer-evidence-report", outer.tip), merged(175, "topic/inner-evidence-report", inner.tip)] }));
+  const held = report.kept.find(row => row.path === inner.dir)!;
+  expect(held.reason).toBe("ignored-files");
+  expect(held.bytes).toBeGreaterThanOrEqual(fs.statSync(capture).blocks * 512);
+  expect(worktreeSweepStatus(report)?.waitsForDecisionBytes).toBe(held.bytes);
+  expect(report.kept.reduce((sum, row) => sum + (row.bytes ?? 0), 0)).toBe(physical);
 });
 
 test("a branch attached to a new checkout after removal is retained", async () => {

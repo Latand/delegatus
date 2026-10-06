@@ -274,8 +274,15 @@ function newestMtimeMs(directory: string, own: fs.Stats): number {
 }
 
 /** Allocated bytes under a directory, without following symlinks; a lower bound past the entry limit. */
-async function measureBytes(directory: string): Promise<number> {
+async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false): Promise<number> {
   let bytes = 0;
+  try {
+    const stat = await fs.promises.stat(directory);
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (seen.has(identity)) return 0;
+    seen.add(identity);
+    if (includeRoot) bytes += stat.blocks * 512;
+  } catch { return 0; }
   let visited = 0;
   const pending = [directory];
   while (pending.length > 0 && visited < MEASURE_ENTRY_LIMIT) {
@@ -291,6 +298,9 @@ async function measureBytes(directory: string): Promise<number> {
       const child = path.join(current, entry.name);
       try {
         const stat = await fs.promises.lstat(child);
+        const identity = `${stat.dev}:${stat.ino}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
         bytes += stat.blocks * 512;
         if (entry.isDirectory()) pending.push(child);
       } catch {
@@ -306,19 +316,13 @@ function namespaceStill(anchor: TempSweepRoot["anchor"], procRoot: string): bool
   return readLink(path.join(procRoot, String(anchor.pid), "ns", "mnt")) === anchor.namespace;
 }
 
-/** A `.git` that makes a checkout: a directory holding `HEAD`, or a file
-    naming its repository with `gitdir:`. An empty `.git` file is a marker
-    some caches write (uv's), and holds nothing. */
+/** Damaged or unknown Git metadata still holds its tree. The empty marker
+    in uv's source-distribution cache is the one proved disposable class. */
 function gitCheckoutMarker(entry: string, directory: boolean): boolean {
   try {
-    if (directory) return fs.lstatSync(path.join(entry, "HEAD")).isFile();
-    const fd = fs.openSync(entry, "r");
-    try {
-      const head = Buffer.alloc(7);
-      return fs.readSync(fd, head, 0, 7, 0) === 7 && head.toString("utf8") === "gitdir:";
-    } finally {
-      fs.closeSync(fd);
-    }
+    if (directory) return true;
+    const stat = fs.lstatSync(entry);
+    return !stat.isFile() || stat.size !== 0 || !/(?:^|\/)uvcache\/sdists-v\d+(?:\/|$)/.test(entry.replaceAll(path.sep, "/"));
   } catch {
     // Unreadable repository metadata cannot prove a disposable cache marker.
     return true;
@@ -371,6 +375,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     held: [],
     errors: [],
   };
+  const seenCandidates = new Set<string>();
+  const seenAllocations = new Set<string>();
+  const candidates: { root: TempSweepRoot; candidate: string }[] = [];
   for (const root of roots) {
     let names: string[];
     try {
@@ -381,61 +388,68 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     }
     for (const name of names.sort()) {
       if (!isOwnedTempName(name)) continue;
-      const candidate = path.join(root.path, name);
-      const reachable = root.via + candidate;
-      let stat: fs.Stats;
-      try {
-        stat = fs.lstatSync(reachable);
-      } catch {
-        continue;
-      }
-      if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
-      const newest = newestMtimeMs(reachable, stat);
-      if (now - newest < options.maxAgeMs) {
-        report.kept.young += 1;
-        continue;
-      }
-      if (inUse.some((entry) => inside(entry, candidate))) {
-        report.kept.inUse += 1;
-        continue;
-      }
-      if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree))) {
+      candidates.push({ root, candidate: path.join(root.path, name) });
+    }
+  }
+  // Nested owned roots receive their own allocations before a parent walk.
+  for (const { root, candidate } of candidates.sort((a, b) => b.candidate.split(path.sep).length - a.candidate.split(path.sep).length)) {
+    const reachable = root.via + candidate;
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(reachable);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (seenCandidates.has(identity)) continue;
+    seenCandidates.add(identity);
+    const newest = newestMtimeMs(reachable, stat);
+    if (now - newest < options.maxAgeMs) {
+      report.kept.young += 1;
+      continue;
+    }
+    if (inUse.some((entry) => inside(entry, candidate))) {
+      report.kept.inUse += 1;
+      continue;
+    }
+    if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree))) {
+      report.kept.worktree += 1;
+      continue;
+    }
+    const hold = containsGitCheckout(reachable);
+    const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
+    if (hold) {
+      report.kept.worktree += 1;
+      report.held!.push({ path: candidate, via: root.via, reason: hold, bytes: await measureBytes(reachable, seenAllocations, includeRoot) });
+      continue;
+    }
+    if (report.removed.length >= maxRemovals) {
+      report.kept.deferred += 1;
+      continue;
+    }
+    if (!namespaceStill(root.anchor, procRoot)) {
+      report.errors.push(`${root.path} (via ${root.via}): the namespace it was read through is gone; skipped`);
+      continue;
+    }
+    try {
+      const bytes = await measureBytes(reachable, seenAllocations, includeRoot);
+      /* The measurement yields; a checkout made meanwhile still keeps it. */
+      const finalHold = containsGitCheckout(reachable);
+      if (finalHold) {
         report.kept.worktree += 1;
-        continue;
-      }
-      const hold = containsGitCheckout(reachable);
-      if (hold) {
-        report.kept.worktree += 1;
-        report.held!.push({ path: candidate, via: root.via, reason: hold, bytes: await measureBytes(reachable) });
-        continue;
-      }
-      if (report.removed.length >= maxRemovals) {
-        report.kept.deferred += 1;
+        report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
         continue;
       }
       if (!namespaceStill(root.anchor, procRoot)) {
-        report.errors.push(`${root.path} (via ${root.via}): the namespace it was read through is gone; skipped`);
-        break;
+        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+        continue;
       }
-      try {
-        const bytes = await measureBytes(reachable);
-        /* The measurement yields; a checkout made meanwhile still keeps it. */
-        const finalHold = containsGitCheckout(reachable);
-        if (finalHold) {
-          report.kept.worktree += 1;
-          report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
-          continue;
-        }
-        if (!namespaceStill(root.anchor, procRoot)) {
-          report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
-          continue;
-        }
-        await fs.promises.rm(reachable, { recursive: true, force: true });
-        report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
-        report.removedBytes += bytes;
-      } catch (error) {
-        report.errors.push(`${reachable}: ${(error as Error).message}`);
-      }
+      await fs.promises.rm(reachable, { recursive: true, force: true });
+      report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
+      report.removedBytes += bytes;
+    } catch (error) {
+      report.errors.push(`${reachable}: ${(error as Error).message}`);
     }
   }
   return report;
