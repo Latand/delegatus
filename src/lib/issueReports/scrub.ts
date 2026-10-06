@@ -80,12 +80,12 @@ const QUOTATION = [
 const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
 /* Explicit attribution remains a conversation quote inside a code span.
    Technical code spans without that attribution stay readable. */
-const OPERATOR_SPEECH = "(?:wrote|said|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
+const OPERATOR_SPEECH = "(?:wrote|said|told|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
 const OPERATOR = "(?:operator|user|human|оператор|користувач|людина)";
-/* Connecting words and possessive attribution still name whose words the
-   code span holds. Ordinary technical spans carry no speech attribution. */
-const SPEECH_CONNECTOR = "(?:(?:with|using|exactly|as|follows|the|following|these|in|words|exact|saying|словами|так|дослівно)(?!\\p{L})\\s*){0,6}";
-const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<code\\b[^<>]*>)";
+/* Attribution can contain arbitrary intervening words in the same clause.
+   A sentence boundary ends it, so a later technical span stays readable. */
+const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:\\r\\n]*";
+const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
   `(?<!\\p{L})(?:${OPERATOR}\\s*(?:`,
   `(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S`,

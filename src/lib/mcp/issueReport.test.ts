@@ -432,6 +432,55 @@ test("attributed code quotes, complete home expressions, spaced absolute paths a
   expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
 });
 
+const additionalPrivateReports: [string, string][] = [
+  ["path", `The transcript is file://${["", "var", "log", "delegatus", "transcript.jsonl"].join("/")}.`],
+  ["path", `The transcript is FILE:${["", "var", "log", "delegatus", "transcript.jsonl"].join("/")}.`],
+  ["quote", "The operator wrote in their message `restart every agent now`."],
+  ["quote", "The operator told me `restart every agent now`."],
+  ["quote", "The operator wrote <q>restart every agent now</q>."],
+  ["quote", "Оператор написав у своєму повідомленні `перезапусти всіх агентів зараз`."],
+  ["quote", "Користувач сказала мені <q>перезапусти всіх агентів зараз</q>."],
+  ["host", "Machine: remote-worker"],
+  ["host", "node = remote-worker"],
+  ["host", '{"machine":"remote-worker"}'],
+  ["host", '{"node":"remote-worker"}'],
+  ["host", "Машина: remote-worker"],
+  ["host", "Вузол = remote-worker"],
+];
+const additionalPrivateForms = additionalPrivateReports.flatMap(([kind, body], index) =>
+  [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]
+    .map((encoded, form) => ({ kind, body: encoded, index, form })));
+
+test.each(additionalPrivateForms)("private report $index form $form is refused before preview storage", async ({ kind, body }) => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
+  expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+  expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  expect(h.published).toEqual([]);
+});
+
+test.each(additionalPrivateForms)("legacy private report $index form $form is refused before publication claim", async ({ kind, body }) => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
+  h.operatorSays((await shown(h, digest)).en);
+  const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+  expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
+  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  expect(h.published).toEqual([]);
+});
+
+test("unpopulated machine fields and technical spans after a speech sentence stay publishable", async () => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation. The error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767." };
+  const digest = await previewed(h, report);
+  h.operatorSays((await shown(h, digest)).uk);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
+});
+
 test("technical numeric evidence and source line references remain publishable", async () => {
   const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
   for (const body of [

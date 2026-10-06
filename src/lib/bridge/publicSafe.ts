@@ -156,7 +156,7 @@ export interface PrivateClassOptions {
 const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt", "consul", "svc"]);
 /* A single-label hostname is private when the text explicitly names it.
    Merely discussing a hostname field or detector names no machine. */
-const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node)[\s_-]*(?:name|host(?:[\s_-]*name)?)|хост|ім['’]я\s+(?:хоста|машини|вузла))["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
+const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node)(?:[\s_-]*(?:name|host(?:[\s_-]*name)?))?|хост|машина|вузол|ім['’]я\s+(?:хоста|машини|вузла))["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
 /* Explicitly labeled remote identities are private even if this machine
    has never seen that user or account in its local deny list. */
 const NAMED_USER = /(?<![\p{L}\p{N}_])(?:user[\s_-]*name|ім['’]я\s+користувача)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?\S/iu;
@@ -184,6 +184,9 @@ const QUOTED_SPACED_PATH = /([`"'])[ \t]*\/[ \t]+[^\r\n]*?\1|[“«‹][ \t]*\/[
    escaped backslash can reduce a UNC prefix to one backslash, which remains
    a local path, even when it holds only one component. */
 const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[^\s\/\\>*]/u;
+/* A file URI can open an absolute path with three slashes, which neither
+   the token-opening slash nor the network-root reading accepts. */
+const ABSOLUTE_FILE_URI = /(?<![\p{L}\p{N}_])file:[/\\]/iu;
 const DRIVE_RELATIVE_PATH = /(?<![\p{L}\p{N}_])[a-z]:(?!\/\/)[^\s"'`\/\\]/iu;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
@@ -297,7 +300,7 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (strictDomain(text)) found.add("domain");
     if (NAMED_HOST.test(text)) found.add("host");
     if (NAMED_USER.test(text) || NAMED_ACCOUNT.test(text)) found.add("account");
-    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
+    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || ABSOLUTE_FILE_URI.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
     if (portMatches(text, STRICT_PORT) || STRICT_PORT_FIELD.test(text)) found.add("port");

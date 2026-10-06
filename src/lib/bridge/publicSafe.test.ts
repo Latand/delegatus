@@ -164,3 +164,20 @@ test("technical numeric labels and source locations grant no exemption to a late
     expect(privateClasses(line, undefined, { strict: true })).toContain("port");
   }
 });
+
+test("strict local file URIs retain their absolute path meaning", () => {
+  const absolute = ["", "var", "log", "delegatus", "transcript.jsonl"].join("/");
+  for (const uri of [`file://${absolute}`, `FILE:${absolute}`, `file://remote-worker${absolute}`]) {
+    expect(privateClasses(`The transcript is ${uri}.`, undefined, { strict: true })).toContain("path");
+  }
+  expect(privateClasses("See src/lib/mcp/bindings.ts:1767.", undefined, { strict: true })).toEqual([]);
+});
+
+test("strict populated bare machine and node fields name remote hosts", () => {
+  for (const field of ["machine", "node", "машина", "вузол"]) {
+    for (const line of [`${field}: remote-worker`, `${field} = remote-worker`, `{\"${field}\":\"remote-worker\"}`]) {
+      expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+    }
+    expect(privateClasses(`The ${field} field was missing.`, undefined, { strict: true })).toEqual([]);
+  }
+});
