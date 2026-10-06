@@ -7,6 +7,9 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
+import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
+import { TelegramBotService, productionTelegramBotDependencies } from "@/lib/telegram/bot/service";
+import type { TgUpdate } from "@/lib/telegram/bot/store";
 
 import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
@@ -91,7 +94,7 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
       post: async () => { throw new Error("unexpected control mutation"); },
       get: async (url: string) => {
         if (options.controlRead) return options.controlRead(url);
-        expect(url).toBe("/api/telegram/bot/agent?op=chats");
+        expect(url).toBe("/api/telegram/bot/agent?op=chats&includeInactive=1");
         await options.privacyRead!();
         return { chats: [] };
       },
@@ -510,7 +513,7 @@ test("unpopulated machine fields and technical spans after a speech sentence sta
 const unavailableNameSources = ["chats throws", "chats malformed", "messages throws", "messages malformed", "messages pagination malformed"];
 function unavailableNameReader(mode: string) {
   return async (url: string): Promise<Record<string, unknown>> => {
-    if (url.endsWith("op=chats") && mode.startsWith("messages")) return { chats: [{ chat: "allowed-chat", postAllowed: true }] };
+    if (new URLSearchParams(url.split("?")[1]).get("op") === "chats" && mode.startsWith("messages")) return { chats: [{ chat: "allowed-chat", postAllowed: true }] };
     if (mode.endsWith("throws")) throw new Error("private-source-error-must-stay-private");
     if (mode === "messages pagination malformed") return { messages: [] };
     return {};
@@ -540,7 +543,7 @@ test("available empty sources allow reports, recovered people sources reject kno
   let available = false;
   const h = harness({ controlRead: async (url) => {
     if (!available) throw new Error("privacy read unavailable");
-    return url.endsWith("op=chats")
+    return new URLSearchParams(url.split("?")[1]).get("op") === "chats"
       ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
       : { messages: [{ fromName: "Ada" }], hasMore: false, nextCursor: null };
   } });
@@ -563,7 +566,7 @@ test.each(["fifth chat", "older page", "posting disabled", "remote without seat"
     schemaVersion: 1, aliases: { "old-project": `repo-${"1".repeat(32)}` }, displayNames: { "old-project": "HiddenWorkshop" },
   }));
   const h = harness({ controlRead: async (url) => {
-    if (url.endsWith("op=chats")) return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: source !== "posting disabled" })) };
+    if (new URLSearchParams(url.split("?")[1]).get("op") === "chats") return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: source !== "posting disabled" })) };
     const params = new URLSearchParams(url.split("?")[1]);
     if (source === "older page" && !params.has("cursor")) return { messages: [], hasMore: true, nextCursor: "older" };
     return { messages: source === "older page" || source === "posting disabled" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
@@ -607,8 +610,60 @@ test.each(["claude", "codex"])("retired %s account names remain private at both 
   expect(h.published).toEqual([]);
 });
 
+test.each(["preview", "publish"])("retained names from an inactive Telegram chat refuse %s before storage or publication claim", async (boundary) => {
+  const transport = new FakeBotTransport();
+  const now = new Date("2026-09-24T12:00:00Z");
+  const date = Math.floor(now.getTime() / 1000) - 600;
+  const chat = { id: -1000000000303, type: "supergroup", title: "Old Chat" };
+  const service = new TelegramBotService({
+    ...productionTelegramBotDependencies(),
+    transportFor: () => transport,
+    now: () => now,
+    sleep: async () => {},
+    conversationTitle: () => null,
+    documentEnvironment: () => ({ home: process.env.HOME!, stateDir: privacyState }),
+  });
+  try {
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
+    await service.connect(fakeBotToken());
+    await service.stopPoller();
+    const updates: TgUpdate[] = [
+      { update_id: 1, my_chat_member: { chat: chat as never, date, new_chat_member: { status: "member" } } },
+      { update_id: 2, message: { message_id: 1, date: date + 1, chat: chat as never, from: { id: 700000505, first_name: "Person", last_name: "Retained" }, text: "A launch failed." } },
+      { update_id: 3, my_chat_member: { chat: chat as never, date: date + 2, new_chat_member: { status: "kicked" } } },
+    ];
+    transport.script("getUpdates", ok(updates));
+    expect(await service.pollOnce(new AbortController().signal)).toEqual({ next: "continue", delayMs: 0 });
+    expect(service.listChats().chats).toEqual([]);
+    expect(service.listChats({ includeInactive: true }).chats).toMatchObject([{ member: false, postAllowed: false }]);
+    const h = harness({ controlRead: async (url) => {
+      const params = new URLSearchParams(url.split("?")[1]);
+      return params.get("op") === "chats"
+        ? { ...service.listChats({ includeInactive: params.get("includeInactive") === "1" }) }
+        : { ...service.readMessages({ chat: params.get("chat")!, limit: 100, maxChars: 1, cursor: params.get("cursor") ?? undefined }) };
+    } });
+    const report = { title: REPORT.title, body: "Person Retained observed the failed launch." };
+    let digest: string | undefined;
+    if (boundary === "publish") {
+      digest = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox }).digest;
+      h.operatorSays((await shown(h, digest)).en);
+    }
+    const refused = await h.call(boundary === "preview" ? REPORTER : SEAT_CALLER,
+      boundary === "preview" ? { action: "preview", ...report } : { action: "publish", digest });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("person");
+    if (digest) {
+      expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+      expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+    } else expect(fs.readdirSync(sandbox)).toEqual([]);
+    expect(h.published).toEqual([]);
+  } finally {
+    await service.remove();
+  }
+});
+
 test.each(["truncated chats", "missing cursor", "repeated cursor"])("incomplete %s refuses both privacy boundaries", async (mode) => {
-  const h = harness({ controlRead: async (url) => url.endsWith("op=chats")
+  const h = harness({ controlRead: async (url) => new URLSearchParams(url.split("?")[1]).get("op") === "chats"
     ? { chats: [{ chat: "allowed-chat", postAllowed: true }], ...(mode === "truncated chats" ? { truncated: 1 } : {}) }
     : { messages: [], hasMore: true, nextCursor: mode === "missing cursor" ? null : "repeated" },
   });

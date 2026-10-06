@@ -3559,11 +3559,11 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
 async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
   const people = new Set<string>();
   try {
-    const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[]; truncated?: number };
+    const chats = await readViewerControl(control, `/api/telegram/bot/agent?op=chats${requireComplete ? "&includeInactive=1" : ""}`) as { chats?: { chat?: unknown; postAllowed?: unknown }[]; truncated?: number };
     if (requireComplete && !Array.isArray(chats.chats)) throw new Error("Privacy chats read is malformed");
     if (requireComplete && chats.truncated) throw new Error("Privacy chats read is incomplete");
-    /* Publication protects people in every known chat, even if posting is
-       disabled. The bridge retains its destination-specific reading. */
+    /* Publication protects retained people in every known chat, including
+       chats the bot has left. The bridge retains its destination-specific reading. */
     if (requireComplete && chats.chats?.some((entry) => !entry || typeof entry.chat !== "string" || !entry.chat.trim())) throw new Error("Privacy chats read is malformed");
     const readable = (chats.chats ?? []).filter((entry) => (requireComplete || entry.postAllowed === true) && typeof entry.chat === "string");
     for (const chat of requireComplete ? readable : readable.slice(0, 4)) {
