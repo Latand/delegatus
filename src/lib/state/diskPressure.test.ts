@@ -541,3 +541,42 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+
+test.skipIf(process.platform === "win32")("hard-linked allocations contribute once across state, checkout and temp consumers", async () => {
+  const original = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-hardlinks-"));
+  const state = path.join(fixture, "state");
+  const worktree = path.join(fixture, "checkout");
+  const temp = path.join(fixture, "temp");
+  const role = path.join(temp, "llv-role");
+  for (const directory of [state, worktree, role]) fs.mkdirSync(directory, { recursive: true });
+  const shared = path.join(state, "shared.bin");
+  fs.writeFileSync(shared, Buffer.alloc(1024 * 1024, 1));
+  fs.linkSync(shared, path.join(worktree, "shared.bin"));
+  fs.linkSync(shared, path.join(role, "shared.bin"));
+  fs.writeFileSync(path.join(role, "independent.bin"), Buffer.alloc(256 * 1024, 1));
+  const alias = path.join(fixture, "checkout-alias");
+  fs.symlinkSync(worktree, alias);
+  process.env.LLV_STATE_DIR = state;
+  const caches = new Map();
+  const options = { caches, worktrees: [worktree, alias], tempRoots: [{ path: temp, via: "" }], roots: [{ role: "state", directory: state }],
+    now: () => Date.parse("2026-10-06T12:00:00Z"), probe: () => ({ volume: "fixture", freeBytes: GiB }) };
+  try {
+    await readDiskPressure(options);
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    const bytes = fs.statSync(shared).blocks * 512;
+    expect(measured.consumers.find(row => row.kind === "state")!.bytes).toBeGreaterThanOrEqual(bytes);
+    expect(measured.consumers.find(row => row.kind === "worktrees")!.bytes).toBe(0);
+    expect(measured.consumers.find(row => row.kind === "temp")!.bytes).toBe(256 * 1024);
+    const total = measured.consumers.reduce((sum, row) => sum + row.bytes, 0);
+    expect(total).toBeGreaterThanOrEqual(bytes + 256 * 1024);
+    expect(total).toBeLessThan(bytes + 320 * 1024);
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    if (original === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = original;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});

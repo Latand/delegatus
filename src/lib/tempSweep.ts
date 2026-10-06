@@ -301,7 +301,7 @@ function newestMtimeMs(directory: string, own: fs.Stats): number {
 }
 
 /** Allocated bytes under a directory, without following symlinks; a lower bound past the entry limit. */
-async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false, excluded: readonly string[] = []): Promise<number> {
+async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false, excluded: readonly string[] = [], linkedFiles?: Set<string>): Promise<number> {
   let bytes = 0;
   const excludedDirectories = new Set<string>();
   const excludedPaths: string[] = [];
@@ -342,6 +342,7 @@ async function measureBytes(directory: string, seen = new Set<string>(), include
         const identity = `${stat.dev}:${stat.ino}`;
         if (seen.has(identity)) continue;
         seen.add(identity);
+        if (!stat.isDirectory() && stat.nlink > 1) linkedFiles?.add(identity);
         bytes += stat.blocks * 512;
         if (entry.isDirectory() && !excludedDirectories.has(identity)) pending.push(child);
       } catch {
@@ -442,6 +443,18 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     for (const name of names.sort()) {
       if (!isOwnedTempName(name)) continue;
       candidates.push({ root, candidate: path.join(root.path, name) });
+    }
+  }
+  // Retained checkouts own their shared file allocations. Seed only hard-link
+  // identities; enclosing temp trees still own the checkout directory blocks.
+  // One bounded walk per physical checkout also covers namespace aliases.
+  const seenAccounted = new Set<string>();
+  for (const root of candidates.length ? roots : []) {
+    if (!namespaceStill(root.anchor, procRoot)) continue;
+    for (const checkout of accounted) {
+      const links = new Set<string>();
+      await measureBytes(root.via + checkout, seenAccounted, false, [], links);
+      if (namespaceStill(root.anchor, procRoot)) for (const identity of links) seenAllocations.add(identity);
     }
   }
   // Nested owned roots receive their own allocations before a parent walk.

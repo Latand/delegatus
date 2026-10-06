@@ -243,7 +243,7 @@ export async function readDiskPressure(ports: {
   if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
   cached.observedAt = now();
   /* Loaded here: the pipeline engine imports this module for its admission check. */
-  const [{ loadPipelinesForList }, { exclusiveBytes, readWorktreeSweepReport, hostTempWorktreeAccess }] = await Promise.all([
+  const [{ loadPipelinesForList }, { allocatedBytes, readWorktreeSweepReport, hostTempWorktreeAccess }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
@@ -269,14 +269,14 @@ export async function readDiskPressure(ports: {
     target.measuring = (async () => {
       const measuredAt = new Date(now()).toISOString();
       const worktreePaths = worktrees.map(accessible);
-      const seenDirectories = new Set<string>();
-      const stateBytes = await exclusiveBytes(directory, worktreePaths, seenDirectories);
+      const seenAllocations = new Set<string>();
+      const stateBytes = await allocatedBytes(directory, worktreePaths, seenAllocations);
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
       for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
         const view = worktreeView(worktree);
         if (view && !tempViewAvailable(view)) continue;
-        const bytes = await exclusiveBytes(accessible(worktree), [directory], seenDirectories);
+        const bytes = await allocatedBytes(accessible(worktree), [directory], seenAllocations);
         if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
       }
       let tempBytes = 0;
@@ -292,7 +292,7 @@ export async function readDiskPressure(ports: {
             // checkout and independent role files; exclude only the checkout.
             if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
             if (!tempViewAvailable(root)) break;
-            const bytes = await exclusiveBytes(child, [directory, ...worktreePaths], seenDirectories);
+            const bytes = await allocatedBytes(child, [directory, ...worktreePaths], seenAllocations);
             if (tempViewAvailable(root)) tempBytes += bytes;
           }
         } catch { /* An inaccessible root has no attributable consumer count. */ }

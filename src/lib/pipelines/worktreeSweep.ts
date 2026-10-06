@@ -382,9 +382,18 @@ export function parseWorktreeList(raw: string): ListedWorktree[] {
 }
 
 /** Bytes a removal frees: allocated blocks of entries with a single link,
-    without following symlinks; a lower bound past the entry limit. Consumer
-    walks share directory identities to attribute namespace aliases once. */
-export async function exclusiveBytes(directory: string, excludedDirectories: readonly string[] = [], seenDirectories = new Set<string>()): Promise<number> {
+    without following symlinks; a lower bound past the entry limit. */
+export function exclusiveBytes(directory: string, excludedDirectories: readonly string[] = [], seenEntries = new Set<string>()): Promise<number> {
+  return measureDirectory(directory, excludedDirectories, seenEntries, true);
+}
+
+/** Physical allocations retained or used by owned consumers. Shared inode
+    identities count hard links and namespace aliases once across walks. */
+export function allocatedBytes(directory: string, excludedDirectories: readonly string[] = [], seenEntries = new Set<string>()): Promise<number> {
+  return measureDirectory(directory, excludedDirectories, seenEntries, false);
+}
+
+async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean): Promise<number> {
   const excluded = new Set<string>();
   for (const excludedDirectory of excludedDirectories) {
     try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
@@ -393,8 +402,8 @@ export async function exclusiveBytes(directory: string, excludedDirectories: rea
   try {
     const stat = fs.statSync(directory);
     const identity = `${stat.dev}:${stat.ino}`;
-    if (excluded.has(identity) || seenDirectories.has(identity)) return 0;
-    seenDirectories.add(identity);
+    if (excluded.has(identity) || seenEntries.has(identity)) return 0;
+    seenEntries.add(identity);
   }
   catch { return 0; }
   let bytes = 0;
@@ -415,11 +424,14 @@ export async function exclusiveBytes(directory: string, excludedDirectories: rea
         const stat = await fs.promises.lstat(child);
         if (entry.isDirectory()) {
           const identity = `${stat.dev}:${stat.ino}`;
-          if (excluded.has(identity) || seenDirectories.has(identity)) continue;
-          seenDirectories.add(identity);
+          if (excluded.has(identity) || seenEntries.has(identity)) continue;
+          seenEntries.add(identity);
           bytes += stat.blocks * 512;
           pending.push(child);
-        } else if (stat.nlink <= 1) {
+        } else if (!singleLinksOnly || stat.nlink <= 1) {
+          const identity = `${stat.dev}:${stat.ino}`;
+          if (seenEntries.has(identity)) continue;
+          seenEntries.add(identity);
           bytes += stat.blocks * 512;
         }
       } catch {
@@ -1082,7 +1094,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     }
   }
   const seenKept = new Set<string>();
-  for (const kept of [...report.kept].sort((a, b) => a.path.split(path.sep).length - b.path.split(path.sep).length)) {
+  for (const kept of [...report.kept].sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length)) {
     const nested = report.kept.filter(other => other !== kept && inside(other.path, kept.path) && other.path !== kept.path);
     const reached = accessible(kept.path);
     let rootBytes = 0;
@@ -1094,7 +1106,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
       } catch { /* Unavailable directories contribute no measured blocks. */ }
     }
-    kept.bytes = rootBytes + await exclusiveBytes(reached, nested.map(row => accessible(row.path)), seenKept);
+    kept.bytes = rootBytes + await allocatedBytes(reached, nested.map(row => accessible(row.path)), seenKept);
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;

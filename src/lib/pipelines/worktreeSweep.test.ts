@@ -19,6 +19,7 @@ import {
   FINISHED_WORKTREE_RETENTION_MS,
   classifyStatus,
   exclusiveBytes,
+  allocatedBytes,
   forgeCacheMergedPullRequests,
   ghMergedPullRequests,
   hostTempWorktreeAccess,
@@ -1481,7 +1482,7 @@ test("kept nested checkouts contribute their allocated bytes once", async () => 
   expect(fs.existsSync(inner.dir)).toBe(true);
 });
 
-test("nested evidence contributes bytes to its own decision hold", async () => {
+test.each([false, true])("nested evidence contributes bytes to its own decision hold with hard links=%s", async hardlinked => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const outer = lane(root, path.join(caseDir, "outer-evidence-report"), "topic/outer-evidence-report");
@@ -1489,7 +1490,8 @@ test("nested evidence contributes bytes to its own decision hold", async () => {
   const capture = path.join(inner.dir, ".artifacts/capture.png");
   fs.mkdirSync(path.dirname(capture));
   fs.writeFileSync(capture, Buffer.alloc(256 * 1024, 1));
-  const physical = await exclusiveBytes(outer.dir);
+  if (hardlinked) fs.linkSync(capture, path.join(outer.dir, "node_modules/shared-capture.png"));
+  const physical = await exclusiveBytes(outer.dir) + (hardlinked ? fs.statSync(capture).blocks * 512 : 0);
   const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(174, "topic/outer-evidence-report", outer.tip), merged(175, "topic/inner-evidence-report", inner.tip)] }));
   const held = report.kept.find(row => row.path === inner.dir)!;
   expect(held.reason).toBe("ignored-files");
@@ -1979,17 +1981,18 @@ test.each(["scripts/", "__pycache__/"])("bytecode directory %s containing a uniq
   expect(fs.readFileSync(log, "utf8")).toBe("unique evidence");
 });
 
-test.each(["intact", "missing-marker"])("worktree and temp reports partition role allocations with %s metadata", async marker => {
+test.each(["intact", "missing-marker", "hardlinked"])("worktree and temp reports partition role allocations with %s metadata", async marker => {
   const { runTempSweep, tempSweepStatus } = await import("@/lib/tempSweep");
   const root = repository(); remoteRepository(root);
   const temp = path.join(caseDir, "temp");
   const role = path.join(temp, "llv-review-export");
   const { dir } = lane(root, path.join(role, "checkout"), "topic/private-export");
-  fs.writeFileSync(path.join(role, "role-output.txt"), "retained role output");
+  fs.writeFileSync(path.join(role, "role-output.txt"), marker === "hardlinked" ? Buffer.alloc(1024 * 1024, 1) : "retained role output");
+  if (marker === "hardlinked") fs.linkSync(path.join(role, "role-output.txt"), path.join(dir, "node_modules/dep/shared-output.log"));
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   let report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first,
     now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
-  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  expect(report.kept[0]!.reason).toBe(marker === "hardlinked" ? "ignored-files" : "local-only-commits");
   if (marker === "missing-marker") {
     fs.unlinkSync(path.join(dir, ".git"));
     report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: report,
@@ -2002,10 +2005,13 @@ test.each(["intact", "missing-marker"])("worktree and temp reports partition rol
   expect(temporary.held).toHaveLength(1);
   const reported = Object.values(report.keptBytes).reduce((sum, bytes) => sum + (bytes ?? 0), 0)
     + Object.values(tempSweepStatus(temporary)!.heldBytes).reduce((sum, bytes) => sum + bytes, 0);
-  expect(reported).toBeLessThanOrEqual(await exclusiveBytes(role));
-  expect(temporary.held![0]!.bytes).toBeGreaterThanOrEqual(fs.statSync(path.join(role, "role-output.txt")).blocks * 512);
+  const sharedBytes = marker === "hardlinked" ? fs.statSync(path.join(role, "role-output.txt")).blocks * 512 : 0;
+  expect(reported).toBeLessThanOrEqual(await exclusiveBytes(role) + sharedBytes);
+  if (marker === "hardlinked") expect(report.kept[0]!.bytes).toBeGreaterThanOrEqual(sharedBytes);
+  if (marker === "hardlinked") expect(temporary.held![0]!.bytes).toBeLessThan(sharedBytes);
+  else expect(temporary.held![0]!.bytes).toBeGreaterThanOrEqual(fs.statSync(path.join(role, "role-output.txt")).blocks * 512);
   expect(fs.existsSync(dir)).toBeTrue();
-  expect(fs.readFileSync(path.join(role, "role-output.txt"), "utf8")).toBe("retained role output");
+  expect(fs.readFileSync(path.join(role, "role-output.txt"))).toEqual(marker === "hardlinked" ? Buffer.alloc(1024 * 1024, 1) : Buffer.from("retained role output"));
 });
 
 test("a lane that settles again during measurement receives fresh retention", async () => {
@@ -2019,4 +2025,20 @@ test("a lane that settles again during measurement receives fresh retention", as
   expect(report.removed).toEqual([]);
   expect(report.kept[0]!.reason).toBe("retention");
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+
+test.skipIf(process.platform === "win32")("allocated hard links count once while removal estimates exclude shared files", async () => {
+  const first = path.join(caseDir, "allocation-first");
+  const second = path.join(caseDir, "allocation-second");
+  fs.mkdirSync(first); fs.mkdirSync(second);
+  const file = path.join(first, "shared.bin");
+  fs.writeFileSync(file, Buffer.alloc(1024 * 1024, 1));
+  fs.linkSync(file, path.join(first, "second-link.bin"));
+  fs.linkSync(file, path.join(second, "third-link.bin"));
+  const bytes = fs.statSync(file).blocks * 512;
+  const seen = new Set<string>();
+  expect(await allocatedBytes(first, [], seen)).toBe(bytes);
+  expect(await allocatedBytes(second, [], seen)).toBe(0);
+  expect(await exclusiveBytes(first)).toBe(0);
 });
