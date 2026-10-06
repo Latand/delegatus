@@ -285,6 +285,8 @@ export class MemoryIndex {
       }
       // These earlier identities are provably the caller's exact folder,
       // including a deleted checkout recovered by the scanner's durable map.
+      // A previous folder at a different path needs a trusted alias; name
+      // similarity alone cannot establish that its memories belong here.
       if (options.cwd && canonicalProject(projectInfoFromCwd(options.cwd)?.project ?? "") === canonical) {
         const folders = new Set([options.cwd, projectRootForCwd(options.cwd)].filter((folder): folder is string => Boolean(folder)));
         for (const folder of folders) {

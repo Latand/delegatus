@@ -531,7 +531,7 @@ for (const mode of ["unproven authorship", "expired deadline", "agent delivery",
   expect(memoryIndex().injectionActivity().skipped).toBe(mode === "agent delivery" || mode === "no capability" ? 0 : 1);
 });
 
-for (const oldKey of ["directory", "local repository", "path", "alias"] as const) for (const sourceEngine of ["claude", "codex"] as const) test(`Claude seat operator hook selects ${sourceEngine} (${oldKey}) memories after a relay with old folder keys and no asks store`, async () => {
+for (const oldKey of ["directory", "local repository", "path", "alias", "unlinked deleted directory", "unlinked deleted path", "aliased deleted directory", "aliased deleted path"] as const) for (const sourceEngine of ["claude", "codex"] as const) test(`Claude seat operator hook selects ${sourceEngine} (${oldKey}) memories after a relay with old folder keys and no asks store`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-turn-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
@@ -559,7 +559,7 @@ for (const oldKey of ["directory", "local repository", "path", "alias"] as const
   const ledger = new FileClaudeDeliveryLedger();
   ledger.recordQueued(session, { id: "fixture-relay-delivery", text: relay, origin: { kind: "agent" } }, "queued-next-turn");
   ledger.confirmDelivered(session, "fixture-relay-delivery", "fixture-relay");
-  const sources = ["older", "current"].map((name, n) => {
+  const sources = ["older", "current", "foreign"].map((name, n) => {
     const source = path.join(root, name + ".md");
     fs.writeFileSync(source, sourceEngine === "claude"
       ? `---\nname: Widget ${name} rule\ndescription: Widget parser ${name} delimiter policy.\ntype: project\n---\nWidget ${name} policy requires ${n + 2} escape characters.\n`
@@ -567,19 +567,36 @@ for (const oldKey of ["directory", "local repository", "path", "alias"] as const
     return { path: source, engine: sourceEngine, sourceKind: sourceEngine === "claude" ? "claude_memory" as const : "rollout_summary" as const, project };
   });
   await memoryIndex().refresh(sources);
-  // Retained rows predate the alias pass; this read must recover their scope.
+  // Old-path rows have no trusted relationship unless an alias records it.
+  // A similarly named foreign folder stays outside the project's scope.
+  const deletedFolder = root + "-previous";
+  const foreignFolder = deletedFolder + "-copy";
+  expect(fs.existsSync(deletedFolder)).toBe(false);
+  expect(fs.existsSync(foreignFolder)).toBe(false);
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   const previousKey = oldKey === "directory" ? directoryProjectId(root) : oldKey === "local repository" ? localRepositoryProjectId(root)!
-    : oldKey === "path" ? root.replace(/[^a-zA-Z0-9]/g, "-") : "fixture-old-repository";
-  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(previousKey, sources[0].path); db.close();
-  if (oldKey === "alias") fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({ schemaVersion: 1,
+    : oldKey === "path" ? root.replace(/[^a-zA-Z0-9]/g, "-") : oldKey.endsWith("directory") ? directoryProjectId(deletedFolder)
+    : oldKey.endsWith("path") ? deletedFolder.replace(/[^a-zA-Z0-9]/g, "-") : "fixture-old-repository";
+  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(previousKey, sources[0].path);
+  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(oldKey.endsWith("path")
+    ? foreignFolder.replace(/[^a-zA-Z0-9]/g, "-") : directoryProjectId(foreignFolder), sources[2].path);
+  const expectedMemoryIds = db.query<{ id: string }, [string]>("SELECT id FROM memory_entries WHERE sourcePath = ?")
+    .all(sources[1].path).map(row => row.id);
+  if (!oldKey.startsWith("unlinked")) expectedMemoryIds.push(...db.query<{ id: string }, [string]>("SELECT id FROM memory_entries WHERE sourcePath = ?")
+    .all(sources[0].path).map(row => row.id));
+  db.close();
+  if (oldKey === "alias" || oldKey.startsWith("aliased")) fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({ schemaVersion: 1,
     aliases: { [previousKey]: "fixture-intermediate", "fixture-intermediate": project }, displayNames: { [project]: "Widgets" } }));
+  // Unknown deleted paths intentionally contribute no candidate. Same-folder
+  // historical keys and explicitly aliased deleted paths contribute both.
+  const expectedCandidates = oldKey.startsWith("unlinked") ? 1 : 2;
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "operator-asks.json"))).toBe(false);
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "asks-you-settings.json"))).toBe(false);
   let decisionCalls = 0, candidateCount = 0, failDecision = false;
   const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
     decisionCalls++; const body = await request.json(); candidateCount = Object.keys(body.questions).length;
     if (failDecision) return new Response(null, { status: 503 });
+    expect(Object.keys(body.questions).sort()).toEqual(expectedMemoryIds.sort());
     expect(body.state.latestOperatorMessage).toBe(prompt);
     expect(body.state.precedingTurns).toContain("machine:");
     return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
@@ -600,17 +617,17 @@ for (const oldKey of ["directory", "local repository", "path", "alias"] as const
     expect(await hook.exited).toBe(0);
     const output = await new Response(hook.stdout).text(); await pending;
     expect(output).toContain("Delegatus shared memory");
-    expect(candidateCount).toBe(2); expect(decisionCalls).toBe(1);
+    expect(candidateCount).toBe(expectedCandidates); expect(decisionCalls).toBe(1);
     expect(readOperatorAsks().spend.calls).toBe(1);
     expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
     expect(memoryIndex().injectionActivity()).toMatchObject({ decisions: 1, delivered: 1 });
     fs.appendFileSync(transcript, line("user", prompt, "fixture-current") + "\n");
     ledger.confirmDelivered(session, turn, "fixture-current");
     const names = offeredMemoryForTranscript(transcript);
-    expect(names["fixture-current"]).toHaveLength(2); expect(names["fixture-relay"]).toBeUndefined();
+    expect(names["fixture-current"]).toHaveLength(expectedCandidates); expect(names["fixture-relay"]).toBeUndefined();
     const feed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
     const items = feed.feed(fs.readFileSync(transcript, "utf8").trim().split("\n"), 0, false).items.map(e => e.item);
-    expect(provenanceLookupFor({ memoryOffers: names }, items).memoryFor!(items.find(i => i.kind === "sysmsg" && i.deliveredMessage?.engineMessageId === "fixture-current")!)).toHaveLength(2);
+    expect(provenanceLookupFor({ memoryOffers: names }, items).memoryFor!(items.find(i => i.kind === "sysmsg" && i.deliveredMessage?.engineMessageId === "fixture-current")!)).toHaveLength(expectedCandidates);
     expect(memoryIndex().lastTurn(project)).toBe("delivered");
     const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
     const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt: relay, delegatus_delivery_id: "fixture-relay-delivery" };

@@ -496,10 +496,38 @@ The operator-turn correction supersedes the candidate exclusion in step 2:
 index presence alone gives no evidence that a topic was loaded into this
 conversation. Candidates from both engines now reach the decision model.
 Loaded instructions, retired entries, previous offers and their near matches
-remain excluded. Retrieval reads the canonical alias family and the verified
-caller's earlier folder identities without rewriting project rows in the hook.
-Refresh still normalizes the derivative separately. A missing Asks-you store
-is a first reservation; the Asks-you switch does not gate shared memory.
+remain excluded. Retrieval reads the canonical alias family and, after verifying
+the caller's project, the directory, local-repository and Claude slug keys derived
+from its exact cwd and recovered repository root. A deleted worktree whose root
+is known to the scanner's durable map uses that root. A key derived from a
+different, absent checkout path needs a trusted alias into this family; similar
+folder names supply no link. The hook never rewrites project rows. Refresh still
+normalizes the derivative separately.
+
+Read-only review of the installation's 7,701-row snapshot found 438 Claude
+entries and zero Codex entries under the current key. The three earlier keys
+derived from the seat's current path held zero entries, and its alias family
+was empty. A previous, absent checkout path held 3,685 Codex entries under 99
+`dir-` keys and 387 Claude entries under the old folder slug; 385 of those Claude
+entries had exact copies under the current key. Those unlinked old-path keys
+remain outside retrieval. The five older-key Codex FTS matches observed in the
+initial investigation also remain outside retrieval. Recovering that history
+requires separately establishing the relationship through trusted project
+identity data. The seat regression covers both unlinked deleted directory/slug
+keys (only the current entry is offered) and explicitly aliased ones (both are
+offered), with a similarly named foreign folder excluded in every case.
+
+The confirmed injection blocker was the receiving-engine exclusion. On that
+snapshot, main gave the Claude seat 0–6 candidates from 16 global Codex entries;
+the corrected query gave it up to 30 candidates in at most 43 ms, all from its
+eligible current/global scope. For a Codex recipient, main exhausted the 100 ms
+candidate budget (zero candidates in 101–117 ms); the corrected query took
+4–25 ms. With 430 previous offers, retrieval took at most 56 ms. These are
+snapshot measurements; retrieval retains its 100 ms budget, 30-candidate bound
+and fail-open behavior within the 1,500 ms hook deadline.
+
+A missing Asks-you store is a first reservation; the Asks-you switch does not
+gate shared memory.
 The existing status row includes the last project turn's result, and confirmed
 emission names use the existing offer below that operator message.
 
