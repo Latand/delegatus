@@ -185,8 +185,19 @@ guarantees for the 1.x series.
 - **Launching an agent no longer shifts the page.** A draft without a task
   is drawn at the top of In progress, where its launch puts it, the card
   replaces the draft in one swap, and the launched reader keeps the draft's
-  height. On a phone the screen stays on the launched agent from send to
-  transcript, and Back leaves it in one tap ([#2428], [#2431]).
+  height. While you read another agent in In progress, the draft stays in
+  Inbox so it pushes nothing out of view, and the launched card takes its
+  place below the one you read. On a phone the screen stays on the launched
+  agent from send to transcript, and Back leaves it in one tap ([#2428],
+  [#2431]).
+- **A new agent's first frame is already correct.** The composer shows the
+  chosen model, effort and speed from the first frame of a launch instead
+  of the lowest tier that then jumps, and a launch sent with its first
+  prompt titles its card with that prompt until the agent's own title
+  replaces it. The model row reads "model" instead of "reasoning", and the
+  `haiku` alias reads "Haiku 4.5" like the resolved id after a reload.
+  Markdown lists written with `-`, `*` or `+` draw as bullet rows with a
+  hanging indent, in finished and streaming replies alike ([#2431]).
 - **Long conversations load their history without jumps.** Reaching the
   start of a long conversation no longer re-renders the whole feed on every
   older page, a link to a conversation opens without refetching the
@@ -205,6 +216,13 @@ guarantees for the 1.x series.
   finds the orchestrator idle, the composer sends the draft as an ordinary
   message and confirms "Seat idle — sent directly."; a failure keeps the
   draft ([#2472]).
+- **Fork and account switch copy the agent's usual private history.** The
+  project and session folders an agent provider creates with group-write
+  access, and Codex transcripts written group-writable, made a fork or an
+  account switch refuse with an unsafe-root or unsafe-source error. Such
+  history is now accepted when an owner-only parent folder keeps other users
+  out; peer-accessible, foreign-owned, linked and world-writable history is
+  still refused, and the copy is stored owner-only ([#2472]).
 - **A late delivery confirmation clears the "unknown outcome" notice.** A
   message confirmed after its delivery timeout left the composer on an
   unknown outcome, also after a restart. The status now reconciles against
