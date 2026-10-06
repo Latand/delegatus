@@ -4096,6 +4096,7 @@ export const en = {
   "kanban.hideWhy": "Nothing stops. History stays. Comes back by itself when it needs you.",
   "kanban.hideWhyWorking": { one: "{count} agent keeps working. History stays.", other: "{count} agents keep working. History stays." },
   "kanban.hideNote": "nothing stops",
+  "kanban.linkToTaskNote": "nothing is sent to the agent",
   "kanban.hideNoteWorking": { one: "{count} agent keeps working", other: "{count} agents keep working" },
   "kanban.menu.appearance": "Appearance",
   "kanban.menu.more": "More",

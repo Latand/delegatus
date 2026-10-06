@@ -4010,6 +4010,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.hideWhy": "Нічого не зупиняється. Історія лишається. Повернеться сама, коли знадобиться вам.",
   "kanban.hideWhyWorking": { one: "{count} агент далі працює. Історія лишається.", few: "{count} агенти далі працюють. Історія лишається.", many: "{count} агентів далі працюють. Історія лишається.", other: "{count} агентів далі працюють. Історія лишається." },
   "kanban.hideNote": "нічого не зупиняється",
+  "kanban.linkToTaskNote": "агентові нічого не надсилається",
   "kanban.hideNoteWorking": { one: "{count} агент далі працює", few: "{count} агенти далі працюють", many: "{count} агентів далі працюють", other: "{count} агентів далі працюють" },
   "kanban.menu.appearance": "Вигляд",
   "kanban.menu.more": "Ще",

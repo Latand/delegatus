@@ -34,7 +34,9 @@ critic left open on it:
 - **What Hide leaves running is written under the cells**: "Hide: 2 agents keep
   working", or "Hide: nothing stops", or the reason a Hide is refused. What the
   ends of the priority row do is written under them: "Top of the Inbox" under
-  High, "Bottom of the Inbox" under Low. Neither is only a tooltip now.
+  High, "Bottom of the Inbox" under Low. In a conversation's ⋯ the line
+  "To task: nothing is sent to the agent" stands under its cells. None of
+  them is only a tooltip now.
 - **The keys stay on the menu.** Enter, E and H are drawn in the corner of
   their cells (Enter as ↵) and named to a screen reader; I stays on the Icon
   row.

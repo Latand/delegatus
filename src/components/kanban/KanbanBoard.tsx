@@ -1619,6 +1619,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           id: "link",
           label: t("kanban.linkToTask"),
           why: t("kanban.linkToTaskWhy"),
+          note: t("kanban.linkToTaskNote"),
           onSelect: () => {
             setLinkQuery("");
             queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "link", key } }));

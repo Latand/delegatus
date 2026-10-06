@@ -18022,8 +18022,9 @@ describe("compact card menu and overflow menus: today and built", () => {
    * the menu's own button (both read on every card of the fixture, where it
    * stands and at the bottom of the window); when the rows of a section opened
    * in place are not under its own row, or a closed row carries the arrow of
-   * an open one; when the line under the Hide cell or the two lines under the
-   * priority row are missing or cut; when the first and the last cell of the
+   * an open one; when the line under the Hide cell, the line under the
+   * conversation's To task cell or the two lines under the priority row are
+   * missing or cut; when the first and the last cell of the
    * phone's row stand at different insets; when a double click on a row that
    * swaps the list for a page, or on the page's back row, sends a write or
    * lands on another row; when a state leaves the window or cuts a label; and
@@ -18425,7 +18426,20 @@ describe("compact card menu and overflow menus: today and built", () => {
         await page.waitForSelector(MENU, { timeout: 10_000 });
         await page.waitForTimeout(120);
         await capture(page, where, MENU, "conversation", "rest");
-        if (BUILT) await walk(page, where, "conversation");
+        if (BUILT) {
+          /* What Link to another task does beyond its name, at rest under the conversation's cells, the way Hide's is under the card's. */
+          const link = await page.evaluate(() => {
+            const menu = document.querySelector<HTMLElement>(".kb .menu");
+            const element = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-note="link"]');
+            if (!element || !menu) return null;
+            const box = element.getBoundingClientRect();
+            const frame = menu.getBoundingClientRect();
+            return box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.top >= frame.top && box.bottom <= frame.bottom + 0.5 && element.scrollWidth <= element.clientWidth + 0.5 ? (element.textContent ?? "").trim() : null;
+          });
+          said[`${keyOf(where)} conversation`] = { link };
+          if (link !== `${t("kanban.menu.cell.link")}: ${t("kanban.linkToTaskNote")}`) failures.push(`${keyOf(where)} conversation rest: no line under the To task cell (${JSON.stringify(link)})`);
+          await walk(page, where, "conversation");
+        }
         await closeMenu(page);
         if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
       } catch (error) {
