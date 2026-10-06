@@ -476,6 +476,22 @@
 .host-chip-icon { width: 12px; height: 12px; flex: none; color: var(--color-info); }
 .host-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
+/* The prototype review's button: a soft accent fill and a dot while a round
+   waits unopened, the accent word alone once it was opened, and the chosen
+   numbers after the decision. */
+.kb .card .proto { white-space: nowrap; }
+/* The word stands in a wide card; a narrow foot keeps the mark and its dot,
+   so the button never pushes the foot's other tools onto a second line. */
+.kb .card .foot:has(> .proto) { container: card-foot / inline-size; }
+@container card-foot (max-width: 479px) { .kb .card .proto .proto-word { display: none; } }
+.kb .card .proto svg { width: 14px; height: 14px; color: var(--color-muted); flex: none; }
+.kb .card .proto[data-prototype-state="ready"] { background: var(--color-accent-soft); color: var(--color-accent); }
+.kb .card .proto[data-prototype-state="ready"] svg, .kb .card .proto[data-prototype-state="opened"] svg { color: var(--color-accent); }
+.kb .card .proto[data-prototype-state="opened"] { color: var(--color-accent); }
+.kb .card .proto .proto-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); flex: none; }
+.kb .card .proto .proto-dot.warn { background: var(--color-warning); }
+.kb .card .proto .proto-chosen { display: inline-flex; align-items: center; gap: 3px; }
+.kb .card .proto .proto-chosen svg { width: 12px; height: 12px; color: var(--color-success); }
 .kb .card .ask svg { width: 14px; height: 14px; color: var(--color-accent); }
 .kb .card .ask.on { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .card .album .album-new { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; color: var(--color-accent); white-space: nowrap; }

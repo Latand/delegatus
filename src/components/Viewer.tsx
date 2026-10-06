@@ -28,6 +28,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, attentionExpiries, attentionId, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
+import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { useDismissalOverlay } from "./attention/dismissalOverlay";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
@@ -1804,6 +1805,8 @@ function ViewerApp() {
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
+      {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
+      <PrototypeReviewHost tasks={tasks} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
           surface serves every board and both form factors; it renders nothing
           until the header button or `/` opens it, and a selected row leaves

@@ -1,10 +1,8 @@
 # Task prototype review: server and interface contract
 
 This implementation follows the operator's 2026-10-06 task review request and
-supersedes draft #2521. This stage supplies the server and typed interface
-hooks. The card button, review modal or phone sheet, voice input reuse and
-orchestrator notice are the following interface stage on this same branch.
-Their browser evidence and measurements belong to that stage.
+supersedes draft #2521. The server and the typed hooks come first below; the
+interface built on them is described in the last section.
 
 Agents call `publish_prototype_review` with `clientRequestId`, `title` and
 `variants: [{number, name, description}]`. The short form adds `dir`; immediate
@@ -68,11 +66,6 @@ The interface imports client-safe contracts from
   notice/card navigation event. Its target names the task and review to open.
   The interface focuses the task before opening the requested round.
 
-The interface stage reuses the existing image viewer, modal and mobile sheet,
-composer microphone, and suggested-notice components. It supplies en/uk labels,
-keyboard selection and the unsaved-comment guard, then extends the existing
-kanban and conversation browser drivers. Captures stay under
-`$HOME/Projects/delegatus-wt/handoff/prototype-review/`; commit measurements only.
 
 Production-seam tests are `src/lib/prototypeReview/http.test.ts` and
 `src/lib/prototypeReview/decision.integration.test.ts`. The latter uses the
@@ -80,3 +73,57 @@ existing fake engine fixture with the real send handler, registry, runtime
 journal and retry leaf. Task sync, prompt and needs-you regressions extend their
 existing test files. Run every file in a separate process with isolated
 `LLV_STATE_DIR`, `HOME`, `TMPDIR` and a closed `LLV_VIEWER_CONTROL_URL`.
+
+## The interface
+
+Everything lives in `src/components/prototypeReview/`. `PrototypeReviewHost`
+is mounted once in the Viewer: it opens the review a card or a notice asks
+for through `openPrototypeReview`, and hands the waiting notices of the page's
+task poll to the orchestrator's composer.
+
+**The card button** (`CardPrototypeButton`, in the card's foot before the
+album) is absent while the task has no review. A waiting round this browser has
+not opened draws a soft accent fill and a dot (`ready`); once opened and left
+undecided it keeps the accent mark without the fill (`opened`, remembered in
+`localStorage`); a decided review shows a check and the chosen numbers
+(`decided`); a decision whose message failed or is unconfirmed shows an amber
+dot in the check's place (`unsent`). A newer round after a decision is `ready`
+again. The word "Prototype" is drawn where the foot is at least 480 px wide; a
+narrower foot keeps the mark and the dot. A card that waits only on its review
+adds no reason line and no dismissal to its foot: the choice is what clears it.
+The phone's task screen carries the same entry as a row (`PhonePrototypeRow`).
+
+**The orchestrator's notice** (`PrototypeNoticeRow`) stands above the seat's
+message field, where the task chips stand: one line per waiting task with
+"Go to prototype". Two lines show on the desktop and one on the phone; the rest
+fold behind a count. Where the composer is put away, one chip carries the
+notice and its count: on the folded seat's strip and on the phone board's seat
+card (`PrototypeNoticeChip`). The action brings the task up on the board, or
+pushes its screen on the phone, and opens the review over it.
+
+**The review** (`PrototypeReview`) is a dialog on the desktop and the existing
+`MobileSheet` on the phone. The variants are a list beside the stage (a row of
+chips on the phone), each with its number, name and description. The stage
+shows one picture at a time under a line with the variant's number, its name
+and the picture's caption; a strip of thumbnails holds the variant's other
+pictures and videos and scrolls sideways. An original and its change are shown
+side by side or under a slider over one frame. A click, or the zoom button,
+opens the existing `Lightbox` over the whole round, an original right before
+its change. A video plays in place from the store's own copy. The choice is the
+variant's number box; the comment field carries the composer's microphone
+(`useDictation` and `MicButtonView`, wired as the composer wires them). The
+saved decision replaces the field: the chosen variants, the comment, the time
+and what happened to the message, with a retry where the server allows one.
+Earlier rounds open from the header's round buttons.
+
+Keys: Left and Right step through the round's pictures, 1 to 9 toggle a
+variant, Escape closes and asks first when a comment was typed or dictated and
+not saved. A text field and a playing video keep their own keys.
+
+Rendered evidence is one `describe` block in
+`src/components/kanban/kanbanBoard.browser.test.tsx` over the `?proto=1`
+scenario of the board fixture, at 1440, 1000 and 390, in English and
+Ukrainian, light and dark. The seat's composer is drawn by the board, so the
+notice and its jump are measured there and the conversation driver is
+unchanged. Readings are in `evidence/prototype-review/readings.json`; frames
+stay under `$HOME/Projects/delegatus-wt/handoff/prototype-review/`.

@@ -17953,3 +17953,515 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("prototype review on a task: the card's button, the review and the orchestrator's notice", () => {
+  /*
+   * A task's prototype review as the operator meets it. The card's foot
+   * carries the review button in each of its states; the orchestrator's pane
+   * says a prototype is ready above its message field, and «Go to prototype»
+   * brings the task up and opens its review; the review shows one variant or
+   * four, an original beside its change, a video, forty pictures in one
+   * variant, a combination chosen with a dictated comment, the saved decision
+   * and the earlier round. Measured at 1440, 1000 and 390, in English and
+   * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "prototype review"
+   *
+   * The video is a two-second test pattern `ffmpeg` writes beside the bundle,
+   * and the microphone is Chromium's fake device answered by the fixture's
+   * transcription. Frames go to PROTOTYPE_REVIEW_PNG_DIR (default
+   * `.artifacts/prototype-review/`); readings to
+   * `evidence/prototype-review/readings.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "pane-1000", viewport: { width: 1000, height: 700 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+  const only = (process.env.PROTOTYPE_REVIEW_ONLY ?? "").split(",").filter(Boolean);
+
+  /* Every pair of the named regions that overlaps, and every one that leaves
+     the frame: the reading the gate is about. */
+  const measure = (page: Page, frame: string, regions: Record<string, string>) => page.evaluate(({ frame, regions }) => {
+    const host = document.querySelector<HTMLElement>(frame);
+    if (!host) return { missing: [frame], overlaps: [] as string[], outside: [] as string[], boxes: {} as Record<string, number[]> };
+    const bounds = host.getBoundingClientRect();
+    const boxes: [string, DOMRect][] = [];
+    const missing: string[] = [];
+    for (const [name, selector] of Object.entries(regions)) {
+      const found = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
+      if (!found.length) missing.push(name);
+      found.forEach((element, at) => boxes.push([found.length > 1 ? `${name}#${at + 1}` : name, element.getBoundingClientRect()]));
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
+      const [an, a] = boxes[i]!, [bn, b] = boxes[j]!;
+      if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`${an} × ${bn}`);
+    }
+    const outside = boxes.filter(([, box]) => box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5 || box.top < bounds.top - 0.5 || box.bottom > bounds.bottom + 0.5).map(([name]) => name);
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return { missing, overlaps, outside, boxes: Object.fromEntries(boxes.map(([name, box]) => [name, [round(box.left), round(box.top), round(box.width), round(box.height)]])) };
+  }, { frame, regions });
+
+  browserTest("prototype review: card button states, the orchestrator notice and its jump, and the review's variants, pair, video, forty pictures, combination and decision", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const video = path.join(out, "proto-video.webm");
+    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm", "accept-ranges": "bytes" } }),
+    });
+    const launch: LaunchOptions = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] };
+    let browser = await chromium.launch(launch);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?proto=1`;
+    const REVIEW = "[data-prototype-review]";
+    const DESKTOP_REGIONS = {
+      header: `${REVIEW} [role=dialog] > header`,
+      rail: `${REVIEW} aside`,
+      toolbar: `${REVIEW} [data-prototype-stage] > div:first-child`,
+      canvas: `${REVIEW} [data-prototype-canvas]`,
+      strip: `${REVIEW} [data-prototype-strip]`,
+      footer: `${REVIEW} [role=dialog] > footer`,
+    };
+    const DESKTOP_PARTS = {
+      variant: `${REVIEW} [data-prototype-variant]`,
+      caption: `${REVIEW} [data-prototype-caption]`,
+      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
+      rounds: `${REVIEW} [data-prototype-rounds]`,
+      close: `${REVIEW} [data-prototype-close]`,
+      heading: `${REVIEW} [role=dialog] > header > div:not([data-prototype-rounds])`,
+      field: `${REVIEW} [data-prototype-comment-field]`,
+      save: `${REVIEW} [data-prototype-save]`,
+      decisionComment: `${REVIEW} [data-prototype-comment]`,
+      delivery: `${REVIEW} [data-prototype-delivery]`,
+      chosen: `${REVIEW} [data-prototype-chosen]`,
+    };
+    const PHONE_REGIONS = {
+      header: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]",
+      body: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]",
+      footer: "[data-mobile2-sheet=prototype-review] > div:last-child",
+    };
+    const PHONE_PARTS = {
+      chips: `${REVIEW} [data-prototype-variant]`,
+      choose: `${REVIEW} [data-prototype-choose]`,
+      caption: `${REVIEW} [data-prototype-caption]`,
+      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
+      canvas: `${REVIEW} [data-prototype-canvas]`,
+      strip: `${REVIEW} [data-prototype-strip]`,
+    };
+    try {
+      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${size.name}-${lang}-${scheme}`;
+        if (only.length && !only.some((part) => label.includes(part))) continue;
+        if (!browser.isConnected()) browser = await chromium.launch(launch);
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, url, size.viewport, scheme, lang, "reduce", size.phone);
+        await context.addInitScript(`try { if (!localStorage.getItem("llv.prototypeReview.seen")) localStorage.setItem("llv.prototypeReview.seen", '["r-upload"]'); } catch {}`);
+        await page.reload();
+        /* The phone's sheet draws the decision in its own footer, outside the review's scrolling body. */
+        const scope = size.phone ? "[data-mobile2-sheet=prototype-review]" : REVIEW;
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        /* The review's own frame: regions that must not overlap, then the
+           parts inside them, each kind among its own. */
+        const frameCheck = async (name: string) => {
+          const frame = size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`;
+          const regions = await measure(page, frame, size.phone ? PHONE_REGIONS : DESKTOP_REGIONS);
+          const parts = await measure(page, frame, size.phone ? PHONE_PARTS : DESKTOP_PARTS);
+          const sideways = await page.evaluate((phone) => {
+            const scroller = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]" : "[data-prototype-review] [role=dialog]");
+            return scroller ? scroller.scrollWidth - scroller.clientWidth : -1;
+          }, size.phone);
+          /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
+          const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
+          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry))];
+          record(`${name}-geometry`, { regions: regions.boxes, overlaps: [...regions.overlaps, ...parts.overlaps], outside, sideways });
+          if (regions.overlaps.length || parts.overlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...parts.overlaps].join(", ")}`);
+          if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
+          if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
+        };
+        const stageState = () => page.evaluate(() => {
+          const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
+          const canvas = review.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
+          const inside = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5; };
+          const media = [...review.querySelectorAll<HTMLElement>("[data-prototype-canvas] img, [data-prototype-canvas] video")];
+          return {
+            slide: review.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage ?? null,
+            caption: review.querySelector("[data-prototype-caption]")?.textContent ?? null,
+            position: review.querySelector("[data-prototype-position]")?.textContent ?? null,
+            canvas: [Math.round(canvas.width), Math.round(canvas.height)],
+            media: media.map((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.width), Math.round(box.height)]; }),
+            mediaInside: media.every(inside),
+            loaded: media.every((element) => (element instanceof HTMLImageElement ? element.complete && element.naturalWidth > 0 : (element as HTMLVideoElement).readyState >= 1)),
+            pair: review.querySelector<HTMLElement>("[data-prototype-pair]")?.dataset.prototypePair ?? null,
+            thumbs: review.querySelectorAll("[data-prototype-thumb]").length,
+            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((element) => element.dataset.prototypeChosen),
+            round: review.dataset.prototypeRoundShown ?? document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
+          };
+        });
+        const showVariant = (number: number) => page.locator(size.phone ? `${REVIEW} button[data-prototype-variant="${number}"]` : `${REVIEW} [data-prototype-show="${number}"]`).click();
+        const choose = async (number: number) => {
+          if (size.phone) await showVariant(number);
+          await page.locator(`${REVIEW} [data-prototype-choose="${number}"]`).click();
+        };
+        const settle = () => page.waitForTimeout(250);
+        const posts = () => page.evaluate(() => (window as unknown as { protoPosts: { taskId: string; retry?: boolean }[] }).protoPosts);
+        const closeReview = async () => {
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
+        };
+        try {
+          /* 1. The board: one button per state. */
+          let openTask: (taskId: string) => Promise<void>;
+          if (size.phone) {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(400);
+            openTask = async (taskId) => {
+              const phoneCard = page.locator(`[data-phone-card="task:${taskId}"]`).first();
+              await phoneCard.scrollIntoViewIfNeeded();
+              await phoneCard.click();
+              const row = page.locator(`[data-phone-task-prototype="${taskId}"]`);
+              await row.waitFor({ timeout: 10_000 });
+              await row.scrollIntoViewIfNeeded();
+            };
+          } else {
+            await page.waitForSelector("[data-prototype-button]", { state: "attached", timeout: 30_000 });
+            const tab = page.locator('.tabs-nav [data-tab="assigned"]');
+            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
+            await page.waitForTimeout(400);
+            openTask = async (taskId) => {
+              const button = page.locator(`[data-prototype-button="${taskId}"]`);
+              await button.scrollIntoViewIfNeeded();
+              await button.click();
+            };
+            const cards = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-prototype-button]")].map((button) => {
+              const cardElement = button.closest<HTMLElement>(".card")!;
+              const foot = button.closest<HTMLElement>(".foot")!;
+              const box = (element: Element) => element.getBoundingClientRect();
+              const own = box(button);
+              const others = [...foot.children].filter((child) => child !== button && box(child).width > 0 && !child.classList.contains("spacer"));
+              const style = getComputedStyle(button);
+              return {
+                task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
+                word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width), dot: Boolean(button.querySelector(".proto-dot")),
+                background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
+                insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
+                overlaps: others.filter((other) => { const b = box(other); return own.left < b.right - 0.5 && b.left < own.right - 0.5 && own.top < b.bottom - 0.5 && b.top < own.bottom - 0.5; }).length,
+                footLines: new Set([...others, button].map((child) => { const b = box(child); return Math.round((b.top + b.bottom) / 2); })).size,
+              };
+            }));
+            record("cards", cards);
+            const states = Object.fromEntries(cards.map((entry) => [entry.task, entry.state]));
+            const expected = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-links": "ready", "t-disk": "unsent" };
+            if (JSON.stringify(states) !== JSON.stringify(expected) && Object.entries(expected).some(([task, state]) => states[task] !== state)) failures.push(`${label}: the card buttons read ${JSON.stringify(states)}`);
+            if (cards.length !== 5) failures.push(`${label}: ${cards.length} review buttons on the board, expected the five tasks with a review`);
+            for (const entry of cards) {
+              if (!entry.insideCard || entry.overlaps) failures.push(`${label}: the button of ${entry.task} leaves its card or overlaps the foot: ${JSON.stringify(entry)}`);
+              /* A foot that carries a reason and its dismissal already wraps its tools onto a second line; the button adds no third. */
+              if (entry.footLines > 2) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines`);
+            }
+            /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
+            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
+            if (!byTask["t-search"]?.aria?.includes(tr("proto.title").split(" ")[0]!.slice(0, 5)) && !byTask["t-search"]?.aria?.toLowerCase().includes(tr("proto.button.word").toLowerCase())) failures.push(`${label}: the waiting button is unnamed: ${byTask["t-search"]?.aria}`);
+            if (byTask["t-export"]?.text !== "2, 3" || byTask["t-disk"]?.text !== "2") failures.push(`${label}: the buttons say ${JSON.stringify(cards.map((entry) => entry.text))}`);
+            if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
+            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
+            await shot("cards");
+          }
+
+          /* 2. The orchestrator's notice and its jump. */
+          if (!size.phone) {
+            /* Where the seat is folded to its strip, the strip carries the notice as one chip; unfolded, the composer carries the lines. */
+            const chip = page.locator("[data-kanban-seat] [data-prototype-notice-chip]");
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) {
+              await chip.waitFor({ timeout: 15_000 });
+              const strip = await measure(page, "[data-kanban-seat] [data-seat-head]", { parts: "[data-kanban-seat] [data-seat-head] > *" });
+              record("notice-strip", { ...strip, text: await chip.textContent(), count: await chip.getAttribute("data-prototype-notice-chip") });
+              if (strip.overlaps.length || strip.outside.length || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the folded seat's notice chip overlaps ${strip.overlaps.join(", ")}, leaves the strip ${strip.outside.join(", ")} or miscounts`);
+              await shot("notice-folded");
+              await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+            }
+            const noticeRow = page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]');
+            await noticeRow.waitFor({ timeout: 15_000 });
+            if (await chip.count()) failures.push(`${label}: the unfolded seat repeats the notice as a chip`);
+            await noticeRow.scrollIntoViewIfNeeded();
+            const notice = await measure(page, "[data-orchestrator-conversation]", { row: "[data-orchestrator-conversation] [data-prototype-notice]", more: "[data-orchestrator-conversation] [data-prototype-notice-more]", field: "[data-orchestrator-conversation] textarea" });
+            const noticeParts = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => {
+              const box = row.getBoundingClientRect();
+              const action = row.querySelector<HTMLElement>("[data-prototype-notice-open]")!.getBoundingClientRect();
+              const titleBox = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
+              return { task: row.dataset.prototypeNotice, text: row.textContent, actionInside: action.right <= box.right + 0.5 && action.left >= box.left, titleClear: titleBox.right <= action.left + 0.5, height: Math.round(box.height) };
+            }));
+            record("notice", { ...notice, rows: noticeParts });
+            /* Three tasks wait; two lines stand and the third folds behind the count. */
+            const more = await page.locator("[data-prototype-notice-more]").getAttribute("data-prototype-notice-more");
+            if (noticeParts.length !== 2 || more !== "1") failures.push(`${label}: ${noticeParts.length} notice lines and «${more}» folded in the orchestrator's pane, expected two lines and one folded for the three waiting tasks`);
+            if (notice.overlaps.length || notice.outside.length) failures.push(`${label}: the notice overlaps ${notice.overlaps.join(", ")} or leaves the pane ${notice.outside.join(", ")}`);
+            if (noticeParts.some((row) => !row.actionInside || !row.titleClear || !row.text?.includes(tr("proto.notice.open")))) failures.push(`${label}: a notice row is broken: ${JSON.stringify(noticeParts)}`);
+            await shot("notice");
+            await page.locator('[data-prototype-notice-open="t-search"]').click();
+            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+            await page.waitForTimeout(600);
+            const jump = await page.evaluate(() => {
+              const cardElement = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-search"]');
+              const box = cardElement?.getBoundingClientRect();
+              return { review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, cardOnScreen: Boolean(box && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth) };
+            });
+            record("jump", jump);
+            if (jump.review !== "t-search" || !jump.cardOnScreen) failures.push(`${label}: «Go to prototype» did not bring the task up and open its review: ${JSON.stringify(jump)}`);
+          } else {
+            /* The phone board's seat card carries the notice with its count; a tap goes to the task and opens the review over it. */
+            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
+            await chip.waitFor({ timeout: 15_000 });
+            const seatCard = await measure(page, "[data-mobile2-seat-card]", { parts: "[data-mobile2-seat-card] > *" });
+            const chipBox = (await chip.boundingBox())!;
+            record("notice", { ...seatCard, count: await chip.getAttribute("data-prototype-notice-chip"), chip: [Math.round(chipBox.width), Math.round(chipBox.height)] });
+            if (seatCard.overlaps.length || seatCard.outside.length || chipBox.height < 44 || chipBox.width < 44 || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the seat card's notice chip reads ${JSON.stringify({ seatCard, chipBox })}`);
+            await shot("notice");
+            await chip.click();
+            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            const jump = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, taskScreen: Boolean(document.querySelector('[data-phone-task-prototype="t-search"]')) }));
+            record("jump", jump);
+            if (jump.review !== "t-search" || !jump.taskScreen) failures.push(`${label}: the seat card's notice did not bring the task up and open its review: ${JSON.stringify(jump)}`);
+            await shot("jump");
+            await page.keyboard.press("Escape");
+            await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
+            const row = await page.locator('[data-phone-task-prototype="t-search"]').evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return { text: element.textContent, state: element.getAttribute("data-prototype-state"), height: Math.round(box.height), right: box.right, width: window.innerWidth, background: getComputedStyle(element).backgroundColor };
+            });
+            record("task-row", row);
+            /* Opened a moment ago through the notice and left undecided: the row keeps its mark and drops the «ready» highlight. */
+            if (row.state !== "opened" || row.height < 44 || row.right > row.width) failures.push(`${label}: the task screen's review row reads ${JSON.stringify(row)}`);
+            await shot("task-row");
+            await page.locator('[data-phone-task-prototype="t-search"]').click();
+            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+            await page.waitForTimeout(500);
+          }
+
+          /* 3. Four variants. */
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await shot("four-variants");
+          const four = await stageState();
+          record("four-variants", four);
+          await frameCheck("four-variants");
+          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 4) failures.push(`${label}: the review does not list four variants`);
+          if (!four.caption?.includes(lang === "en" ? "Compact list" : "Компактний список") || !four.caption.startsWith("1") || four.position?.trim() !== "1 / 3" || !four.mediaInside || !four.loaded) failures.push(`${label}: the first picture reads ${JSON.stringify(four)}`);
+
+          /* 4. Arrows walk the pictures into the next variant: a pair. */
+          if (!size.phone) for (let step = 0; step < 3; step += 1) await page.keyboard.press("ArrowRight");
+          else await showVariant(2);
+          await settle();
+          if (!size.phone) {
+            const side = await stageState();
+            record("pair-side", side);
+            await shot("pair-side");
+            await frameCheck("pair-side");
+            const sides = await measure(page, "[data-prototype-canvas]", { side: "[data-prototype-pair-side]" });
+            if (side.pair !== "side" || side.media.length !== 2 || sides.overlaps.length || sides.outside.length || !side.mediaInside || !side.caption?.startsWith("2")) failures.push(`${label}: the pair side by side reads ${JSON.stringify({ side, sides })}`);
+            await page.locator('[data-prototype-pair-mode="slider"]').click();
+            await settle();
+          }
+          await page.locator("[data-prototype-split]").fill("35");
+          await settle();
+          const slider = await stageState();
+          const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
+          record("pair-slider", { ...slider, clip });
+          await shot("pair-slider");
+          await frameCheck("pair-slider");
+          if (slider.pair !== "slider" || slider.media.length !== 2 || !slider.mediaInside || !clip.includes("65%")) failures.push(`${label}: the pair slider reads ${JSON.stringify({ slider, clip })}`);
+
+          /* 5. Forty pictures in one variant. */
+          await showVariant(3);
+          await settle();
+          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await settle();
+          const forty = await stageState();
+          const strip = await page.evaluate(() => {
+            const element = document.querySelector<HTMLElement>("[data-prototype-strip]")!;
+            const current = element.querySelector<HTMLElement>("[aria-current=true]")!.getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            return { scrolls: element.scrollWidth > element.clientWidth, tall: element.scrollHeight - element.clientHeight, currentInView: current.left >= box.left - 0.5 && current.right <= box.right + 0.5, height: Math.round(box.height) };
+          });
+          record("forty", { ...forty, strip });
+          await shot("forty-pictures");
+          await frameCheck("forty-pictures");
+          if (forty.thumbs !== 40 || forty.position?.trim() !== "40 / 40" || !strip.scrolls || strip.tall > 0 || !strip.currentInView || !forty.mediaInside) failures.push(`${label}: forty pictures read ${JSON.stringify({ forty, strip })}`);
+
+          /* 6. A video. */
+          await showVariant(4);
+          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
+          await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-prototype-video]")?.readyState ?? 0) >= 2, undefined, { timeout: 15_000 });
+          await settle();
+          const videoState = await stageState();
+          const videoSize = await page.evaluate(() => { const element = document.querySelector<HTMLVideoElement>("[data-prototype-video]")!; return [element.videoWidth, element.videoHeight, element.controls]; });
+          record("video", { ...videoState, videoSize });
+          await shot("video");
+          await frameCheck("video");
+          if (!videoState.mediaInside || videoSize[0] !== 640 || videoSize[2] !== true || videoState.position?.trim() !== "3 / 3") failures.push(`${label}: the video reads ${JSON.stringify({ videoState, videoSize })}`);
+
+          /* 7. Full size in the existing viewer, with the variant's number, its name and the caption. */
+          await showVariant(1);
+          await settle();
+          await page.locator("[data-prototype-fullsize]").click();
+          await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
+          await page.waitForTimeout(300);
+          const viewer = await page.evaluate(() => ({ position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null }));
+          record("viewer", viewer);
+          await shot("full-size");
+          if (!viewer.caption?.includes(lang === "en" ? "1 · Compact list — results, desktop" : "1 · Компактний список — результати, десктоп") || !/^1 \/ \d+$/.test(viewer.position?.trim() ?? "")) failures.push(`${label}: the full-size viewer reads ${JSON.stringify(viewer)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
+          if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
+
+          /* 8. A combination and a dictated comment. */
+          if (size.phone) { await choose(2); await choose(3); } else { await page.keyboard.press("2"); await page.keyboard.press("3"); }
+          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
+          const stop = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
+          await stop.waitFor({ timeout: 10_000 });
+          await page.waitForTimeout(1_200);
+          await shot("dictating");
+          await frameCheck("dictating");
+          await stop.click();
+          const spoken = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
+          await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, spoken, { timeout: 10_000 });
+          await settle();
+          const combination = await stageState();
+          record("combination", combination);
+          await shot("combination");
+          await frameCheck("combination");
+          if (JSON.stringify(combination.chosen) !== JSON.stringify(["2", "3"])) failures.push(`${label}: the combination reads ${JSON.stringify(combination.chosen)}`);
+
+          /* 9. Escape with an unsaved comment asks first. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
+          await shot("unsaved-guard");
+          const guard = await measure(page, "body", { guard: "[data-prototype-guard]", actions: "[data-prototype-guard] button" });
+          record("guard", guard);
+          if (guard.outside.length || guard.overlaps.some((entry) => entry.includes("actions#1 × actions#2"))) failures.push(`${label}: the unsaved-comment guard is broken: ${JSON.stringify(guard)}`);
+          await page.locator("[data-prototype-guard-keep]").click();
+          if (!await page.locator(REVIEW).count() || await page.locator("[data-prototype-comment-field]").inputValue() !== spoken) failures.push(`${label}: keeping the edit lost the review or the comment`);
+
+          /* 10. Saved: the decision stays on the review and on the card, sent once. */
+          await page.locator("[data-prototype-save]").click();
+          await page.waitForSelector(`${scope} [data-prototype-decision]`, { timeout: 10_000 });
+          await settle();
+          const decided = await page.evaluate(() => ({
+            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-decision] [data-prototype-chosen]")].map((element) => element.textContent),
+            comment: document.querySelector("[data-prototype-decision] [data-prototype-comment]")?.textContent ?? null,
+            delivery: document.querySelector<HTMLElement>("[data-prototype-delivery]")?.dataset.prototypeDelivery ?? null,
+            deliveryText: document.querySelector("[data-prototype-delivery]")?.textContent ?? null,
+            time: document.querySelector("[data-prototype-decision] time")?.textContent ?? null,
+          }));
+          const sent = (await posts()).filter((post) => post.taskId === "t-search");
+          record("decided", { ...decided, posts: sent });
+          await shot("decided");
+          await frameCheck("decided");
+          if (decided.comment !== spoken || decided.delivery !== "sent" || decided.chosen.length !== 2 || !decided.time || sent.length !== 1) failures.push(`${label}: the saved decision reads ${JSON.stringify({ decided, sent })}`);
+          await closeReview();
+          if (!size.phone) {
+            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-prototype-button="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
+            const after = await page.locator('[data-prototype-button="t-search"]').textContent();
+            if (after?.trim() !== "2, 3") failures.push(`${label}: the card says ${after} after the choice`);
+            if (await page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]').count()) failures.push(`${label}: the notice of a decided review stays in the orchestrator's pane`);
+          } else {
+            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
+            await shot("task-row-decided");
+            await page.goBack();
+            await page.waitForTimeout(400);
+          }
+
+          /* 11. One variant, saved into a project with no orchestrator. */
+          await openTask("t-upload");
+          if (size.phone) await page.locator('[data-phone-task-prototype="t-upload"]').click();
+          await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await settle();
+          await shot("one-variant");
+          await frameCheck("one-variant");
+          record("one-variant", await stageState());
+          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 1) failures.push(`${label}: the one-variant review lists more than one`);
+          await page.locator(`${REVIEW} [data-prototype-choose="1"]`).click();
+          await page.locator("[data-prototype-save]").click();
+          await page.waitForSelector(`${scope} [data-prototype-delivery="no-orchestrator"]`, { timeout: 10_000 });
+          await settle();
+          await shot("no-orchestrator");
+          await frameCheck("no-orchestrator");
+          const unsent = await page.locator("[data-prototype-delivery]").textContent();
+          record("no-orchestrator", unsent);
+          if (!unsent?.includes(tr("proto.delivery.no-orchestrator"))) failures.push(`${label}: with no orchestrator the review says ${unsent}`);
+          await closeReview();
+          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
+
+          /* 12. A newer round after a decision, and the earlier round still opens. */
+          await openTask("t-links");
+          if (size.phone) await page.locator('[data-phone-task-prototype="t-links"]').click();
+          await page.waitForSelector(`${REVIEW} [data-prototype-rounds]`, { timeout: 10_000 });
+          await settle();
+          const newer = await stageState();
+          await shot("newer-round");
+          await frameCheck("newer-round");
+          await page.locator('[data-prototype-round="r-links-1"]').click();
+          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
+          await settle();
+          await shot("earlier-round");
+          await frameCheck("earlier-round");
+          const earlier = await stageState();
+          record("rounds", { newer: newer.round, earlier: earlier.round, earlierChosen: earlier.chosen });
+          if (newer.round !== "r-links-2" || earlier.round !== "r-links-1" || JSON.stringify(earlier.chosen) !== JSON.stringify(["1"])) failures.push(`${label}: the rounds read ${JSON.stringify({ newer: newer.round, earlier: earlier.round, chosen: earlier.chosen })}`);
+          await closeReview();
+          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
+
+          /* 13. Files no longer readable: the variants and the decision stay. */
+          await openTask("t-export");
+          if (size.phone) await page.locator('[data-phone-task-prototype="t-export"]').click();
+          await page.waitForSelector(`${REVIEW} [data-prototype-gone]`, { timeout: 10_000 });
+          await settle();
+          await shot("files-gone");
+          await frameCheck("files-gone");
+          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
+          record("files-gone", goneState);
+          if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
+          await closeReview();
+          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
+
+          /* 14. A send that failed: the decision is kept and one retry sends it. */
+          await openTask("t-disk");
+          if (size.phone) await page.locator('[data-phone-task-prototype="t-disk"]').click();
+          await page.waitForSelector(`${scope} [data-prototype-delivery="failed"]`, { timeout: 10_000 });
+          await settle();
+          await shot("send-failed");
+          await frameCheck("send-failed");
+          await page.locator("[data-prototype-retry]").click();
+          await page.waitForSelector(`${scope} [data-prototype-delivery="sent"]`, { timeout: 10_000 });
+          const retries = (await posts()).filter((post) => post.taskId === "t-disk");
+          record("retry", { posts: retries, button: await page.locator("[data-prototype-retry]").count() });
+          if (retries.length !== 1 || retries[0]!.retry !== true || await page.locator("[data-prototype-retry]").count()) failures.push(`${label}: the retry sent ${JSON.stringify(retries)} and the button ${await page.locator("[data-prototype-retry]").count() ? "stays" : "went"}`);
+          await shot("retry-sent");
+          await closeReview();
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (!only.length) fs.writeFileSync("evidence/prototype-review/readings.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    else fs.writeFileSync(path.join(out, "partial-readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 1_800_000);
+});

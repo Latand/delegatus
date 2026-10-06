@@ -41,6 +41,7 @@ import { useMobileNav, useMobileNavStore } from "./mobileNav";
 import { readSeatDraftField, seatFlowStorage, writeSeatDraftField } from "./orchestratorDraftStorage";
 import { seatCardView } from "./orchestratorRowState";
 import { deputyAskLabel, DeputyTwin, liveSeatDeputy } from "../orchestrator/SeatDeputyChip";
+import { PrototypeNoticeChip } from "@/components/prototypeReview/PrototypeNoticeRow";
 
 /**
  * Why the sheet is open. `handoff` arms the landing: the sheet was opened to
@@ -582,6 +583,9 @@ export function MobileSeatCard({
           </span>
         )}
       </button>
+      {/* A prototype waits: the seat's card says so with the count, and a tap
+          goes to the task and opens its review. */}
+      {view.shape === "invitation" ? null : <PrototypeNoticeChip project={project} compact />}
       {/* The seat's ⚙ (issue #1347): visible beside the card whenever the
           card's own tap is the conversation, so the one surface that opens the
           chat also shows where rotation and the seat's settings live. */}

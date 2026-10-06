@@ -7,7 +7,9 @@ import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead }
 import type { BoardTask } from "@/lib/tasks/types";
 
 export const OPEN_PROTOTYPE_REVIEW_EVENT = "llv:open-prototype-review";
-export type PrototypeReviewTarget = PrototypeReviewNotice["target"];
+/** `from` says who asked: a notice takes the operator to the task first, a
+    card's own button opens the review where the operator already is. */
+export type PrototypeReviewTarget = PrototypeReviewNotice["target"] & { from?: "card" | "notice" };
 /** The notice and card use the same task/round navigation contract. */
 export function openPrototypeReview(target: PrototypeReviewTarget): void {
   window.dispatchEvent(new CustomEvent<PrototypeReviewTarget>(OPEN_PROTOTYPE_REVIEW_EVENT,{ detail: target }));
