@@ -197,12 +197,15 @@ regression and all 43 comparison tests now pass with 225 assertions.
 
 ## Process-launch audit
 
-The audit parsed test files and fixture/probe helpers throughout the repository
-for imported Node spawn/fork/exec calls, their aliases, namespace calls and Bun
-spawn calls. Calls inside generated scripts inherit runner containment too.
-The tables record every source file with matching real call syntax. A local
-function merely named spawn is excluded. Tests that substitute launch ports
-remain covered whenever the real primitive is called.
+The audit searched test files and fixture/probe helpers throughout the repository
+for Node spawn/fork/exec primitives, their aliases, namespace calls and Bun
+spawn calls. The independent reference search includes dynamic imports and
+primitives passed to higher-order helpers such as `promisify(execFile)`;
+requiring a primitive to be the direct callee misses these launches. Calls
+inside generated scripts inherit runner containment too. The tables record
+each source file with real launch wiring, including the verification helpers.
+A local function merely named spawn and type-only imports are excluded. Tests
+that substitute launch ports remain covered whenever the real primitive is called.
 
 Disposition **owned**: the preload now records the real handle before spawn
 returns, and the runner contains descendants from fork time. Existing local
@@ -212,9 +215,22 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The syntax census contains 227 files: 152 with asynchronous primitives and
-75 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 231 files: 154 with asynchronous primitives and
+77 with only synchronous primitives. These dispositions describe the verified
 Linux path.
+
+An independent primitive-reference scan reconciled all 231 files with the
+inventory, with zero unlisted helpers. It found the dynamic Git launch at
+line 248 and the higher-order curl launches at lines 74, 510 and 591.
+
+The reconciliation adds the dynamically imported Git helper and all three
+promisified curl launches. It also counts the two verifier rows whose missing
+disposition columns excluded them from the earlier 227-file total, and moves
+the asynchronous Viewer verifier into its correct table. The bounded
+`scripts/test-child-lifetime-audit.test.ts` regression checks both omitted
+helpers, complete disposition columns, unique files, verifier classification
+and counts. All three checks failed against the earlier audit and pass after
+the correction. Existing Git and curl ownership needs no source change.
 
 | File | Async launch sites | Disposition |
 | --- | --- | --- |
@@ -244,6 +260,7 @@ Linux path.
 | `scripts/rebuild.test.ts` | 104 | owned |
 | `scripts/runtime-host-viewer-adapter.test.ts` | 82, 107, 160, 258, 520, 598, 700, 1051, 1234, 1263, 1340 | owned |
 | `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
+| `scripts/verify-viewer-runtime.ts` | 200, 244, 383 | contained helper; direct Linux CLI enters containment, served probe owns a nested service and rejects unconfirmed shutdown |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 29, 99 | owned |
@@ -363,6 +380,7 @@ Linux path.
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
+| `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
 | `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
@@ -389,8 +407,6 @@ Linux path.
 | `scripts/dockerfile-permissions.test.ts` | 56 | synchronous |
 | `scripts/eslint-changes.test.ts` | 13 | synchronous |
 | `scripts/harness-ledger.ts` | 673, 796 | synchronous |
-| `scripts/verify-viewer-runtime.ts` | Direct Linux CLI enters containment; served probe owns a nested service and rejects unconfirmed shutdown. |
-| `scripts/verify-bun-runtime-controls.ts` | Synchronous negative-control launches remain contained; synthetic build links verifier dependencies. |
 | `scripts/local-gate-tests.ts` | 158, 198 | synchronous |
 | `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
@@ -398,6 +414,7 @@ Linux path.
 | `scripts/publish-workflow.test.ts` | 189, 328 | synchronous |
 | `scripts/supply-chain-check.test.ts` | 14 | synchronous |
 | `scripts/verify-native-codex-runtime.test.ts` | 33 | synchronous |
+| `scripts/verify-bun-runtime-controls.ts` | 14 | synchronous; negative-control launches remain contained, synthetic build links verifier dependencies |
 | `src/app/api/artifact/route.test.ts` | 143 | synchronous |
 | `src/app/api/pipelines/route.test.ts` | 24 | synchronous |
 | `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
@@ -407,6 +424,7 @@ Linux path.
 | `src/lib/agent/spawnCommand.contention.test.ts` | 92, 155, 226 | synchronous |
 | `src/lib/agent/transcript.test.ts` | 36, 40 | synchronous |
 | `src/lib/attention/landing.test.ts` | 42 | synchronous |
+| `src/lib/boardMaintenance/run.test.ts` | 245 (dynamic import), 248 (`git` helper) | synchronous; caller waits for Git init/commit/branch in an isolated repository, and the runner contains descendants on deadline or cancellation |
 | `src/lib/flows/git.test.ts` | 19, 20, 46 | synchronous |
 | `src/lib/forge/autoMerge.test.ts` | 258, 292, 336, 375, 406 | synchronous |
 | `src/lib/git/agentForgeCredentials.test.ts` | 70, 87, 88, 89, 119, 120, 413, 419, 435, 438 | synchronous |
