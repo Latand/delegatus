@@ -45,6 +45,11 @@ observation; the gate judges them on the candidate alone. It never copies new
 candidate tests onto main for baseline evidence.
 
 An assertion failing only on the candidate gets three fresh runs of its file.
+Every full rerun is compared with the pinned baseline, including failures first
+seen during confirmation. Each new identity needs three subsequent observations.
+Confirmation stops after at most six full file rounds; an identity still awaiting
+confirmation refuses the batch. Pre-existing failures discovered in reruns are
+also reported separately.
 If any observes it passing, the report lists it as intermittent and permits it.
 Missing, skipped or incomplete confirmation results provide no passing evidence.
 For a confirmed failure, the gate replays the batch with each PR omitted in turn
@@ -57,10 +62,20 @@ The report names the PR whose omission clears a failure. If multiple omissions
 clear it, those PRs are reported as `integration: needs both`. If no single
 omission clears it, the gate samples a combined removal and restores PRs one at
 a time to establish a minimal clearing removal set, with the same integration
-label. An assertion still failing with all PRs removed cannot be attributed and
-stops the pass. This extra search costs at most one combined sample plus one
+label. When the preserved candidate test still fails with all PRs removed, the
+gate checks changes to the test itself: it omits the test-writing PRs using each
+subject's native test versions, then restores those PRs one at a time to find a
+minimal clearing removal set. A complete native inventory may show that an
+added test is absent; a skipped test supplies no passing evidence. The report
+labels these failures `test change regression` and records the native samples.
+Only files with proven faulty test changes are replaced with the remaining
+batch's native versions before revalidation. All other candidate detectors stay
+installed, so removing a healthy test author cannot hide an implementation bug.
+A failure that neither search can attribute stops the pass.
+The preserved-corpus search costs at most one combined sample plus one
 sample per PR for each such assertion. Removal and confirmation observations
-remain in the private run record and the report.
+remain in the private run record and the report. Test-change attribution adds
+at most one native sample plus one per PR that wrote the affected test file.
 
 Attributed PRs are withheld at their unchanged reviewed heads. The remaining
 reviewed patches are rebuilt in input order, then all gates run again before

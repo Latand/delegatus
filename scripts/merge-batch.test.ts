@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -54,6 +54,61 @@ test("a candidate failure that passes a confirmation is reported as intermittent
   expect(runs).toBe(3);
   expect(decision.intermittent).toEqual([failure]);
   expect(decision.attributed).toEqual([]);
+});
+
+test("confirmation discovers and attributes a failure skipped in the initial candidate", async () => {
+  const first = site("initial intermittent"), later = site("later regression");
+  let runs = 0;
+  const decision = await attributeBatchTests(recorded([], [first, later]), recorded([first]), [12, 13],
+    async () => { runs++; return recorded([later], [first]); },
+    async removed => removed.includes(13) ? recorded([], [first, later]) : recorded([later], [first]));
+  expect(runs).toBe(4);
+  expect(decision.intermittent).toEqual([first]);
+  expect(decision.attributed.map(entry => entry.test)).toEqual([later]);
+  expect(decision.attributed[0]!.prs).toEqual([13]);
+  expect(decision.attributed[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+});
+
+test("confirmation reports baseline failures first seen during a full rerun", async () => {
+  const initial = site("intermittent"), existing = site("existing");
+  const decision = await attributeBatchTests(recorded([existing]), recorded([initial]), [12],
+    async () => recorded([existing], [initial]), async () => { throw new Error("must not attribute"); });
+  expect(decision.preExisting).toEqual([existing]);
+  expect(decision.intermittent).toEqual([initial]);
+});
+
+test("late discoveries exhaust a bounded confirmation budget and cannot approve", async () => {
+  const initial = site("initial");
+  const failures = [initial];
+  let runs = 0;
+  await expect(attributeBatchTests(recorded(), recorded(failures.slice()), [12], async () => {
+    failures.push(site(`discovery ${++runs}`));
+    return recorded(failures.slice());
+  }, async () => { throw new Error("must not attribute before confirmation completes"); })).rejects.toThrow("confirmation budget exhausted");
+  expect(runs).toBe(MAX_TEST_CONFIRMATION_RUNS);
+});
+
+test("between-test errors discovered during confirmation remain hard failures", async () => {
+  const failure = site("initial"), error: TestSite = { ...site("load error"), kind: "error" };
+  await expect(attributeBatchTests(recorded(), recorded([failure]), [12], async () => recorded([error], [failure]),
+    async () => { throw new Error("must not attribute"); })).rejects.toThrow("between-test error");
+});
+
+test("multiple faulty test authors retain integration evidence and exclude unrelated PRs", async () => {
+  const failure = site("faulty assertion");
+  const decision = await attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
+    async () => recorded([failure]), async () => recorded([failure]), {
+      owners: () => [12, 13],
+      without: async removed => ({ run: removed.includes(12) && removed.includes(13) ? recorded() : recorded([failure]),
+        absent: removed.includes(12) && removed.includes(13) }),
+    });
+  expect(decision.attributed[0]!.prs).toEqual([12, 13]);
+  expect(decision.attributed[0]!.reason).toBe("integration: needs both; test change regression");
+  expect(decision.attributed[0]!.removals.filter(entry => entry.corpus === "native")).toEqual([
+    { removed: [12, 13], outcome: "absent", corpus: "native" },
+    { removed: [13], outcome: "fail", corpus: "native" },
+    { removed: [12], outcome: "fail", corpus: "native" },
+  ]);
 });
 
 test("between-test errors and missing confirmation tests remain hard failures", async () => {
@@ -289,6 +344,33 @@ test("a hard gate refusal invalidates a previously gated tip", async () => {
   expect(batch.read().gated).toBeNull();
 });
 
+test("full batch gate withholds a regression discovered while the initial failure clears", async () => {
+  const f = fixture();
+  f.seed("bad.test.ts", "fixture");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const culprit = f.addPr(13, "bad.ts", "regression");
+  let candidateRuns = 0;
+  const runner: CommandRunner = async (cwd, args) => {
+    if (args[1] === "bun" && args[2] === "test") {
+      const file = args[3]!.replace(/^\.\//, "");
+      if (!existsSync(join(cwd, "bad.ts"))) return testResult(file, [], ["A", "B"]);
+      if (++candidateRuns === 1) return testResult(file, ["A"], []);
+      return testResult(file, ["B"], ["A"]);
+    }
+    return successfulCommand(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${healthy},13@${culprit}`);
+  const state = await batch.gate();
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  expect(state.rows[1]!.head).toBe(culprit);
+  expect(state.testDecisions![0]!.attributed[0]!.test.name).toBe("B");
+  expect(report(state)).toContain("B; candidate failed; confirmations fail, fail, fail");
+  expect(report(state)).toContain("without #13: pass");
+  expect(state.gated).toBe(state.tip);
+  expect(existsSync(join(state.work, "bad.ts"))).toBeFalse();
+}, 30_000);
+
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
   setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner) {
   const f = fixture();
@@ -409,6 +491,21 @@ test("one run lands healthy PRs in order and reports the unchanged culprit with 
   expect(summary).toContain("Pre-existing failures (permitted):\n- check.test.ts > suite > pre-existing");
   expect(summary).toContain("confirmations fail, fail, fail; without #12: fail; without #13: pass; without #14: fail");
 });
+
+test("one run lands the healthy PR after attributing a faulty new test to its author", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+    ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const culprit = f.addPr(13, "new.test.ts", "const { test, expect } = require('bun:test');\ntest('invariant', () => expect(1).toBe(2));\n");
+  await f.batch.build(`12@${healthy},13@${culprit}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(culprit);
+  expect(report(state)).toContain(`| #12 | merged ${state.rows[0]!.commit} |`);
+  expect(report(state)).toContain("#13 | culprit test change regression");
+  expect(existsSync(join(f.repo, "new.test.ts"))).toBeFalse();
+}, 30_000);
 
 function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   mkdirSync(join(f.repo, "scripts"));
@@ -934,3 +1031,52 @@ test("PR removal keeps the reviewed regression test when its author is healthy",
   expect(git(state.work, ["show", `${state.tip}:adder.js`])).toContain("a + b");
   expect(built.testCorpus).toBeUndefined();
 });
+
+for (const mode of ["new", "modified", "added assertion"] as const) {
+  test(`a faulty ${mode} test names its author and revalidates the healthy remainder with real Bun`, async () => {
+    const f = fixture();
+    const existing = mode !== "new";
+    const valid = "const { test, expect } = require('bun:test');\ntest('valid invariant', () => expect(1).toBe(1));\n";
+    if (existing) f.seed("new.test.ts", valid);
+    const healthy = f.addPr(12, "healthy.txt", "healthy");
+    const broken = mode === "added assertion" ? valid + "test('added invariant', () => expect(1).toBe(2));\n"
+      : valid.replace("toBe(1)", "toBe(2)");
+    const culprit = f.addPr(13, "new.test.ts", broken);
+    let revalidated = false;
+    const runner: CommandRunner = async (cwd, args, env) => {
+      if (args[1] === "bun" && args[2] === "test") return commandRunner(cwd, args.slice(1), env);
+      if (existsSync(join(cwd, "healthy.txt")) && (!existsSync(join(cwd, "new.test.ts"))
+        || readFileSync(join(cwd, "new.test.ts"), "utf8") === valid)) revalidated = true;
+      return { code: 0, output: "" };
+    };
+    const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+    await batch.build(`12@${healthy},13@${culprit}`);
+    const state = await batch.gate();
+    expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+    expect(state.rows[1]!.head).toBe(culprit);
+    expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(culprit);
+    expect(state.gated).toBe(state.tip);
+    expect(revalidated).toBeTrue();
+    expect(existsSync(join(state.work, "healthy.txt"))).toBeTrue();
+    expect(Object.keys(state.testCorpus!)).toEqual(existing ? ["new.test.ts"] : []);
+    const evidence = state.testDecisions![0]!.attributed[0]!;
+    expect(evidence.prs).toEqual([13]);
+    expect(evidence.reason).toBe("test change regression");
+    expect(report(state)).toContain(`without #13 (native tests): ${mode === "modified" ? "pass" : "absent"}`);
+    expect(git(state.work, ["status", "--porcelain"])).toBe("");
+  }, 30_000);
+}
+
+test("a skipped native assertion cannot clear a faulty test change", async () => {
+  const f = fixture();
+  const valid = "const { test, expect } = require('bun:test');\ntest('sentinel', () => expect(1).toBe(1));\ntest.skip('invariant', () => expect(1).toBe(2));\n";
+  f.seed("new.test.ts", valid);
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const faulty = f.addPr(13, "new.test.ts", valid.replace("test.skip", "test"));
+  const runner: CommandRunner = async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+    ? commandRunner(cwd, args.slice(1), env) : { code: 0, output: "" };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${healthy},13@${faulty}`);
+  await expect(batch.gate()).rejects.toThrow("missing or skipped test");
+  expect(batch.read().gated).toBeNull();
+}, 30_000);

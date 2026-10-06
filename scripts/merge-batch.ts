@@ -20,7 +20,9 @@ export function compareBatchTests(base: TestRun, candidate: TestRun) {
 }
 
 export const MAX_TEST_CONFIRMATIONS = 3;
-type TestObservation = { removed: number[]; outcome: "pass" | "fail" };
+export const MAX_TEST_CONFIRMATION_RUNS = MAX_TEST_CONFIRMATIONS * 2;
+type NativeTestSample = { run: TestRun; absent: boolean };
+type TestObservation = { removed: number[]; outcome: "pass" | "fail" | "absent"; corpus?: "native" };
 export type TestAttribution = {
   test: TestSite; prs: number[]; reason: string; confirmation: ("pass" | "fail")[]; removals: TestObservation[];
 };
@@ -37,18 +39,33 @@ function observed(run: TestRun, test: TestSite, label: string): "pass" | "fail" 
 
 /** Recorded results drive the decision; callbacks supply fresh file samples. */
 export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
-  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>): Promise<BatchTestDecision> {
+  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>,
+  native?: { owners: (test: TestSite) => number[]; without: (removed: number[], test: TestSite) => Promise<NativeTestSample> }): Promise<BatchTestDecision> {
   const comparison = compareBatchTests(base, candidate);
   const decision: BatchTestDecision = { preExisting: comparison.preExisting, intermittent: [], attributed: [] };
-  const confirmations = new Map(comparison.introduced.map(test => [testIdentity(test), [] as ("pass" | "fail")[]]));
+  const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
   const files = [...new Set(comparison.introduced.map(test => test.file))];
   if (!files.length) return decision;
-  for (let round = 0; round < MAX_TEST_CONFIRMATIONS; round++) {
+  for (let round = 0; round < MAX_TEST_CONFIRMATION_RUNS; round++) {
     const run = await rerun(files);
-    for (const test of comparison.introduced) confirmations.get(testIdentity(test))!.push(observed(run, test, "candidate confirmation"));
+    const discovered = compareBatchTests(base, run);
+    for (const test of discovered.preExisting) {
+      if (!decision.preExisting.some(site => testIdentity(site) === testIdentity(test))) decision.preExisting.push(test);
+    }
+    for (const entry of pending.values()) {
+      const outcome = observed(run, entry.test, "candidate confirmation");
+      entry.confirmation.push(outcome);
+    }
+    for (const test of discovered.introduced) {
+      if (!pending.has(testIdentity(test))) pending.set(testIdentity(test), { test, confirmation: [] });
+    }
+    if ([...pending.values()].every(entry => entry.confirmation.length >= MAX_TEST_CONFIRMATIONS)) break;
   }
-  const confirmed = comparison.introduced.filter(test => {
-    if (confirmations.get(testIdentity(test))!.includes("pass")) { decision.intermittent.push(test); return false; }
+  if ([...pending.values()].some(entry => entry.confirmation.length < MAX_TEST_CONFIRMATIONS)) {
+    throw new Error("Candidate confirmation budget exhausted with unclassified failures; batch not gated");
+  }
+  const confirmed = [...pending.values()].map(entry => entry.test).filter(test => {
+    if (pending.get(testIdentity(test))!.confirmation.includes("pass")) { decision.intermittent.push(test); return false; }
     return true;
   });
   if (!confirmed.length) return decision;
@@ -58,7 +75,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   for (const test of confirmed) {
     const evidence: TestObservation[] = removals.map(entry => ({ removed: entry.removed, outcome: observed(entry.run, test, "PR removal") }));
     let responsible = evidence.filter(entry => entry.outcome === "pass").map(entry => entry.removed[0]!);
-    const integration = responsible.length !== 1;
+    let reason = responsible.length === 1 ? "test regression" : "integration: needs both";
     if (!responsible.length) {
       // Several independent changes can keep the same assertion red after each
       // single removal. Find a minimal clearing removal set, retaining unrelated
@@ -67,16 +84,40 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
       const all = await without(responsible, [test.file]);
       const outcome = observed(all, test, "combined PR removal");
       evidence.push({ removed: [...responsible], outcome });
-      if (outcome !== "pass") throw new Error("Integration failure persists without any PR; cannot establish attribution");
-      for (const pr of prs) {
-        const removed = responsible.filter(number => number !== pr);
-        const outcome = observed(await without(removed, [test.file]), test, "combined PR removal");
-        evidence.push({ removed, outcome });
-        if (outcome === "pass") responsible = removed;
+      if (outcome !== "pass") {
+        // A detector that passes on the base implementation must stay installed
+        // when its author is omitted. Only a detector that also fails there can
+        // be attributed to changes in the test itself using native subjects.
+        const owners = native?.owners(test).filter(pr => prs.includes(pr)) ?? [];
+        if (!owners.length) throw new Error("Integration failure persists without any PR; cannot establish attribution");
+        const nativeOutcome = async (removed: number[]) => {
+          const sample = await native!.without(removed, test);
+          // Absence comes from the native subject's complete test inventory.
+          // Skipped assertions remain present and provide no passing evidence.
+          if (sample.run.failures.some(site => site.kind === "error")) throw new Error("Native PR removal: between-test error; batch not gated");
+          const outcome = sample.absent ? "absent" : observed(sample.run, test, "native PR removal");
+          evidence.push({ removed: [...removed], outcome, corpus: "native" });
+          return outcome;
+        };
+        responsible = [...owners];
+        if (await nativeOutcome(responsible) === "fail") throw new Error("Native test failure persists without its authors; cannot establish attribution");
+        for (const pr of owners) {
+          const removed = responsible.filter(number => number !== pr);
+          if (await nativeOutcome(removed) !== "fail") responsible = removed;
+        }
+        if (!responsible.length) throw new Error("Native test failure is intermittent; cannot establish test-change attribution");
+        reason = responsible.length === 1 ? "test change regression" : "integration: needs both; test change regression";
+      } else {
+        for (const pr of prs) {
+          const removed = responsible.filter(number => number !== pr);
+          const outcome = observed(await without(removed, [test.file]), test, "combined PR removal");
+          evidence.push({ removed, outcome });
+          if (outcome === "pass") responsible = removed;
+        }
       }
     }
-    decision.attributed.push({ test, prs: responsible, reason: integration ? "integration: needs both" : "test regression",
-      confirmation: confirmations.get(testIdentity(test))!, removals: evidence });
+    decision.attributed.push({ test, prs: responsible, reason,
+      confirmation: pending.get(testIdentity(test))!.confirmation, removals: evidence });
   }
   return decision;
 }
@@ -511,9 +552,9 @@ export class MergeBatch {
     }
   }
 
-  private async testSample(cwd: string, files: string[], stable: boolean): Promise<TestRun> {
+  private async testSample(cwd: string, files: string[], stable: boolean): Promise<TestRun & { present: TestSite[] }> {
     const started = performance.now();
-    const sample: TestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
+    const sample: TestRun & { present: TestSite[] } = { failures: [], passed: [], completed: [], elapsedMs: 0, present: [] };
     for (const file of files) {
       const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, stable);
       if (/^# Unhandled error between tests/m.test(result.output)) throw new Error(`Test gate: between-test error in ${file}; batch not gated`);
@@ -522,13 +563,17 @@ export class MergeBatch {
       catch { throw new Error(`Test gate could not complete ${file}; missing or invalid report`); }
       if (parsed.failures.some(site => site.kind === "error")) throw new Error(`Test gate: between-test error in ${file}; batch not gated`);
       if ((result.code === 0) !== (parsed.failures.length === 0)) throw new Error(`Test gate could not run ${file}; runner exit disagrees with report`);
+      // Reuse the validated parser to retain skipped identities as present.
+      // Native omission may remove an added assertion; skipping it proves no fix.
+      const present = parseReport((result.report ?? "").replace(/<skipped\b[^>]*(?:\/>|>[\s\S]*?<\/skipped>)/g, ""), result.output, file, cwd);
+      sample.present.push(...present.failures, ...present.passed);
       sample.failures.push(...parsed.failures); sample.passed.push(...parsed.passed); sample.completed.push(file);
     }
     sample.elapsedMs = performance.now() - started;
     return sample;
   }
 
-  private async testSubject(state: RunState, files: string[], removed?: number[]): Promise<TestRun> {
+  private async testSubject(state: RunState, files: string[], removed?: number[], stable = !!removed): Promise<TestRun & { present: TestSite[] }> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     try {
@@ -539,8 +584,8 @@ export class MergeBatch {
       }
       const install = await this.gateCommand(work, { id: "dependencies", args: ["bun", "install", "--frozen-lockfile"] }, false);
       if (install.code) throw new Error(`${removed ? "PR removal" : "Baseline"} dependency gate cannot run; batch not gated`);
-      const selected = removed ? files : files.filter(file => existsSync(join(work, file)) && statSync(join(work, file)).isFile());
-      return await this.testSample(work, selected, !!removed);
+      const selected = stable ? files : files.filter(file => existsSync(join(work, file)) && statSync(join(work, file)).isFile());
+      return await this.testSample(work, selected, stable);
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
@@ -551,7 +596,13 @@ export class MergeBatch {
     state.testBaseline = { base: state.base, run: baseline };
     this.save(state);
     const decision = await attributeBatchTests(baseline, candidate, state.rows.filter(row => row.status === "clean").map(row => row.number),
-      files => this.testSample(state.work, files, true), (removed, files) => this.testSubject(state, files, removed));
+      files => this.testSample(state.work, files, true), (removed, files) => this.testSubject(state, files, removed), {
+        owners: test => state.rows.filter(row => row.status === "clean" && row.paths.includes(test.file)).map(row => row.number),
+        without: async (removed, test) => {
+          const run = await this.testSubject(state, [test.file], removed, false);
+          return { run, absent: !run.present.some(site => testIdentity(site) === testIdentity(test)) };
+        },
+      });
     (state.testDecisions ??= []).push(decision);
     for (const row of state.rows) {
       if (row.status !== "clean") continue;
@@ -563,6 +614,14 @@ export class MergeBatch {
     this.save(state);
     if (!decision.attributed.length) return true;
     await this.rebuild(state);
+    // Proven faulty test changes no longer belong to the remaining candidate.
+    // Preserve every other reviewed detector, including those of healthy PRs.
+    for (const file of new Set(decision.attributed.filter(entry => entry.reason.includes("test change regression")).map(entry => entry.test.file))) {
+      const absolute = join(state.work, file);
+      if (existsSync(absolute)) state.testCorpus![file] = readFileSync(absolute).toString("base64");
+      else delete state.testCorpus![file];
+    }
+    this.save(state);
     return false;
   }
 
@@ -890,7 +949,7 @@ function testDecisionReport(decisions: BatchTestDecision[]): string[] {
     "", "Intermittent failures (permitted):", ...[...intermittent.values()].map(site => `- ${describe(site)}`),
     "", "Attributed failures:", ...attributed.map(entry =>
       `- ${entry.prs.map(number => `#${number}`).join(", ")}: ${entry.reason}: ${describe(entry.test)}; candidate failed; confirmations ${entry.confirmation.join(", ")}; `
-      + entry.removals.map(sample => `without ${sample.removed.map(number => `#${number}`).join(", ") || "none"}: ${sample.outcome}`).join("; ")),
+      + entry.removals.map(sample => `without ${sample.removed.map(number => `#${number}`).join(", ") || "none"}${sample.corpus ? " (native tests)" : ""}: ${sample.outcome}`).join("; ")),
   ];
 }
 
