@@ -634,7 +634,6 @@ function freshIgnored(worktree: string, tracked: string): string[] {
     for (let depth = 1; depth < parts.length; depth++) directories.add(parts.slice(0, depth).join("/"));
   }
   const pending = [""];
-  const checked = new Map<string, boolean>();
   let visited = 0;
   try {
     while (pending.length) {
@@ -644,7 +643,7 @@ function freshIgnored(worktree: string, tracked: string): string[] {
         const name = relative ? `${relative}/${entry.name}` : entry.name;
         if (name === ".git" || files.has(name)) continue;
         if (entry.isDirectory() && directories.has(name)) pending.push(name);
-        else if (!disposableIgnored(worktree, name, checked)) return [name];
+        else if (!disposableIgnored(worktree, name)) return [name];
       }
     }
     return [];
