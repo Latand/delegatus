@@ -6,63 +6,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
-import ts from "typescript";
-
-/** Positive proof for the narrow case where a test cannot observe project code
- * or data. Anything beyond literal assertions needs passing removal evidence.
- */
-export function literalAssertionFile(contents: string): boolean {
-  const source = ts.createSourceFile("candidate.test.ts", contents, ts.ScriptTarget.Latest, true);
-  const bindings = new Set<string>();
-  let assertions = 0;
-  const literal = (node: ts.Expression): boolean => ts.isStringLiteral(node) || ts.isNumericLiteral(node)
-    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)
-    || (ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)
-      && ts.isNumericLiteral(node.operand));
-  const assertion = (node: ts.Expression): boolean => {
-    if (!ts.isCallExpression(node) || node.arguments.length !== 1 || !literal(node.arguments[0]!)) return false;
-    const matcher = node.expression;
-    if (!ts.isPropertyAccessExpression(matcher) || !["toBe", "toEqual", "toStrictEqual"].includes(matcher.name.text)) return false;
-    const expect = matcher.expression;
-    if (!ts.isCallExpression(expect) || !ts.isIdentifier(expect.expression) || expect.expression.text !== "expect"
-      || expect.arguments.length !== 1 || !literal(expect.arguments[0]!)) return false;
-    assertions++;
-    return true;
-  };
-  for (const statement of source.statements) {
-    let names: string[] | undefined;
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === "bun:test") {
-      const clause = statement.importClause;
-      if (!clause || clause.name || clause.isTypeOnly || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) return false;
-      if (clause.namedBindings.elements.some(element => element.propertyName || element.isTypeOnly)) return false;
-      names = clause.namedBindings.elements.map(element => element.name.text);
-    } else if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const) {
-      if (statement.declarationList.declarations.length !== 1) return false;
-      const { name, initializer } = statement.declarationList.declarations[0]!;
-      if (!ts.isObjectBindingPattern(name) || !initializer || !ts.isCallExpression(initializer)
-        || !ts.isIdentifier(initializer.expression) || initializer.expression.text !== "require"
-        || initializer.arguments.length !== 1 || !ts.isStringLiteral(initializer.arguments[0]!)
-        || initializer.arguments[0]!.text !== "bun:test") return false;
-      if (name.elements.some(element => element.propertyName || element.initializer || element.dotDotDotToken || !ts.isIdentifier(element.name))) return false;
-      names = name.elements.map(element => element.name.getText(source));
-    } else {
-      if (!bindings.has("test") || !bindings.has("expect") || !ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
-      const call = statement.expression;
-      const callee = ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "skip" ? call.expression.expression : call.expression;
-      if (!ts.isIdentifier(callee) || callee.text !== "test" || call.arguments.length !== 2 || !ts.isStringLiteral(call.arguments[0]!)) return false;
-      const callback = call.arguments[1]!;
-      if (!ts.isArrowFunction(callback) || callback.parameters.length || callback.modifiers?.length) return false;
-      if (ts.isBlock(callback.body)) {
-        if (!callback.body.statements.length || !callback.body.statements.every(item => ts.isExpressionStatement(item) && assertion(item.expression))) return false;
-      } else if (!assertion(callback.body)) return false;
-    }
-    if (names) for (const name of names) {
-      if (!["test", "expect"].includes(name) || bindings.has(name)) return false;
-      bindings.add(name);
-    }
-  }
-  return assertions > 0;
-}
 
 const testIdentity = (site: TestSite) => JSON.stringify([site.file, site.suite, site.name, site.occurrence ?? 0]);
 export function compareBatchTests(base: TestRun, candidate: TestRun) {
@@ -78,8 +21,7 @@ export function compareBatchTests(base: TestRun, candidate: TestRun) {
 
 export const MAX_TEST_CONFIRMATIONS = 3;
 export const MAX_TEST_CONFIRMATION_RUNS = MAX_TEST_CONFIRMATIONS * 2;
-type NativeTestSample = { run: TestRun; absent: boolean };
-type TestObservation = { removed: number[]; outcome: "pass" | "fail" | "absent"; corpus?: "native" };
+type TestObservation = { removed: number[]; outcome: "pass" | "fail" };
 export type TestAttribution = {
   test: TestSite; prs: number[]; reason: string; confirmation: ("pass" | "fail")[]; removals: TestObservation[];
 };
@@ -96,9 +38,7 @@ function observed(run: TestRun, test: TestSite, label: string): "pass" | "fail" 
 
 /** Recorded results drive the decision; callbacks supply fresh file samples. */
 export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
-  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>,
-  native?: { owners: (test: TestSite) => number[]; independent: (test: TestSite) => boolean;
-    without: (removed: number[], test: TestSite) => Promise<NativeTestSample> }): Promise<BatchTestDecision> {
+  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>): Promise<BatchTestDecision> {
   const comparison = compareBatchTests(base, candidate);
   const decision: BatchTestDecision = { preExisting: comparison.preExisting, intermittent: [], attributed: [] };
   const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
@@ -133,7 +73,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   for (const test of confirmed) {
     const evidence: TestObservation[] = removals.map(entry => ({ removed: entry.removed, outcome: observed(entry.run, test, "PR removal") }));
     let responsible = evidence.filter(entry => entry.outcome === "pass").map(entry => entry.removed[0]!);
-    let reason = responsible.length === 1 ? "test regression" : "integration: needs both";
+    const reason = responsible.length === 1 ? "test regression" : "integration: needs both";
     if (!responsible.length) {
       // Several independent changes can keep the same assertion red after each
       // single removal. Find a minimal clearing removal set, retaining unrelated
@@ -143,29 +83,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
       const outcome = observed(all, test, "combined PR removal");
       evidence.push({ removed: [...responsible], outcome });
       if (outcome !== "pass") {
-        // Native absence identifies authorship only. A new feature's healthy
-        // detector can also fail when its implementation is entirely removed.
-        // Require independent proof that the test cannot observe that code.
-        const owners = native?.owners(test).filter(pr => prs.includes(pr)) ?? [];
-        if (!owners.length) throw new Error("Integration failure persists without any PR; cannot establish attribution");
-        if (!native!.independent(test)) throw new Error(`Insufficient test-change attribution for ${test.file} > ${test.name}; detector retained; batch not gated`);
-        const nativeOutcome = async (removed: number[]) => {
-          const sample = await native!.without(removed, test);
-          // Absence comes from the native subject's complete test inventory.
-          // Skipped assertions remain present and provide no passing evidence.
-          if (sample.run.failures.some(site => site.kind === "error")) throw new Error("Native PR removal: between-test error; batch not gated");
-          const outcome = sample.absent ? "absent" : observed(sample.run, test, "native PR removal");
-          evidence.push({ removed: [...removed], outcome, corpus: "native" });
-          return outcome;
-        };
-        responsible = [...owners];
-        if (await nativeOutcome(responsible) === "fail") throw new Error("Native test failure persists without its authors; cannot establish attribution");
-        for (const pr of owners) {
-          const removed = responsible.filter(number => number !== pr);
-          if (await nativeOutcome(removed) !== "fail") responsible = removed;
-        }
-        if (!responsible.length) throw new Error("Native test failure is intermittent; cannot establish test-change attribution");
-        reason = responsible.length === 1 ? "test change regression" : "integration: needs both; test change regression";
+        throw new Error(`Cannot establish attribution for ${confirmed.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated`);
       } else {
         for (const pr of prs) {
           const removed = responsible.filter(number => number !== pr);
@@ -646,9 +564,9 @@ export class MergeBatch {
     }
   }
 
-  private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>, missingModule?: (output: string, file: string, report: string) => boolean): Promise<TestRun & { present: TestSite[]; unavailable: string[] }> {
+  private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>, missingModule?: (output: string, file: string, report: string) => boolean): Promise<TestRun & { unavailable: string[] }> {
     const started = performance.now();
-    const sample: TestRun & { present: TestSite[]; unavailable: string[] } = { failures: [], passed: [], completed: [], elapsedMs: 0, present: [], unavailable: [] };
+    const sample: TestRun & { unavailable: string[] } = { failures: [], passed: [], completed: [], elapsedMs: 0, unavailable: [] };
     for (const file of files) {
       const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, corpus);
       if (result.code !== 0 && missingModule?.(result.output, file, result.report ?? "")) {
@@ -661,17 +579,13 @@ export class MergeBatch {
       catch { throw new Error(`Test gate could not complete ${file}; missing or invalid report`); }
       if (parsed.failures.some(site => site.kind === "error")) throw new Error(`Test gate: between-test error in ${file}; batch not gated`);
       if ((result.code === 0) !== (parsed.failures.length === 0)) throw new Error(`Test gate could not run ${file}; runner exit disagrees with report`);
-      // Reuse the validated parser to retain skipped identities as present.
-      // Native omission may remove an added assertion; skipping it proves no fix.
-      const present = parseReport((result.report ?? "").replace(/<skipped\b[^>]*(?:\/>|>[\s\S]*?<\/skipped>)/g, ""), result.output, file, cwd);
-      sample.present.push(...present.failures, ...present.passed);
       sample.failures.push(...parsed.failures); sample.passed.push(...parsed.passed); sample.completed.push(file);
     }
     sample.elapsedMs = performance.now() - started;
     return sample;
   }
 
-  private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false): Promise<TestRun & { present: TestSite[] }> {
+  private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false): Promise<TestRun> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     try {
@@ -753,32 +667,9 @@ export class MergeBatch {
       const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus, withheld ? (output, file, report) => this.missingReviewedModule(state, detector, output, file, report) : undefined);
       for (const file of candidate.unavailable) validation.notApplicable.push({ source: detector.source, file,
         reason: "reviewed detector cannot load without withheld PR code (missing module)" });
-      // A withheld, self-contained literal assertion can never judge remaining
-      // implementation code. Establish that afresh, including confirmations;
-      // historical attribution is never consulted as validation evidence.
-      if (withheld) for (const file of Object.keys(detector.corpus)) {
-        if (!literalAssertionFile(Buffer.from(detector.corpus[file]!, "base64").toString("utf8"))) continue;
-        const introduced = compareBatchTests(baseline, candidate).introduced.filter(test => test.file === file);
-        if (!introduced.length) continue;
-        for (let round = 0; round < MAX_TEST_CONFIRMATIONS; round++) {
-          const run = await this.testSample(state.work, [file], detector.corpus);
-          for (const test of introduced) if (observed(run, test, "withheld literal assertion") !== "fail") {
-            throw new Error("Withheld literal assertion changed during confirmation; batch not gated");
-          }
-        }
-        validation.notApplicable.push({ source: detector.source, file, reason: "confirmed faulty literal assertions of a withheld PR; independent of candidate code" });
-        candidate.failures = candidate.failures.filter(test => !introduced.some(site => testIdentity(site) === testIdentity(test)));
-      }
       const decision = await attributeBatchTests(baseline, candidate, prs,
         files => this.testSample(state.work, files, detector.corpus),
-        (removed, files) => this.testSubject(state, files, removed, detector.corpus), {
-          owners: test => state.rows.filter(row => row.status === "clean" && row.paths.includes(test.file)).map(row => row.number),
-          independent: test => literalAssertionFile(Buffer.from(detector.corpus[test.file]!, "base64").toString("utf8")),
-          without: async (removed, test) => {
-            const run = await this.testSubject(state, [test.file], removed);
-            return { run, absent: !run.present.some(site => testIdentity(site) === testIdentity(test)) };
-          },
-        });
+        (removed, files) => this.testSubject(state, files, removed, detector.corpus));
       validation.decisions.push(decision);
       for (const entry of decision.attributed) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source });
       for (const row of state.rows) {
@@ -1103,7 +994,7 @@ function testDecisionReport(decisions: BatchTestDecision[], log: AttributionReco
     "", "Intermittent failures (permitted):", ...[...intermittent.values()].map(site => `- ${describe(site)}`),
     "", "Attributed failures:", ...attributed.map(entry =>
       `- ${entry.prs.map(number => `#${number}`).join(", ")}: ${entry.reason}: ${describe(entry.test)}; candidate failed; confirmations ${entry.confirmation.join(", ")}; `
-      + entry.removals.map(sample => `without ${sample.removed.map(number => `#${number}`).join(", ") || "none"}${sample.corpus ? " (native tests)" : ""}: ${sample.outcome}`).join("; ") + `; established on ${JSON.stringify(entry.candidate)} (${entry.source})`),
+      + entry.removals.map(sample => `without ${sample.removed.map(number => `#${number}`).join(", ") || "none"}: ${sample.outcome}`).join("; ") + `; established on ${JSON.stringify(entry.candidate)} (${entry.source})`),
   ];
 }
 

@@ -65,17 +65,12 @@ exact detector under investigation. Every subject installs frozen dependencies.
 A behaviour conflict stops the pass. A clearing omission names the responsible
 PR; multiple clearing omissions report `integration: needs both`. If no single
 omission clears it, combined removals find a minimal clearing set. If all
-implementation removals leave a failure, test-change attribution requires
-independent proof that the entire file contains self-contained literal
-`bun:test` assertions. Native test omission then establishes their authorship;
-absence alone cannot blame a healthy feature detector. Unsupported or
-project-dependent assertions without clearing evidence stop attribution.
-
-After a faulty literal test author is withheld, its reviewed file is still run.
-Its independent faulty assertions are confirmed afresh and explicitly reported
-as not applicable to the remaining implementation. Other assertions and every
-healthy reviewed detector continue to judge the candidate. Historical attribution
-never supplies an exemption or a passing observation.
+implementation removals leave a failure, attribution cannot be proven: the gate
+names the failing tests, retains their detectors and refuses publication. Test
+authorship and literal assertion syntax supply no attribution or exemption.
+Candidate-only failures hold the batch; only a failure observed in that exact
+native main test is pre-existing. Withheld reviewed detectors continue to judge
+every rebuilt candidate.
 
 The script holds three kinds of state: immutable reviewed patch bases and heads,
 one completed validation receipt, and an append-only attribution log. The receipt
