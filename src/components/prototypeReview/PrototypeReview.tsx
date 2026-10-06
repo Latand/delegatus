@@ -126,7 +126,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     ?? null;
   const roundId = round?.id ?? null;
   const slides = useMemo(() => (round ? slidesOf(round) : []), [round]);
-  const index = Math.min(roundId ? active[roundId] ?? 0 : 0, Math.max(0, slides.length - 1));
+  /* A decided round opens on what was chosen: its first chosen variant. */
+  const opening = round?.decision ? Math.max(0, slides.findIndex((entry) => round.decision!.chosen.includes(entry.variant.number))) : 0;
+  const index = Math.min(roundId ? active[roundId] ?? opening : 0, Math.max(0, slides.length - 1));
   const slide = slides[index] ?? null;
   const variant = slide?.variant ?? round?.variants[0] ?? null;
   const elsewhere = data?.unavailable === "another-installation";
@@ -298,13 +300,14 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   ) : null;
 
   /* A variant in the list: its number is the choice (a check once chosen), the
-     rest of the row shows it on the stage. */
+     rest of the row shows it on the stage. The accent belongs to the choice
+     alone: a chosen row is tinted, and the row on the stage is only framed. */
   const variantRow = (entry: Variant) => {
     const chosen = round?.decision ? round.decision.chosen.includes(entry.number) : draft.chosen.includes(entry.number);
     const current = entry === variant;
     const count = entry.frames.length + entry.videos.length;
     return (
-      <li key={entry.number} data-prototype-variant={entry.number} data-chosen={chosen ? "1" : "0"} className={`flex min-w-0 items-start gap-2 rounded-control border p-1.5 ${current ? "border-accent/50 bg-accent-soft" : "border-transparent hover:bg-sunken"}`}>
+      <li key={entry.number} data-prototype-variant={entry.number} data-chosen={chosen ? "1" : "0"} className={`flex min-w-0 items-start gap-2 rounded-control border p-1.5 ${chosen ? `bg-accent-soft ${current ? "border-accent/60" : "border-accent/25"}` : current ? "border-strong bg-sunken" : "border-transparent hover:bg-sunken"}`}>
         <button
           type="button"
           role="checkbox"
@@ -336,7 +339,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   };
 
   /* The phone has no room for the list beside the stage: the variants are a
-     row of chips, and the shown one's words and its choice stand under it. */
+     row of chips, and the shown one's words and its choice stand under it.
+     As in the list, a chosen chip is tinted and the shown one only framed. */
   const variantChips = round ? (
     <div className="flex flex-col gap-2 px-4">
       <div role="group" aria-label={t("proto.variants")} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -349,7 +353,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
               data-prototype-variant={entry.number}
               data-chosen={chosen ? "1" : "0"}
               aria-pressed={entry === variant}
-              className="inline-flex h-11 max-w-[70vw] shrink-0 items-center gap-1.5 rounded-control border border-border bg-card px-2.5 text-ui font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 aria-pressed:border-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent"
+              className={`inline-flex h-11 max-w-[70vw] shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${chosen ? `bg-accent-soft text-accent ${entry === variant ? "border-accent/60" : "border-accent/25"}` : entry === variant ? "border-strong bg-sunken text-primary" : "border-border bg-card text-secondary"}`}
               onClick={() => show(firstOf(entry))}
             >
               <span className={`grid h-5 min-w-5 place-items-center rounded-sm px-1 text-caption font-bold tabular-nums ${chosen ? "bg-accent text-white" : "bg-sunken text-secondary"}`}>
@@ -638,7 +642,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         <MobileSheet name="prototype-review" title={title} onClose={requestClose} footer={footer}>
           <div data-prototype-review={taskId} data-prototype-round-shown={roundId ?? ""} className="relative flex flex-col gap-2 pb-1">
             {banners}
-            <div className="flex flex-col gap-1.5 px-4">
+            {/* The round and its task stay whole at the top while the body
+                scrolls under them, so a choice or the field never leaves them cut. */}
+            <div data-prototype-context="" className="sticky top-0 z-[2] flex flex-col gap-1.5 bg-raised px-4 py-1">
               <p className="m-0 text-label text-muted"><span className="font-semibold text-secondary">{round?.title ?? ""}</span>{round ? " · " : ""}{taskTitle}</p>
               {roundTabs}
             </div>

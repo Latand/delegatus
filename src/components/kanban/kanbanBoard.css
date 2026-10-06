@@ -480,12 +480,6 @@
    waits unopened, the accent word alone once it was opened, and the chosen
    numbers after the decision. */
 .kb .card .proto { white-space: nowrap; }
-/* The word stands in a wide card. A narrow foot keeps the mark and its dot,
-   and the reason line says «Prototype ready» in the button's stead, so a
-   waiting card always says in words what it waits for and says it once. */
-.kb .card .foot:has(> .proto) { container: card-foot / inline-size; }
-@container card-foot (max-width: 479px) { .kb .card .proto .proto-word { display: none; } }
-@container card-foot (min-width: 480px) { .kb .card .foot-meta.needs.proto-wait { display: none; } }
 .kb .card .proto svg { width: 14px; height: 14px; color: var(--color-muted); flex: none; }
 .kb .card .proto[data-prototype-state="ready"] { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .card .proto[data-prototype-state="ready"] svg, .kb .card .proto[data-prototype-state="opened"] svg { color: var(--color-accent); }

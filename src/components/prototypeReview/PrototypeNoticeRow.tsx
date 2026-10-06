@@ -70,9 +70,10 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
 
 /** The same word where the composer and its lines are put away: one chip
     with the count, opening the first waiting review. The folded seat's strip
-    draws it with its words; the phone board's seat card, which has a few
-    dozen pixels to spare, draws the mark and the count in a full touch
-    target. Absent while nothing waits. */
+    draws it with its words; the phone board's seat card, which has no room
+    beside its title, draws the mark, the short word and the count in a full
+    touch target on a line of its own under the seat's words, level with its
+    title. Absent while nothing waits. */
 export function PrototypeNoticeChip({ project, compact = false }: { project: string; compact?: boolean }) {
   const { t } = useLocale();
   const notices = usePrototypeNoticesFor(project);
@@ -82,18 +83,21 @@ export function PrototypeNoticeChip({ project, compact = false }: { project: str
   const label = `${t("proto.notice.ready")}: ${first.title}. ${t("proto.notice.open")}`;
   if (compact) {
     return (
-      <button
-        type="button"
-        data-prototype-notice-chip={notices.length}
-        aria-label={label}
-        className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-[8px] active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        onClick={open}
-      >
-        <span className="inline-flex h-8 items-center gap-1 rounded-full bg-accent-soft px-2 text-label font-semibold tabular-nums text-accent">
-          <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden />
-          {notices.length}
-        </span>
-      </button>
+      <div data-prototype-notice-chip-line="" className="order-last -mt-1 flex basis-full pl-10">
+        <button
+          type="button"
+          data-prototype-notice-chip={notices.length}
+          aria-label={label}
+          className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-[8px] px-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={open}
+        >
+          <span className="inline-flex h-8 items-center gap-1 rounded-full bg-accent-soft px-2 text-label font-semibold tabular-nums text-accent">
+            <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden />
+            <span data-prototype-notice-chip-word="" className="whitespace-nowrap">{t("proto.button.word")}</span>
+            <span>{notices.length}</span>
+          </span>
+        </button>
+      </div>
     );
   }
   return (

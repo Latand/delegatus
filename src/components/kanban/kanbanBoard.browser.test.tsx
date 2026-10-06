@@ -17966,8 +17966,12 @@ describe("prototype review on a task: the card's button, the review and the orch
    * in full, and a close while speech is still transcribed asks first; speech
    * started in one round stays in it while another round is pressed. Measured at 1440, 1000 and 390, in English and
    * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
-   * A card that waits on its prototype says so in drawn words at every desktop
-   * width and on the phone's board, the line over the picture parts the variant's name from the caption,
+   * A card's review button carries its word at every desktop width with no
+   * reason line beside it, and is cut out whole in each of its five states;
+   * the phone's card carries the same button, which opens the review in one
+   * tap; the phone's seat chip says the word with its count; the accent in a
+   * decided review marks exactly the chosen variants, and the sheet's round
+   * line is never cut under its header; the line over the picture parts the variant's name from the caption,
    * the slider's two labels stand clear of both drawn pictures, and a delivery
    * line keeps its mark on the first line of its words.
    *
@@ -18150,27 +18154,75 @@ describe("prototype review on a task: the card's button, the review and the orch
         const settle = () => page.waitForTimeout(250);
         const posts = () => page.evaluate(() => (window as unknown as { protoPosts: { taskId: string; retry?: boolean }[] }).protoPosts);
         /* Each task card on the phone's board: whether it waits, the words
-           that say why, and its lines measured against each other and the card. */
+           that say why, its review button, and its lines measured against each
+           other and the card. The button stands under the card's face, inside
+           the card's frame, so the face stays the card's one tap. */
         const phoneCards = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-phone-card^="task:"]')].map((cardElement) => {
-          const frame = cardElement.getBoundingClientRect();
+          const shell = cardElement.closest<HTMLElement>("[data-phone-card-frame]") ?? cardElement;
+          const frame = shell.getBoundingClientRect();
           const drawn = (element: Element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
-          const lines = [...cardElement.children].filter(drawn);
-          const line = cardElement.querySelector<HTMLElement>("[data-phone-card-prototype]");
-          const words = line?.querySelector<HTMLElement>("[data-phone-card-prototype-words]") ?? null;
+          const button = shell.querySelector<HTMLElement>("[data-phone-card-prototype-button]");
+          const pill = button?.firstElementChild as HTMLElement | null | undefined;
+          const lines = [...cardElement.children, ...(button ? [button] : [])].filter(drawn);
           const overlaps: string[] = [];
           for (let i = 0; i < lines.length; i += 1) for (let j = i + 1; j < lines.length; j += 1) {
             const a = lines[i]!.getBoundingClientRect(), b = lines[j]!.getBoundingClientRect();
             if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`#${i + 1} × #${j + 1}`);
           }
+          const own = button?.getBoundingClientRect();
           return {
             task: cardElement.dataset.phoneCard!.slice("task:".length), needs: cardElement.dataset.needs === "1" || cardElement.dataset.edge === "warning",
-            prototype: line && drawn(line) ? words?.textContent?.trim() ?? "" : null,
-            mark: Boolean(line?.querySelector("[data-phone-card-prototype-mark]")?.getBoundingClientRect().width),
-            clipped: Boolean(words && words.scrollWidth > words.clientWidth + 0.5),
-            reasons: [...cardElement.querySelectorAll<HTMLElement>("[data-phone-card-prototype-words], [data-phone-card-badge], [data-phone-card-ask]")].filter(drawn).map((element) => element.textContent?.trim() ?? "").filter(Boolean),
+            /* A line that only says a prototype is ready is gone; the button is the card's one new element. */
+            line: Boolean(cardElement.querySelector("[data-phone-card-prototype]")),
+            button: button && own && drawn(button) ? {
+              state: button.dataset.prototypeState ?? null, text: button.textContent?.trim() ?? "", size: [Math.round(own.width), Math.round(own.height)],
+              insideFace: cardElement.contains(button), clipped: Boolean(pill && pill.scrollWidth > pill.clientWidth + 0.5),
+            } : null,
+            reasons: [...cardElement.querySelectorAll<HTMLElement>("[data-phone-card-badge], [data-phone-card-ask]"), ...(button ? [button] : [])].filter(drawn).map((element) => element.textContent?.trim() ?? "").filter(Boolean),
             overlaps, outside: lines.flatMap((element, at) => { const b = element.getBoundingClientRect(); return b.left < frame.left - 0.5 || b.right > frame.right + 0.5 || b.top < frame.top - 0.5 || b.bottom > frame.bottom + 0.5 ? [`#${at + 1}`] : []; }),
           };
         }));
+        /* In a review, the accent belongs to the choice: the variants drawn on
+           the accent's soft fill are exactly the chosen ones, whichever one is
+           on the stage. On a freshly opened decided round, the stage shows the
+           first chosen variant. */
+        const accentCheck = async (name: string, opensOnChoice: boolean) => {
+          const reading = await page.evaluate(() => {
+            const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
+            const probe = document.createElement("span");
+            probe.className = "bg-accent-soft";
+            review.appendChild(probe);
+            const soft = getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            return {
+              soft,
+              variants: [...review.querySelectorAll<HTMLElement>("[data-prototype-variant]")].map((element) => {
+                const style = getComputedStyle(element);
+                const current = element.getAttribute("aria-pressed") === "true" || Boolean(element.querySelector('[aria-current="true"]'));
+                return { number: Number(element.dataset.prototypeVariant), chosen: element.dataset.chosen === "1", current, background: style.backgroundColor, border: style.borderTopColor, accented: style.backgroundColor === soft };
+              }),
+            };
+          });
+          record(`${name}-accent`, reading);
+          const accented = reading.variants.filter((entry) => entry.accented).map((entry) => entry.number);
+          const chosen = reading.variants.filter((entry) => entry.chosen).map((entry) => entry.number);
+          if (!chosen.length || JSON.stringify(accented) !== JSON.stringify(chosen)) failures.push(`${label} ${name}: the accent marks ${JSON.stringify(accented)} while ${JSON.stringify(chosen)} were chosen`);
+          const current = reading.variants.find((entry) => entry.current);
+          if (opensOnChoice && current?.number !== chosen[0]) failures.push(`${label} ${name}: the decided round opened on variant ${current?.number}, not on the first chosen ${chosen[0]}`);
+        };
+        /* The sheet's line naming the round and its task is whole or wholly
+           scrolled away: never cut by the sheet's header. */
+        const contextCheck = async (name: string) => {
+          if (!size.phone) return;
+          const reading = await page.evaluate(() => {
+            const header = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]")!.getBoundingClientRect();
+            const line = document.querySelector<HTMLElement>("[data-prototype-context]")!.getBoundingClientRect();
+            const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!;
+            return { headerBottom: Math.round(header.bottom * 10) / 10, line: [Math.round(line.top * 10) / 10, Math.round(line.bottom * 10) / 10], scrolled: body.scrollTop, whole: line.top >= header.bottom - 0.5, hidden: line.bottom <= header.bottom + 0.5 };
+          });
+          record(`${name}-context`, reading);
+          if (!reading.whole && !reading.hidden) failures.push(`${label} ${name}: the sheet's round line is cut by its header: ${JSON.stringify(reading)}`);
+        };
         const closeReview = async () => {
           await page.keyboard.press("Escape");
           await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
@@ -18191,22 +18243,40 @@ describe("prototype review on a task: the card's button, the review and the orch
               await row.waitFor({ timeout: 10_000 });
               await row.scrollIntoViewIfNeeded();
             };
-            /* The phone's card has no review button, so a card that waits only
-               on its prototype says so on a line of its own. */
+            /* The phone's card carries the review button under its face: the
+               mark and the word while a round waits, a full touch target. */
             const cards = await phoneCards();
             record("cards", cards);
             const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
             for (const task of ["t-search", "t-upload", "t-links"]) if (!byTask[task]) failures.push(`${label}: the phone board draws no card for ${task}`);
             for (const entry of cards) {
               if (entry.needs && !entry.reasons.length) failures.push(`${label}: the phone card of ${entry.task} waits on the operator without a word why`);
-              if (entry.overlaps.length || entry.outside.length || entry.clipped) failures.push(`${label}: the phone card of ${entry.task} overlaps ${entry.overlaps.join(", ")}, leaves the card ${entry.outside.join(", ")} or clips its prototype line: ${JSON.stringify(entry.prototype)}`);
+              if (entry.line) failures.push(`${label}: the phone card of ${entry.task} still draws a line that only says a prototype is ready`);
+              if (entry.overlaps.length || entry.outside.length || entry.button?.clipped) failures.push(`${label}: the phone card of ${entry.task} overlaps ${entry.overlaps.join(", ")}, leaves the card ${entry.outside.join(", ")} or clips its review button: ${JSON.stringify(entry.button)}`);
+              if (entry.button && (entry.button.insideFace || entry.button.size[0]! < 44 || entry.button.size[1]! < 44)) failures.push(`${label}: the review button of ${entry.task} is not a full target of its own: ${JSON.stringify(entry.button)}`);
             }
-            for (const task of ["t-search", "t-upload"]) if (byTask[task]?.prototype !== tr("proto.notice.ready") || !byTask[task]?.mark) failures.push(`${label}: the waiting phone card of ${task} reads ${JSON.stringify(byTask[task]?.prototype)} with the mark ${byTask[task]?.mark}`);
-            /* A card with a reason of its own keeps it and adds nothing. */
-            if (byTask["t-links"]?.prototype !== null || !byTask["t-links"]?.reasons.length) failures.push(`${label}: the phone card of t-links reads ${JSON.stringify(byTask["t-links"])}`);
-            if (cards.some((entry) => !entry.needs && entry.prototype !== null)) failures.push(`${label}: a phone card that waits on nothing says a prototype is ready`);
+            const phoneStates = { "t-search": "ready", "t-upload": "opened", "t-links": "ready" } as const;
+            for (const [task, state] of Object.entries(phoneStates)) if (byTask[task]?.button?.state !== state || byTask[task]?.button?.text !== tr("proto.button.word")) failures.push(`${label}: the phone card of ${task} carries the review button ${JSON.stringify(byTask[task]?.button)}`);
+            if (cards.some((entry) => entry.button && !["t-search", "t-upload", "t-links", "t-export", "t-disk"].includes(entry.task))) failures.push(`${label}: a phone card with no review carries a review button`);
             await page.locator('[data-phone-card="task:t-search"]').first().scrollIntoViewIfNeeded();
             await shot("cards");
+            for (const [task, state] of Object.entries(phoneStates)) {
+              const shell = page.locator(`[data-phone-card-frame="task:${task}"]`);
+              await shell.scrollIntoViewIfNeeded();
+              await shell.screenshot({ path: path.join(pngDir, `${label}-card-${task === "t-links" ? "newer-round" : state}.png`) });
+            }
+            /* One tap on the card's button opens the review over the board. */
+            const cardTap = page.locator('[data-phone-card-prototype-button="t-upload"]');
+            await cardTap.scrollIntoViewIfNeeded();
+            await cardTap.click();
+            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+            await settle();
+            const tapped = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, board: Boolean(document.querySelector("[data-phone-kanban]")), taskScreen: Boolean(document.querySelector("[data-phone-task-prototype]")) }));
+            record("card-tap", tapped);
+            await shot("card-tap");
+            if (tapped.review !== "t-upload" || tapped.taskScreen) failures.push(`${label}: one tap on the card's review button read ${JSON.stringify(tapped)}`);
+            await closeReview();
+            await settle();
           } else {
             await page.waitForSelector("[data-prototype-button]", { state: "attached", timeout: 30_000 });
             const tab = page.locator('.tabs-nav [data-tab="assigned"]');
@@ -18227,7 +18297,8 @@ describe("prototype review on a task: the card's button, the review and the orch
               return {
                 task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
                 word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width), dot: Boolean(button.querySelector(".proto-dot")),
-                reason: [...foot.querySelectorAll<HTMLElement>("[data-foot-prototype]")].filter((line) => box(line).width > 0 && box(line).left >= box(cardElement).left - 0.5 && box(line).right <= box(cardElement).right + 0.5).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
+                /* Any drawn line in the foot that says only that a prototype is ready: there must be none. */
+                reason: [...foot.querySelectorAll<HTMLElement>(".foot-meta")].filter((line) => box(line).width > 0 && /prototype|прототип/i.test(line.textContent ?? "")).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
                 background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
                 insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
                 overlaps: others.filter((other) => { const b = box(other); return own.left < b.right - 0.5 && b.left < own.right - 0.5 && own.top < b.bottom - 0.5 && b.top < own.bottom - 0.5; }).length,
@@ -18239,24 +18310,46 @@ describe("prototype review on a task: the card's button, the review and the orch
             const expected = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-links": "ready", "t-disk": "unsent" };
             if (JSON.stringify(states) !== JSON.stringify(expected) && Object.entries(expected).some(([task, state]) => states[task] !== state)) failures.push(`${label}: the card buttons read ${JSON.stringify(states)}`);
             if (cards.length !== 5) failures.push(`${label}: ${cards.length} review buttons on the board, expected the five tasks with a review`);
+            /* The foot lines each card had before its word moved into the button: none may grow. */
+            const footBefore: Record<string, number> = size.name === "desktop-1440" ? { "t-search": 2, "t-upload": 2, "t-links": 2, "t-export": 1, "t-disk": 1 } : { "t-search": 1, "t-upload": 1, "t-links": 1, "t-export": 1, "t-disk": 1 };
             for (const entry of cards) {
               if (!entry.insideCard || entry.overlaps) failures.push(`${label}: the button of ${entry.task} leaves its card or overlaps the foot: ${JSON.stringify(entry)}`);
-              /* A foot that carries a reason and its dismissal already wraps its tools onto a second line; the button adds no third. */
-              if (entry.footLines > 2) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines`);
+              if (entry.footLines > (footBefore[entry.task ?? ""] ?? 2)) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines, ${footBefore[entry.task ?? ""]} before`);
             }
             /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
             const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
             if (!byTask["t-search"]?.aria?.includes(tr("proto.title").split(" ")[0]!.slice(0, 5)) && !byTask["t-search"]?.aria?.toLowerCase().includes(tr("proto.button.word").toLowerCase())) failures.push(`${label}: the waiting button is unnamed: ${byTask["t-search"]?.aria}`);
-            /* A card that waits only on its prototype says so in drawn words, once: on the button where the foot is wide, on the reason line where it is narrow. */
-            for (const task of ["t-search", "t-upload"]) {
+            /* A waiting card says so on its button, in its word and in the accent, at every desktop width; no reason line repeats it. */
+            for (const task of ["t-search", "t-upload", "t-links"]) {
               const entry = byTask[task];
-              if (!entry || entry.word === Boolean(entry.reason) || (entry.reason !== null && entry.reason !== tr("proto.notice.ready"))) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} and the reason ${JSON.stringify(entry?.reason)}`);
+              if (!entry || !entry.word || entry.text !== tr("proto.button.word") || entry.reason !== null) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} (${JSON.stringify(entry?.text)}) and the line ${JSON.stringify(entry?.reason)}`);
             }
-            if (byTask["t-export"]?.reason || byTask["t-disk"]?.reason) failures.push(`${label}: a decided card still says a prototype is ready`);
+            if (cards.some((entry) => entry.reason !== null)) failures.push(`${label}: a card's foot says a prototype is ready beside its button`);
             if (byTask["t-export"]?.text !== "2, 3" || byTask["t-disk"]?.text !== "2") failures.push(`${label}: the buttons say ${JSON.stringify(cards.map((entry) => entry.text))}`);
             if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
             await shot("cards");
+            /* The button cut out whole in each of its states. */
+            const stateShots = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-disk": "unsent", "t-links": "newer-round" } as const;
+            const cutouts: Record<string, unknown> = {};
+            for (const [task, name] of Object.entries(stateShots)) {
+              const status = await page.locator(card(task)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? null);
+              const columnTab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+              if (status && await columnTab.count() && await columnTab.first().isVisible()) await columnTab.first().click();
+              await page.locator(card(task)).scrollIntoViewIfNeeded();
+              await settle();
+              const whole = await page.evaluate((selector) => {
+                const cardElement = document.querySelector<HTMLElement>(selector)!;
+                const button = cardElement.querySelector<HTMLElement>("[data-prototype-button]")!.getBoundingClientRect();
+                const own = cardElement.getBoundingClientRect();
+                return { button: [Math.round(button.left), Math.round(button.top), Math.round(button.width), Math.round(button.height)], inCard: button.left >= own.left - 0.5 && button.right <= own.right + 0.5 && button.top >= own.top - 0.5 && button.bottom <= own.bottom + 0.5, onScreen: button.left >= 0 && button.top >= 0 && button.right <= window.innerWidth && button.bottom <= window.innerHeight };
+              }, card(task));
+              cutouts[name] = whole;
+              if (!whole.inCard || !whole.onScreen) failures.push(`${label}: the ${name} button of ${task} is not whole in its cut-out: ${JSON.stringify(whole)}`);
+              await page.locator(card(task)).screenshot({ path: path.join(pngDir, `${label}-card-${name}.png`) });
+            }
+            record("card-cutouts", cutouts);
+            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
           }
 
           /* 1b. A waiting review is counted where everything that needs the
@@ -18347,8 +18440,15 @@ describe("prototype review on a task: the card's button, the review and the orch
             await chip.waitFor({ timeout: 15_000 });
             const seatCard = await measure(page, "[data-mobile2-seat-card]", { parts: "[data-mobile2-seat-card] > *" });
             const chipBox = (await chip.boundingBox())!;
-            record("notice", { ...seatCard, count: await chip.getAttribute("data-prototype-notice-chip"), chip: [Math.round(chipBox.width), Math.round(chipBox.height)] });
+            /* The chip says the word with the count, and the seat's title beside it is read whole. */
+            const seatWords = await page.evaluate(() => {
+              const word = document.querySelector<HTMLElement>("[data-mobile2-seat-card] [data-prototype-notice-chip-word]");
+              const titles = [...document.querySelectorAll<HTMLElement>("[data-mobile2-seat-card] button span.truncate")].filter((element) => element.getBoundingClientRect().width > 0);
+              return { chip: document.querySelector("[data-mobile2-seat-card] [data-prototype-notice-chip]")?.textContent ?? null, word: word?.textContent ?? null, wordClipped: Boolean(word && word.scrollWidth > word.clientWidth + 0.5), titleClipped: titles.some((element) => element.scrollWidth > element.clientWidth + 0.5) };
+            });
+            record("notice", { ...seatCard, ...seatWords, count: await chip.getAttribute("data-prototype-notice-chip"), chipSize: [Math.round(chipBox.width), Math.round(chipBox.height)] });
             if (seatCard.overlaps.length || seatCard.outside.length || chipBox.height < 44 || chipBox.width < 44 || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the seat card's notice chip reads ${JSON.stringify({ seatCard, chipBox })}`);
+            if (seatWords.word !== tr("proto.button.word") || seatWords.chip !== `${tr("proto.button.word")}3` || seatWords.wordClipped || seatWords.titleClipped) failures.push(`${label}: the seat card's chip and title read ${JSON.stringify(seatWords)}`);
             await shot("notice");
             await chip.click();
             await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
@@ -18480,6 +18580,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await page.waitForTimeout(1_200);
           await shot("dictating");
           await frameCheck("dictating");
+          await contextCheck("dictating");
           /* A saved decision cannot be changed, so the shortcut saves nothing while the recording runs. */
           await page.locator("[data-prototype-comment-field]").press("Control+Enter");
           await page.waitForTimeout(300);
@@ -18492,12 +18593,14 @@ describe("prototype review on a task: the card's button, the review and the orch
           record("combination", combination);
           await shot("combination");
           await frameCheck("combination");
+          await contextCheck("combination");
           if (JSON.stringify(combination.chosen) !== JSON.stringify(["2", "3"])) failures.push(`${label}: the combination reads ${JSON.stringify(combination.chosen)}`);
 
           /* 9. Escape with an unsaved comment asks first. */
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
           await shot("unsaved-guard");
+          await contextCheck("unsaved-guard");
           const guard = await measure(page, "body", { guard: "[data-prototype-guard]", actions: "[data-prototype-guard] button" });
           record("guard", guard);
           if (guard.outside.length || guard.overlaps.some((entry) => entry.includes("actions#1 × actions#2"))) failures.push(`${label}: the unsaved-comment guard is broken: ${JSON.stringify(guard)}`);
@@ -18519,22 +18622,30 @@ describe("prototype review on a task: the card's button, the review and the orch
           record("decided", { ...decided, posts: sent });
           await shot("decided");
           await frameCheck("decided");
+          await accentCheck("decided", false);
           if (decided.comment !== spoken || decided.delivery !== "sent" || decided.chosen.length !== 2 || !decided.time || sent.length !== 1) failures.push(`${label}: the saved decision reads ${JSON.stringify({ decided, sent })}`);
           await closeReview();
           if (!size.phone) {
             await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-prototype-button="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
             const after = await page.locator('[data-prototype-button="t-search"]').textContent();
             if (after?.trim() !== "2, 3") failures.push(`${label}: the card says ${after} after the choice`);
+            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
+            await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
             if (await page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]').count()) failures.push(`${label}: the notice of a decided review stays in the orchestrator's pane`);
           } else {
             await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
             await shot("task-row-decided");
             await page.goBack();
             await page.waitForTimeout(400);
-            /* The choice clears the card's line; the card that still waits keeps its own. */
+            /* The choice turns the card's button to the chosen numbers; the card that still waits keeps its word. */
             const after = await phoneCards();
             record("cards-after-choice", after.filter((entry) => entry.task === "t-search" || entry.task === "t-upload"));
-            if (after.find((entry) => entry.task === "t-search")?.prototype !== null || after.find((entry) => entry.task === "t-upload")?.prototype !== tr("proto.notice.ready")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.prototype]))}`);
+            const searchAfter = after.find((entry) => entry.task === "t-search")?.button;
+            const uploadAfter = after.find((entry) => entry.task === "t-upload")?.button;
+            if (searchAfter?.state !== "decided" || searchAfter.text !== "2, 3" || uploadAfter?.state !== "opened" || uploadAfter.text !== tr("proto.button.word")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.button]))}`);
+            const shell = page.locator('[data-phone-card-frame="task:t-search"]');
+            await shell.scrollIntoViewIfNeeded();
+            await shell.screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
           }
 
           /* The choice took exactly this review out of the count. */
@@ -18650,6 +18761,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           await shot("earlier-round");
           await frameCheck("earlier-round");
+          await accentCheck("earlier-round", true);
           const earlier = await stageState();
           record("rounds", { newer: newer.round, earlier: earlier.round, earlierChosen: earlier.chosen });
           if (newer.round !== "r-links-2" || earlier.round !== "r-links-1" || JSON.stringify(earlier.chosen) !== JSON.stringify(["1"])) failures.push(`${label}: the rounds read ${JSON.stringify({ newer: newer.round, earlier: earlier.round, chosen: earlier.chosen })}`);
@@ -18712,6 +18824,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           await shot("files-gone");
           await frameCheck("files-gone");
+          await accentCheck("files-gone", true);
           const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
           record("files-gone", goneState);
           if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
@@ -18725,6 +18838,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           await shot("send-failed");
           await frameCheck("send-failed");
+          await accentCheck("send-failed", true);
           await deliveryRow("send-failed");
           /* The first retry comes back unconfirmed and offers itself again; the second lands. */
           await page.evaluate(() => { (window as unknown as { protoRetryAnswers: string[] }).protoRetryAnswers = ["uncertain"]; });

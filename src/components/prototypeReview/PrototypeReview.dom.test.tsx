@@ -329,3 +329,37 @@ test("a round published while speech is recorded leaves the speech, and the stag
   await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${newer}"]`)!.click(); });
   expect(commentField().value).toBe("");
 });
+
+test("a decided round opens on its first chosen variant, and the accent marks the chosen rows only, never the row merely on the stage", async () => {
+  const read = reviewRead({ chosen: [2], comment: "" });
+  read.rounds[0]!.variants.push(variant(3, "Wide"));
+  await mountReview(read);
+  expect(document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage).toBe("2:f0");
+  const row = (number: number) => document.querySelector<HTMLElement>(`li[data-prototype-variant="${number}"]`)!;
+  const tinted = (number: number) => row(number).className.split(/\s+/).includes("bg-accent-soft") || /\bborder-accent/.test(row(number).className);
+  expect([1, 2, 3].map(tinted)).toEqual([false, true, false]);
+  /* Stepping onto an unchosen variant frames it, in no accent. */
+  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-show="1"]')!.click(); });
+  expect(document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage).toBe("1:f0");
+  expect([1, 2, 3].map(tinted)).toEqual([false, true, false]);
+  expect(row(1).className).toContain("border-strong");
+});
+
+test("the phone seat card's prototype chip says the word with the count", async () => {
+  const { PrototypeNoticeChip } = await import("./PrototypeNoticeRow");
+  const { publishPrototypeNotices } = await import("./prototypeReviewStore");
+  const notice = (taskId: string) => ({ id: `n-${taskId}`, project: "project-a", taskId, reviewId: `r-${taskId}`, title: `Task ${taskId}`, createdAt: "2026-10-06T10:00:00.000Z", target: { kind: "prototype-review" as const, taskId, reviewId: `r-${taskId}` } });
+  publishPrototypeNotices([notice("a"), notice("b"), notice("c")]);
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  try {
+    await act(async () => root!.render(<PrototypeNoticeChip project="project-a" compact />));
+    const chip = host.querySelector<HTMLElement>("[data-prototype-notice-chip]")!;
+    expect(chip.textContent).toBe("Prototype3");
+    expect(chip.querySelector("[data-prototype-notice-chip-word]")?.textContent).toBe("Prototype");
+    expect(chip.className).toContain("h-11");
+  } finally {
+    publishPrototypeNotices([]);
+  }
+});

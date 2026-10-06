@@ -7,13 +7,13 @@
         "state": "ready",
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
-        "word": false,
+        "word": true,
         "dot": true,
-        "reason": "Prototype ready",
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          40,
+          95,
           28
         ],
         "insideCard": true,
@@ -25,31 +25,31 @@
         "state": "opened",
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
-        "word": false,
+        "word": true,
         "dot": false,
-        "reason": "Prototype ready",
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          30,
+          85,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-links",
         "state": "ready",
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
-        "word": false,
+        "word": true,
         "dot": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          40,
+          95,
           28
         ],
         "insideCard": true,
@@ -93,6 +93,58 @@
         "footLines": 1
       }
     ],
+    "desktop-1440-en-light-card-cutouts": {
+      "ready": {
+        "button": [
+          852,
+          841,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          795,
+          700,
+          85,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          813,
+          604,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          831,
+          764,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          582,
+          615,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "desktop-1440-en-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -733,7 +785,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:58:10 PM",
+      "time": "10/6/2026, 10:57:01 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -788,6 +840,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(248, 245, 240)",
+          "border": "rgb(203, 195, 183)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "desktop-1440-en-light-one-variant-geometry": {
       "regions": {
@@ -1094,6 +1183,27 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "desktop-1440-en-light-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -1191,6 +1301,35 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "desktop-1440-en-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -1232,6 +1371,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "desktop-1440-en-light-send-failed-delivery-row": {
       "state": "failed",
@@ -1339,13 +1499,13 @@
         "state": "ready",
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
-        "word": false,
+        "word": true,
         "dot": true,
-        "reason": "Prototype ready",
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          40,
+          95,
           28
         ],
         "insideCard": true,
@@ -1357,31 +1517,31 @@
         "state": "opened",
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
-        "word": false,
+        "word": true,
         "dot": false,
-        "reason": "Prototype ready",
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          30,
+          85,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-links",
         "state": "ready",
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
-        "word": false,
+        "word": true,
         "dot": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          40,
+          95,
           28
         ],
         "insideCard": true,
@@ -1425,6 +1585,58 @@
         "footLines": 1
       }
     ],
+    "desktop-1440-en-dark-card-cutouts": {
+      "ready": {
+        "button": [
+          852,
+          841,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          795,
+          700,
+          85,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          813,
+          604,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          831,
+          764,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          582,
+          615,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "desktop-1440-en-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -2065,7 +2277,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:58:31 PM",
+      "time": "10/6/2026, 10:57:32 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -2120,6 +2332,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(20, 21, 27)",
+          "border": "rgb(60, 64, 76)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "desktop-1440-en-dark-one-variant-geometry": {
       "regions": {
@@ -2426,6 +2675,27 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "desktop-1440-en-dark-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -2523,6 +2793,35 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "desktop-1440-en-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -2564,6 +2863,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "desktop-1440-en-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -2671,13 +2991,13 @@
         "state": "ready",
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": true,
-        "reason": "Прототип готовий",
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          40,
+          96,
           28
         ],
         "insideCard": true,
@@ -2689,13 +3009,13 @@
         "state": "opened",
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": false,
-        "reason": "Прототип готовий",
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          30,
+          86,
           28
         ],
         "insideCard": true,
@@ -2707,13 +3027,13 @@
         "state": "ready",
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          40,
+          96,
           28
         ],
         "insideCard": true,
@@ -2757,6 +3077,58 @@
         "footLines": 1
       }
     ],
+    "desktop-1440-uk-light-card-cutouts": {
+      "ready": {
+        "button": [
+          827,
+          841,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          837,
+          700,
+          86,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          789,
+          604,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          807,
+          764,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          582,
+          615,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "desktop-1440-uk-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -3397,7 +3769,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:58:53",
+      "time": "06.10.2026, 22:58:01",
       "posts": [
         {
           "taskId": "t-search",
@@ -3452,6 +3824,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(248, 245, 240)",
+          "border": "rgb(203, 195, 183)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "desktop-1440-uk-light-one-variant-geometry": {
       "regions": {
@@ -3758,6 +4167,27 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "desktop-1440-uk-light-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -3855,6 +4285,35 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "desktop-1440-uk-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -3896,6 +4355,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "desktop-1440-uk-light-send-failed-delivery-row": {
       "state": "failed",
@@ -4003,13 +4483,13 @@
         "state": "ready",
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": true,
-        "reason": "Прототип готовий",
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          40,
+          96,
           28
         ],
         "insideCard": true,
@@ -4021,13 +4501,13 @@
         "state": "opened",
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": false,
-        "reason": "Прототип готовий",
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          30,
+          86,
           28
         ],
         "insideCard": true,
@@ -4039,13 +4519,13 @@
         "state": "ready",
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
-        "word": false,
+        "word": true,
         "dot": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          40,
+          96,
           28
         ],
         "insideCard": true,
@@ -4089,6 +4569,58 @@
         "footLines": 1
       }
     ],
+    "desktop-1440-uk-dark-card-cutouts": {
+      "ready": {
+        "button": [
+          827,
+          841,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          837,
+          700,
+          86,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          789,
+          604,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          807,
+          764,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          582,
+          615,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "desktop-1440-uk-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -4729,7 +5261,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:59:14",
+      "time": "06.10.2026, 22:58:30",
       "posts": [
         {
           "taskId": "t-search",
@@ -4784,6 +5316,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(20, 21, 27)",
+          "border": "rgb(60, 64, 76)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "desktop-1440-uk-dark-one-variant-geometry": {
       "regions": {
@@ -5090,6 +5659,27 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "desktop-1440-uk-dark-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -5187,6 +5777,35 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "desktop-1440-uk-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -5228,6 +5847,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "desktop-1440-uk-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -5421,6 +6061,58 @@
         "footLines": 1
       }
     ],
+    "pane-1000-en-light-card-cutouts": {
+      "ready": {
+        "button": [
+          737,
+          500,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          747,
+          665,
+          85,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          765,
+          555,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          783,
+          581,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          737,
+          554,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "pane-1000-en-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -6102,7 +6794,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:59:35 PM",
+      "time": "10/6/2026, 10:58:57 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -6157,6 +6849,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(248, 245, 240)",
+          "border": "rgb(203, 195, 183)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "pane-1000-en-light-one-variant-geometry": {
       "regions": {
@@ -6463,6 +7192,27 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "pane-1000-en-light-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -6560,6 +7310,35 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "pane-1000-en-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -6601,6 +7380,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "pane-1000-en-light-send-failed-delivery-row": {
       "state": "failed",
@@ -6794,6 +7594,58 @@
         "footLines": 1
       }
     ],
+    "pane-1000-en-dark-card-cutouts": {
+      "ready": {
+        "button": [
+          737,
+          500,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          747,
+          665,
+          85,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          765,
+          555,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          783,
+          581,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          737,
+          554,
+          95,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "pane-1000-en-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -7475,7 +8327,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:59:56 PM",
+      "time": "10/6/2026, 10:59:23 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -7530,6 +8382,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(20, 21, 27)",
+          "border": "rgb(60, 64, 76)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "pane-1000-en-dark-one-variant-geometry": {
       "regions": {
@@ -7836,6 +8725,27 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "pane-1000-en-dark-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -7933,6 +8843,35 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "pane-1000-en-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -7974,6 +8913,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "pane-1000-en-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -8167,6 +9127,58 @@
         "footLines": 1
       }
     ],
+    "pane-1000-uk-light-card-cutouts": {
+      "ready": {
+        "button": [
+          713,
+          500,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          723,
+          665,
+          86,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          741,
+          555,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          759,
+          581,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          713,
+          554,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "pane-1000-uk-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -8848,7 +9860,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:00:17",
+      "time": "06.10.2026, 22:59:46",
       "posts": [
         {
           "taskId": "t-search",
@@ -8903,6 +9915,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(248, 245, 240)",
+          "border": "rgb(203, 195, 183)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "pane-1000-uk-light-one-variant-geometry": {
       "regions": {
@@ -9209,6 +10258,27 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "pane-1000-uk-light-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -9306,6 +10376,35 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "pane-1000-uk-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -9347,6 +10446,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "pane-1000-uk-light-send-failed-delivery-row": {
       "state": "failed",
@@ -9540,6 +10660,58 @@
         "footLines": 1
       }
     ],
+    "pane-1000-uk-dark-card-cutouts": {
+      "ready": {
+        "button": [
+          713,
+          500,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "opened": {
+        "button": [
+          723,
+          665,
+          86,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "decided": {
+        "button": [
+          741,
+          555,
+          67,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "unsent": {
+        "button": [
+          759,
+          581,
+          49,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      },
+      "newer-round": {
+        "button": [
+          713,
+          554,
+          96,
+          28
+        ],
+        "inCard": true,
+        "onScreen": true
+      }
+    },
     "pane-1000-uk-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -10221,7 +11393,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:00:38",
+      "time": "06.10.2026, 23:00:16",
       "posts": [
         {
           "taskId": "t-search",
@@ -10276,6 +11448,43 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": true,
+          "background": "rgb(20, 21, 27)",
+          "border": "rgb(60, 64, 76)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
     },
     "pane-1000-uk-dark-one-variant-geometry": {
       "regions": {
@@ -10582,6 +11791,27 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        }
+      ]
+    },
     "pane-1000-uk-dark-rounds": {
       "newer": "r-links-2",
       "earlier": "r-links-1",
@@ -10679,6 +11909,35 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "pane-1000-uk-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -10720,6 +11979,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "pane-1000-uk-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -10825,9 +12105,8 @@
       {
         "task": "t-pending",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10835,9 +12114,8 @@
       {
         "task": "t-longtitle",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10845,9 +12123,8 @@
       {
         "task": "t-onboarding",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10855,12 +12132,21 @@
       {
         "task": "t-links",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Prototype",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
           "permission prompt",
-          "gpt-5.6·16m"
+          "gpt-5.6·16m",
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -10868,11 +12154,19 @@
       {
         "task": "t-search",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Prototype",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -10880,11 +12174,19 @@
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Prototype",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -10892,19 +12194,28 @@
       {
         "task": "t-export",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-merge-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10912,9 +12223,8 @@
       {
         "task": "t-verify-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10922,19 +12232,28 @@
       {
         "task": "t-disk",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "unsent",
+          "text": "2",
+          "size": [
+            69,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-limits",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [
           "needs a decision · diagnose"
         ],
@@ -10944,9 +12263,8 @@
       {
         "task": "t-auth",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10954,9 +12272,8 @@
       {
         "task": "t-attach",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10964,9 +12281,8 @@
       {
         "task": "t-interrupt",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10974,9 +12290,8 @@
       {
         "task": "t-compact",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -10984,14 +12299,18 @@
       {
         "task": "t-voice",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
       }
     ],
+    "phone-390-en-light-card-tap": {
+      "review": "t-upload",
+      "board": true,
+      "taskScreen": false
+    },
     "phone-390-en-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -11029,13 +12348,13 @@
         "parts#1": [
           24,
           64,
-          254,
+          302,
           45.8
         ],
         "parts#2": [
-          282,
-          64.9,
-          44,
+          24,
+          109.8,
+          350,
           44
         ],
         "parts#3": [
@@ -11045,9 +12364,13 @@
           44
         ]
       },
+      "chip": "Prototype3",
+      "word": "Prototype",
+      "wordClipped": false,
+      "titleClipped": false,
       "count": "3",
-      "chip": [
-        44,
+      "chipSize": [
+        105,
         44
       ]
     },
@@ -11148,13 +12471,13 @@
         "drawn": [
           [
             54.9,
-            406.8,
+            414.8,
             280.1,
             175.1
           ],
           [
             54.9,
-            406.8,
+            414.8,
             280.1,
             175.1
           ]
@@ -11164,7 +12487,7 @@
             "side": "original",
             "box": [
               12,
-              387.8,
+              395.8,
               50.9,
               15
             ],
@@ -11175,7 +12498,7 @@
             "side": "changed",
             "box": [
               325.7,
-              387.8,
+              395.8,
               52.3,
               15
             ],
@@ -11352,6 +12675,16 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-dictating-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-en-light-combination": {
       "slide": "3:f0",
       "caption": "3Dense table — table state 1",
@@ -11406,6 +12739,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-combination-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
+    "phone-390-en-light-unsaved-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-en-light-guard": {
       "missing": [],
       "overlaps": [
@@ -11442,7 +12795,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:00:58 PM",
+      "time": "10/6/2026, 11:00:38 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -11459,15 +12812,15 @@
       "regions": {
         "header": [
           0,
-          137.4,
+          129.4,
           390,
           48
         ],
         "body": [
           0,
-          185.4,
+          177.4,
           390,
-          543.6
+          551.6
         ],
         "footer": [
           0,
@@ -11480,15 +12833,60 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        }
+      ]
+    },
     "phone-390-en-light-cards-after-choice": [
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Prototype",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -11496,10 +12894,20 @@
       {
         "task": "t-search",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       }
@@ -11710,15 +13118,15 @@
       "regions": {
         "header": [
           0,
-          193.9,
+          185.9,
           390,
           48
         ],
         "body": [
           0,
-          241.9,
+          233.9,
           390,
-          505.1
+          513.1
         ],
         "footer": [
           0,
@@ -11730,6 +13138,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        }
+      ]
     },
     "phone-390-en-light-rounds": {
       "newer": "r-links-2",
@@ -11783,15 +13212,15 @@
       "regions": {
         "header": [
           0,
-          138.9,
+          130.9,
           390,
           48
         ],
         "body": [
           0,
-          186.9,
+          178.9,
           390,
-          521.1
+          529.1
         ],
         "footer": [
           0,
@@ -11804,6 +13233,35 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "phone-390-en-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -11813,15 +13271,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -11833,6 +13291,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "phone-390-en-light-send-failed-delivery-row": {
       "state": "failed",
@@ -11862,15 +13341,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -11926,9 +13405,8 @@
       {
         "task": "t-pending",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -11936,9 +13414,8 @@
       {
         "task": "t-longtitle",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -11946,9 +13423,8 @@
       {
         "task": "t-onboarding",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -11956,12 +13432,21 @@
       {
         "task": "t-links",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Prototype",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
           "permission prompt",
-          "gpt-5.6·16m"
+          "gpt-5.6·16m",
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -11969,11 +13454,19 @@
       {
         "task": "t-search",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Prototype",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -11981,11 +13474,19 @@
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Prototype",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -11993,19 +13494,28 @@
       {
         "task": "t-export",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-merge-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12013,9 +13523,8 @@
       {
         "task": "t-verify-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12023,19 +13532,28 @@
       {
         "task": "t-disk",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "unsent",
+          "text": "2",
+          "size": [
+            69,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-limits",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [
           "needs a decision · diagnose"
         ],
@@ -12045,9 +13563,8 @@
       {
         "task": "t-auth",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12055,9 +13572,8 @@
       {
         "task": "t-attach",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12065,9 +13581,8 @@
       {
         "task": "t-interrupt",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12075,9 +13590,8 @@
       {
         "task": "t-compact",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -12085,14 +13599,18 @@
       {
         "task": "t-voice",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
       }
     ],
+    "phone-390-en-dark-card-tap": {
+      "review": "t-upload",
+      "board": true,
+      "taskScreen": false
+    },
     "phone-390-en-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -12130,13 +13648,13 @@
         "parts#1": [
           24,
           64,
-          254,
+          302,
           45.8
         ],
         "parts#2": [
-          282,
-          64.9,
-          44,
+          24,
+          109.8,
+          350,
           44
         ],
         "parts#3": [
@@ -12146,9 +13664,13 @@
           44
         ]
       },
+      "chip": "Prototype3",
+      "word": "Prototype",
+      "wordClipped": false,
+      "titleClipped": false,
       "count": "3",
-      "chip": [
-        44,
+      "chipSize": [
+        105,
         44
       ]
     },
@@ -12249,13 +13771,13 @@
         "drawn": [
           [
             54.9,
-            406.8,
+            414.8,
             280.1,
             175.1
           ],
           [
             54.9,
-            406.8,
+            414.8,
             280.1,
             175.1
           ]
@@ -12265,7 +13787,7 @@
             "side": "original",
             "box": [
               12,
-              387.8,
+              395.8,
               50.9,
               15
             ],
@@ -12276,7 +13798,7 @@
             "side": "changed",
             "box": [
               325.7,
-              387.8,
+              395.8,
               52.3,
               15
             ],
@@ -12453,6 +13975,16 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-dictating-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-en-dark-combination": {
       "slide": "3:f0",
       "caption": "3Dense table — table state 1",
@@ -12507,6 +14039,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-combination-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
+    "phone-390-en-dark-unsaved-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        187.8
+      ],
+      "scrolled": 19,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-en-dark-guard": {
       "missing": [],
       "overlaps": [
@@ -12543,7 +14095,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:01:20 PM",
+      "time": "10/6/2026, 11:01:03 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -12560,15 +14112,15 @@
       "regions": {
         "header": [
           0,
-          137.4,
+          129.4,
           390,
           48
         ],
         "body": [
           0,
-          185.4,
+          177.4,
           390,
-          543.6
+          551.6
         ],
         "footer": [
           0,
@@ -12581,15 +14133,60 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        }
+      ]
+    },
     "phone-390-en-dark-cards-after-choice": [
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Prototype ready",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Prototype",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Prototype ready"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -12597,10 +14194,20 @@
       {
         "task": "t-search",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       }
@@ -12811,15 +14418,15 @@
       "regions": {
         "header": [
           0,
-          193.9,
+          185.9,
           390,
           48
         ],
         "body": [
           0,
-          241.9,
+          233.9,
           390,
-          505.1
+          513.1
         ],
         "footer": [
           0,
@@ -12831,6 +14438,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        }
+      ]
     },
     "phone-390-en-dark-rounds": {
       "newer": "r-links-2",
@@ -12884,15 +14512,15 @@
       "regions": {
         "header": [
           0,
-          138.9,
+          130.9,
           390,
           48
         ],
         "body": [
           0,
-          186.9,
+          178.9,
           390,
-          521.1
+          529.1
         ],
         "footer": [
           0,
@@ -12905,6 +14533,35 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "phone-390-en-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -12914,15 +14571,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -12934,6 +14591,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "phone-390-en-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -12963,15 +14641,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -13027,9 +14705,8 @@
       {
         "task": "t-pending",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13037,9 +14714,8 @@
       {
         "task": "t-longtitle",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13047,9 +14723,8 @@
       {
         "task": "t-onboarding",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13057,12 +14732,21 @@
       {
         "task": "t-links",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Прототип",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·16 хв"
+          "gpt-5.6·16 хв",
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -13070,11 +14754,19 @@
       {
         "task": "t-search",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Прототип",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -13082,11 +14774,19 @@
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Прототип",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -13094,19 +14794,28 @@
       {
         "task": "t-export",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-merge-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13114,9 +14823,8 @@
       {
         "task": "t-verify-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13124,19 +14832,28 @@
       {
         "task": "t-disk",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "unsent",
+          "text": "2",
+          "size": [
+            69,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-limits",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [
           "потрібне рішення · diagnose"
         ],
@@ -13146,9 +14863,8 @@
       {
         "task": "t-auth",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13156,9 +14872,8 @@
       {
         "task": "t-attach",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13166,9 +14881,8 @@
       {
         "task": "t-interrupt",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13176,9 +14890,8 @@
       {
         "task": "t-compact",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -13186,14 +14899,18 @@
       {
         "task": "t-voice",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
       }
     ],
+    "phone-390-uk-light-card-tap": {
+      "review": "t-upload",
+      "board": true,
+      "taskScreen": false
+    },
     "phone-390-uk-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -13231,13 +14948,13 @@
         "parts#1": [
           24,
           64,
-          254,
+          302,
           45.8
         ],
         "parts#2": [
-          282,
-          64.9,
-          44,
+          24,
+          109.8,
+          350,
           44
         ],
         "parts#3": [
@@ -13247,9 +14964,13 @@
           44
         ]
       },
+      "chip": "Прототип3",
+      "word": "Прототип",
+      "wordClipped": false,
+      "titleClipped": false,
       "count": "3",
-      "chip": [
-        44,
+      "chipSize": [
+        106,
         44
       ]
     },
@@ -13350,13 +15071,13 @@
         "drawn": [
           [
             54.9,
-            423.3,
+            431.3,
             280.1,
             175.1
           ],
           [
             54.9,
-            423.3,
+            431.3,
             280.1,
             175.1
           ]
@@ -13366,7 +15087,7 @@
             "side": "original",
             "box": [
               12,
-              404.3,
+              412.3,
               53.7,
               15
             ],
@@ -13377,7 +15098,7 @@
             "side": "changed",
             "box": [
               330,
-              404.3,
+              412.3,
               48,
               15
             ],
@@ -13554,6 +15275,16 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-dictating-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-uk-light-combination": {
       "slide": "3:f0",
       "caption": "3Щільна таблиця — стан таблиці 1",
@@ -13608,6 +15339,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-combination-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
+    "phone-390-uk-light-unsaved-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-uk-light-guard": {
       "missing": [],
       "overlaps": [
@@ -13644,7 +15395,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:01:42",
+      "time": "06.10.2026, 23:01:27",
       "posts": [
         {
           "taskId": "t-search",
@@ -13682,15 +15433,60 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-decided-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        }
+      ]
+    },
     "phone-390-uk-light-cards-after-choice": [
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Прототип",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -13698,10 +15494,20 @@
       {
         "task": "t-search",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       }
@@ -13912,15 +15718,15 @@
       "regions": {
         "header": [
           0,
-          193.9,
+          185.9,
           390,
           48
         ],
         "body": [
           0,
-          241.9,
+          233.9,
           390,
-          505.1
+          513.1
         ],
         "footer": [
           0,
@@ -13932,6 +15738,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-light-earlier-round-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        }
+      ]
     },
     "phone-390-uk-light-rounds": {
       "newer": "r-links-2",
@@ -13985,15 +15812,15 @@
       "regions": {
         "header": [
           0,
-          133.4,
+          125.4,
           390,
           48
         ],
         "body": [
           0,
-          181.4,
+          173.4,
           390,
-          521.1
+          529.1
         ],
         "footer": [
           0,
@@ -14006,6 +15833,35 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-files-gone-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "phone-390-uk-light-files-gone": {
       "retired": true,
       "decision": true,
@@ -14015,15 +15871,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -14035,6 +15891,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-light-send-failed-accent": {
+      "soft": "rgb(236, 235, 251)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(255, 253, 250)",
+          "border": "rgb(229, 223, 213)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(236, 235, 251)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "phone-390-uk-light-send-failed-delivery-row": {
       "state": "failed",
@@ -14064,15 +15941,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -14128,9 +16005,8 @@
       {
         "task": "t-pending",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14138,9 +16014,8 @@
       {
         "task": "t-longtitle",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14148,9 +16023,8 @@
       {
         "task": "t-onboarding",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14158,12 +16032,21 @@
       {
         "task": "t-links",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Прототип",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·16 хв"
+          "gpt-5.6·16 хв",
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -14171,11 +16054,19 @@
       {
         "task": "t-search",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "ready",
+          "text": "Прототип",
+          "size": [
+            118,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -14183,11 +16074,19 @@
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Прототип",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -14195,19 +16094,28 @@
       {
         "task": "t-export",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-merge-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14215,9 +16123,8 @@
       {
         "task": "t-verify-a",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14225,19 +16132,28 @@
       {
         "task": "t-disk",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "unsent",
+          "text": "2",
+          "size": [
+            69,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2"
+        ],
         "overlaps": [],
         "outside": []
       },
       {
         "task": "t-limits",
         "needs": true,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [
           "потрібне рішення · diagnose"
         ],
@@ -14247,9 +16163,8 @@
       {
         "task": "t-auth",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14257,9 +16172,8 @@
       {
         "task": "t-attach",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14267,9 +16181,8 @@
       {
         "task": "t-interrupt",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14277,9 +16190,8 @@
       {
         "task": "t-compact",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
@@ -14287,14 +16199,18 @@
       {
         "task": "t-voice",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
+        "line": false,
+        "button": null,
         "reasons": [],
         "overlaps": [],
         "outside": []
       }
     ],
+    "phone-390-uk-dark-card-tap": {
+      "review": "t-upload",
+      "board": true,
+      "taskScreen": false
+    },
     "phone-390-uk-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -14332,13 +16248,13 @@
         "parts#1": [
           24,
           64,
-          254,
+          302,
           45.8
         ],
         "parts#2": [
-          282,
-          64.9,
-          44,
+          24,
+          109.8,
+          350,
           44
         ],
         "parts#3": [
@@ -14348,9 +16264,13 @@
           44
         ]
       },
+      "chip": "Прототип3",
+      "word": "Прототип",
+      "wordClipped": false,
+      "titleClipped": false,
       "count": "3",
-      "chip": [
-        44,
+      "chipSize": [
+        106,
         44
       ]
     },
@@ -14451,13 +16371,13 @@
         "drawn": [
           [
             54.9,
-            423.3,
+            431.3,
             280.1,
             175.1
           ],
           [
             54.9,
-            423.3,
+            431.3,
             280.1,
             175.1
           ]
@@ -14467,7 +16387,7 @@
             "side": "original",
             "box": [
               12,
-              404.3,
+              412.3,
               53.7,
               15
             ],
@@ -14478,7 +16398,7 @@
             "side": "changed",
             "box": [
               330,
-              404.3,
+              412.3,
               48,
               15
             ],
@@ -14655,6 +16575,16 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-dictating-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-uk-dark-combination": {
       "slide": "3:f0",
       "caption": "3Щільна таблиця — стан таблиці 1",
@@ -14709,6 +16639,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-combination-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
+    "phone-390-uk-dark-unsaved-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        204.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false
+    },
     "phone-390-uk-dark-guard": {
       "missing": [],
       "overlaps": [
@@ -14745,7 +16695,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:02:04",
+      "time": "06.10.2026, 23:01:51",
       "posts": [
         {
           "taskId": "t-search",
@@ -14783,15 +16733,60 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-decided-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 4,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        }
+      ]
+    },
     "phone-390-uk-dark-cards-after-choice": [
       {
         "task": "t-upload",
         "needs": true,
-        "prototype": "Прототип готовий",
-        "mark": true,
-        "clipped": false,
+        "line": false,
+        "button": {
+          "state": "opened",
+          "text": "Прототип",
+          "size": [
+            106,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
         "reasons": [
-          "Прототип готовий"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -14799,10 +16794,20 @@
       {
         "task": "t-search",
         "needs": false,
-        "prototype": null,
-        "mark": false,
-        "clipped": false,
-        "reasons": [],
+        "line": false,
+        "button": {
+          "state": "decided",
+          "text": "2, 3",
+          "size": [
+            90,
+            44
+          ],
+          "insideFace": false,
+          "clipped": false
+        },
+        "reasons": [
+          "2, 3"
+        ],
         "overlaps": [],
         "outside": []
       }
@@ -15013,15 +17018,15 @@
       "regions": {
         "header": [
           0,
-          193.9,
+          185.9,
           390,
           48
         ],
         "body": [
           0,
-          241.9,
+          233.9,
           390,
-          505.1
+          513.1
         ],
         "footer": [
           0,
@@ -15033,6 +17038,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-dark-earlier-round-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 2,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        }
+      ]
     },
     "phone-390-uk-dark-rounds": {
       "newer": "r-links-2",
@@ -15086,15 +17112,15 @@
       "regions": {
         "header": [
           0,
-          133.4,
+          125.4,
           390,
           48
         ],
         "body": [
           0,
-          181.4,
+          173.4,
           390,
-          521.1
+          529.1
         ],
         "footer": [
           0,
@@ -15107,6 +17133,35 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-files-gone-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        },
+        {
+          "number": 3,
+          "chosen": true,
+          "current": false,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "accented": true
+        }
+      ]
+    },
     "phone-390-uk-dark-files-gone": {
       "retired": true,
       "decision": true,
@@ -15116,15 +17171,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,
@@ -15136,6 +17191,27 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-dark-send-failed-accent": {
+      "soft": "rgb(38, 35, 71)",
+      "variants": [
+        {
+          "number": 1,
+          "chosen": false,
+          "current": false,
+          "background": "rgb(25, 27, 35)",
+          "border": "rgb(41, 44, 54)",
+          "accented": false
+        },
+        {
+          "number": 2,
+          "chosen": true,
+          "current": true,
+          "background": "rgb(38, 35, 71)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
+          "accented": true
+        }
+      ]
     },
     "phone-390-uk-dark-send-failed-delivery-row": {
       "state": "failed",
@@ -15165,15 +17241,15 @@
       "regions": {
         "header": [
           0,
-          171.4,
+          163.4,
           390,
           48
         ],
         "body": [
           0,
-          219.4,
+          211.4,
           390,
-          479.6
+          487.6
         ],
         "footer": [
           0,

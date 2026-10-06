@@ -26,6 +26,7 @@ import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remote
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
@@ -444,20 +445,6 @@ function othersText(t: TFunction, item: PhoneCard): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-/** A task that waits only on its prototype review: the words the desktop
-    card's narrow foot says, with its mark. The card has no review button, so
-    this line is what says why it waits; the choice clears it. */
-function PrototypeWaitLine({ item }: { item: PhoneCard }) {
-  const { t } = useLocale();
-  if (!item.waitsOnPrototype) return null;
-  return (
-    <span data-phone-card-prototype="" className="flex min-w-0 items-center gap-[7px] text-label font-semibold text-warning">
-      <span aria-hidden data-phone-card-prototype-mark="" className="ml-[3px] h-1.5 w-1.5 shrink-0 rounded-full bg-warning shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-warning)_22%,transparent)]" />
-      <span data-phone-card-prototype-words="" className="min-w-0 truncate">{t("proto.notice.ready")}</span>
-    </span>
-  );
-}
-
 /** Who cleared a card and how long ago: the muted line a cleared card keeps
     while what it cleared is still live. */
 function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
@@ -569,7 +556,6 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
-      <PrototypeWaitLine item={item} />
       <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
       <ClearedLine item={item} nowMs={nowMs} />
       {remote ? <RemoteCardLines remote={remote} title={title} nowMs={nowMs} withLane={!item.shown} /> : null}
@@ -578,10 +564,14 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const quiet = item.kind === "task" && item.finished && !item.need;
   const tone = `${quiet ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}${remote ? " remote-surface" : ""}`;
   const aside = onDismiss || onUndo;
-  const className = aside ? BODY : `${CARD} ${tone}`;
+  /* The task's prototype review has its own button under the face, so the
+     card's one tap still opens the task and the review is one tap away. */
+  const review = usePrototypeButton(item.kind === "task" ? card.task ?? null : null);
+  const framed = Boolean(aside || review);
+  const className = framed ? `${BODY}${aside ? "" : " pr-3"}${review ? " pb-1" : ""}` : `${CARD} ${tone}`;
   /* The phone draws no borders, so the remote card's tinted line joins the
      shadows its colour edge and its lift already write. */
-  const faceStyle = aside ? undefined : remote
+  const faceStyle = framed ? undefined : remote
     ? { boxShadow: [colour ? colour.boxShadow : quiet ? null : "var(--shadow-1)", "inset 0 0 0 1px var(--remote-edge)"].filter(Boolean).join(", ") }
     : colour;
   const data = {
@@ -600,10 +590,9 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   return (
     <>
     <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0 || item.waitsOnPrototype}>
-      {aside ? (
-        <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
-          {face}
-          {onDismiss ? (
+      {framed ? (
+        <div data-phone-card-frame={item.key} className={`${FRAME} ${review ? "flex-col" : ""} ${tone}`} style={colour}>
+          {aside ? <div className="flex w-full min-w-0 items-stretch">{face}{onDismiss ? (
             <button
               type="button"
               data-phone-card-dismiss={item.key}
@@ -624,7 +613,12 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
             >
               {t("needs.undo")}
             </button>
-          )}
+          )}</div> : face}
+          {review && card.task ? (
+            <div data-phone-card-review-row="" className="flex justify-end px-1 pb-1">
+              <PhoneCardPrototypeButton task={card.task} title={title} review={review} />
+            </div>
+          ) : null}
         </div>
       ) : face}
     </Pressable>
