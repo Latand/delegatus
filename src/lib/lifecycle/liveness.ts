@@ -566,7 +566,7 @@ export function livenessRecordIsLive(record: LivenessVerdict): boolean {
 }
 
 /** The conversation an id names once the registry's aliases are followed. */
-function canonicalConversationId(registry: LivenessRegistrySnapshot, conversationId: string): string {
+export function canonicalConversationId(registry: Pick<LivenessRegistrySnapshot, "conversationAliases">, conversationId: string): string {
   return registry.conversationAliases && conversationId.startsWith("conversation_")
     ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, conversationId as `conversation_${string}`)
     : conversationId;
@@ -664,13 +664,13 @@ function transcriptFromEntry(entry: FileEntry): LivenessTranscript {
 
 /** The conversation that owns a transcript, from the registry the snapshot has
     already read — a targeted lookup has no scan projection to carry one. */
-function conversationIdForPath(
-  registry: Pick<RegistryFile, "conversations">,
+export function conversationIdForPath(
+  registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
   transcriptPath: string,
 ): string | null {
   for (const conversation of Object.values(registry.conversations)) {
-    if (conversation.generations.some((generation) => generation.path === transcriptPath)) return conversation.id;
-    if (conversation.continuityPaths?.includes(transcriptPath)) return conversation.id;
+    if (conversation.generations.some((generation) => generation.path === transcriptPath)
+      || conversation.continuityPaths?.includes(transcriptPath)) return canonicalConversationId(registry, conversation.id);
   }
   return null;
 }

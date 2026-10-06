@@ -198,14 +198,16 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   // blockers are cut for display; an admission compares the whole set.
   const work: string[] = [];
   const readings = new Map<string, Promise<TurnEvidence | null>>();
+  const journalPaths = new Map<string, string>();
   const probe = {};
   const evidence = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">): Promise<TurnEvidence | null> => {
-    const id = session.conversationId;
-    if (!readings.has(id)) readings.set(id, (async () => {
-      try { return await ports.turnLiveness?.(session, probe) ?? null; }
+    const artifactPath = session.artifactPath ?? journalPaths.get(session.conversationId) ?? null;
+    const key = JSON.stringify([session.conversationId, artifactPath]);
+    if (!readings.has(key)) readings.set(key, (async () => {
+      try { return await ports.turnLiveness?.({ ...session, artifactPath }, probe) ?? null; }
       catch { return null; } // Evidence that could not be read always blocks admission.
     })());
-    return readings.get(id)!;
+    return readings.get(key)!;
   };
   if (ports.memoryAvailableMb) {
     const mb = ports.memoryAvailableMb();
@@ -215,6 +217,13 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.registryIssues = (ports.registryHealth ?? pipelineRegistryHealth)();
     const pipelines = ports.pipelines();
     const flows = ports.flows?.() ?? [];
+    // A stage can predate its transcript binding. Read the journal before
+    // judging owners so its path protects both the stage and its turn in this
+    // probe; an earlier pathless reading must not hide that evidence.
+    const runtime = await ports.runtimeSnapshot();
+    for (const session of runtime.sessions) {
+      if (session.artifactPath) journalPaths.set(session.conversationId, session.artifactPath);
+    }
     const stages: BlockingStage[] = [];
     const unresolved = new Set<string>();
     const settled = new Set<string>();
@@ -282,7 +291,6 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     work.push(...stages.map((stage) => `stage:${stage.pipelineId}:${stage.stageId}:${stage.conversationId ?? ""}`));
     blockers.stageList = stages.slice(0, 20);
     const seats = ports.seats?.() ?? [];
-    const runtime = await ports.runtimeSnapshot();
     const turns: BlockingTurn[] = [];
     const seen = new Set<string>();
     for (const session of runtime.sessions) {

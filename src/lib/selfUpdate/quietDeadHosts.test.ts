@@ -14,9 +14,12 @@ import { newRound, reserveReviewerSpawn } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
+import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { RuntimeJournal } from "../../runtime-host/journal";
 
-import { productionDeps } from "./instance";
+import { productionDeps, turnEvidenceReader } from "./instance";
 import { probeQuiet, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
@@ -693,4 +696,222 @@ test("review attack: accepted structured relay still holds its stage before the 
     expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true))
       .toMatchObject({quiet: true, blockers: {stages: 0}});
   } finally { releaseDrain(drainFile(), holdId); restore(); saveFlows([]); journal.close(); child.kill(); await child.exited; }
+});
+
+test("independent attack: a path-only fixing implementer with live recorded process survives lagging dead status", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = ended("open");
+  const implementer = hosted("open", identity);
+  registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${implementer.key.sessionId}`]!, status: "dead" });
+  const at = new Date().toISOString();
+  const flowId = "flow_path_live";
+  reviewFlow(flowId, implementer.artifactPath, "relaying", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity,
+    verdict: "REQUEST_CHANGES", reviewedAt: at, relayedAt: at,
+    relayDelivery: { path: implementer.artifactPath, deliveredAt: at },
+  });
+  const journal = journalOf("path-only-fixing", [
+    { ...row(reviewer, "hosted"), sessionKey: reviewer.key },
+    { ...row(implementer, "hosted", "idle"), sessionKey: implementer.key, activeTurnId: null },
+  ]);
+  const p = { ...ports([], [lane("lane_path_live", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const { tickFlows } = await import("@/lib/flows/engine");
+    await tickFlows([{ path: implementer.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture" } as never]);
+    expect(loadFlows()[0]!.state).toBe("fixing");
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 0 } });
+    }
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally {
+    saveFlows([]);
+    journal.close();
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("independent attack: a deleted transcript cannot hide a live path-only fixing implementer", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = ended("open");
+  const implementer = hosted("open", identity);
+  const at = new Date().toISOString();
+  const flowId = "flow_path_deleted";
+  reviewFlow(flowId, implementer.artifactPath, "fixing", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity,
+    verdict: "REQUEST_CHANGES", reviewedAt: at, relayedAt: at,
+  });
+  rmSync(implementer.artifactPath);
+  const journal = journalOf("path-deleted-fixing", [
+    { ...row(reviewer, "hosted"), sessionKey: reviewer.key },
+    { ...row(implementer, "hosted", "idle"), sessionKey: implementer.key, activeTurnId: null },
+  ]);
+  const p = { ...ports([], [lane("lane_path_deleted", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 0 } });
+    }
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally {
+    saveFlows([]);
+    journal.close();
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("independent control: canonical live ownership with a deleted transcript holds until real process death", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const reviewer = ended("open");
+  const implementer = hosted("open", identity);
+  rmSync(implementer.artifactPath);
+  const flowId = "flow_control";
+  const at = new Date().toISOString();
+  reviewFlow(flowId, implementer.artifactPath, "fixing", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity,
+    verdict: "REQUEST_CHANGES", reviewedAt: at, relayedAt: at,
+  });
+  const active = loadFlows()[0]!;
+  active.implementerConversationId = implementer.conversation.id;
+  saveFlows([active]);
+  const journal = journalOf("canonical-control", [
+    { ...row(reviewer, "hosted"), sessionKey: reviewer.key },
+    { ...row(implementer, "hosted", "idle"), sessionKey: implementer.key, activeTurnId: null },
+  ]);
+  const p = { ...ports([], [lane("lane_control", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const now = Date.now();
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally {
+    saveFlows([]);
+    journal.close();
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("independent cache attack: a stage without a path cannot mask the journal's live transcript evidence", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const live = hosted("open", identity);
+  const orphanId = `conversation_${randomUUID()}`;
+  const journal = journalOf("cached-path-owner", [
+    { ...row(live, "hosted"), conversationId: orphanId, sessionKey: live.key },
+  ]);
+  const p = { ...ports([], [lane("lane_cached", "running", {
+    conversationId: orphanId, agentPath: null,
+  })]), runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1, unresolved: 0 } });
+    }
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  } finally {
+    journal.close();
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("independent cache control: the same journal protects its live process when the stage supplies the path", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const live = hosted("open", identity);
+  const orphanId = `conversation_${randomUUID()}`;
+  const journal = journalOf("cached-path-control", [
+    { ...row(live, "hosted"), conversationId: orphanId, sessionKey: live.key },
+  ]);
+  const p = { ...ports([], [lane("lane_cached_control", "running", {
+    conversationId: orphanId, agentPath: live.artifactPath,
+  })]), runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const now = Date.now();
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+    expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+    const runtimeOnly = { ...p, pipelines: () => [] };
+    expect(await probeQuiet(snapshot, runtimeOnly, now + FIVE_MINUTES, true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  } finally {
+    journal.close();
+    child.kill();
+    await child.exited;
+  }
+});
+
+
+test.each(["generation", "continuity", "alias"] as const)("fallback ownership follows a deleted %s path to the current process", async (binding) => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const previous = ended("open");
+  const current = hosted("open", identity);
+  const disk = registry.readOnlySnapshot();
+  if (binding === "alias") disk.conversationAliases[previous.conversation.id] = current.conversation.id;
+  else {
+    delete disk.conversations[previous.conversation.id];
+    const owner = disk.conversations[current.conversation.id]!;
+    if (binding === "generation") owner.generations.unshift(previous.conversation.generations[0]!);
+    else owner.continuityPaths.push(previous.artifactPath);
+  }
+  rmSync(previous.artifactPath);
+  const read = turnEvidenceReader(() => ({ ...productionLivenessSources(), registrySnapshot: () => disk }));
+  const request = { conversationId: "flow:legacy:implementer", artifactPath: previous.artifactPath };
+  try {
+    expect(await read(request, {})).toMatchObject({ record: null, registryHost: { processAlive: true } });
+    child.kill();
+    await child.exited;
+    expect(await read(request, {})).toMatchObject({ record: null, registryHost: { state: "gone", processAlive: false } });
+  } finally { child.kill(); await child.exited; }
+});
+
+test("a path-only owner reads its current hosted turn even when registry and transcript say gone", async () => {
+  const fixture = ended("open");
+  rmSync(fixture.artifactPath);
+  const journal = journalOf("path-current-host", []);
+  const client = {
+    snapshot: async () => journal.snapshot(),
+    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    producerCursor: async () => 0,
+    effectBatch: async () => [],
+    operationStatus: async () => null,
+  } as unknown as RuntimeHostClient;
+  const fake = new FakeEngineHost();
+  const health = await fake.health();
+  const host = Object.assign(fake, {
+    health: async () => ({ ...health, status: "active" as const, activeTurnRef: "replacement-turn" }),
+    onStateChange: () => () => {},
+  });
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true, hostlessSettleIntervalMs: 0 });
+    await publishStructuredDeliveryHost({ key: fixture.key, host });
+    const read = productionDeps({ ...process.env }).quiet!.turnLiveness!;
+    expect(await read({ conversationId: "flow:legacy:implementer", artifactPath: fixture.artifactPath }, {}))
+      .toMatchObject({ record: null, registryHost: { state: "gone", processAlive: false }, currentTurnIdle: false });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
 });

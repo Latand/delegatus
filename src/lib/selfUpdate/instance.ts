@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
-import { agentLivenessSnapshot, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, canonicalConversationId, conversationIdForPath, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -103,11 +103,19 @@ export function turnEvidenceReader(
     /* By id first. The transcript the journal row itself names is the second
        reading, for an id the registry no longer resolves. */
     const record = await read({ conversationId }) ?? (artifactPath ? await read({ transcriptPath: artifactPath }) : null);
-    const host = structuredDeliveryHostForConversation(conversationId);
+    const registry = liveness.registrySnapshot();
+    const requestedId = canonicalConversationId(registry, conversationId);
+    // A legacy flow may name only a path. The registry keeps that ownership
+    // even after the transcript disappears, including past generations and
+    // continuity paths. Ask the canonical owner's current host in every case.
+    const ownerId = registry.conversations[requestedId] ? requestedId
+      : canonicalConversationId(registry, (artifactPath ? conversationIdForPath(registry, artifactPath) : null)
+        ?? record?.conversationId ?? requestedId);
+    const host = structuredDeliveryHostForConversation(ownerId);
     return {
       record,
-      registryHost: conversationRegistryHost(liveness.registrySnapshot(), conversationId, liveness.probe),
-      headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], conversationId, artifactPath ?? null, liveness.probe, liveness.registrySnapshot()),
+      registryHost: conversationRegistryHost(registry, ownerId, liveness.probe),
+      headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], ownerId, artifactPath ?? null, liveness.probe, registry),
       currentTurnIdle: currentHostTurnIdle(await host?.health()),
     };
   };

@@ -309,6 +309,14 @@ Two consequences shape the rule:
      for as long as it exists;
    - evidence that cannot be read counts.
 
+   A fallback transcript path resolves its canonical owner through the same
+   registry generations, continuity paths and aliases as the liveness read.
+   That owner's recorded process and current Viewer host remain evidence even
+   when the transcript was deleted or the registry's status word lags. Each
+   probe reads the journal before judging stages, so a journal artifact path
+   also supplies a stage's missing binding. Cached readings include both the
+   conversation id and the effective artifact path.
+
    The rows themselves are corrected at the source: once a minute the
    delivery controller publishes the registry's verdict over a session row
    that still claims an open turn for a conversation the registry proves
