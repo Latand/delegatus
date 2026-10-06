@@ -20,7 +20,7 @@ import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/proce
 import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { runtimeHostKindForEngine, runtimeIdleKillMatches, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
+import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
