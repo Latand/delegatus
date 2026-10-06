@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 
 import {
+  isOwnedTempConsumerName,
   isOwnedTempName,
   recordTempSweep,
   runTempSweep,
@@ -65,9 +66,11 @@ async function started(child: ChildProcess): Promise<ChildProcess> {
 test("owned names are llv-* and three legacy test prefixes; shared roots and foreign names are not", () => {
   for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c"]) {
     expect(isOwnedTempName(name)).toBeTrue();
+    expect(isOwnedTempConsumerName(name)).toBeTrue();
   }
   for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x"]) {
     expect(isOwnedTempName(name)).toBeFalse();
+    expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd"].includes(name));
   }
 });
 

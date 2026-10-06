@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import childProcess from "node:child_process";
 
 import { stateDir, statePath } from "@/lib/configDir";
-import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
+import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
@@ -75,6 +76,22 @@ function tempViewAvailable(root: TempSweepRoot): boolean {
   catch { return false; }
 }
 
+/** Docker's CLI shims target PID 1. An unrelated agent namespace cannot
+    establish a required stage write volume. The image's setuid nsenter can
+    read that namespace when direct proc access is denied, as the shims do. */
+function stageHostNamespace(): string | null {
+  try { return fs.readlinkSync("/proc/1/ns/mnt"); }
+  catch { /* PID 1 can belong to another user. */ }
+  try {
+    const result = childProcess.spawnSync("nsenter", ["-t", "1", "-m", "-p", "--", "/usr/bin/setpriv",
+      `--reuid=${process.getuid?.() ?? 0}`, `--regid=${process.getgid?.() ?? 0}`,
+      `--groups=${process.getgroups?.().join(",") ?? ""}`, "--", "/bin/readlink", "/proc/self/ns/mnt"],
+    { encoding: "utf8", timeout: 2_000 });
+    const namespace = result.stdout?.trim();
+    return result.status === 0 && /^mnt:\[\d+\]$/.test(namespace) ? namespace : null;
+  } catch { return null; }
+}
+
 /** One row per volume; available bytes are those this user can allocate. */
 export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probeDisk): DiskVolume[] {
   const volumes = new Map<string, DiskVolume>();
@@ -111,8 +128,10 @@ function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweep
   // paths can name another volume there; use the same validated views as
   // cleanup, and include only actual stage destinations in admission.
   const namespaces = new Set<string>();
+  const hostNamespace = source.LLV_DOCKER_NSENTER_SHIMS === "1" && tempRoots.some(root => root.via) ? stageHostNamespace() : null;
   if (source.LLV_DOCKER_NSENTER_SHIMS === "1") for (const temp of tempRoots) {
     if (!temp.via || !temp.anchor) continue;
+    if (temp.anchor.namespace !== hostNamespace) continue;
     if (namespaces.has(temp.anchor.namespace)) continue;
     if (!tempViewAvailable(temp)) continue;
     namespaces.add(temp.anchor.namespace);
@@ -265,7 +284,7 @@ export async function readDiskPressure(ports: {
         const base = root.via + root.path;
         try {
           for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-            if (!entry.isDirectory() || !isOwnedTempName(entry.name)) continue;
+            if (!entry.isDirectory() || !isOwnedTempConsumerName(entry.name)) continue;
             const child = path.join(base, entry.name);
             const canonicalChild = path.join(root.path, entry.name);
             // Scratch is part of state. Other owned roots can contain both a

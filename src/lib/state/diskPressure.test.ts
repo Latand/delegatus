@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import childProcess from "node:child_process";
 import { exclusiveBytes } from "@/lib/pipelines/worktreeSweep";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
@@ -109,11 +110,14 @@ test.skipIf(process.platform !== "linux")("Docker admission checks actual host c
   const state = "/srv/delegatus-config/agent-log-viewer/state";
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-host-admission-"));
   const via = path.join(fixture, "proc/42/root");
-  const namespace = "mnt:[host-admission]";
+  const namespace = "mnt:[12345]";
   fs.mkdirSync(path.join(fixture, "proc/42/ns"), { recursive: true });
   fs.symlinkSync(namespace, path.join(fixture, "proc/42/ns/mnt"));
   const source = { NODE_ENV: "test" as const, XDG_CONFIG_HOME: "/srv/delegatus-config", TMPDIR: os.tmpdir(), CLAUDE_CODE_TMPDIR: "/srv/claude-temp", LLV_DOCKER_NSENTER_SHIMS: "1" };
   const temp = { path: os.tmpdir(), via, anchor: { pid: 42, namespace } };
+  const readlink = fs.readlinkSync;
+  const hostNamespace = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : readlink(file, options as undefined)) as typeof fs.readlinkSync);
   process.env.LLV_STATE_DIR = state;
   try {
     const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(state, "scratch/tmp") });
@@ -129,6 +133,31 @@ test.skipIf(process.platform !== "linux")("Docker admission checks actual host c
       freeBytes = 20 * GiB;
       expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, [temp])).toBeNull();
     }
+    const unrelatedVia = path.join(fixture, "proc/43/root");
+    const unrelatedNamespace = "mnt:[private-agent]";
+    fs.mkdirSync(path.join(fixture, "proc/43/ns"), { recursive: true });
+    fs.symlinkSync(unrelatedNamespace, path.join(fixture, "proc/43/ns/mnt"));
+    const unrelated = { path: os.tmpdir(), via: unrelatedVia, anchor: { pid: 43, namespace: unrelatedNamespace } };
+    const visited: string[] = [];
+    expect(worktreeDiskWait("/srv/repo", "/srv/lane", directory => {
+      visited.push(directory);
+      return { volume: directory.startsWith(unrelatedVia) ? "private" : "writer", freeBytes: directory.startsWith(unrelatedVia) ? GiB : 500 * GiB, totalBytes: 1000 * GiB };
+    }, source, [unrelated, temp])).toBeNull();
+    expect(visited.some(directory => directory.startsWith(unrelatedVia))).toBeFalse();
+    hostNamespace.mockImplementation(((file: fs.PathLike, options?: unknown) => {
+      if (String(file) === "/proc/1/ns/mnt") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return readlink(file, options as undefined);
+    }) as typeof fs.readlinkSync);
+    const enter = spyOn(childProcess, "spawnSync").mockReturnValue({ status: 0, stdout: namespace + "\n", stderr: "" } as ReturnType<typeof childProcess.spawnSync>);
+    try {
+      const hostLow: DiskProbe = directory => ({ volume: directory.startsWith(via) ? "host" : "container",
+        freeBytes: directory.startsWith(via) ? GiB : 500 * GiB, totalBytes: 1000 * GiB });
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", hostLow, source, [temp])).toContain("1.00 GiB free");
+      expect(enter.mock.calls[0]?.[0]).toBe("nsenter");
+      expect(enter.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["-t", "1", "/usr/bin/setpriv", "/bin/readlink", "/proc/self/ns/mnt"]));
+      enter.mockReturnValue({ status: 1, stdout: "", stderr: "permission denied" } as ReturnType<typeof childProcess.spawnSync>);
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", hostLow, source, [temp])).toBeNull();
+    } finally { enter.mockRestore(); }
     fs.unlinkSync(path.join(fixture, "proc/42/ns/mnt"));
     fs.symlinkSync("mnt:[recycled]", path.join(fixture, "proc/42/ns/mnt"));
     let hostProbe = false;
@@ -138,8 +167,49 @@ test.skipIf(process.platform !== "linux")("Docker admission checks actual host c
     }, source, [temp]);
     expect(hostProbe).toBe(false);
   } finally {
+    hostNamespace.mockRestore();
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32")("shared agent sandboxes and tmux state count once across temp-root aliases and remain protected", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-shared-consumers-"));
+  const state = path.join(fixture, "state");
+  const temp = path.join(fixture, "temp");
+  const alias = path.join(fixture, "temp-alias");
+  fs.mkdirSync(state); fs.mkdirSync(temp);
+  fs.symlinkSync(temp, alias);
+  const via = path.join(fixture, "proc/42/root");
+  const namespace = "mnt:[12346]";
+  fs.mkdirSync(path.join(fixture, "proc/42/ns"), { recursive: true });
+  fs.symlinkSync(namespace, path.join(fixture, "proc/42/ns/mnt"));
+  fs.symlinkSync("/", via);
+  process.env.LLV_STATE_DIR = state;
+  const config = agentConfigSandboxRoot({ TMPDIR: temp }, "/repo/account-a");
+  const sandbox = path.dirname(config);
+  const tmux = path.join(temp, "llv-tmux-cwd");
+  const manual = path.join(temp, "manual-output");
+  for (const directory of [config, tmux, manual]) fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(config, "cache.bin"), Buffer.alloc(512 * 1024, 1));
+  fs.writeFileSync(path.join(tmux, "state"), Buffer.alloc(64 * 1024, 1));
+  fs.writeFileSync(path.join(manual, "bulk"), Buffer.alloc(256 * 1024, 1));
+  const caches = new Map();
+  const options = { caches, worktrees: [], roots: [{ role: "state", directory: state }, { role: "temp", directory: temp }],
+    tempRoots: [{ path: temp, via: "" }, { path: alias, via: "" }, { path: temp, via, anchor: { pid: 42, namespace } }], now: () => Date.parse("2026-10-06T12:00:00Z"),
+    probe: () => ({ volume: "fixture", freeBytes: GiB }) };
+  try {
+    await readDiskPressure(options);
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    expect(measured.consumers.find(row => row.kind === "temp")?.bytes).toBe(await exclusiveBytes(sandbox) + await exclusiveBytes(tmux));
+    expect(fs.existsSync(path.join(config, "cache.bin"))).toBeTrue();
+    expect(fs.existsSync(path.join(tmux, "state"))).toBeTrue();
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });

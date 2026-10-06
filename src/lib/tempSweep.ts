@@ -71,6 +71,11 @@ export function isOwnedTempName(name: string): boolean {
   return LEGACY_OWNED_PREFIXES.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
 }
 
+/** Shared agent state consumes owned space while remaining protected from cleanup. */
+export function isOwnedTempConsumerName(name: string): boolean {
+  return KEPT_OWNED_NAMES.has(name) || isOwnedTempName(name);
+}
+
 /** The staleness threshold, or null when the operator turned the sweep off
     with `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0`. */
 export function tempSweepMaxAgeMs(env: Readonly<Record<string, string | undefined>> = process.env): number | null {
