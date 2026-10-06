@@ -22,6 +22,7 @@ import { MenuFamily } from "@/components/kanban/compactMenus.family.prototype";
 import { compactMenuPresenter } from "@/components/kanban/compactMenus.prototype";
 import { MENU_VARIANTS } from "@/components/kanban/compactMenus.prototype.model";
 import { HEADER_VARIANTS } from "@/components/kanban/headerMenu.prototype";
+import { HeaderMemory, MEMORY_STATES, memoryFixtureView } from "@/components/kanban/headerMemory.prototype";
 import { menuPresenter } from "@/components/kanban/kanbanMenus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
@@ -2514,6 +2515,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* `?header=N&memory=<state>`: the shared memory block in one of its states, for the header menu's variants. */
+  if (MEMORY && method === "GET" && url.pathname === "/api/memory/settings") return json(memoryFixtureView(MEMORY));
+  if (MEMORY && method === "GET" && url.pathname === "/api/asks-you/key") return json({ present: MEMORY !== "noKey", source: MEMORY === "noKey" ? null : "file" });
+  if (MEMORY && method === "GET" && url.pathname === "/api/telemetry") return json({ enabled: true, locked: false, noticeDismissed: true });
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
   if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
@@ -3101,10 +3106,11 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
    as one of the numbered design variants, over the product's own entries. */
 /* `?header=1|2|3` groups the app header's ⋯ as one of its own variants, in the chosen card menu's look (variant 1). */
 const HEADER = HEADER_VARIANTS.find((variant) => String(variant) === new URLSearchParams(location.search).get("header")) ?? null;
+const MEMORY = HEADER || new URLSearchParams(location.search).has("memory") ? MEMORY_STATES.find((state) => state === new URLSearchParams(location.search).get("memory")) ?? "working" : null;
 const MENUS = HEADER ? 1 : MENU_VARIANTS.find((variant) => String(variant) === new URLSearchParams(location.search).get("menus")) ?? null;
 if (MENUS) menuPresenter.current = compactMenuPresenter(MENUS);
 createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : MENUS ? <><Viewer /><MenuFamily variant={MENUS} header={HEADER} /></> : <Viewer />);
+) : MENUS ? <><Viewer /><MenuFamily variant={MENUS} header={HEADER} />{HEADER ? <HeaderMemory variant={HEADER} project="atlas" /> : null}</> : <Viewer />);

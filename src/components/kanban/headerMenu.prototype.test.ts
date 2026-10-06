@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { HEADER_ITEMS, HEADER_LAYOUTS, HEADER_VARIANTS, headerFamilySpecs, headerHome, headerName, type HeaderItem } from "./headerMenu.prototype";
+import type { MemorySettingView } from "@/lib/memory/viewTypes";
+
+import { HEADER_ITEMS, HEADER_LAYOUTS, HEADER_MEMORY_EVENT, HEADER_VARIANTS, headerFamilySpecs, headerHome, headerName, type HeaderItem } from "./headerMenu.prototype";
+import { MEMORY_STATES, memoryFixtureView, memoryTone } from "./headerMemory.prototype";
 
 const ITEMS = Object.keys(HEADER_ITEMS) as HeaderItem[];
 
@@ -48,5 +51,34 @@ describe("the header's menu, three groupings (docs/design/compact-card-menu.md)"
     const names = (variant: (typeof HEADER_VARIANTS)[number]) => JSON.stringify(HEADER_LAYOUTS[variant].names);
     expect(new Set(HEADER_VARIANTS.map(shape)).size).toBe(3);
     expect(new Set(HEADER_VARIANTS.map(names)).size).toBe(3);
+  });
+});
+
+describe("shared memory's home in the header's menu", () => {
+  test("every variant names memory apart from the ping and shows its state at the first level", () => {
+    for (const variant of HEADER_VARIANTS) {
+      expect(headerName(variant, "memory")).not.toEqual(headerName(variant, "settings"));
+      const home = headerHome(variant, "memory")!;
+      const [rail, phone] = headerFamilySpecs(variant);
+      for (const spec of [rail!, phone!]) {
+        expect(spec.dress?.memory?.trail).toBeDefined();
+        expect(spec.virtual?.memory?.event).toBe(HEADER_MEMORY_EVENT);
+        /* At rest the entry carries its state itself; inside a group the group's row carries it. */
+        const section = spec.layouts[1].placements.flatMap((placement) => ("section" in placement && placement.section.rows.includes("memory") ? [placement.section] : []))[0];
+        if (home.group) expect(section?.trail).toBeDefined(); else expect(section).toBeUndefined();
+      }
+    }
+  });
+
+  test("one state is read from the reasons the product reports, the blocking one first", () => {
+    const view = (reasons: MemorySettingView["reasons"], enabled = true) => ({ ...memoryFixtureView("working"), enabled, reasons });
+    expect(memoryTone(null)).toBe("unknown");
+    expect(memoryTone({ enabled: true, status: "unavailable" })).toBe("unknown");
+    expect(memoryTone(view([]))).toBe("working");
+    expect(memoryTone(view(["projectOff"], false))).toBe("off");
+    expect(memoryTone(view(["projectOff", "noKey"], false))).toBe("noKey");
+    expect(memoryTone(view(["capped"]))).toBe("capped");
+    expect(memoryTone(view(["noKey", "notOwner"]))).toBe("notOwner");
+    for (const state of MEMORY_STATES) expect(memoryTone(memoryFixtureView(state))).toBe(state);
   });
 });

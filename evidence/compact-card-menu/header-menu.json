@@ -21,6 +21,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -36,6 +37,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -51,6 +53,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -66,6 +69,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -81,6 +85,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -96,6 +101,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -111,6 +117,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -126,6 +133,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -138,6 +146,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -152,6 +161,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -166,6 +176,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -180,6 +191,7 @@
       "mapping": "open install",
       "dictation": "open install",
       "settings": "open install",
+      "memory": "rest",
       "linked": "open install",
       "relay": "open install",
       "update": "rest",
@@ -196,7 +208,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -211,7 +224,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -226,7 +240,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -241,7 +256,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -256,7 +272,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -271,7 +288,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -286,7 +304,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -301,7 +320,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -313,7 +333,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -327,7 +348,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -341,7 +363,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -355,7 +378,8 @@
       "walk": "open learn",
       "mapping": "open agents",
       "dictation": "open agents",
-      "settings": "rest",
+      "settings": "open outbound",
+      "memory": "open outbound",
       "linked": "open connect",
       "relay": "open connect",
       "update": "rest",
@@ -373,6 +397,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -388,6 +413,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -403,6 +429,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -418,6 +445,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -433,6 +461,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -448,6 +477,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -463,6 +493,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -478,6 +509,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -490,6 +522,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -504,6 +537,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -518,6 +552,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -532,6 +567,7 @@
       "mapping": "open settings",
       "dictation": "open settings",
       "settings": "open settings",
+      "memory": "open settings",
       "linked": "open settings",
       "relay": "open settings",
       "update": "rest",
@@ -546,7 +582,9 @@
     "sheet-compare-uk.png",
     "sheet-variant-1.png",
     "sheet-variant-2.png",
-    "sheet-variant-3.png"
+    "sheet-variant-3.png",
+    "sheet-memory-en.png",
+    "sheet-memory-uk.png"
   ],
   "failures": [],
   "states": [
@@ -801,16 +839,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1440-light-en-header-rest.png",
       "shown": {
         "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update"
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
       }
     },
     {
@@ -824,17 +863,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-en-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -850,22 +890,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1440-light-en-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Agents by role",
         "rail-menu-dictation": "Speech recognition",
         "rail-menu-linked-settings": "Linked machines",
         "rail-menu-external-relay": "Questions from chats",
-        "rail-menu-settings": "Privacy and memory"
+        "rail-menu-settings": "Privacy"
       }
     },
     {
@@ -879,17 +916,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-en-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-team": "Team",
         "qr": "Open on phone"
       }
@@ -905,17 +943,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-en-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -931,16 +970,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1440-light-uk-header-rest.png",
       "shown": {
         "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення"
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
       }
     },
     {
@@ -954,17 +994,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-uk-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -980,22 +1021,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1440-light-uk-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Агенти для ролей",
         "rail-menu-dictation": "Розпізнавання мовлення",
         "rail-menu-linked-settings": "Пов’язані комп’ютери",
         "rail-menu-external-relay": "Питання з чатів",
-        "rail-menu-settings": "Приватність і пам’ять"
+        "rail-menu-settings": "Приватність"
       }
     },
     {
@@ -1009,17 +1047,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-uk-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-team": "Команда",
         "qr": "Відкрити на телефоні"
       }
@@ -1035,17 +1074,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-light-uk-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -1061,16 +1101,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1440-dark-en-header-rest.png",
       "shown": {
         "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update"
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
       }
     },
     {
@@ -1084,17 +1125,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-en-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -1110,22 +1152,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1440-dark-en-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Agents by role",
         "rail-menu-dictation": "Speech recognition",
         "rail-menu-linked-settings": "Linked machines",
         "rail-menu-external-relay": "Questions from chats",
-        "rail-menu-settings": "Privacy and memory"
+        "rail-menu-settings": "Privacy"
       }
     },
     {
@@ -1139,17 +1178,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-en-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-team": "Team",
         "qr": "Open on phone"
       }
@@ -1165,17 +1205,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-en-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -1191,16 +1232,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1440-dark-uk-header-rest.png",
       "shown": {
         "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення"
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
       }
     },
     {
@@ -1214,17 +1256,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-uk-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -1240,22 +1283,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1440-dark-uk-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Агенти для ролей",
         "rail-menu-dictation": "Розпізнавання мовлення",
         "rail-menu-linked-settings": "Пов’язані комп’ютери",
         "rail-menu-external-relay": "Питання з чатів",
-        "rail-menu-settings": "Приватність і пам’ять"
+        "rail-menu-settings": "Приватність"
       }
     },
     {
@@ -1269,17 +1309,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-uk-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-team": "Команда",
         "qr": "Відкрити на телефоні"
       }
@@ -1295,17 +1336,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1440-dark-uk-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -1321,16 +1363,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1000-light-en-header-rest.png",
       "shown": {
         "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update"
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
       }
     },
     {
@@ -1344,17 +1387,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-en-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -1370,22 +1414,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1000-light-en-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Agents by role",
         "rail-menu-dictation": "Speech recognition",
         "rail-menu-linked-settings": "Linked machines",
         "rail-menu-external-relay": "Questions from chats",
-        "rail-menu-settings": "Privacy and memory"
+        "rail-menu-settings": "Privacy"
       }
     },
     {
@@ -1399,17 +1440,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-en-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-team": "Team",
         "qr": "Open on phone"
       }
@@ -1425,17 +1467,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-en-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -1451,16 +1494,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1000-light-uk-header-rest.png",
       "shown": {
         "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення"
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
       }
     },
     {
@@ -1474,17 +1518,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-uk-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -1500,22 +1545,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1000-light-uk-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Агенти для ролей",
         "rail-menu-dictation": "Розпізнавання мовлення",
         "rail-menu-linked-settings": "Пов’язані комп’ютери",
         "rail-menu-external-relay": "Питання з чатів",
-        "rail-menu-settings": "Приватність і пам’ять"
+        "rail-menu-settings": "Приватність"
       }
     },
     {
@@ -1529,17 +1571,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-uk-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-team": "Команда",
         "qr": "Відкрити на телефоні"
       }
@@ -1555,17 +1598,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-light-uk-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -1581,16 +1625,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1000-dark-en-header-rest.png",
       "shown": {
         "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update"
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
       }
     },
     {
@@ -1604,17 +1649,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-en-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -1630,22 +1676,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1000-dark-en-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Activity",
-        "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Agents by role",
         "rail-menu-dictation": "Speech recognition",
         "rail-menu-linked-settings": "Linked machines",
         "rail-menu-external-relay": "Questions from chats",
-        "rail-menu-settings": "Privacy and memory"
+        "rail-menu-settings": "Privacy"
       }
     },
     {
@@ -1659,17 +1702,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-en-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-team": "Team",
         "qr": "Open on phone"
       }
@@ -1685,17 +1729,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-en-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-update": "Update",
+        "memory": "Project memory",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -1711,16 +1756,17 @@
         7,
         36.5,
         232,
-        190
+        220
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 7,
       "cut": [],
       "file": "v1/1000-dark-uk-header-rest.png",
       "shown": {
         "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення"
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
       }
     },
     {
@@ -1734,17 +1780,18 @@
         7,
         36.5,
         232,
-        266
+        296
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-uk-header-open_device.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -1760,22 +1807,19 @@
         7,
         36.5,
         232,
-        340
+        195
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 11,
+      "controls": 6,
       "cut": [],
       "file": "v1/1000-dark-uk-header-open_install.png",
-      "shift": 0,
       "shown": {
-        "rail-menu-activity": "Активність",
-        "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Агенти для ролей",
         "rail-menu-dictation": "Розпізнавання мовлення",
         "rail-menu-linked-settings": "Пов’язані комп’ютери",
         "rail-menu-external-relay": "Питання з чатів",
-        "rail-menu-settings": "Приватність і пам’ять"
+        "rail-menu-settings": "Приватність"
       }
     },
     {
@@ -1789,17 +1833,18 @@
         7,
         36.5,
         232,
-        262
+        292
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-uk-header-open_people.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-team": "Команда",
         "qr": "Відкрити на телефоні"
       }
@@ -1815,17 +1860,18 @@
         7,
         36.5,
         232,
-        250
+        280
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v1/1000-dark-uk-header-open_help.png",
       "shift": 0,
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -1839,16 +1885,17 @@
       "state": "rest",
       "box": [
         0,
-        228,
+        184,
         390,
-        616
+        660
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 16,
       "cut": [],
       "file": "v1/390-light-en-phone-rest.png",
       "shown": {
+        "memory": "Project memory",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -1894,27 +1941,18 @@
       "state": "open device",
       "box": [
         0,
-        118.9,
+        614.9,
         390,
-        725.1
+        229.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 5,
       "cut": [],
       "file": "v1/390-light-en-phone-open_device.png",
       "shown": {
-        "new-agent": "New agent",
-        "new-task": "New task",
-        "new-pipeline": "New pipeline",
-        "tasks": "Tasks13 open",
-        "pipelines": "Pipelines",
-        "hidden": "Hidden tasks2",
-        "activity": "Activity",
-        "team": "Team",
         "sound-settings-trigger": "Sound alerts",
-        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
-        "self-update": "Update"
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer."
       }
     },
     {
@@ -1940,7 +1978,7 @@
         "dictation": "Speech recognition",
         "linked-settings": "Linked machines",
         "external-relay": "Questions from chats",
-        "settings": "Privacy and memory"
+        "settings": "Privacy"
       }
     },
     {
@@ -1952,27 +1990,18 @@
       "state": "open help",
       "box": [
         0,
-        140,
+        636,
         390,
-        704
+        208
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 4,
       "cut": [],
       "file": "v1/390-light-en-phone-open_help.png",
       "shown": {
-        "new-agent": "New agent",
-        "new-task": "New task",
-        "new-pipeline": "New pipeline",
-        "tasks": "Tasks13 open",
-        "pipelines": "Pipelines",
-        "hidden": "Hidden tasks2",
-        "activity": "Activity",
-        "team": "Team",
         "setup-guide": "Setup guide",
-        "interface-walk": "Interface walk",
-        "self-update": "Update"
+        "interface-walk": "Interface walk"
       }
     },
     {
@@ -2009,16 +2038,17 @@
       "state": "rest",
       "box": [
         0,
-        228,
+        184,
         390,
-        616
+        660
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 16,
       "cut": [],
       "file": "v1/390-light-uk-phone-rest.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -2064,27 +2094,18 @@
       "state": "open device",
       "box": [
         0,
-        118.9,
+        614.9,
         390,
-        725.1
+        229.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 5,
       "cut": [],
       "file": "v1/390-light-uk-phone-open_device.png",
       "shown": {
-        "new-agent": "Новий агент",
-        "new-task": "Нове завдання",
-        "new-pipeline": "Новий пайплайн",
-        "tasks": "Завдання13 відкритих",
-        "pipelines": "Пайплайни",
-        "hidden": "Приховані задачі2",
-        "activity": "Активність",
-        "team": "Команда",
         "sound-settings-trigger": "Звукові сповіщення",
-        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
-        "self-update": "Оновлення"
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою."
       }
     },
     {
@@ -2110,7 +2131,7 @@
         "dictation": "Розпізнавання мовлення",
         "linked-settings": "Пов’язані комп’ютери",
         "external-relay": "Питання з чатів",
-        "settings": "Приватність і пам’ять"
+        "settings": "Приватність"
       }
     },
     {
@@ -2122,27 +2143,18 @@
       "state": "open help",
       "box": [
         0,
-        140,
+        636,
         390,
-        704
+        208
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 4,
       "cut": [],
       "file": "v1/390-light-uk-phone-open_help.png",
       "shown": {
-        "new-agent": "Новий агент",
-        "new-task": "Нове завдання",
-        "new-pipeline": "Новий пайплайн",
-        "tasks": "Завдання13 відкритих",
-        "pipelines": "Пайплайни",
-        "hidden": "Приховані задачі2",
-        "activity": "Активність",
-        "team": "Команда",
         "setup-guide": "Посібник із налаштування",
-        "interface-walk": "Екскурсія інтерфейсом",
-        "self-update": "Оновлення"
+        "interface-walk": "Екскурсія інтерфейсом"
       }
     },
     {
@@ -2179,16 +2191,17 @@
       "state": "rest",
       "box": [
         0,
-        228,
+        184,
         390,
-        616
+        660
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 16,
       "cut": [],
       "file": "v1/390-dark-en-phone-rest.png",
       "shown": {
+        "memory": "Project memory",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -2234,27 +2247,18 @@
       "state": "open device",
       "box": [
         0,
-        118.9,
+        614.9,
         390,
-        725.1
+        229.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 5,
       "cut": [],
       "file": "v1/390-dark-en-phone-open_device.png",
       "shown": {
-        "new-agent": "New agent",
-        "new-task": "New task",
-        "new-pipeline": "New pipeline",
-        "tasks": "Tasks13 open",
-        "pipelines": "Pipelines",
-        "hidden": "Hidden tasks2",
-        "activity": "Activity",
-        "team": "Team",
         "sound-settings-trigger": "Sound alerts",
-        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
-        "self-update": "Update"
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer."
       }
     },
     {
@@ -2280,7 +2284,7 @@
         "dictation": "Speech recognition",
         "linked-settings": "Linked machines",
         "external-relay": "Questions from chats",
-        "settings": "Privacy and memory"
+        "settings": "Privacy"
       }
     },
     {
@@ -2292,27 +2296,18 @@
       "state": "open help",
       "box": [
         0,
-        140,
+        636,
         390,
-        704
+        208
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 4,
       "cut": [],
       "file": "v1/390-dark-en-phone-open_help.png",
       "shown": {
-        "new-agent": "New agent",
-        "new-task": "New task",
-        "new-pipeline": "New pipeline",
-        "tasks": "Tasks13 open",
-        "pipelines": "Pipelines",
-        "hidden": "Hidden tasks2",
-        "activity": "Activity",
-        "team": "Team",
         "setup-guide": "Setup guide",
-        "interface-walk": "Interface walk",
-        "self-update": "Update"
+        "interface-walk": "Interface walk"
       }
     },
     {
@@ -2349,16 +2344,17 @@
       "state": "rest",
       "box": [
         0,
-        228,
+        184,
         390,
-        616
+        660
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 16,
       "cut": [],
       "file": "v1/390-dark-uk-phone-rest.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -2404,27 +2400,18 @@
       "state": "open device",
       "box": [
         0,
-        118.9,
+        614.9,
         390,
-        725.1
+        229.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 5,
       "cut": [],
       "file": "v1/390-dark-uk-phone-open_device.png",
       "shown": {
-        "new-agent": "Новий агент",
-        "new-task": "Нове завдання",
-        "new-pipeline": "Новий пайплайн",
-        "tasks": "Завдання13 відкритих",
-        "pipelines": "Пайплайни",
-        "hidden": "Приховані задачі2",
-        "activity": "Активність",
-        "team": "Команда",
         "sound-settings-trigger": "Звукові сповіщення",
-        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
-        "self-update": "Оновлення"
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою."
       }
     },
     {
@@ -2450,7 +2437,7 @@
         "dictation": "Розпізнавання мовлення",
         "linked-settings": "Пов’язані комп’ютери",
         "external-relay": "Питання з чатів",
-        "settings": "Приватність і пам’ять"
+        "settings": "Приватність"
       }
     },
     {
@@ -2462,27 +2449,18 @@
       "state": "open help",
       "box": [
         0,
-        140,
+        636,
         390,
-        704
+        208
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 4,
       "cut": [],
       "file": "v1/390-dark-uk-phone-open_help.png",
       "shown": {
-        "new-agent": "Новий агент",
-        "new-task": "Нове завдання",
-        "new-pipeline": "Новий пайплайн",
-        "tasks": "Завдання13 відкритих",
-        "pipelines": "Пайплайни",
-        "hidden": "Приховані задачі2",
-        "activity": "Активність",
-        "team": "Команда",
         "setup-guide": "Посібник із налаштування",
-        "interface-walk": "Екскурсія інтерфейсом",
-        "self-update": "Оновлення"
+        "interface-walk": "Екскурсія інтерфейсом"
       }
     },
     {
@@ -2531,8 +2509,7 @@
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
-        "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-update": "Update"
       }
     },
     {
@@ -2559,8 +2536,7 @@
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Who does what",
-        "rail-menu-dictation": "Voice input",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-dictation": "Voice input"
       }
     },
     {
@@ -2588,7 +2564,6 @@
         "rail-menu-update": "Update",
         "rail-menu-linked-settings": "Other installs",
         "rail-menu-external-relay": "Outside chats",
-        "rail-menu-settings": "What leaves this machine",
         "qr": "Open on phone"
       }
     },
@@ -2615,9 +2590,35 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-en-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
       }
     },
     {
@@ -2643,7 +2644,6 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -2669,8 +2669,7 @@
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
-        "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-update": "Оновлення"
       }
     },
     {
@@ -2697,8 +2696,7 @@
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Хто що робить",
-        "rail-menu-dictation": "Голосове введення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-dictation": "Голосове введення"
       }
     },
     {
@@ -2726,7 +2724,6 @@
         "rail-menu-update": "Оновлення",
         "rail-menu-linked-settings": "Інші інсталяції",
         "rail-menu-external-relay": "Зовнішні чати",
-        "rail-menu-settings": "Що йде назовні",
         "qr": "Відкрити на телефоні"
       }
     },
@@ -2753,9 +2750,35 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
       }
     },
     {
@@ -2781,7 +2804,6 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -2807,8 +2829,7 @@
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
-        "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-update": "Update"
       }
     },
     {
@@ -2835,8 +2856,7 @@
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Who does what",
-        "rail-menu-dictation": "Voice input",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-dictation": "Voice input"
       }
     },
     {
@@ -2864,7 +2884,6 @@
         "rail-menu-update": "Update",
         "rail-menu-linked-settings": "Other installs",
         "rail-menu-external-relay": "Outside chats",
-        "rail-menu-settings": "What leaves this machine",
         "qr": "Open on phone"
       }
     },
@@ -2891,9 +2910,35 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
       }
     },
     {
@@ -2919,7 +2964,6 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -2945,8 +2989,7 @@
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
-        "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-update": "Оновлення"
       }
     },
     {
@@ -2973,8 +3016,7 @@
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Хто що робить",
-        "rail-menu-dictation": "Голосове введення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-dictation": "Голосове введення"
       }
     },
     {
@@ -3002,7 +3044,6 @@
         "rail-menu-update": "Оновлення",
         "rail-menu-linked-settings": "Інші інсталяції",
         "rail-menu-external-relay": "Зовнішні чати",
-        "rail-menu-settings": "Що йде назовні",
         "qr": "Відкрити на телефоні"
       }
     },
@@ -3029,9 +3070,35 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
       }
     },
     {
@@ -3057,7 +3124,6 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -3083,8 +3149,7 @@
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
-        "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-update": "Update"
       }
     },
     {
@@ -3111,8 +3176,7 @@
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Who does what",
-        "rail-menu-dictation": "Voice input",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-dictation": "Voice input"
       }
     },
     {
@@ -3140,7 +3204,6 @@
         "rail-menu-update": "Update",
         "rail-menu-linked-settings": "Other installs",
         "rail-menu-external-relay": "Outside chats",
-        "rail-menu-settings": "What leaves this machine",
         "qr": "Open on phone"
       }
     },
@@ -3167,9 +3230,35 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-en-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
       }
     },
     {
@@ -3195,7 +3284,6 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -3221,8 +3309,7 @@
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
-        "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-update": "Оновлення"
       }
     },
     {
@@ -3249,8 +3336,7 @@
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Хто що робить",
-        "rail-menu-dictation": "Голосове введення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-dictation": "Голосове введення"
       }
     },
     {
@@ -3278,7 +3364,6 @@
         "rail-menu-update": "Оновлення",
         "rail-menu-linked-settings": "Інші інсталяції",
         "rail-menu-external-relay": "Зовнішні чати",
-        "rail-menu-settings": "Що йде назовні",
         "qr": "Відкрити на телефоні"
       }
     },
@@ -3305,9 +3390,35 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
       }
     },
     {
@@ -3333,7 +3444,6 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -3359,8 +3469,7 @@
       "shown": {
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
-        "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-update": "Update"
       }
     },
     {
@@ -3387,8 +3496,7 @@
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
         "rail-menu-agent-mapping": "Who does what",
-        "rail-menu-dictation": "Voice input",
-        "rail-menu-settings": "What leaves this machine"
+        "rail-menu-dictation": "Voice input"
       }
     },
     {
@@ -3416,7 +3524,6 @@
         "rail-menu-update": "Update",
         "rail-menu-linked-settings": "Other installs",
         "rail-menu-external-relay": "Outside chats",
-        "rail-menu-settings": "What leaves this machine",
         "qr": "Open on phone"
       }
     },
@@ -3443,9 +3550,35 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
       }
     },
     {
@@ -3471,7 +3604,6 @@
         "rail-menu-activity": "Activity",
         "rail-menu-team": "Team",
         "rail-menu-update": "Update",
-        "rail-menu-settings": "What leaves this machine",
         "rail-menu-setup-guide": "Setup guide",
         "rail-menu-interface-walk": "Interface walk"
       }
@@ -3497,8 +3629,7 @@
       "shown": {
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
-        "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-update": "Оновлення"
       }
     },
     {
@@ -3525,8 +3656,7 @@
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
         "rail-menu-agent-mapping": "Хто що робить",
-        "rail-menu-dictation": "Голосове введення",
-        "rail-menu-settings": "Що йде назовні"
+        "rail-menu-dictation": "Голосове введення"
       }
     },
     {
@@ -3554,7 +3684,6 @@
         "rail-menu-update": "Оновлення",
         "rail-menu-linked-settings": "Інші інсталяції",
         "rail-menu-external-relay": "Зовнішні чати",
-        "rail-menu-settings": "Що йде назовні",
         "qr": "Відкрити на телефоні"
       }
     },
@@ -3581,9 +3710,35 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-open_outbound.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
       }
     },
     {
@@ -3609,7 +3764,6 @@
         "rail-menu-activity": "Активність",
         "rail-menu-team": "Команда",
         "rail-menu-update": "Оновлення",
-        "rail-menu-settings": "Що йде назовні",
         "rail-menu-setup-guide": "Посібник із налаштування",
         "rail-menu-interface-walk": "Екскурсія інтерфейсом"
       }
@@ -3633,7 +3787,6 @@
       "cut": [],
       "file": "v2/390-light-en-phone-rest.png",
       "shown": {
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -3691,7 +3844,6 @@
       "shown": {
         "agent-mapping": "Who does what",
         "dictation": "Voice input",
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -3724,7 +3876,6 @@
       "shown": {
         "linked-settings": "Other installs",
         "external-relay": "Outside chats",
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -3765,6 +3916,38 @@
       "scheme": "light",
       "lang": "en",
       "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_outbound.png",
+      "shown": {
+        "memory": "Shared memory",
+        "settings": "Install ping",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
       "state": "open learn",
       "box": [
         0,
@@ -3778,7 +3961,6 @@
       "cut": [],
       "file": "v2/390-light-en-phone-open_learn.png",
       "shown": {
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -3836,7 +4018,6 @@
       "cut": [],
       "file": "v2/390-light-uk-phone-rest.png",
       "shown": {
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -3894,7 +4075,6 @@
       "shown": {
         "agent-mapping": "Хто що робить",
         "dictation": "Голосове введення",
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -3927,7 +4107,6 @@
       "shown": {
         "linked-settings": "Інші інсталяції",
         "external-relay": "Зовнішні чати",
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -3968,6 +4147,38 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
       "state": "open learn",
       "box": [
         0,
@@ -3981,7 +4192,6 @@
       "cut": [],
       "file": "v2/390-light-uk-phone-open_learn.png",
       "shown": {
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -4039,7 +4249,6 @@
       "cut": [],
       "file": "v2/390-dark-en-phone-rest.png",
       "shown": {
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -4097,7 +4306,6 @@
       "shown": {
         "agent-mapping": "Who does what",
         "dictation": "Voice input",
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -4130,7 +4338,6 @@
       "shown": {
         "linked-settings": "Other installs",
         "external-relay": "Outside chats",
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -4171,6 +4378,38 @@
       "scheme": "dark",
       "lang": "en",
       "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_outbound.png",
+      "shown": {
+        "memory": "Shared memory",
+        "settings": "Install ping",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
       "state": "open learn",
       "box": [
         0,
@@ -4184,7 +4423,6 @@
       "cut": [],
       "file": "v2/390-dark-en-phone-open_learn.png",
       "shown": {
-        "settings": "What leaves this machine",
         "new-agent": "New agent",
         "new-task": "New task",
         "new-pipeline": "New pipeline",
@@ -4242,7 +4480,6 @@
       "cut": [],
       "file": "v2/390-dark-uk-phone-rest.png",
       "shown": {
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -4300,7 +4537,6 @@
       "shown": {
         "agent-mapping": "Хто що робить",
         "dictation": "Голосове введення",
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -4333,7 +4569,6 @@
       "shown": {
         "linked-settings": "Інші інсталяції",
         "external-relay": "Зовнішні чати",
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -4374,6 +4609,38 @@
       "scheme": "dark",
       "lang": "uk",
       "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
       "state": "open learn",
       "box": [
         0,
@@ -4387,7 +4654,6 @@
       "cut": [],
       "file": "v2/390-dark-uk-phone-open_learn.png",
       "shown": {
-        "settings": "Що йде назовні",
         "new-agent": "Новий агент",
         "new-task": "Нове завдання",
         "new-pipeline": "Новий пайплайн",
@@ -4462,19 +4728,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1440-light-en-header-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "rail-menu-agent-mapping": "Roles: engine and model",
         "rail-menu-dictation": "Dictation",
         "rail-menu-linked-settings": "Linked installs",
         "rail-menu-external-relay": "Chat relay",
-        "rail-menu-settings": "Install ping and memory",
+        "rail-menu-settings": "Install ping",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -4543,19 +4810,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1440-light-uk-header-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "rail-menu-agent-mapping": "Ролі: рушій і модель",
         "rail-menu-dictation": "Диктування",
         "rail-menu-linked-settings": "Пов’язані інсталяції",
         "rail-menu-external-relay": "Ретранслятор чатів",
-        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "rail-menu-settings": "Анонімний пінг",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -4624,19 +4892,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1440-dark-en-header-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "rail-menu-agent-mapping": "Roles: engine and model",
         "rail-menu-dictation": "Dictation",
         "rail-menu-linked-settings": "Linked installs",
         "rail-menu-external-relay": "Chat relay",
-        "rail-menu-settings": "Install ping and memory",
+        "rail-menu-settings": "Install ping",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -4705,19 +4974,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1440-dark-uk-header-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "rail-menu-agent-mapping": "Ролі: рушій і модель",
         "rail-menu-dictation": "Диктування",
         "rail-menu-linked-settings": "Пов’язані інсталяції",
         "rail-menu-external-relay": "Ретранслятор чатів",
-        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "rail-menu-settings": "Анонімний пінг",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -4786,19 +5056,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1000-light-en-header-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "rail-menu-agent-mapping": "Roles: engine and model",
         "rail-menu-dictation": "Dictation",
         "rail-menu-linked-settings": "Linked installs",
         "rail-menu-external-relay": "Chat relay",
-        "rail-menu-settings": "Install ping and memory",
+        "rail-menu-settings": "Install ping",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -4867,19 +5138,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1000-light-uk-header-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "rail-menu-agent-mapping": "Ролі: рушій і модель",
         "rail-menu-dictation": "Диктування",
         "rail-menu-linked-settings": "Пов’язані інсталяції",
         "rail-menu-external-relay": "Ретранслятор чатів",
-        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "rail-menu-settings": "Анонімний пінг",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -4948,19 +5220,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1000-dark-en-header-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "rail-menu-agent-mapping": "Roles: engine and model",
         "rail-menu-dictation": "Dictation",
         "rail-menu-linked-settings": "Linked installs",
         "rail-menu-external-relay": "Chat relay",
-        "rail-menu-settings": "Install ping and memory",
+        "rail-menu-settings": "Install ping",
         "language": "Language: EnglishEN",
         "push": "Notifications: off"
       }
@@ -5029,19 +5302,20 @@
         7,
         36.5,
         232,
-        271
+        301
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 8,
+      "controls": 9,
       "cut": [],
       "file": "v3/1000-dark-uk-header-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "rail-menu-agent-mapping": "Ролі: рушій і модель",
         "rail-menu-dictation": "Диктування",
         "rail-menu-linked-settings": "Пов’язані інсталяції",
         "rail-menu-external-relay": "Ретранслятор чатів",
-        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "rail-menu-settings": "Анонімний пінг",
         "language": "Мова: УкраїнськаUK",
         "push": "Сповіщення: вимкнені"
       }
@@ -5138,20 +5412,21 @@
       "state": "open settings",
       "box": [
         0,
-        394.9,
+        350.9,
         390,
-        449.1
+        493.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 10,
+      "controls": 11,
       "cut": [],
       "file": "v3/390-light-en-phone-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "agent-mapping": "Roles: engine and model",
         "linked-settings": "Linked installs",
         "external-relay": "Chat relay",
-        "settings": "Install ping and memory",
+        "settings": "Install ping",
         "sound-settings-trigger": "Sound alerts",
         "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
         "dictation": "Dictation"
@@ -5278,20 +5553,21 @@
       "state": "open settings",
       "box": [
         0,
-        394.9,
+        350.9,
         390,
-        449.1
+        493.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 10,
+      "controls": 11,
       "cut": [],
       "file": "v3/390-light-uk-phone-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "agent-mapping": "Ролі: рушій і модель",
         "linked-settings": "Пов’язані інсталяції",
         "external-relay": "Ретранслятор чатів",
-        "settings": "Анонімний пінг і пам’ять",
+        "settings": "Анонімний пінг",
         "sound-settings-trigger": "Звукові сповіщення",
         "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
         "dictation": "Диктування"
@@ -5418,20 +5694,21 @@
       "state": "open settings",
       "box": [
         0,
-        394.9,
+        350.9,
         390,
-        449.1
+        493.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 10,
+      "controls": 11,
       "cut": [],
       "file": "v3/390-dark-en-phone-open_settings.png",
       "shown": {
+        "memory": "Project memory",
         "agent-mapping": "Roles: engine and model",
         "linked-settings": "Linked installs",
         "external-relay": "Chat relay",
-        "settings": "Install ping and memory",
+        "settings": "Install ping",
         "sound-settings-trigger": "Sound alerts",
         "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
         "dictation": "Dictation"
@@ -5558,20 +5835,21 @@
       "state": "open settings",
       "box": [
         0,
-        394.9,
+        350.9,
         390,
-        449.1
+        493.1
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 10,
+      "controls": 11,
       "cut": [],
       "file": "v3/390-dark-uk-phone-open_settings.png",
       "shown": {
+        "memory": "Пам’ять проєкту",
         "agent-mapping": "Ролі: рушій і модель",
         "linked-settings": "Пов’язані інсталяції",
         "external-relay": "Ретранслятор чатів",
-        "settings": "Анонімний пінг і пам’ять",
+        "settings": "Анонімний пінг",
         "sound-settings-trigger": "Звукові сповіщення",
         "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
         "dictation": "Диктування"
@@ -5633,6 +5911,3882 @@
         "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
         "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
       }
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        104.9,
+        512,
+        690.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "today/1440-light-en-memory-working-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        115.5,
+        512,
+        669
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "today/1440-light-en-memory-off-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        115.5,
+        512,
+        669
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "today/1440-light-en-memory-noKey-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        104.9,
+        512,
+        690.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "today/1440-light-en-memory-capped-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        94.4,
+        512,
+        711.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "today/1440-light-uk-memory-working-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        94.4,
+        512,
+        711.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "today/1440-light-uk-memory-off-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        94.4,
+        512,
+        711.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "today/1440-light-uk-memory-noKey-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        83.8,
+        512,
+        732.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "today/1440-light-uk-memory-capped-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        94.4,
+        512,
+        711.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "today/1440-dark-uk-memory-working-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        94.4,
+        512,
+        711.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "today/1440-dark-uk-memory-noKey-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "today/390-light-uk-memory-working-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "today/390-light-uk-memory-noKey-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "today/390-dark-uk-memory-working-dialog.png"
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "today/390-dark-uk-memory-noKey-dialog.png"
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-light-en-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-light-en-memory-working-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "working",
+        "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "off",
+      "file": "v1/1440-light-en-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        86,
+        512,
+        728
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v1/1440-light-en-memory-off-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "off",
+        "status": "Injection is off for this project. Turn on the switch to allow it.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          189.5,
+          471.0625,
+          749
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-light-en-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-light-en-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "noKey",
+        "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below.",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "capped",
+      "file": "v1/1440-light-en-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "memory": "Project memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v1/1440-light-en-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "capped",
+        "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-light-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "off",
+      "file": "v1/1440-light-uk-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v1/1440-light-uk-memory-off-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "off",
+        "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "capped",
+      "file": "v1/1440-light-uk-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        55.1,
+        512,
+        789.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v1/1440-light-uk-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "capped",
+        "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          158.625,
+          482.4375,
+          779.875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-dark-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/1440-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "memory": "Пам’ять проєкту"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/1440-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/390-light-uk-memory-working-rest.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/390-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/390-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/390-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/390-dark-uk-memory-working-rest.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v1/390-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/390-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v1/390-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-en-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-en-memory-working-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-en-memory-working-dialog.png",
+      "drawn": {
+        "title": "Shared memory",
+        "state": "working",
+        "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-en-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-en-memory-off-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        86,
+        512,
+        728
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-en-memory-off-dialog.png",
+      "drawn": {
+        "title": "Shared memory",
+        "state": "off",
+        "status": "Injection is off for this project. Turn on the switch to allow it.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          189.5,
+          471.0625,
+          749
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-en-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-en-memory-noKey-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-en-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Shared memory",
+        "state": "noKey",
+        "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below.",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-en-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-en-memory-capped-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "memory": "Shared memory",
+        "rail-menu-settings": "Install ping"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-en-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Shared memory",
+        "state": "capped",
+        "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-uk-memory-working-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-uk-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-uk-memory-off-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v2/1440-light-uk-memory-off-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "off",
+        "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-uk-memory-noKey-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-uk-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-uk-memory-capped-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        55.1,
+        512,
+        789.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v2/1440-light-uk-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "capped",
+        "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          158.625,
+          482.4375,
+          779.875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-dark-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-dark-uk-memory-working-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/1440-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open outbound",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-dark-uk-memory-noKey-open_outbound.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "memory": "Спільна пам’ять",
+        "rail-menu-settings": "Анонімний пінг"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/1440-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-light-uk-memory-working-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-light-uk-memory-working-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-light-uk-memory-noKey-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-dark-uk-memory-working-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-dark-uk-memory-working-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v2/390-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open outbound",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-dark-uk-memory-noKey-open_outbound.png",
+      "shown": {
+        "memory": "Спільна пам’ять",
+        "settings": "Анонімний пінг",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v2/390-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Спільна пам’ять",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-en-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-en-memory-working-open_settings.png",
+      "shown": {
+        "memory": "Project memory",
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-en-memory-working-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "working",
+        "status": "Injection can run for supported operator turns. A memory is sent only when a relevant match is selected.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-en-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-en-memory-off-open_settings.png",
+      "shown": {
+        "memory": "Project memory",
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        86,
+        512,
+        728
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-en-memory-off-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "off",
+        "status": "Injection is off for this project. Turn on the switch to allow it.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          189.5,
+          471.0625,
+          749
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-en-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-en-memory-noKey-open_settings.png",
+      "shown": {
+        "memory": "Project memory",
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-en-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "noKey",
+        "status": "Injection needs an OpenRouter key. Enter it in the OpenRouter key row below.",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-en-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-en-memory-capped-open_settings.png",
+      "shown": {
+        "memory": "Project memory",
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        75.4,
+        512,
+        749.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-en-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Project memory",
+        "state": "capped",
+        "status": "Injection is paused because the shared Asks-you monthly cap has been reached or has less than one cent left. Wait for next month.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "OpenRouter key",
+        "order": [
+          178.9375,
+          481.625,
+          759.5625
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-uk-memory-working-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-uk-memory-off-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-uk-memory-off-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "off",
+      "file": "v3/1440-light-uk-memory-off-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "off",
+        "status": "Передавання пам’яті вимкнено для цього проєкту. Увімкніть перемикач, щоб дозволити його.",
+        "on": false,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-uk-memory-noKey-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-uk-memory-capped-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-uk-memory-capped-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        55.1,
+        512,
+        789.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "capped",
+      "file": "v3/1440-light-uk-memory-capped-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "capped",
+        "status": "Передавання пам’яті призупинено: спільний місячний ліміт «Питає вас» вичерпано або залишилося менше одного цента. Дочекайтеся наступного місяця.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$4.996 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          158.625,
+          482.4375,
+          779.875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-dark-uk-memory-working-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-dark-uk-memory-working-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/1440-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        301
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 9,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-dark-uk-memory-noKey-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "dialog",
+      "box": [
+        464,
+        65.7,
+        512,
+        768.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/1440-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          169.1875,
+          471.875,
+          769.3125
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-light-uk-memory-working-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        350.9,
+        390,
+        493.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-light-uk-memory-working-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-light-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-light-uk-memory-noKey-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        350.9,
+        390,
+        493.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-light-uk-memory-noKey-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-light-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-dark-uk-memory-working-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        350.9,
+        390,
+        493.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-dark-uk-memory-working-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "working",
+      "file": "v3/390-dark-uk-memory-working-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "working",
+        "status": "Пам’ять можна передавати для підтримуваних повідомлень оператора. Вона надходить лише після добору доречного збігу.",
+        "on": true,
+        "tiles": [
+          "128",
+          "41",
+          "$1.214 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          887.671875
+        ],
+        "cut": []
+      },
+      "shown": {}
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-dark-uk-memory-noKey-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        350.9,
+        390,
+        493.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-dark-uk-memory-noKey-open_settings.png",
+      "shown": {
+        "memory": "Пам’ять проєкту",
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "dialog",
+      "box": [
+        16,
+        42.2,
+        358,
+        759.6
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 4,
+      "cut": [],
+      "memory": "noKey",
+      "file": "v3/390-dark-uk-memory-noKey-dialog.png",
+      "drawn": {
+        "title": "Пам’ять проєкту",
+        "state": "noKey",
+        "status": "Для передавання пам’яті потрібен ключ OpenRouter. Введіть його нижче в рядку «Ключ OpenRouter».",
+        "on": true,
+        "tiles": [
+          "0",
+          "0",
+          "$0.000 / $5.00"
+        ],
+        "key": "Ключ OpenRouter",
+        "order": [
+          145.703125,
+          510.609375,
+          868.171875
+        ],
+        "cut": []
+      },
+      "shown": {}
     }
   ]
 }

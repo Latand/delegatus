@@ -16,6 +16,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { HEADER_ITEMS, HEADER_LAYOUTS, headerHome, headerName, type HeaderItem, type HeaderVariant } from "./headerMenu.prototype";
+import { MEMORY_STATES, type MemoryState } from "./headerMemory.prototype";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -18856,6 +18857,8 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       shown: Record<string, string>;
       /** How far opening this group moved its own row, in px. */
       shift?: number;
+      /** The state shared memory was in, on the frames that show its home. */
+      memory?: MemoryState;
       file: string;
     }
     const states: State[] = [];
@@ -18871,33 +18874,34 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       const visible = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
       const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ").trim();
       const shown: Record<string, string> = {};
-      for (const proxy of surface.querySelectorAll<HTMLElement>("[data-cmf-proxy]")) if (visible(proxy)) shown[proxy.getAttribute("data-cmf-proxy")!] = words(proxy);
+      for (const proxy of surface.querySelectorAll<HTMLElement>("[data-cmf-proxy]")) if (visible(proxy)) shown[proxy.getAttribute("data-cmf-proxy")!] = words(proxy.querySelector(".cmf-title") ?? proxy);
       for (const row of surface.querySelectorAll<HTMLElement>("[data-cmf-row]:not([data-cmf-proxied])")) if (visible(row)) shown[row.getAttribute("data-cmf-row")!] ??= row.querySelector("[data-cmf-name]")?.getAttribute("data-cmf-name") ?? words(row);
       const cut = [...surface.querySelectorAll<HTMLElement>(".cmf-title, [data-cmf-mask] .truncate, [data-cmf-name]")].filter(visible)
         .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => words(element).slice(0, 40));
       return { shown, cut };
     }, selector);
 
-    async function capture(page: Page, where: Where, selector: string, surface: State["surface"], state: string): Promise<State | null> {
+    async function capture(page: Page, where: Where, selector: string, surface: State["surface"], state: string, memory?: MemoryState): Promise<State | null> {
       const reading = await read(page, selector);
       if (!reading) { failures.push(`${keyOf(where)} ${surface} ${state}: the menu did not open`); return null; }
       const mine = await entries(page, selector);
-      const file = `${keyOf(where)}-${surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
+      const file = `${keyOf(where)}-${memory ? `memory-${memory}` : surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
       fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
-      const strip = `${title(where.variant, "en")}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface} menu: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
+      const strip = `${title(where.variant, "en")}${memory ? `  ·  shared memory: ${memory}` : ""}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface} menu: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
       fs.writeFileSync(path.join(out, file), await frameWithStrip(await page.screenshot(), where.frame.width, strip, where.variant));
       const entry: State = {
         variant: where.variant, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state,
-        box: reading.box, scrolls: reading.scrolls, inside: reading.inside, controls: reading.controls, cut: [...reading.clipped, ...mine.cut], shown: mine.shown, file,
+        box: reading.box, scrolls: reading.scrolls, inside: reading.inside, controls: reading.controls, cut: [...reading.clipped, ...mine.cut], shown: mine.shown, ...(memory ? { memory } : {}), file,
       };
       states.push(entry);
       if (where.variant) {
         const at = `${keyOf(where)} ${surface} ${state}`;
         if (!entry.inside) failures.push(`${at}: leaves the window ${JSON.stringify(entry.box)}`);
-        if (entry.scrolls) failures.push(`${at}: scrolls`);
+        /* The dialog on the phone is a page of its own length, today as well. */
+        if (entry.scrolls && !(state === "dialog" && surface === "phone")) failures.push(`${at}: scrolls`);
         if (entry.cut.length) failures.push(`${at}: cut labels ${JSON.stringify(entry.cut)}`);
         if (reading.arrows.length) failures.push(`${at}: a row that opens in place and a row that opens a page carry the same arrow ${JSON.stringify(reading.arrows)}`);
-        if (surface === "header" && entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
+        if (surface === "header" && !state.startsWith("dialog") && entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
       }
       return entry;
     }
@@ -18975,11 +18979,102 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       }
     }
 
+    /* Shared memory's home (#2536's block): the menu with the state at a glance, the group that holds the entry, and the dialog behind it, with memory working, off, without a key and at its cap. */
+    const DIALOG = "[data-telemetry-settings]";
+    async function memoryHome(where: Where, memory: MemoryState) {
+      const phoneFrame = where.frame.phone;
+      const { context, page, pageErrors } = await openFixture(browser, `${url(where.variant)}&memory=${memory}`, where.frame, where.scheme, where.lang, "reduce", phoneFrame);
+      const at = `${keyOf(where)} memory ${memory}`;
+      const surface = phoneFrame ? "phone" : "header";
+      const panel = phoneFrame ? SHEET : RAIL;
+      try {
+        if (phoneFrame) {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector(`${SHEET} [data-mobile2-menu-row="tasks"]`, { timeout: 10_000 });
+        } else {
+          await page.locator("[data-kanban-board] .card[data-id]").locator("visible=true").first().waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(500);
+          await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+          await page.mouse.move(2, 2);
+          await page.locator("[data-rail-menu]").first().click();
+          await page.waitForSelector(RAIL, { timeout: 10_000 });
+        }
+        await page.waitForTimeout(300);
+        if (!where.variant) {
+          /* Today: the block as it merged, behind the entry called Settings. */
+          await jsClick(page, phoneFrame ? `${SHEET} [data-mobile2-menu-row="settings"]` : `${RAIL} [data-rail-menu-settings]`);
+          await page.waitForSelector(`${DIALOG} [data-memory-status]`, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, DIALOG, surface, "dialog", memory);
+          return;
+        }
+        const variant = where.variant as HeaderVariant;
+        const home = headerHome(variant, "memory");
+        const marks = () => page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [data-hm-memory]`)].filter((element) => element.getBoundingClientRect().width > 0).map((element) => element.getAttribute("data-hm-memory")), panel);
+        await capture(page, where, panel, surface, "rest", memory);
+        /* At the first level the state is read without a press: on the entry, or on the row of the group that holds it. */
+        const first = await marks();
+        if (first.length !== 1 || first[0] !== memory) failures.push(`${at}: the first level shows ${JSON.stringify(first)}, expected one mark reading ${memory}`);
+        if (home?.group) {
+          await jsClick(page, `${panel} [data-cmf-head="section"][data-cmf-section="${home.group.id}"]`);
+          await page.waitForTimeout(150);
+          await capture(page, where, panel, surface, `open ${home.group.id}`, memory);
+          if (!(await marks()).includes(memory)) failures.push(`${at}: the open group does not show ${memory} on the memory entry`);
+        }
+        await page.locator(`${panel} [data-cmf-proxy="memory"]`).click();
+        await page.waitForSelector(`${DIALOG}[data-hm="memory"] [data-hm-state]`, { timeout: 10_000 });
+        await page.waitForTimeout(400);
+        const dialog = await capture(page, where, DIALOG, surface, "dialog", memory);
+        const drawn = await page.evaluate((target) => {
+          const dialogElement = document.querySelector<HTMLElement>(target)!;
+          const text = (selector: string) => (dialogElement.querySelector(selector)?.textContent ?? "").replace(/\s+/g, " ").trim();
+          const top = (selector: string) => dialogElement.querySelector(selector)?.getBoundingClientRect().top ?? null;
+          return {
+            title: dialogElement.querySelector("#telemetry-title")?.getAttribute("data-hm-title") ?? null,
+            state: dialogElement.querySelector("[data-hm-state]")?.getAttribute("data-hm-state") ?? null,
+            status: text("[data-memory-status]"),
+            on: dialogElement.querySelector<HTMLInputElement>("[data-memory-setting] input[role='switch']")?.checked ?? null,
+            tiles: [...dialogElement.querySelectorAll(".hm-tile > b")].map((element) => (element.textContent ?? "").trim()),
+            key: text("[data-provider-key] label"),
+            /* Memory first, the key under it, the ping after both. */
+            order: [top("[data-memory-setting]"), top("[data-provider-key]"), top(":scope > label")],
+            cut: [...dialogElement.querySelectorAll<HTMLElement>(".hm-tile > b, .hm-tile > span, .hm-state")].filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim()),
+          };
+        }, DIALOG);
+        if (dialog) (dialog as State & { drawn?: unknown }).drawn = drawn;
+        if (drawn.title !== headerName(variant, "memory")[where.lang]) failures.push(`${at}: the dialog is titled ${JSON.stringify(drawn.title)}`);
+        if (drawn.state !== memory) failures.push(`${at}: the dialog's state reads ${drawn.state}`);
+        if (!drawn.status) failures.push(`${at}: the product's status line is missing`);
+        if (drawn.on !== (memory !== "off")) failures.push(`${at}: the switch is ${drawn.on}`);
+        if (drawn.tiles.length !== 3) failures.push(`${at}: ${drawn.tiles.length} counter tiles, expected decisions, turns with memory and spend`);
+        if (!drawn.key) failures.push(`${at}: the key row is missing`);
+        if (drawn.cut.length) failures.push(`${at}: the dialog cut ${JSON.stringify(drawn.cut)}`);
+        if (!(drawn.order[0]! < drawn.order[1]! && drawn.order[1]! < drawn.order[2]!)) failures.push(`${at}: memory, the key and the ping stand in another order ${JSON.stringify(drawn.order)}`);
+        if (dialog?.scrolls && !phoneFrame) failures.push(`${at}: the dialog scrolls at ${where.frame.width}×${where.frame.height}`);
+        if (pageErrors.length) failures.push(`${at}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${at}: ${brief(error)}`);
+        fs.mkdirSync(path.join(out, "failed"), { recursive: true });
+        await page.screenshot({ path: path.join(out, "failed", `${keyOf(where).replace("/", "-")}-memory-${memory}.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+
     try {
       for (const variant of VARIANTS) for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
         await alive();
         const where: Where = { variant, frame, scheme, lang };
         if (frame.phone) await phone(where); else await desktop(where);
+      }
+      /* Memory: every state in both languages at the first desktop size in light; the working and the keyless state also in dark and on the phone. */
+      for (const variant of VARIANTS) for (const frame of FRAMES.filter((entry) => entry.name !== "1000")) for (const scheme of SCHEMES) for (const lang of LANGS) for (const memory of MEMORY_STATES) {
+        const narrow = frame.phone || scheme === "dark";
+        if (narrow && (lang !== "uk" || (memory !== "working" && memory !== "noKey"))) continue;
+        await alive();
+        await memoryHome({ variant, frame, scheme, lang }, memory);
       }
     } finally {
       await browser.close();
@@ -18987,7 +19082,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     }
 
     const of = (variant: number, frame: string, scheme: Scheme, lang: string, surface: State["surface"]) =>
-      states.filter((entry) => entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface);
+      states.filter((entry) => !entry.memory && entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface);
     /* Every entry the fixture draws today is shown in some state of every variant, under the name the variant gives it. No member session runs here, so Sign out is held by the model's own test. */
     const reach: Record<string, Record<string, string>> = {};
     for (const variant of VARIANTS.filter((entry) => entry > 0) as HeaderVariant[]) for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
@@ -19030,7 +19125,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       const width = Math.max(size.width!, compared ? 310 : 250);
       const named = entry.variant ? HEADER_LAYOUTS[entry.variant as HeaderVariant] : null;
       const groupName = (id: string) => named?.slots.flatMap((slot) => ("group" in slot && slot.group.id === id ? [(entry.surface === "phone" ? slot.group.phoneTitle ?? slot.group.title : slot.group.title)[lang]] : []))[0] ?? id;
-      const note = `${named && compared ? `${named.name[lang]} · ` : ""}${entry.state === "rest" ? (lang === "uk" ? "у спокої" : "at rest") : `${lang === "uk" ? "відкрито" : "open"}: ${groupName(entry.state.slice(5))}`} · ${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? (lang === "uk" ? " · прокручується" : " · scrolls") : ""}`;
+      const note = `${named && compared ? `${named.name[lang]} · ` : ""}${entry.memory ? `${entry.memory} · ` : ""}${entry.state === "dialog" ? (lang === "uk" ? "діалог" : "the dialog") : entry.state === "rest" ? (lang === "uk" ? "у спокої" : "at rest") : `${lang === "uk" ? "відкрито" : "open"}: ${groupName(entry.state.slice(5))}`} · ${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? (lang === "uk" ? " · прокручується" : " · scrolls") : ""}`;
       const image = await sharp({ create: { width, height: size.height! + 54, channels: 3, background: "#f1efe9" } })
         .composite([{ input: svgText(entry.variant ? `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${entry.variant}` : title(0, lang), width, 14, "#fff", 700, COLOURS[entry.variant]!), left: 0, top: 0 }, { input: svgText(note, width, 11, "#555", 400), left: 0, top: 28 }, { input: picture, left: 0, top: 54 }]).png().toBuffer();
       return { image, width, height: size.height! + 54 };
@@ -19075,6 +19170,29 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       for (const lang of LANGS) rows.push({ name: `Phone 390×844 · ${lang} · light: the board menu at rest, then each of the header's groups open (×0.6)`, tiles: await all(variant, "390", "light", lang, "phone", 0.6) });
       rows.push({ name: "Phone 390×844 · uk · dark (×0.6)", tiles: await all(variant, "390", "dark", "uk", "phone", 0.6) });
       await sheet(`sheet-variant-${variant}.png`, `${title(variant, "en")} · ${title(variant, "uk")}`, COLOURS[variant]!, rows);
+    }
+
+    /* Shared memory: per language, each variant's menu in the four states, then the dialog today and as the variants draw it. */
+    const memoryOf = (variant: number, frame: string, scheme: Scheme, lang: string, memory: MemoryState, state: (name: string) => boolean) =>
+      states.filter((entry) => entry.memory === memory && entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && state(entry.state));
+    for (const lang of LANGS) {
+      const uk = lang === "uk";
+      const rows: { name: string; tiles: Tile[] }[] = [];
+      const menu = (name: string) => name !== "dialog";
+      for (const variant of VARIANTS.filter((entry) => entry > 0)) {
+        rows.push({
+          name: `${title(variant, lang)} · ${uk ? "меню: працює, вимкнено, без ключа, ліміт (у спокої, потім група з пам’яттю)" : "the menu: working, off, no key, capped (at rest, then the group that holds memory)"}`,
+          tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(variant, "1440", "light", lang, memory, menu).map((entry) => tile(entry, lang)))))).flat(),
+        });
+      }
+      const shown = VARIANTS.find((entry) => entry > 0) ?? 0;
+      rows.push({ name: uk ? "Діалог сьогодні: працює, вимкнено, без ключа, ліміт (×0.75)" : "The dialog today: working, off, no key, capped (×0.75)", tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(0, "1440", "light", lang, memory, (name) => name === "dialog").map((entry) => tile(entry, lang, 0.75)))))).flat() });
+      rows.push({ name: `${uk ? "Діалог у варіантах (той самий блок, зібраний карткою; тут із" : "The dialog in the variants (the same block as one card; here from"} ${title(shown, lang)}) ×0.75`, tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(shown, "1440", "light", lang, memory, (name) => name === "dialog").map((entry) => tile(entry, lang, 0.75)))))).flat() });
+      if (uk) {
+        rows.push({ name: "Темна тема: меню й діалог, працює та без ключа (×0.75)", tiles: (await Promise.all((["working", "noKey"] as const).map((memory) => Promise.all(memoryOf(shown, "1440", "dark", lang, memory, () => true).map((entry) => tile(entry, lang, 0.75)))))).flat() });
+        rows.push({ name: "Телефон 390×844: аркуш, група, діалог; працює та без ключа (×0.5)", tiles: (await Promise.all((["working", "noKey"] as const).map((memory) => Promise.all(memoryOf(shown, "390", "light", lang, memory, () => true).map((entry) => tile(entry, lang, 0.5)))))).flat() });
+      }
+      await sheet(`sheet-memory-${lang}.png`, uk ? "Спільна пам’ять у меню заголовка: де вона живе в кожному варіанті" : "Shared memory in the header's menu: its home in each variant", "#222", rows);
     }
 
     const summary = {

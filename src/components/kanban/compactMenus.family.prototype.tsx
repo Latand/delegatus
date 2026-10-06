@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createElement, type ComponentType, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, type LucideIcon } from "lucide-react";
@@ -31,9 +31,13 @@ export interface Section {
   icon?: LucideIcon;
   /** A section that holds one row on this surface is drawn as that row. */
   solo?: boolean;
+  /** Drawn on the section's row before its count: the state of something inside it. */
+  trail?: ComponentType;
 }
 /** How a row is drawn over the product's own: an icon in front of it, another name on it. */
-export interface Dress { icon?: LucideIcon; name?: Words }
+export interface Dress { icon?: LucideIcon; name?: Words; /** Drawn after the name: the state of what the row opens. */ trail?: ComponentType }
+/** A row the menu does not have: it announces itself with an event, then presses the product's row that opens the same place. */
+export interface VirtualRow { press: string; event: string }
 export type Placement =
   | { rows: readonly string[]; cells?: boolean }
   | { section: Section };
@@ -50,6 +54,7 @@ export interface FamilySpec {
   sample: string;
   /** Rows drawn with an icon or under another name; the product's row stays in the menu, pressed through. */
   dress?: Readonly<Record<string, Dress>>;
+  virtual?: Readonly<Record<string, VirtualRow>>;
   /** Rows stand in the order a placement lists them; without it, in the product's own order. */
   ordered?: boolean;
   layouts: Record<MenuVariant, { placements: readonly Placement[]; removed?: readonly Removal[] }>;
@@ -179,7 +184,7 @@ export const FAMILY_CSS = `
 [data-cmf][data-cmf-cells] { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
 [data-cmf][data-cmf-cells] > *, [data-cmf][data-cmf-cells] > [data-cmf-chrome] > * { grid-column: 1 / -1; }
 [data-cmf] > [data-cmf-chrome], [data-cmf] [data-cmf-flat] { display: contents; }
-[data-cmf] [data-cmf-hidden], [data-cmf] [data-cmf-proxied] { display: none !important; }
+[data-cmf] [data-cmf-hidden], [data-cmf] [data-cmf-proxied], [data-cmf] [data-cmf-virtual] { display: none !important; }
 [data-cmf] [data-cmf-head], [data-cmf] [data-cmf-proxy] { display: flex; width: 100%; align-items: center; text-align: left; }
 [data-cmf] .cmf-ico { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; opacity: 0.72; }
 [data-cmf] [data-cmf-mask]::before { content: ""; width: 16px; height: 16px; flex-shrink: 0; background: currentColor; opacity: 0.72; -webkit-mask: var(--cmf-mask) center / contain no-repeat; mask: var(--cmf-mask) center / contain no-repeat; }
@@ -271,6 +276,17 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     container.setAttribute("data-cmf", spec.id);
     container.setAttribute("data-cmf-variant", String(variant));
     container.setAttribute("data-cmf-view", open ?? "rest");
+    for (const [key, virtual] of Object.entries(spec.virtual ?? {})) {
+      const target = container.querySelector<HTMLElement>(virtual.press);
+      if (!target || container.querySelector(`:scope > [data-cmf-virtual="${key}"]`)) continue;
+      const stand = document.createElement("button");
+      stand.type = "button";
+      stand.setAttribute("data-cmf-virtual", key);
+      stand.setAttribute("data-cmf-key", key);
+      stand.textContent = key;
+      stand.onclick = () => { window.dispatchEvent(new Event(virtual.event)); container.querySelector<HTMLElement>(virtual.press)?.click(); };
+      container.appendChild(stand);
+    }
     const laid = rowsOf(container, spec);
     const taken = new Set<Laid>();
     const removed = new Set((layout.removed ?? []).map((entry) => entry.row));
@@ -329,7 +345,9 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
   }, [chrome, container, spec, variant, layout, open, lang, tick]);
   useEffect(() => () => { chrome.remove(); }, [chrome]);
   const inside = open ? heads.find((head) => head.id === open && head.page) ?? null : null;
-  const iconOf = (id: string) => layout.placements.flatMap((placement) => ("section" in placement && placement.section.id === id ? [placement.section.icon] : []))[0];
+  const sectionOf = (id: string) => layout.placements.flatMap((placement) => ("section" in placement && placement.section.id === id ? [placement.section] : []))[0];
+  const iconOf = (id: string) => sectionOf(id)?.icon;
+  const trail = (Trail: ComponentType | undefined) => (Trail ? <Trail /> : null);
   /* In a menu whose rows lead with an icon the box is theirs; elsewhere it is 16 px and the gap the dressed rows share. */
   const mark = (icon: LucideIcon | undefined) => (icon
     ? <span className="cmf-ico" aria-hidden style={lead ? { width: lead } : { width: 16, marginRight: 8 }}>{createElement(icon, { size: lead ? 18 : 16 })}</span>
@@ -350,6 +368,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
         >
           {mark(spec.dress?.[proxy.key]?.icon)}
           <span className="cmf-title">{proxy.title}</span>
+          {trail(spec.dress?.[proxy.key]?.trail)}
         </button>
       ))}
       {inside ? (
@@ -372,6 +391,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
         >
           {mark(iconOf(head.id))}
           <span className="cmf-title">{head.title}</span>
+          {trail(sectionOf(head.id)?.trail)}
           <span className="cmf-count">{head.count}</span>
           {/* A page is the arrow to the right; a section that opens in place points down, and up once it is open. */}
           {head.page ? <ChevronRight aria-hidden /> : open === head.id ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
