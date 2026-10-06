@@ -1681,6 +1681,7 @@ test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped
   if (dropped) expect(historySection(prompts[0]!)).toBe("");
   else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
   expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
+  expect(prompts[0]).toContain(OLD_ID);
   expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
