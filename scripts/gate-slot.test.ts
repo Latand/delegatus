@@ -44,7 +44,7 @@ function cpuFixture(options: { manager: boolean; refuseQuota?: boolean }) {
     chmodSync(join(root, "systemctl"), 0o755);
     writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$@"\n'); chmodSync(join(root, "systemd-run"), 0o755);
   }
-  const env = { ...process.env, PATH: root, LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log"), SYSTEMCTL_LOG: join(root, "systemctl.log"),
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: root, LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log"), SYSTEMCTL_LOG: join(root, "systemctl.log"),
     DELEGATUS_AGENT_CPU: "auto", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_PSI_FILE: join(root, "pressure"), LLV_GATE_POLL_SECONDS: "0.1",
     // The test run itself may sit in a work scope (a hook's gate); judge a fixture cgroup instead.
     LLV_GATE_CGROUP_FILE: join(root, "no-cgroup") };
