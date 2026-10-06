@@ -18,10 +18,6 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
-import { MenuFamily } from "@/components/kanban/compactMenus.family.prototype";
-import { compactMenuPresenter } from "@/components/kanban/compactMenus.prototype";
-import { MENU_VARIANTS } from "@/components/kanban/compactMenus.prototype.model";
-import { menuPresenter } from "@/components/kanban/kanbanMenus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -3095,12 +3091,8 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
-/* docs/design/compact-card-menu.md: `?menus=1|2|3` lays the board's menus out
-   as one of the numbered design variants, over the product's own entries. */
-const MENUS = MENU_VARIANTS.find((variant) => String(variant) === new URLSearchParams(location.search).get("menus")) ?? null;
-if (MENUS) menuPresenter.current = compactMenuPresenter(MENUS);
 createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : MENUS ? <><Viewer /><MenuFamily variant={MENUS} /></> : <Viewer />);
+) : <Viewer />);

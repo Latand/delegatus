@@ -47,7 +47,8 @@ import { MoreGlyph } from "./kanbanGlyphs";
 import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
 import { reuseKanbanModel } from "./reuseKanbanModel";
 import { useStableCallback } from "./useStableCallback";
-import { KanbanMenu, KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
+import { BoardMenu } from "./compactMenu";
+import { KanbanPopover, useOverlay, type KanbanMenuItem } from "./kanbanMenus";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
@@ -1458,7 +1459,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "sep" },
         card.holdsSeat
           ? { type: "item", id: "hide", label: t("kanban.hideFromBoard"), why: t("kanban.seatProtected"), disabled: true, onSelect: () => {} }
-          : { type: "item", id: "hide", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), keepFocus: true, onSelect: () => hideCard(card) },
+          : { type: "item", id: "hide", label: t("kanban.hideFromBoard"), kbd: "H", why: card.working ? t("kanban.hideWhyWorking", { count: card.working }) : t("kanban.hideWhy"), note: card.working ? t("kanban.hideNoteWorking", { count: card.working }) : t("kanban.hideNote"), keepFocus: true, onSelect: () => hideCard(card) },
       ],
     };
   };
@@ -2924,7 +2925,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       />
 
       {openMenu && menu.open ? (
-        <KanbanMenu anchor={menu.open.anchor} label={openMenu.label} items={openMenu.items} onClose={menu.close} kind={menu.open.value.kind} />
+        <BoardMenu anchor={menu.open.anchor} label={openMenu.label} items={openMenu.items} onClose={menu.close} kind={menu.open.value.kind} />
       ) : null}
       {stopOpen && stopView ? <StopHostConfirm file={stopView.file} anchor={stopOpen.anchor} onClose={menu.close} /> : null}
       {linkOpen && linkView ? (

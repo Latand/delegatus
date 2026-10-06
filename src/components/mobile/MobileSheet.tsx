@@ -170,6 +170,34 @@ export function MobileSheetDivider() {
   return <div className="my-1.5 h-px shrink-0 bg-border" aria-hidden />;
 }
 
+/** A row of icon cells for a sheet's most frequent actions: an icon over a
+    short name, with the same inset at both edges of the sheet. */
+export function MobileSheetCells({ label, children, attrs }: { label?: string; children: ReactNode; attrs?: Record<`data-${string}`, string | undefined> }) {
+  return <div role="group" aria-label={label} {...attrs} className="grid auto-cols-fr grid-flow-col gap-1 px-3 py-1">{children}</div>;
+}
+
+/** One cell of `MobileSheetCells`. `label` is the action's full name, read where the short caption is not enough. */
+export function MobileSheetCell({ icon, caption, label, onSelect, attrs }: {
+  icon: ReactNode;
+  caption: string;
+  label: string;
+  onSelect: () => void;
+  attrs?: Record<`data-${string}`, string | undefined>;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      {...attrs}
+      onClick={onSelect}
+      className="flex min-h-[60px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-control px-1 py-2 text-center text-label font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+    >
+      <span aria-hidden className="flex shrink-0 items-center justify-center text-secondary">{icon}</span>
+      <span className="max-w-full truncate">{caption}</span>
+    </button>
+  );
+}
+
 /** One 44 px row inside a sheet (the prototype's `.mrow`): an icon, a label,
     one trailing element. Rows are the only place a labelled control lives on
     the phone; the bar keeps four icons at most. */

@@ -9,9 +9,10 @@ import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types"
    beside their anchor, focus moves in on open and back to the anchor on close,
    arrows walk the items, Tab and Escape close. */
 
-/* What an entry is and which group it belongs to, for a presenter that lays
-   the same entries out another way (`menuPresenter`), and on a group's heading
-   the state of what the group acts on; the menu itself reads none of them. */
+/* What an entry is and which group it belongs to, for the compact layout of
+   the same entries (`compactMenu.tsx`). `note` is the state of what a group
+   acts on, on the group's heading, and on an action the short line an icon
+   cell shows under it. The plain list below reads none of them. */
 interface KanbanMenuMark { id?: string; group?: string; note?: string }
 
 export type KanbanMenuItem =
@@ -89,21 +90,11 @@ export interface KanbanMenuProps {
   label: string;
   items: readonly KanbanMenuItem[];
   onClose: (refocus: boolean) => void;
-  /** Which menu of the board this is (`card`, `column`, `reader`, …). */
+  /** Which menu of the board this is (`card`, `column`, `reader`, …); `BoardMenu` lays some of them out compactly. */
   kind?: string;
 }
 
-/* A design prototype lays the board's menus out another way over the same
-   entries (docs/design/compact-card-menu.md). Only the evidence fixture sets
-   it; the product leaves it empty and draws the menu below. */
-export const menuPresenter: { current: ((props: KanbanMenuProps) => ReactNode | undefined) | null } = { current: null };
-
-export function KanbanMenu(props: KanbanMenuProps) {
-  const presented = menuPresenter.current?.(props);
-  return presented === undefined ? <KanbanMenuList {...props} /> : presented;
-}
-
-export function KanbanMenuList({ anchor, label, items, onClose }: KanbanMenuProps) {
+export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {

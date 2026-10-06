@@ -39,7 +39,7 @@ import type { FileEntry } from "@/lib/types";
 import { BADGE_LABEL, statePhrase } from "./MobileBoard";
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
-import { MobileSheet } from "./MobileSheet";
+import { MobileSheet, MobileSheetCell, MobileSheetCells } from "./MobileSheet";
 import { ROW_ACTION_TONE, type MobileRowAction } from "./MobileSwipeRow";
 import { useMobileNav, useMobileNavStore, useSheetSelection } from "./mobileNav";
 import { mobileRowState } from "./mobileBoardModel";
@@ -718,13 +718,37 @@ interface SheetRow {
   icon: ReactNode;
   tone: MobileRowAction["tone"];
   run: () => void;
+  /** The row is one of a set drawn side by side under one heading (the other columns), under this short name. */
+  cell?: string;
 }
 
 function CardSheet({ title, rows, onClose }: { title: string; rows: readonly SheetRow[]; onClose: () => void }) {
+  const { t } = useLocale();
+  const cells = rows.filter((row) => row.cell !== undefined);
   return (
     <MobileSheet name="card" title={title} onClose={onClose}>
       <div data-phone-card-sheet="" className="flex flex-col py-1">
-        {rows.map((row) => (
+        {cells.length ? (
+          <>
+            <span className="px-4 pt-1 text-label font-semibold text-muted">{t("kanban.moveTo")}</span>
+            <MobileSheetCells label={t("kanban.moveTo")} attrs={{ "data-phone-card-cells": "" }}>
+              {cells.map((row) => (
+                <MobileSheetCell
+                  key={row.key}
+                  icon={<span className={`grid h-8 w-8 place-items-center rounded-full ${ROW_ACTION_TONE[row.tone]}`}>{row.icon}</span>}
+                  caption={row.cell!}
+                  label={row.name}
+                  onSelect={() => {
+                    onClose();
+                    row.run();
+                  }}
+                  attrs={{ "data-phone-card-action": row.key }}
+                />
+              ))}
+            </MobileSheetCells>
+          </>
+        ) : null}
+        {rows.filter((row) => row.cell === undefined).map((row) => (
           <button
             key={row.key}
             type="button"
@@ -1075,6 +1099,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         icon: <Icon className="h-4 w-4" aria-hidden />,
         tone: "accent",
         run: () => move(item, status),
+        cell: t(STATUS_LABEL[status]),
       };
     });
     if (!item.card.holdsSeat) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, GitMerge, Users, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -112,7 +112,7 @@ import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { SoundToggle } from "./SoundToggle";
-import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
+import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -2188,27 +2188,34 @@ function ProjectDashboardView({
                 </button>
               </BarMenuGroup>
             ) : null}
-            {wide ? null : (
-              <BarMenuGroup name="accounts">
-                <ProjectAccounts project={project} appearance="menu" />
-              </BarMenuGroup>
-            )}
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
-            <BarMenuGroup name="project">
-              <MergeOnReviewRow project={project} variant="menu" />
-              <ShareProjectRow project={project} variant="menu" />
-              <BridgeReportsRow project={project} variant="menu" />
-              <AsksYouRow variant="menu" />
-              {archived ? (
-                <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
-                  <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
-                </button>
-              ) : (
-                <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+            <BarMenuGroup name="sections">
+              {wide ? null : (
+                <BarMenuSection id="accounts" title={t("dash.menu.accounts")} icon={<Users className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
+                  <ProjectAccounts project={project} appearance="menu" />
+                </BarMenuSection>
               )}
-              <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+              {/* The four project switches carry their explanations, so each pair is a page of its own. */}
+              <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
+                <MergeOnReviewRow project={project} variant="menu" />
+                <ShareProjectRow project={project} variant="menu" />
+              </BarMenuSection>
+              <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
+                <BridgeReportsRow project={project} variant="menu" />
+                <AsksYouRow variant="menu" />
+              </BarMenuSection>
+              <BarMenuSection id="project" title={t("dash.menu.project")} icon={<Archive className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
+                {archived ? (
+                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                    <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
+                  </button>
+                ) : (
+                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+                )}
+                <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
+              </BarMenuSection>
             </BarMenuGroup>
           </>
         )}
