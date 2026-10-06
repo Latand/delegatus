@@ -32,10 +32,38 @@ frozen dependency installation, TypeScript, ESLint on changed source files,
 changed tests and existing sibling tests by file path, and the publication
 gate with `--check-commits`. Each command has isolated state under `/var/tmp`.
 The commands are in one replaceable function for the CI/local-hooks lane.
-On failure, the same command must first pass on the batch's main baseline.
-`git bisect run` then identifies the first failing batch commit. The culprit
-is removed, and the remaining reviewed patches are rebuilt and checked.
-A red baseline or an inconclusive bisect stops the pass.
+Test files run one at a time with a JUnit report and an isolated home, config,
+state and temp root. The gate compares each assertion's file, suite, name and
+occurrence with the native tests on the pinned main baseline. A failure present
+on both is reported as pre-existing and permits the batch, regardless of the
+baseline exit code. Files and tests introduced by the candidate have no baseline
+observation; the gate judges them on the candidate alone. It never copies new
+candidate tests onto main for baseline evidence.
+
+An assertion failing only on the candidate gets three fresh runs of its file.
+If any observes it passing, the report lists it as intermittent and permits it.
+Missing, skipped or incomplete confirmation results provide no passing evidence.
+For a confirmed failure, the gate replays the batch with each PR omitted in turn
+and runs the affected files with the original candidate test corpus. Keeping
+that corpus prevents a test-adding PR's removal from hiding another PR's bug.
+Every subject installs its own frozen dependencies. A removal that creates a
+behaviour conflict stops the pass.
+
+The report names the PR whose omission clears a failure. If multiple omissions
+clear it, those PRs are reported as `integration: needs both`. If no single
+omission clears it, the gate samples a combined removal and restores PRs one at
+a time to establish a minimal clearing removal set, with the same integration
+label. An assertion still failing with all PRs removed cannot be attributed and
+stops the pass. This extra search costs at most one combined sample plus one
+sample per PR for each such assertion. Removal and confirmation observations
+remain in the private run record and the report.
+
+Attributed PRs are withheld at their unchanged reviewed heads. The remaining
+reviewed patches are rebuilt in input order, then all gates run again before
+publication. Pre-existing and intermittent assertions permit the batch;
+between-test errors, invalid or incomplete test reports, dependency installation
+and type-check failures remain hard failures with their own cause. Privacy and
+other non-test gates retain their existing attribution and stop rules.
 
 `land` requires a gated exact tip, checks original heads again, pushes only
 the owned batch branch, and creates one batch PR. Its body carries the
@@ -71,7 +99,8 @@ including `git show --remerge-diff <sha>`, before listing its newly reviewed
 head in the next batch. A failed resolution gate can be retried after its
 cause is addressed, with the recorded resolution kept for inspection.
 
-The report has one row per input: `merged <main sha>`, `needs-review <sha>`,
+The report separates pre-existing, intermittent and attributed test failures,
+including confirmation and omission evidence. It has one row per input: `merged <main sha>`, `needs-review <sha>`,
 `culprit <check: attribution>` or `head-moved`, plus the batch URL. A deferred
 row initially says `needs-review pending resolution`; it is unfinished until
 the merger resolves it or reports why the pass failed. The run succeeds when

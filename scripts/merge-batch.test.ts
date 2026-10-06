@@ -6,7 +6,88 @@ import { createHash } from "node:crypto";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
+import type { TestRun, TestSite } from "./local-gate-tests";
+
+const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
+const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
+  failures, passed, completed: [...new Set([...failures, ...passed].map(test => test.file))], elapsedMs: 0,
+});
+
+test("batch comparison permits pre-existing failures and judges new tests on the candidate", () => {
+  const existing = site("existing"), added = site("added"), newFile = site("new file", "added.test.ts");
+  expect(compareBatchTests(recorded([existing]), recorded([existing]))).toEqual({ preExisting: [existing], introduced: [] });
+  expect(compareBatchTests(recorded([existing]), recorded([added, newFile]))).toEqual({ preExisting: [], introduced: [added, newFile] });
+});
+
+test("recorded batch results name one culprit among three after bounded confirmation", async () => {
+  const failure = site("regression"), calls: number[][] = [];
+  const decision = await attributeBatchTests(recorded([], [failure]), recorded([failure]), [12, 13, 14],
+    async () => recorded([failure]), async removed => {
+      calls.push(removed);
+      return removed.includes(13) ? recorded([], [failure]) : recorded([failure]);
+    });
+  expect(decision.attributed.map(entry => entry.prs)).toEqual([[13]]);
+  expect(calls).toEqual([[12], [13], [14]]);
+  expect(decision.attributed[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+});
+
+test("recorded integration evidence keeps an unrelated PR out of the culprit set", async () => {
+  const failure = site("combined changes");
+  for (const mode of ["together", "independent"] as const) {
+    const decision = await attributeBatchTests(recorded([], [failure]), recorded([failure]), [12, 13, 14],
+      async () => recorded([failure]), async removed => {
+        const fails = mode === "together" ? !removed.includes(12) && !removed.includes(13)
+          : !removed.includes(12) || !removed.includes(13);
+        return fails ? recorded([failure]) : recorded([], [failure]);
+      });
+    expect(decision.attributed[0]!.prs).toEqual([12, 13]);
+    expect(decision.attributed[0]!.reason).toBe("integration: needs both");
+  }
+});
+
+test("a candidate failure that passes a confirmation is reported as intermittent", async () => {
+  const failure = site("intermittent");
+  let runs = 0;
+  const decision = await attributeBatchTests(recorded(), recorded([failure]), [12], async () =>
+    ++runs === 2 ? recorded([], [failure]) : recorded([failure]), async () => { throw new Error("must not attribute"); });
+  expect(runs).toBe(3);
+  expect(decision.intermittent).toEqual([failure]);
+  expect(decision.attributed).toEqual([]);
+});
+
+test("between-test errors and missing confirmation tests remain hard failures", async () => {
+  const failure = site("failure"), error: TestSite = { ...site("load error"), kind: "error" };
+  expect(() => compareBatchTests(recorded([error]), recorded([failure]))).toThrow("baseline: between-test error");
+  expect(() => compareBatchTests(recorded(), recorded([error]))).toThrow("candidate: between-test error");
+  await expect(attributeBatchTests(recorded(), recorded([failure]), [12], async () => recorded(),
+    async () => recorded())).rejects.toThrow("incomplete test file");
+});
+
+const octoberSixFailures: TestSite[] = [
+  site("Codex canonical root conversation and fork recovery (#708) > five recoverable failures in a row leave one fork artifact and one operation identity", "src/lib/accounts/migration/coordinator.test.ts"),
+  site("startup socket recovery retains a partially adopted host and drains its held send once", "src/lib/runtime/startup.test.ts"),
+  site("scheduled startup retry continues through the retained Codex host", "src/lib/runtime/startup.test.ts"),
+  site("a Claude spawn born on a non-routed account (http viewer transport) > starts its first turn on that account and materializes its transcript (no drain)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+  site("a Claude spawn born on a non-routed account (http viewer transport) > starts its first turn on that account and materializes its transcript (a drain running before staging)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+  site("a Claude spawn born on a non-routed account (http viewer transport) > starts its first turn on that account and materializes its transcript (a drain committed after staging)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+  site("a Claude spawn born on a non-routed account (stdio viewer transport) > starts its first turn on that account and materializes its transcript (no drain)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+  site("a Claude spawn born on a non-routed account (stdio viewer transport) > starts its first turn on that account and materializes its transcript (a drain running before staging)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+  site("a Claude spawn born on a non-routed account (stdio viewer transport) > starts its first turn on that account and materializes its transcript (a drain committed after staging)", "src/lib/runtime/structuredSpawn.integration.test.ts"),
+].map(test => {
+  const ancestry = test.name.split(" > ");
+  return { ...test, suite: ancestry.slice(0, -1).join(" > "), name: ancestry.at(-1)! };
+});
+
+test("October 6 reduced identities decide six pre-existing and three attributed", async () => {
+  const candidate = recorded(octoberSixFailures);
+  const base = recorded(octoberSixFailures.slice(3));
+  const decision = await attributeBatchTests(base, candidate, [12, 13, 14], async () => candidate,
+    async removed => removed.includes(13) ? recorded(octoberSixFailures.slice(3), octoberSixFailures.slice(0, 3)) : candidate);
+  expect(decision.preExisting).toHaveLength(6);
+  expect(decision.attributed).toHaveLength(3);
+  expect(decision.attributed.every(entry => entry.prs.join() === "13")).toBeTrue();
+});
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
   expect(parseReviewedPrs("12@abcdef1, 13@1234567")).toEqual([
@@ -22,6 +103,16 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 function githubFailedLog(output: string): string {
   return output.split("\n").map((line) => `privacy\tScan\t2026-10-02T08:45:12Z ${line}`).join("\n");
+}
+
+function testResult(file: string, failures: string[] = [], passed: string[] = ["fixture"]) {
+  const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
+  const cases = [...failures.map(name => ({ name, failed: true })), ...passed.map(name => ({ name, failed: false }))];
+  return { code: failures.length ? 1 : 0, output: "", report: `<testsuites tests="${cases.length}" failures="${failures.length}">
+    ${cases.map(test => `<testcase file="${escape(file)}" classname="suite" name="${escape(test.name)}">${test.failed ? '<failure message="assertion"/>' : ""}</testcase>`).join("")}</testsuites>` };
+}
+function successfulCommand(args: string[]) {
+  return args[1] === "bun" && args[2] === "test" ? testResult(args[3]!.replace(/^\.\//, "")) : { code: 0, output: "" };
 }
 
 function fixture() {
@@ -60,7 +151,7 @@ function fixture() {
     if (args[0] === "pr" && args[1] === "view") return JSON.stringify(views.get(Number(args[2])));
     throw new Error(`Unexpected GH request: ${args.slice(0, 2).join(" ")}`);
   };
-  const good: CommandRunner = async () => ({ code: 0, output: "" });
+  const good: CommandRunner = async (_cwd, args) => successfulCommand(args);
   return { root, repo, get base() { return base; }, views, addPr, seed, gh, good };
 }
 
@@ -138,24 +229,62 @@ test("preflight drops moved, draft and wrong-base heads without applying them", 
   expect((await batch.build(`12@${sha}`)).rows[0]!.status).toBe("head-moved");
 });
 
-test("a real git bisect isolates a local gate culprit and rebuilds the remaining reviewed patches", async () => {
+test("a type-check gate that cannot run stops the batch without accusing a PR", async () => {
   const f = fixture();
   const a = f.addPr(12, "a.txt", "good");
   const bad = f.addPr(13, "bad.txt", "bad");
   const c = f.addPr(14, "c.txt", "good");
-  const runner: CommandRunner = async (cwd, args, env) => {
-    if (args[0] === "git" && args[1] === "bisect") {
-      return commandRunner(cwd, ["git", "bisect", "run", "node", "-e", "process.exit(require('node:fs').existsSync('bad.txt') ? 1 : 0)"], env);
-    }
-    return { code: args[1] === "bunx" && args[2] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "" };
-  };
+  const runner: CommandRunner = async (cwd, args) => ({
+    code: args[1] === "bunx" && args[2] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "",
+  });
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   await batch.build(`12@${a},13@${bad},14@${c}`);
+  await expect(batch.gate()).rejects.toThrow("tsc gate cannot run");
+  expect(batch.read().rows.map(row => row.status)).toEqual(["clean", "clean", "clean"]);
+  expect(batch.read().gated).toBeNull();
+});
+
+test("batch gate permits a nonzero native baseline and retains candidate-only regression coverage after removal", async () => {
+  const f = fixture();
+  f.seed("existing.test.ts", "baseline test version");
+  const a = f.addPr(12, "good.txt", "good");
+  const b = f.addPr(13, "bad.txt", "bad");
+  const c = f.addPr(14, "existing.test.ts", "candidate test version");
+  let baselineRuns = 0, validatedRemainder = false;
+  const runner: CommandRunner = async (cwd, args) => {
+    if (args[1] === "bun" && args[2] === "test") {
+      const file = args[3]!.replace(/^\.\//, "");
+      const native = readFileSync(join(cwd, file), "utf8") === "baseline test version";
+      if (native) baselineRuns++;
+      else if (!existsSync(join(cwd, "bad.txt"))) validatedRemainder = true;
+      return testResult(file, native || !existsSync(join(cwd, "bad.txt")) ? ["pre-existing"] : ["pre-existing", "regression"],
+        native || !existsSync(join(cwd, "bad.txt")) ? ["regression"] : []);
+    }
+    return successfulCommand(args);
+  };
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${a},13@${b},14@${c}`);
   const state = await batch.gate();
-  expect(state.rows.map((row) => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
+  expect(baselineRuns).toBeGreaterThan(0);
+  expect(validatedRemainder).toBeTrue();
   expect(state.gated).toBe(state.tip);
-  expect(existsSync(join(state.work, "bad.txt"))).toBe(false);
-  expect(git(state.work, ["rev-list", "--count", `${state.base}..HEAD`])).toBe("2");
+  expect(state.rows[1]!.head).toBe(b);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(b);
+});
+
+test("a hard gate refusal invalidates a previously gated tip", async () => {
+  const f = fixture();
+  const head = f.addPr(12, "healthy.txt", "healthy");
+  let broken = false;
+  const runner: CommandRunner = async (_cwd, args) => broken && args[1] === "bunx"
+    ? { code: 1, output: "type checker unavailable" } : successfulCommand(args);
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
+  await batch.build(`12@${head}`);
+  expect((await batch.gate()).gated).not.toBeNull();
+  broken = true;
+  await expect(batch.gate()).rejects.toThrow("tsc gate cannot run");
+  expect(batch.read().gated).toBeNull();
 });
 
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
@@ -251,6 +380,33 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const batch = new MergeBatch(f.repo, stateFile, run, gh, async () => {});
   return { ...f, batch, calls, commands, forge };
 }
+
+test("one run lands healthy PRs in order and reports the unchanged culprit with test evidence", async () => {
+  const f = landingFixture("green", undefined, fixture => {
+    fixture.seed("check.test.ts", "native baseline");
+    return async (cwd, args) => {
+      if (args[1] === "bun" && args[2] === "test") {
+        return testResult("check.test.ts", existsSync(join(cwd, "bad.txt")) ? ["regression", "pre-existing"] : ["pre-existing"],
+          existsSync(join(cwd, "bad.txt")) ? [] : ["regression"]);
+      }
+      return successfulCommand(args);
+    };
+  });
+  const a = f.addPr(12, "check.test.ts", "candidate regression coverage");
+  const bad = f.addPr(13, "bad.txt", "bad");
+  const c = f.addPr(14, "healthy.txt", "healthy");
+  await f.batch.build(`12@${a},13@${bad},14@${c}`);
+  await f.batch.gate();
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged"]);
+  expect(git(f.repo, ["log", "--reverse", "--format=%s", `${landed.base}..HEAD`]).split("\n")).toEqual(["Feature 12 (#12)", "Feature 14 (#14)"]);
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(bad);
+  const summary = report(landed);
+  expect(summary).toContain(`| #12 | merged ${landed.rows[0]!.commit} |`);
+  expect(summary).toContain("#13 | culprit test regression: check.test.ts > suite > regression");
+  expect(summary).toContain("Pre-existing failures (permitted):\n- check.test.ts > suite > pre-existing");
+  expect(summary).toContain("confirmations fail, fail, fail; without #12: fail; without #13: pass; without #14: fail");
+});
 
 function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   mkdirSync(join(f.repo, "scripts"));
@@ -698,13 +854,13 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   let resolutionWork = "";
   const runner: CommandRunner = async (cwd, args) => {
     if (args[1] === "bun" && args[2] === "test") {
-      const paths = args.slice(3);
+      const paths = args.slice(3).filter(path => /\.test\.ts$/.test(path));
       testRuns.push(paths);
       if (cwd === resolutionWork && paths.some((path) => path.includes("story.test.ts"))) {
         return { code: 1, output: "resolution test failed" };
       }
     }
-    return { code: 0, output: "" };
+    return successfulCommand(args);
   };
   const f = landingFixture("green", runner);
   f.seed("story.ts", "export const value = 'first';\n");
@@ -728,13 +884,14 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   expect(git(work, ["ls-remote", "origin", "refs/heads/topic-13"])).toContain(conflict);
 });
 
-test("bisect keeps the reviewed regression test corpus when a candidate lacks the test file", async () => {
+test("PR removal keeps the reviewed regression test when its author is healthy", async () => {
   const f = fixture();
   f.seed("adder.js", "exports.add = (a, b) => a + b;\n");
   const source = f.addPr(12, "adder.js", "exports.add = (a, b) => a - b;\n");
   const detector = f.addPr(13, "adder.test.ts", [
     "const { add } = require('./adder');",
-    "if (add(5, 3) !== 8) throw new Error('add regression');",
+    "const { test, expect } = require('bun:test');",
+    "test('adds', () => expect(add(5, 3)).toBe(8));",
     "",
   ].join("\n"));
   const runner: CommandRunner = async (cwd, args, env) => {
@@ -742,14 +899,7 @@ test("bisect keeps the reviewed regression test corpus when a candidate lacks th
       return commandRunner(cwd, args, env);
     }
     if (args[1] === "bun" && args[2] === "test") {
-      const testFile = args.at(-1)!.replace(/^\.\//, "");
-      const script = [
-        "const fs=require('node:fs');",
-        `if(!fs.existsSync(${JSON.stringify(testFile)}))process.exit(125);`,
-        "const {add}=require('./adder');",
-        "process.exit(add(5,3)===8?0:1);",
-      ].join("");
-      return commandRunner(cwd, ["node", "-e", script], env);
+      return commandRunner(cwd, args.slice(1), env);
     }
     return { code: 0, output: "" };
   };
