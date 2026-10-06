@@ -316,15 +316,15 @@ test("an engine event burst preserves every projection without polling the deliv
   });
   let effectBatchCalls = 0;
   let snapshotCalls = 0;
-  let deltaProjections = 0;
+  const deltaProjections: { text: string; eventKey: string }[] = [];
   let sessionStatusProjections = 0;
   const client = {
     snapshot: async () => {
       snapshotCalls += 1;
       return { filesRevision: 0 };
     },
-    append: async (event: { kind: string }) => {
-      if (event.kind === "delta") deltaProjections += 1;
+    append: async (event: { kind: string; payload: { text?: string }; producer?: { eventKey?: string } }) => {
+      if (event.kind === "delta") deltaProjections.push({ text: event.payload.text ?? "", eventKey: event.producer?.eventKey ?? "" });
       if (event.kind === "session-status") sessionStatusProjections += 1;
     },
     producerCursor: async () => 17,
@@ -348,9 +348,14 @@ test("an engine event burst preserves every projection without polling the deliv
       burst.emit({ kind: "delta", turnId: "turn:burst", text: `delta ${index}`, seq: index });
     }
 
-    await waitForCondition(() => deltaProjections === 40);
+    // A ready burst folds into fewer appends; every fragment still lands, in
+    // order, under the last sequence the journal's producer cursor resumes from.
+    const burstText = Array.from({ length: 40 }, (_, offset) => `delta ${offset + 18}`).join("");
+    await waitForCondition(() => deltaProjections.map(projection => projection.text).join("") === burstText);
     await Bun.sleep(50);
-    expect(deltaProjections).toBe(40);
+    expect(deltaProjections.map(projection => projection.text).join("")).toBe(burstText);
+    expect(deltaProjections.length).toBeLessThanOrEqual(40);
+    expect(deltaProjections.at(-1)!.eventKey).toBe("engine-host:codex:burst-session:57");
     expect(sessionStatusProjections - baselineStatuses).toBeLessThanOrEqual(1);
     expect(effectBatchCalls - baselineEffects).toBeLessThanOrEqual(1);
     expect(snapshotCalls - baselineSnapshots).toBeLessThanOrEqual(1);

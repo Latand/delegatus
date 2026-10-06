@@ -272,6 +272,65 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   };
 }
 
+const DELTA_TEXT_LIMIT_BYTES = 8 * 1024;
+
+/**
+ * The event pump answers one socket round trip per journal append. A Codex
+ * answer streams a delta every few characters, so a 60 000-character final
+ * answer was about 6 000 appends; under a loaded Viewer each took 80–200 ms and
+ * the journal finished replaying the answer seven minutes after the turn ended.
+ * Meanwhile the card kept streaming text and every idle retirement fence was
+ * overtaken by those late deltas.
+ *
+ * Deltas the host has already produced are folded into one delta under the
+ * last folded sequence, which is the producer cursor the journal keeps. Only
+ * consecutive deltas of the same turn fold, up to the projection's text bound,
+ * and only while the next event is ready, so a live stream is never held back.
+ */
+export function coalesceReadyEngineDeltas(
+  events: AsyncIterator<RuntimeEvent>,
+  maxTextBytes = DELTA_TEXT_LIMIT_BYTES,
+): AsyncIterator<RuntimeEvent> {
+  type Read = { result: IteratorResult<RuntimeEvent> } | { error: unknown };
+  let pending: Promise<Read> | null = null;
+  let carried: Read | null = null;
+  const pull = () => (pending ??= events.next().then((result) => ({ result }), (error: unknown) => ({ error })));
+  const settle = (read: Read): IteratorResult<RuntimeEvent> => {
+    if ("error" in read) throw read.error;
+    return read.result;
+  };
+  return {
+    async next() {
+      const first = carried ?? await pull();
+      carried = null;
+      pending = null;
+      const head = settle(first);
+      if (head.done || head.value.kind !== "delta") return head;
+      let merged = head.value;
+      let bytes = Buffer.byteLength(merged.text);
+      while (true) {
+        const ready = await Promise.race([pull(), new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
+        if (!ready) break;
+        pending = null;
+        const value = "result" in ready && !ready.result.done ? ready.result.value : null;
+        const added = value?.kind === "delta" && value.turnId === merged.turnId ? Buffer.byteLength(value.text) : null;
+        if (value?.kind !== "delta" || added === null || bytes + added > maxTextBytes) {
+          carried = ready;
+          break;
+        }
+        merged = { ...value, text: merged.text + value.text };
+        bytes += added;
+      }
+      return { done: false, value: merged };
+    },
+    async return(value?: unknown) {
+      carried = null;
+      pending = null;
+      return await events.return?.(value) ?? { done: true, value: undefined };
+    },
+  };
+}
+
 export function projectEngineHostEvent(
   conversationId: string,
   hostKey: string,

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { streamingVoiceDelivery } from "./voiceDelivery";
-import { projectEngineHostEvent } from "./engineHostEvents";
+import type { RuntimeEvent } from "./engineHost";
+import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
@@ -498,5 +499,102 @@ describe("projectEngineHostEvent", () => {
       seq: 14,
     });
     expect(projected?.payload.voiceResponse).toBeUndefined();
+  });
+});
+
+/** The attach contract of a structured host: events already produced resolve
+    at once, later ones wake the reader when they arrive. */
+function hostStream() {
+  const queue: RuntimeEvent[] = [];
+  let wake: (() => void) | null = null;
+  let ended = false;
+  const iterator = (async function* () {
+    while (true) {
+      const event = queue.shift();
+      if (event) { yield event; continue; }
+      if (ended) return;
+      await new Promise<void>((resolve) => { wake = resolve; });
+      wake = null;
+    }
+  })();
+  return {
+    iterator,
+    push(...events: RuntimeEvent[]) { queue.push(...events); wake?.(); },
+    end() { ended = true; wake?.(); },
+  };
+}
+
+describe("coalesceReadyEngineDeltas", () => {
+  const delta = (seq: number, text: string, turnId = "turn-final"): RuntimeEvent => ({ kind: "delta", turnId, text, seq });
+
+  test("a long final answer reaches the journal in a few appends and its turn end follows at once", async () => {
+    // The observed answer: about 6 000 deltas of five characters, all produced
+    // before the pump had appended a tenth of them.
+    const words = Array.from({ length: 6_000 }, (_, index) => `w${String(index).padStart(3, "0")} `);
+    const stream = hostStream();
+    stream.push(...words.map((text, index) => delta(index + 1, text)));
+    stream.push({ kind: "turn-ended", turnId: "turn-final", status: "completed", seq: 6_001 });
+    stream.end();
+    const appended: NonNullable<ReturnType<typeof projectEngineHostEvent>>[] = [];
+    const events = coalesceReadyEngineDeltas(stream.iterator);
+    while (true) {
+      const next = await events.next();
+      if (next.done) break;
+      appended.push(projectEngineHostEvent("conversation_final", "codex:thread-final", next.value)!);
+      // Each append is a socket round trip to the runtime host.
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const deltas = appended.filter((event) => event.kind === "delta");
+    expect(deltas.length).toBeLessThanOrEqual(5);
+    expect(deltas.map((event) => event.payload.text).join("")).toBe(words.join(""));
+    for (const event of deltas) expect(Buffer.byteLength(String(event.payload.text))).toBeLessThanOrEqual(8 * 1024);
+    // Each append names the last sequence it folded, so the journal's producer
+    // cursor still resumes after exactly the events it holds.
+    expect(deltas.at(-1)!.producer?.eventKey).toBe("engine-host:codex:thread-final:6000");
+    expect(appended.at(-1)).toMatchObject({ kind: "turn-ended", producer: { eventKey: "engine-host:codex:thread-final:6001" } });
+    expect(appended).toHaveLength(deltas.length + 1);
+  });
+
+  test("a live delta is handed over without waiting for the next one", async () => {
+    const stream = hostStream();
+    const events = coalesceReadyEngineDeltas(stream.iterator);
+    stream.push(delta(1, "first "));
+    expect(await events.next()).toEqual({ done: false, value: delta(1, "first ") });
+    const pending = events.next();
+    setTimeout(() => stream.push(delta(2, "second "), delta(3, "third")), 5);
+    expect(await pending).toEqual({ done: false, value: delta(3, "second third") });
+    stream.end();
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+  });
+
+  test("only consecutive deltas of one turn fold, and every other event keeps its place", async () => {
+    const stream = hostStream();
+    const item: RuntimeEvent = { kind: "item", turnId: "turn-a", item: { type: "agentMessage", id: "a" }, phase: "completed", seq: 3 };
+    stream.push(delta(1, "a"), delta(2, "b"), item, delta(4, "c", "turn-a"), delta(5, "d", "turn-b"), delta(6, "e", "turn-b"));
+    stream.end();
+    const seen: RuntimeEvent[] = [];
+    const events = coalesceReadyEngineDeltas(stream.iterator);
+    for (let next = await events.next(); !next.done; next = await events.next()) seen.push(next.value);
+    expect(seen).toEqual([
+      { kind: "delta", turnId: "turn-final", text: "ab", seq: 2 },
+      item,
+      { kind: "delta", turnId: "turn-a", text: "c", seq: 4 },
+      { kind: "delta", turnId: "turn-b", text: "de", seq: 6 },
+    ]);
+  });
+
+  test("a failure read ahead is raised after the text folded before it", async () => {
+    const failure = new Error("host stream failed");
+    let index = 0;
+    const source: AsyncIterator<RuntimeEvent> = {
+      next: async () => {
+        index += 1;
+        if (index <= 2) return { done: false, value: delta(index, `part${index} `) };
+        throw failure;
+      },
+    };
+    const events = coalesceReadyEngineDeltas(source);
+    expect(await events.next()).toEqual({ done: false, value: delta(2, "part1 part2 ") });
+    await expect(events.next()).rejects.toBe(failure);
   });
 });
