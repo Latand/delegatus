@@ -190,7 +190,7 @@ test("young nested temp allocations belong to their retention reason", async () 
   expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0 });
   expect(report.keptBytes?.young).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
   expect(report.keptBytes?.worktree).toBeGreaterThan(0);
-  expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes?.worktree);
+  expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes!.worktree);
   expect(report.held?.[0]?.bytes).toBe(report.keptBytes?.worktree);
   expect(fs.readFileSync(payload)).toEqual(Buffer.alloc(256 * 1024, 1));
 });
