@@ -10,6 +10,7 @@ import {
   setActiveCopilotAccount,
   UnknownCopilotAccountError,
 } from "@/lib/accounts/copilot";
+import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { copilotLoginSupervisor } from "@/lib/accounts/copilotLogin";
 
@@ -73,13 +74,14 @@ export async function POST(req: NextRequest) {
     }
     if (body.action === "select") {
       if (typeof body.id !== "string") return NextResponse.json({ error: "id must be a string" }, { status: 400 });
-      setActiveCopilotAccount(body.id);
+      await withAccountMutationLockAsync(() => setActiveCopilotAccount(body.id as string), { caller: "Copilot account select", holder: "Copilot catalog select" });
       return NextResponse.json(copilotAccountsBody());
     }
     if (typeof body.label !== "string") return NextResponse.json({ error: "label must be a string" }, { status: 400 });
-    const account = createManagedCopilotAccount(body.label);
+    const account = await withAccountMutationLockAsync(() => createManagedCopilotAccount(body.label as string), { caller: "Copilot account create", holder: "Copilot catalog create" });
     return NextResponse.json({ ...copilotAccountsBody(), created: account.id });
   } catch (error) {
+    if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
     const status = error instanceof UnknownCopilotAccountError ? 404 : 400;
     return NextResponse.json({ error: error instanceof Error ? error.message : "could not change Copilot accounts" }, { status });
   }

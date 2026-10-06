@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 
 import { configFilePath, statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -11,7 +13,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
  * The OpenRouter key is read the way the Viewer reads its other provider keys
  * (`readElevenLabsApiKey`): the environment first, then a file in the config
  * directory, at the moment of the call. It is never logged, never returned by
- * a route and never written by one.
+ * a route. The operator can replace the file through Settings.
  */
 
 export const DEFAULT_ASKS_MONTHLY_CAP_USD = 1;
@@ -107,4 +109,30 @@ export function readOpenRouterApiKey(env: Readonly<Record<string, string | undef
 export function openRouterKeySource(env: Readonly<Record<string, string | undefined>> = process.env): "env" | "file" | null {
   if (env[OPENROUTER_KEY_ENV]?.trim()) return "env";
   return readOpenRouterApiKey({}) ? "file" : null;
+}
+
+/** Atomic replacement leaves a linked old file's target untouched. */
+export function writeOpenRouterApiKey(key: string): boolean {
+  const filename = openRouterKeyPath();
+  const temporary = filename + "." + crypto.randomUUID() + ".tmp";
+  let fd: number | undefined;
+  try {
+    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    // Remove secret-bearing leftovers from an interrupted atomic replacement.
+    // Writes are synchronous in the Viewer, so another request cannot interleave.
+    for (const name of fs.readdirSync(path.dirname(filename))) {
+      if (/^openrouter-api-key\.[a-f0-9-]{36}\.tmp$/.test(name)) fs.unlinkSync(path.join(path.dirname(filename), name));
+    }
+    fd = fs.openSync(temporary, "wx", 0o600);
+    fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, key, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    fs.renameSync(temporary, filename);
+    return true;
+  } catch { return false; }
+  finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch { /* already renamed or not created */ }
+  }
 }

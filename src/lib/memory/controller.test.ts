@@ -18,6 +18,7 @@ import { deliverConversationMessage } from "@/lib/delivery";
 import { offeredMemoryForTranscript } from "./offers";
 import { createFeedSession } from "@/components/feed/parse";
 import { provenanceLookupFor } from "@/components/feed/messageProvenance";
+import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { FileEntry } from "@/lib/types";
@@ -216,7 +217,9 @@ test("real controller joins queued operator authorship, calls grounded Jev once,
   setSharedMemoryEnabled(project, false);
   expect(await offerForHook(request, { ...input, delegatus_delivery_id: "operator" })).toBe("");
   setSharedMemoryEnabled(project, true);
+  const skipped = memoryIndex().injectionActivity().skipped;
   expect(await offerForHook(request, { ...input, delegatus_delivery_id: "machine" })).toBe(""); expect(calls).toBe(0);
+  expect(memoryIndex().injectionActivity().skipped).toBe(skipped);
   expect(await offerForHook(request, { ...input, delegatus_delivery_id: "operator" })).toContain("Delegatus shared memory");
   expect(calls).toBe(1);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toMatchObject([{ requestId: "operator", score: .8 }]);
@@ -250,7 +253,9 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   const input = { hook_event_name: "UserPromptSubmit", session_id: crypto.randomUUID(), cwd: root };
   expect(await offerForHook(request, { ...input, prompt: "Update widget parser" })).toBe("");
   const wire = (kind: "agent" | "operator", id: string) => encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind }, crypto.createHash("sha256").update(id).digest("hex"));
+  const skipped = memoryIndex().injectionActivity().skipped;
   expect(await offerForHook(request, { ...input, prompt: wire("agent", "machine") })).toBe(""); expect(calls).toBe(0);
+  expect(memoryIndex().injectionActivity().skipped).toBe(skipped);
   expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toContain("Delegatus shared memory");
   expect(calls).toBe(1);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toMatchObject([{ score: .8 }]);
@@ -494,4 +499,33 @@ for (const engine of ["claude", "codex"] as const) for (const materialization of
   memoryIndex().close();
   const offers = offeredMemoryForTranscript(transcript);
   expect(offers[`native:${messageTextDigest(line)}`]?.length ?? 0).toBe(origin === "operator" ? 1 : 0);
+});
+
+for (const mode of ["unproven authorship", "expired deadline", "agent delivery", "no capability"] as const) test(`operator skipped count excludes machine traffic: ${mode}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-skipped-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT;
+  process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  const session = crypto.randomUUID(), prompt = "Update widget parser";
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "tmux",
+    launchDisplay: { prompt, images: 0, echo: prompt }, launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic count" }) });
+  if (begun.kind !== "created") throw Error("Synthetic launch refused");
+  const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+  if (mode === "unproven authorship") {
+    // Registry authorship survived while the optional machine receipt did not.
+    registry.holdDelivery(begun.receipt.conversationId, prompt, "fixture-missing-receipt", "text", [],
+      structuredContent(prompt, []).contentDigest, { origin: { kind: "agent" } });
+  }
+  setSharedMemoryEnabled(projectInfoFromCwd(root)!.project, true);
+  const submittedPrompt = mode === "agent delivery" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "agent" },
+    crypto.createHash("sha256").update("fixture-agent-turn").digest("hex")) : prompt;
+  const input = { prompt: submittedPrompt, hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, turn_id: "fixture-native-turn" };
+  const request = new Request("http://localhost/api/memory/inject", { headers: {
+    ...(mode === "no capability" ? {} : { "x-llv-spawn-capability": capability }),
+    "x-llv-memory-hook": crypto.randomUUID(),
+    "x-llv-memory-deadline": String(Date.now() + (mode === "expired deadline" ? -1 : 1500)),
+  } });
+  globalThis.fetch = (() => { throw Error("No provider call expected"); }) as unknown as typeof fetch;
+  expect(await prepareForHook(request, input)).toBe("");
+  expect(memoryIndex().injectionActivity().skipped).toBe(mode === "agent delivery" || mode === "no capability" ? 0 : 1);
 });

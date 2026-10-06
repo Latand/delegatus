@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { createSpawnAttempt, spawnRequestBody } from "@/components/draftSpawn";
@@ -10,6 +10,8 @@ import { agentRegistry, AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSessionRoots, createManagedCodexAccount } from "@/lib/accounts/codex";
 import { NoHealthyClaudeAccountError } from "@/lib/accounts/spawnHealth";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { spawnParentSelector, spawnRequestDigest, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
 import { rotateOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -106,6 +108,311 @@ function structuredRouteDependencies(cwd: string): SpawnRouteTestDependencies {
     }),
   };
 }
+
+test("a pinned preflight waits out a short foreign holder and keeps a 2 s timeout replayable without a failed receipt", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "pinned-contention-"));
+  fs.mkdirSync(path.join(cwd, "account"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const deps = structuredRouteDependencies(cwd);
+  const resolveAccount = deps.resolveSpawnAccount!;
+  Object.assign(deps, {
+    registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolveHealthySpawnAccount: async () => {
+      await withAccountMutationLockAsync(() => undefined, { caller: "pinned preflight", holder: "preflight fixture" });
+      return resolveAccount("codex", "account-b");
+    },
+  });
+  const request = (key: string) => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "codex", accountId: "account-b", cwd, title: "Preflight contention", prompt: "Review", clientAttemptId: key }),
+  });
+  try {
+    const short = await foreignAccountHolder();
+    try {
+      short.releaseAfter(120);
+      const admitted = await POST.withDependencies(request("short-preflight-key"), deps);
+      expect({ status: admitted.status, body: await admitted.json() }).toMatchObject({ status: 202 });
+    } finally { await short.close(); }
+    const held = await foreignAccountHolder();
+    try {
+      held.releaseAfter(2_150);
+      const refused = await POST.withDependencies(request("busy-preflight-key"), deps);
+      expect(refused.status).toBe(503);
+      const body = await refused.json();
+      expect(body).toMatchObject({ code: "account_store_busy", retryable: true, error: "The account store is temporarily busy; try again shortly." });
+      expect(JSON.stringify(body)).not.toMatch(/pid|Codex|Claude|held by|account mutation/i);
+      expect(Object.values(store.readOnlySnapshot().receipts).some(receipt => receipt.clientAttemptId === "busy-preflight-key")).toBe(false);
+    } finally { await held.close(); }
+    const replay = await POST.withDependencies(request("busy-preflight-key"), deps);
+    expect(replay.status).toBe(202);
+    expect(Object.values(store.readOnlySnapshot().receipts).filter(receipt => receipt.clientAttemptId === "busy-preflight-key")).toHaveLength(1);
+  } finally {
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT;
+    else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+  }
+});
+
+test("a catalog write between spawn snapshot and reservation answers a retryable admission code without burning the key", async () => {
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "admission-revision-"));
+  fs.mkdirSync(path.join(cwd, "account"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const deps = structuredRouteDependencies(cwd);
+  let raced = false;
+  Object.assign(deps, {
+    registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    autonomousAdmissionHeld: () => {
+      if (!raced) { raced = true; createManagedCodexAccount("Concurrent admission writer"); }
+      return false;
+    },
+  });
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "codex", accountId: "account-b", cwd, title: "Admission revision", prompt: "Review", clientAttemptId: "admission-revision-key" }),
+  });
+  try {
+    const refused = await POST.withDependencies(request(), deps);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+    expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("an automatic bound-project health revision race stays retryable and preserves the same request key", async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { bindAccountToProject } = await import("@/lib/accounts/projectBindings");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "bound-health-revision-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const account = createManagedClaudeAccount("Bound route fixture");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const project = "repo-bound-health-revision";
+  expect(bindAccountToProject("claude", account.id, project).ok).toBe(true);
+  const deps: SpawnRouteTestDependencies = {
+    ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+  };
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let raced = false;
+  globalThis.fetch = (async () => {
+    if (!raced) { raced = true; createManagedClaudeAccount("Concurrent bound route writer"); }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  }) as unknown as typeof globalThis.fetch;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "claude", project, cwd, title: "Bound health revision", prompt: "Review", clientAttemptId: "bound-health-revision-key" }),
+  });
+  try {
+    const refused = await POST.withDependencies(request(), deps);
+    expect(refused.status).toBe(503);
+    const body = await refused.json();
+    expect(body).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+    expect(body.error).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+    expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+    expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+for (const change of ["unrelated refusal", "unrelated refusal with fallback", "pinned catalog", "pinned credential", "pinned unreadable credential", "pinned removed credential", "continuous unrelated writes"] as const) test(`a pinned Claude health probe handles ${change} before reserving once`, async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { readAccountSource, writeAccountSource } = await import("@/lib/accounts/accountsStore");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "bound-health-revision-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  const account = createManagedClaudeAccount("Bound route fixture");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+
+  if (change === "unrelated refusal with fallback") {
+    const fallback = createManagedClaudeAccount("Healthy fallback fixture");
+    fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  }
+  const deps: SpawnRouteTestDependencies = {
+    ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+    resolvePinnedSpawnAdmission: undefined,
+    resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+  };
+  const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let raced = false;
+  let probes = 0;
+  globalThis.fetch = (async () => {
+    probes += 1;
+    if (change === "unrelated refusal with fallback") await Bun.sleep(8);
+    if (!raced || change === "continuous unrelated writes") {
+      raced = true;
+      if (change === "pinned catalog") {
+        const read = readAccountSource("claude-accounts.json");
+        if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+        const catalog = read.body as { accounts: { id: string; label: string }[] };
+        catalog.accounts.find(row => row.id === account.id)!.label = "Changed pin";
+        writeAccountSource("claude-accounts.json", catalog);
+      } else if (change === "pinned unreadable credential") {
+        fs.writeFileSync(path.join(account.home, ".credentials.json"), "{invalid json", { mode: 0o600 });
+      } else if (change === "pinned removed credential") {
+        fs.unlinkSync(path.join(account.home, ".credentials.json"));
+      } else if (change === "pinned credential") {
+        fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+      } else {
+        recordSpawnAdmissionRejection({ clientAttemptId: `unrelated-key-${probes}`, requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+      }
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  }) as unknown as typeof globalThis.fetch;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    body: JSON.stringify({ engine: "claude", accountId: account.id, cwd, title: "Bound health revision", prompt: "Review", clientAttemptId: `pinned-health-${change.replaceAll(" ", "-")}` }),
+  });
+  try {
+    const response = await POST.withDependencies(request(), deps);
+    if (change === "unrelated refusal" || change === "unrelated refusal with fallback") {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+      expect(probes).toBe(2);
+      expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toHaveLength(1);
+    } else {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "account_admission_changed", retrySafe: true, retryable: true });
+      expect(Object.keys(store.readOnlySnapshot().receipts)).toEqual([]);
+      expect(probes).toBe(change === "continuous unrelated writes" ? 3 : 1);
+    }
+  } finally {
+    process.env.LLV_STATE_DIR = previousState;
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+
+for (const scenario of [
+  "exhausted pin", "unavailable pin",
+  "exhausted pin fallback credential rotation", "exhausted pin fallback revision churn",
+  "unavailable pin fallback credential rotation", "unavailable pin fallback revision churn",
+  "automatic credential rotation", "pin credential rotation", "pin catalog change",
+  "pin credential removal", "pin unreadable credential", "pin rejected refresh rotation",
+] as const) test(`Claude selection handles a fallback race with ${scenario}`, async () => {
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
+  const { readAccountSource, writeAccountSource } = await import("@/lib/accounts/accountsStore");
+  const cwd = fs.mkdtempSync(path.join(routeSandbox, "fallback-race-"));
+  const store = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
+  process.env.LLV_STATE_DIR = path.join(cwd, "state");
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  const previousFetch = globalThis.fetch;
+  let restoreRefresh: (() => void) | undefined;
+  try {
+    const first = createManagedClaudeAccount("Account A");
+    const second = createManagedClaudeAccount("Account B");
+    const firstToken = crypto.randomUUID();
+    const secondToken = crypto.randomUUID();
+    const resetAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
+    const writeCredentials = (home: string, token: string, expiresAt = Date.now() + 3600_000) => fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      ["access" + "Token"]: token, refreshToken: crypto.randomUUID(), expiresAt,
+    } }), { mode: 0o600 });
+    writeCredentials(first.home, firstToken, scenario === "pin rejected refresh rotation" ? Date.now() - 1 : Date.now() + 3600_000);
+    writeCredentials(second.home, secondToken);
+    let raced = false;
+    const probes: string[] = [];
+    if (scenario === "pin rejected refresh rotation") {
+      const oauth = await import("@/lib/accounts/claudeOauth");
+      const refresh = spyOn(oauth, "refreshClaudeOauth").mockImplementation(async () => { probes.push("first"); return "invalid"; });
+      restoreRefresh = () => { refresh.mockRestore(); };
+    }
+    globalThis.fetch = (async (_url, init) => {
+      const isFirst = new Headers(init?.headers).get("authorization") === `Bearer ${firstToken}` || String(_url).includes("/oauth/token");
+      probes.push(isFirst ? "first" : "second");
+      if (isFirst && scenario !== "automatic credential rotation") {
+        return scenario.startsWith("exhausted pin")
+          ? Response.json({ five_hour: { utilization: 100, resets_at: resetAt }, seven_day: { utilization: 10 } })
+          : Response.json({ error: "invalid_grant" }, { status: 401 });
+      }
+      if (!raced || scenario.endsWith("fallback revision churn")) {
+        raced = true;
+        if (scenario.endsWith("fallback credential rotation")) writeCredentials(second.home, crypto.randomUUID());
+        else if (scenario.endsWith("fallback revision churn")) recordSpawnAdmissionRejection({ clientAttemptId: `fallback-churn-${probes.length}`, requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+        else if (scenario === "automatic credential rotation") writeCredentials(second.home, crypto.randomUUID());
+        else if (scenario === "pin credential rotation" || scenario === "pin rejected refresh rotation") writeCredentials(first.home, crypto.randomUUID());
+        else if (scenario === "pin credential removal") fs.unlinkSync(path.join(first.home, ".credentials.json"));
+        else if (scenario === "pin unreadable credential") fs.writeFileSync(path.join(first.home, ".credentials.json"), "{invalid json", { mode: 0o600 });
+        else if (scenario === "pin catalog change") {
+          const read = readAccountSource("claude-accounts.json");
+          if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+          const catalog = read.body as { accounts: { id: string; label: string }[] };
+          catalog.accounts.find(row => row.id === first.id)!.label = "Changed pin";
+          writeAccountSource("claude-accounts.json", catalog);
+        }
+        else recordSpawnAdmissionRejection({ clientAttemptId: "unrelated-key", requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+      }
+      return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+    }) as typeof globalThis.fetch;
+    const deps: SpawnRouteTestDependencies = {
+      ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, engineReadiness: () => "connected",
+      resolvePinnedSpawnAdmission: undefined, resolveHealthySpawnAccount,
+      resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id),
+    };
+    const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", ...(scenario === "automatic credential rotation" ? {} : { accountId: first.id }), cwd, title: "Fallback race", prompt: "Review", clientAttemptId: "fallback-race-key" }),
+    });
+    const response = await POST.withDependencies(request(), deps);
+    if (scenario.startsWith("pin ") || scenario.startsWith("unavailable pin fallback")) {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ code: "account_admission_changed", retryable: true, retrySafe: true });
+      expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(0);
+      expect(probes).toEqual(scenario.endsWith("fallback revision churn") ? ["first", "second", "second", "second"] : scenario === "pin catalog change" ? ["first", "second", "second"] : ["first", "second"]);
+      return;
+    }
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
+    const receipts = Object.values(store.readOnlySnapshot().receipts);
+    expect(receipts).toHaveLength(1);
+    // The receipt binds the requested pin even when execution uses a fallback.
+    expect(receipts[0].accountId).toBe(first.id);
+    expect(probes).toEqual(scenario === "automatic credential rotation" ? ["first"]
+      : scenario.endsWith("fallback credential rotation") ? ["first", "second"]
+      : scenario.endsWith("fallback revision churn") ? ["first", "second", "second", "second"]
+      : ["first", "second", "second"]);
+    if (scenario.startsWith("exhausted pin")) {
+      expect(receipts[0]).toMatchObject({
+        accountPin: true, state: "starting",
+        queuedPinnedSpawn: { accountId: first.id, retryAt: resetAt, prompt: "Review" },
+      });
+    } else {
+      expect((await POST.withDependencies(request(), deps)).status).toBe(202);
+      expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(1);
+    }
+  } finally {
+    restoreRefresh?.();
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
 
 test("spawn admission rejects malformed MCP allowlists", async () => {
   const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {

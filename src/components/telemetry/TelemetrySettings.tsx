@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Z } from "@/components/layers";
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
+import { OpenRouterKeySetting } from "@/components/asks/OpenRouterKeySetting";
 import { MemorySetting } from "@/components/memory/MemorySetting";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
@@ -53,6 +54,7 @@ export function TelemetrySettingsHost({ project }: { project?: string }) {
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
         {project && <MemorySetting project={project} />}
+        <OpenRouterKeySetting />
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
       </section>
     </div>}
