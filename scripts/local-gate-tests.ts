@@ -160,6 +160,20 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
   return result.stdout;
 }
 
+/** The preload and service can report the same surviving tree. Keep one
+ * ownership failure for that exact identity set; other hook errors still block.
+ */
+export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string): void {
+  const runnerPrefix = "owned runner: surviving owned processes: ";
+  const hookPrefix = "<hook error> owned test scope children survived teardown: ";
+  const identities = (value: string) => value.split(", ").sort().join(", ");
+  const members = identities(diagnostic.slice(runnerPrefix.length));
+  const duplicate = failures.findIndex(site => site.file === file && site.kind === "error"
+    && site.name.startsWith(hookPrefix) && identities(site.name.slice(hookPrefix.length)) === members);
+  if (duplicate >= 0) failures.splice(duplicate, 1);
+  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error" });
+}
+
 function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void } = {}): TestRun {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   for (const file of files) {
@@ -206,10 +220,10 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       const output = readFileSync(log, "utf8");
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
       const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
-      // The report is complete; the service guard adds a distinct failure.
+      // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
       if (survivors && result.exitCode !== 0) {
-        parsed.failures.push({ file, suite: "", name: `<ownership error> ${survivors}`, kind: "error" });
+        appendOwnershipFailure(parsed.failures, file, survivors);
       }
       if ((result.exitCode === 0) !== (parsed.failures.length === 0)) {
         throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);

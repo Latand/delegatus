@@ -251,9 +251,23 @@ while checking the wider audit: migration parent, flow reviewer and response
 worker teardown. Each initially passed its assertions and failed the survivor
 guard; bounded exit/reap waits fix them, and their reruns pass. All checks use
 private state, a finite command deadline, two assigned CPUs and the standard
-8 GiB gate memory cap. Native macOS/Windows and the packed production/native
-campaign were not rerun in this correction; their earlier verification limits
-remain in force.
+8 GiB gate memory cap. Native macOS/Windows and the packed production campaign
+were not rerun in this correction. The wider native runtime hook was attempted
+under a 30-minute total deadline; it completed both runtime rehearsals and
+several native queue/app-server files before that deadline ended the run.
+Containment reaped every recorded identity and scope. Earlier verification
+limits remain in force.
+
+The wider comparison also reproduced inherited five-second merger-fixture
+failures while nested commands waited for shared gate admission. Their bisect
+children were retained by the test service and reaped when the run ended. The
+preload scope guard and the service guard reported the same identity set twice;
+only the added hook diagnostic was classified as new. Comparison now retains a
+single ownership failure when both guards name the exact same PID/start set.
+Distinct identities and unrelated hook failures still block. Bounded regressions
+cover inherited comparison, differing start identities, and the actual service
+survivor/cleanup paths. This changes reporting only; survivor admission and
+termination remain enforced by the service.
 
 ## Process-launch audit
 

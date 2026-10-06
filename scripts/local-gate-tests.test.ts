@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
+import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 
@@ -103,6 +103,28 @@ test("duplicate names match occurrences and keep suite ancestry", () => {
   const base = { failures: [site], passed: [], elapsedMs: 0, completed: [site.file] };
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
+});
+test("scope and service guards report an identical surviving tree once across the baseline", () => {
+  const file = "fixture.test.ts";
+  const failures: TestSite[] = [{ file, suite: "", kind: "error",
+    name: "<hook error> owned test scope children survived teardown: 22 (22:2), 21 (21:1)" }];
+  appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1), 22 (22:2)");
+  const base: TestRun = { failures: [{ file, suite: "", kind: "error",
+    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3)" }], passed: [], completed: [file], elapsedMs: 0 };
+  const result = compareTests(base, { ...base, failures });
+  expect(result.introduced).toEqual([]);
+  expect(result.preexisting).toHaveLength(1);
+  expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
+});
+test("distinct scope identities and unrelated hook failures remain blocking", () => {
+  const file = "fixture.test.ts";
+  const failures: TestSite[] = [{ file, suite: "", kind: "error",
+    name: "<hook error> owned test scope children survived teardown: 21 (21:9)" },
+  { file, suite: "", kind: "error", name: "<hook error> fixture failed to close" }];
+  appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1)");
+  expect(failures).toHaveLength(3);
+  const empty: TestRun = { failures: [], passed: [], completed: [file], elapsedMs: 0 };
+  expect(compareTests(empty, { ...empty, failures }).introduced).toHaveLength(3);
 });
 test("swapped duplicate outcomes report the stable head occurrence NEW and the recovered occurrence FIXED", () => {
   const f = fixture(source(true));
