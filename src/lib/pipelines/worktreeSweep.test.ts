@@ -259,7 +259,7 @@ test("each guard keeps a merged worktree, and the main checkout is never a candi
   }
   expect(branchExists(root, "main")).toBe(true);
   expect(fs.readFileSync(path.join(untracked.dir, "notes.txt"), "utf8")).toBe("not committed\n");
-});
+}, 30_000); // Nine checkouts and real process scans can exceed the default on a busy host.
 
 test("every linked layout of a registered repository is swept, nested checkouts first", async () => {
   const root = repository();
@@ -1682,6 +1682,27 @@ test.each(["test-results", "out", "build", "coverage", "playwright-report", "nod
   expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
   expect(fs.readFileSync(capture, "utf8")).toBe("retained capture");
   expect(fs.readFileSync(trace, "utf8")).toBe("retained trace");
+});
+
+test.each(["test-results", "playwright-report", "out", "build", "dist", "coverage"].flatMap(name =>
+  ["merged", "retained"].map(state => [name, state] as const)))("%s evidence survives a %s finished lane", async (name, state) => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n`);
+  remoteRepository(root);
+  const branch = "topic/evidence-output";
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-evidence-output"), branch);
+  git(["push", "-q", "origin", branch], root);
+  const evidence = path.join(dir, name, "run");
+  fs.mkdirSync(evidence, { recursive: true });
+  for (const file of ["capture.png", "trace.zip", "unique.log", "probe.ts"]) fs.writeFileSync(path.join(evidence, file), "unique retained evidence");
+  const owner = pipeline({ id: "evidence-output", repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW,
+    prs: state === "merged" ? [merged(142, branch, tip)] : [] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
+  for (const file of ["capture.png", "trace.zip", "unique.log", "probe.ts"]) expect(fs.readFileSync(path.join(evidence, file), "utf8")).toBe("unique retained evidence");
+  expect(branchExists(root, branch)).toBeTrue();
+  expect(report.trimmed.map(row => row.path)).toEqual([path.join(dir, "node_modules")]);
 });
 
 test("a local-path remote does not prove preservation elsewhere", async () => {

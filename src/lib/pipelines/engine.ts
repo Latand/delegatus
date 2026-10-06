@@ -209,7 +209,7 @@ export interface PipelinePorts {
   exec: ExecPort;
   /** Why a new worktree must wait for disk space, or null. Defaults to the
       volumes' free space against `DISK_CRITICAL_BYTES`. */
-  worktreeDiskWait?: (repoDir: string, worktreeDir: string) => string | null;
+  worktreeDiskWait?: (repoDir: string, worktreeDir: string, usesClaude: boolean) => string | null;
   /** Controller-only: committing-stage Git settles after its lease is released. */
   deferStageGit?: boolean;
   remoteActionSupported?: (action: string) => boolean;
@@ -5815,12 +5815,15 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
   // by collection revision; polling needs no lease and no close-path hook.
   const watch = setInterval(revalidate, 50);
   const repositoryTails = new Map<string, Promise<void>>();
+  const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
+    worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
     await Promise.all(jobs.map(async (job) => {
       /* Below the critical free space a new checkout waits, before any git
          runs and again right before `git worktree add`; running work is never
          touched by it. */
-      const diskWait = (ports.worktreeDiskWait ?? worktreeDiskWait)(job.pipeline.repoDir, job.pipeline.worktreeDir);
+      const usesClaude = job.pipeline.stages.some(stage => stage.effectiveRole.engine === "claude");
+      const diskWait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
       if (diskWait) {
         outcomes.set(job.pipeline.id, { id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null, error: diskWait });
         return;
@@ -5828,7 +5831,7 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
       const guardedExec: ProvisionExecPort = async (command, args, cwd, signal) => {
         revalidate();
         if (command === "git" && args[0] === "worktree" && args[1] === "add") {
-          const wait = (ports.worktreeDiskWait ?? worktreeDiskWait)(job.pipeline.repoDir, job.pipeline.worktreeDir);
+          const wait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
           if (wait) return { code: 1, stdout: "", stderr: wait };
         }
         if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };

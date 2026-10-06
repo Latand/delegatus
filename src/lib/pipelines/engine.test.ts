@@ -27,6 +27,7 @@ import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
+import { worktreeDiskWait } from "@/lib/state/diskPressure";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -20764,4 +20765,30 @@ test("critical disk pressure defers new provisioning without parking and automat
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
   expect(h.calls.some(call => call.includes("worktree add"))).toBe(true);
+});
+
+test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandbox => [engine, sandbox] as const)))("provisioning selects actual %s/%s stage temp destinations at both admission boundaries", async (engine, sandbox) => {
+  const h = harness();
+  savePipelines([]);
+  const stages = RUN_STAGES.map(stage => ({ ...stage, engine, sandbox, model: engine === "codex" ? "gpt-6.1-sol" : "fable" }));
+  const source = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const observed: boolean[] = [];
+  h.ports.worktreeDiskWait = (repo, worktree, usesClaude) => {
+    observed.push(usesClaude);
+    return worktreeDiskWait(repo, worktree, directory => ({ volume: directory === source.CLAUDE_CODE_TMPDIR ? "claude" : "writer",
+      freeBytes: directory === source.CLAUDE_CODE_TMPDIR ? 1024 ** 3 : 500 * 1024 ** 3, totalBytes: 1000 * 1024 ** 3 }), source, [], usesClaude);
+  };
+  const created = await createPipelineFromRequest({ task: "Stage volume admission", repoDir: "/repo", stages: stages as never }, h.ports);
+  expect(created.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(observed.every(value => value === (engine === "claude"))).toBeTrue();
+  if (engine === "codex") {
+    expect(observed.length).toBeGreaterThanOrEqual(2);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeTrue();
+    expect(loadPipelines()[0]!.state).toBe("running");
+  } else {
+    expect(observed).toHaveLength(1);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
+    expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
+  }
 });

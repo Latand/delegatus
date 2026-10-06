@@ -101,6 +101,42 @@ test("stage config and Claude temp destinations wait when critical and resume af
   }
 });
 
+test("a lane without Claude stages ignores Claude-only temp pressure while retaining config admission", () => {
+  const source = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(process.env.LLV_STATE_DIR!, "scratch/tmp") });
+  const visited: string[] = [];
+  const stub: DiskProbe = directory => {
+    visited.push(directory);
+    return { volume: directory === source.CLAUDE_CODE_TMPDIR ? "claude" : "writer",
+      freeBytes: directory === source.CLAUDE_CODE_TMPDIR ? GiB : 500 * GiB, totalBytes: 1000 * GiB };
+  };
+  expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, [], false)).toBeNull();
+  expect(visited).not.toContain(source.CLAUDE_CODE_TMPDIR);
+  expect(visited).toContain(config);
+  expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, [], true)).toContain("1.00 GiB free");
+  expect(worktreeDiskWait("/srv/repo", "/srv/lane", directory => ({ volume: directory === config ? "config" : "writer",
+    freeBytes: directory === config ? GiB : 500 * GiB, totalBytes: 1000 * GiB }), source, [], false)).toContain("1.00 GiB free");
+});
+
+test("the System pressure observation omits an unused Claude-only write destination", async () => {
+  const previous = process.env.CLAUDE_CODE_TMPDIR;
+  const destination = "/srv/unused-claude-temp";
+  process.env.CLAUDE_CODE_TMPDIR = destination;
+  const visited: string[] = [];
+  try {
+    const pressure = await readDiskPressure({ caches: new Map(), worktrees: [], tempRoots: [],
+      now: () => Date.parse("2026-10-06T12:00:00Z"), probe: directory => {
+        visited.push(directory);
+        return { volume: directory === destination ? "unused" : "writer", freeBytes: directory === destination ? GiB : 500 * GiB };
+      } });
+    expect(pressure.episode).toBeNull();
+    expect(visited).not.toContain(destination);
+    expect(pressure.volumes.every(row => row.level === "ok")).toBeTrue();
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_TMPDIR; else process.env.CLAUDE_CODE_TMPDIR = previous;
+  }
+});
+
 test.skipIf(process.platform !== "linux")("a vanished namespace anchor is unknown and never falls back onto procfs", () => {
   expect(probeDisk("/proc/2147483647/root/tmp/checkout")).toBeNull();
 });

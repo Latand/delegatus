@@ -119,11 +119,11 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
 /** Every stage writes scratch and agent config. Full-access Claude also
     keeps background-task output on its pre-stage temp destination. Resolve
     config with the same scratch environment the spawn boundary hands it. */
-function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] = []): DiskRoot[] {
+function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] = [], usesClaude = true): DiskRoot[] {
   const scratch = statePath("scratch");
   const roots: DiskRoot[] = [{ role: "state", directory: scratch, provisioning: true },
-    { role: "state", directory: agentConfigSandboxRoot({ ...source, TMPDIR: path.join(scratch, "tmp") }), provisioning: true },
-    { role: "temp", directory: source.CLAUDE_CODE_TMPDIR || source.TMPDIR || os.tmpdir(), provisioning: true }];
+    { role: "state", directory: agentConfigSandboxRoot({ ...source, TMPDIR: path.join(scratch, "tmp") }), provisioning: true }];
+  if (usesClaude) roots.push({ role: "temp", directory: source.CLAUDE_CODE_TMPDIR || source.TMPDIR || os.tmpdir(), provisioning: true });
   // The image's CLI shims enter the host namespace. Their canonical temp
   // paths can name another volume there; use the same validated views as
   // cleanup, and include only actual stage destinations in admission.
@@ -135,20 +135,20 @@ function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweep
     if (namespaces.has(temp.anchor.namespace)) continue;
     if (!tempViewAvailable(temp)) continue;
     namespaces.add(temp.anchor.namespace);
-    for (const root of roots.slice(0, 3)) roots.push({ ...root, directory: temp.via + root.directory, view: temp });
+    for (const root of roots.slice()) roots.push({ ...root, directory: temp.via + root.directory, view: temp });
   }
   return roots;
 }
 
-function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv, tempRoots?: readonly TempSweepRoot[]): DiskRoot[] {
+function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] | undefined, usesClaude: boolean): DiskRoot[] {
   const views = tempRoots ?? (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? sweepRoots(scanProcesses(), ownTempRoots(source)) : []);
   return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
-    { role: "repository", directory: repoDir }, ...stageDiskRoots(source, views)];
+    { role: "repository", directory: repoDir }, ...stageDiskRoots(source, views, usesClaude)];
 }
 
 /** Admission only. A low volume never changes an existing agent's lifecycle. */
-export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk, source: NodeJS.ProcessEnv = process.env, tempRoots?: readonly TempSweepRoot[]): string | null {
-  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir, source, tempRoots), probe).filter(row => row.level === "critical");
+export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk, source: NodeJS.ProcessEnv = process.env, tempRoots?: readonly TempSweepRoot[], usesClaude = true): string | null {
+  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir, source, tempRoots, usesClaude), probe).filter(row => row.level === "critical");
   return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free (needs ${formatDiskBytes(threshold(DISK_CRITICAL_BYTES, row.totalBytes))})`).join("; ")}; retries automatically` : null;
 }
 
@@ -254,7 +254,8 @@ export async function readDiskPressure(ports: {
   const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
   const worktreeView = (directory: string) => tempRoots.find(root => root.via && root.anchor
     && (directory === root.path || directory.startsWith(root.path + path.sep)));
-  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots),
+  const usesClaude = pipelines.some(pipeline => pipeline.stages.some(stage => stage.effectiveRole.engine === "claude"));
+  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots, usesClaude),
     ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path, view: root }))];
   const previousEpisode = cached.pressure.episode;

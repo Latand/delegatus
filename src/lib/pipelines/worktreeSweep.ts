@@ -58,7 +58,7 @@ import { pipelineLiteralGitEnv } from "./git";
  * - `uncommitted` — tracked changes or untracked files; `git worktree remove`
  *   is never forced.
  * - `ignored-files` — an ignored path that is not a rebuildable output
- *   (`node_modules`, `.next`, `dist`, build caches): a `.env`, an agent's
+ *   (`node_modules`, `.next`, tool caches): a `.env`, an agent's
  *   `.claude` session files, a nested repository under an ignored
  *   `.worktrees/`. `git worktree remove` deletes ignored files without asking,
  *   and the status read above never lists them.
@@ -240,11 +240,11 @@ function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
   return times.length ? Math.max(...times) : 0;
 }
 
-/** Ignored outputs any checkout rebuilds, which a removal may take. Anything
-    else ignored keeps the worktree. */
+/** Known dependency and tool caches. Generic build and test output folders
+    can hold unique captures, traces or source and require contents proof. */
 const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
-  "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage",
-  "test-results", "playwright-report", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+  "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit",
+  ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
 ]);
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
 
