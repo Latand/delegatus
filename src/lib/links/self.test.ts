@@ -24,7 +24,7 @@ import { POST as codesRoute } from "@/app/api/links/codes/route";
 import { listCodes, mintCode } from "./protocol";
 import { readGrants, sha, writeGrants } from "./state";
 
-import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, readSelf, saveAddress, selfFile } from "./self";
+import { checkAddress, checkSavedAddress, currentSelf, probeSelfAddress, readSelf, saveAddress, selfFile, type SeenRequest, type SelfCheck } from "./self";
 import { peerTarget } from "./client";
 
 const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST", "LLV_DOCKER_NSENTER_SHIMS", "PORT"] as const;
@@ -109,8 +109,7 @@ test("a saved HTTP name is rechecked against DNS and every probe uses the approv
   let requests = 0;
   const server = http.createServer((request, response) => {
     requests++;
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ host: request.headers.host, vouched: false }));
+    void answerAsRoute(request, response);
   });
   const port = await listen(server);
   let address = "127.0.0.1";
@@ -139,10 +138,7 @@ test("a slow Check cannot restore an address cleared by a newer Save", async () 
   const arrival = new Promise<void>((resolve) => { arrived = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const server = http.createServer((request, response) => {
-    const answer = () => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ host: request.headers.host, vouched: false }));
-    };
+    const answer = () => void answerAsRoute(request, response);
     if (hold) { hold = false; arrived(); void gate.then(answer); }
     else answer();
   });
@@ -257,6 +253,18 @@ async function listen(server: http.Server): Promise<number> {
   return address.port;
 }
 async function close(server: http.Server): Promise<void> { await new Promise((resolve) => server.close(resolve)); }
+/** Answers one request with the real self-check route, after the two headers
+ * Next writes before any route runs (`base-server.js`: `x-forwarded-host ??=
+ * host`, `x-forwarded-proto ??=` the socket's scheme). */
+async function answerAsRoute(incoming: http.IncomingMessage, outgoing: http.ServerResponse, rewrite: Record<string, string> = {}): Promise<void> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries({ ...incoming.headers, ...rewrite })) if (typeof value === "string") headers.set(name, value);
+  if (!headers.has("x-forwarded-host") && headers.has("host")) headers.set("x-forwarded-host", headers.get("host")!);
+  if (!headers.has("x-forwarded-proto")) headers.set("x-forwarded-proto", (incoming.socket as { encrypted?: boolean }).encrypted ? "https" : "http");
+  const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+  outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+  outgoing.end(Buffer.from(await response.arrayBuffer()));
+}
 
 test("pass-through proxy to a remote entry passes all spoof probes; a trusted entry is detected", async () => {
   process.env.LLV_TOKEN = "test-access-key";
@@ -314,6 +322,178 @@ test("pass-through proxy to a remote entry passes all spoof probes; a trusted en
     await close(viewer);
   }
   expect((await checkAddress(publicUrl)).code).toBe("http-public");
+});
+
+/** This server's own self-check route on a loopback port, as a proxy's upstream. */
+async function routeServer(): Promise<{ server: http.Server; port: number }> {
+  const server = http.createServer((incoming, outgoing) => void answerAsRoute(incoming, outgoing));
+  return { server, port: await listen(server) };
+}
+
+let proxyCertificate: { key: string; cert: string } | null = null;
+function certificate(): { key: string; cert: string } {
+  if (proxyCertificate) return proxyCertificate;
+  const key = path.join(root, "proxy-key.pem");
+  const cert = path.join(root, "proxy-cert.pem");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", key, "-out", cert,
+    "-subj", "/CN=board.example.test", "-addext", "subjectAltName=DNS:board.example.test"], { stdio: "ignore" });
+  return proxyCertificate = { key: fs.readFileSync(key, "utf8"), cert: fs.readFileSync(cert, "utf8") };
+}
+
+type ProxyShape = (headers: http.IncomingHttpHeaders, upstream: string) => http.IncomingHttpHeaders;
+
+/** Runs the check through a local reverse proxy that forwards to the real
+ * self-check route with the headers `shape` writes. `{port}` in the address is
+ * the proxy's own port; an address on a default port is dialled at the proxy's
+ * ephemeral port, because a test cannot bind 443 or 80. */
+async function checkBehind(address: string, shape: ProxyShape): Promise<SelfCheck> {
+  process.env.LLV_TOKEN = "test-access-key";
+  const viewer = await routeServer();
+  const forward = http.request;
+  const handler = (incoming: http.IncomingMessage, outgoing: http.ServerResponse) => {
+    const upstream = forward({ host: "127.0.0.1", port: viewer.port, path: incoming.url, method: incoming.method,
+      headers: shape({ ...incoming.headers }, `127.0.0.1:${viewer.port}`) }, (response) => {
+      outgoing.writeHead(response.statusCode ?? 502, response.headers);
+      response.pipe(outgoing);
+    });
+    upstream.on("error", () => { outgoing.writeHead(502); outgoing.end(); });
+    incoming.pipe(upstream);
+  };
+  const tls = address.startsWith("https:");
+  const front = tls ? https.createServer(certificate(), handler) : http.createServer(handler);
+  const frontPort = await listen(front);
+  const lookup = spyOn(dns, "lookup").mockImplementation((async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup);
+  const dial = tls ? https.request : http.request;
+  const request = spyOn(tls ? https : http, "request").mockImplementation(((options: https.RequestOptions, callback: (response: http.IncomingMessage) => void) =>
+    dial({ ...options, port: frontPort, ca: tls ? certificate().cert : undefined }, callback)) as typeof http.request);
+  try { return await checkAddress(new URL(address.replace("{port}", String(frontPort)))); }
+  finally {
+    request.mockRestore();
+    lookup.mockRestore();
+    await close(front);
+    await close(viewer.server);
+  }
+}
+
+const name = (host: string | undefined) => (host ?? "").replace(/:\d+$/, "").toLowerCase();
+const KEPT: [string, string, ProxyShape][] = [
+  ["nginx with proxy_set_header Host $host", "https://board.example.test",
+    (headers) => ({ ...headers, host: name(headers.host), "x-real-ip": "203.0.113.7", "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https" })],
+  ["nginx with $host in front of a port of its own, which $host leaves out", "https://board.example.test:{port}",
+    (headers) => ({ ...headers, host: name(headers.host), "x-forwarded-for": "203.0.113.7" })],
+  ["nginx with proxy_set_header Host $http_host", "https://board.example.test:{port}",
+    (headers) => ({ ...headers, "x-forwarded-for": "203.0.113.7" })],
+  ["Caddy defaults", "https://board.example.test",
+    (headers) => ({ ...headers, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https", "x-forwarded-host": headers.host })],
+  ["a tunnel that delivers over plain HTTP", "https://board.example.test",
+    (headers) => ({ ...headers, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https", "cdn-loop": "tunnel" })],
+  ["TLS terminated at the proxy with no forwarded header at all", "https://board.example.test", (headers) => headers],
+  ["a proxy that keeps Host and adds X-Forwarded-Host, X-Forwarded-Proto and Forwarded", "https://board.example.test",
+    (headers) => ({ ...headers, "x-forwarded-host": headers.host, "x-forwarded-proto": "https", forwarded: `for=203.0.113.7;host=${headers.host};proto=https` })],
+  ["a proxy that writes the default HTTPS port into Host", "https://board.example.test",
+    (headers) => ({ ...headers, host: `${name(headers.host)}:443` })],
+  ["an address typed with its default port, which the proxy leaves out", "https://board.example.test:443",
+    (headers) => ({ ...headers, host: name(headers.host) })],
+  ["a proxy that writes the default HTTP port into Host", "http://board.example.test",
+    (headers) => ({ ...headers, host: `${name(headers.host)}:80` })],
+  ["a proxy that changes the case of Host", "https://board.example.test",
+    (headers) => ({ ...headers, host: "BOARD.Example.Test" })],
+];
+test.each(KEPT)("the address check passes behind %s", async (_shape, address, shape) => {
+  expect(await checkBehind(address, shape)).toMatchObject({ code: "ok" });
+});
+
+const REWRITTEN: [string, string, ProxyShape, Record<string, string | null | string[]>][] = [
+  // The operator's proxy in #2516: Host is the upstream, and only X-Forwarded-Host still names the address.
+  ["Caddy with header_up Host set to the upstream", "https://board.example.test",
+    (headers, upstream) => ({ ...headers, host: upstream, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https", "x-forwarded-host": headers.host }),
+    { host: "{upstream}", forwardedHost: "board.example.test", forwardedProto: "https", forwarded: null, unknown: [] }],
+  ["nginx proxy_pass with no Host line, which sends the upstream", "https://board.example.test",
+    (headers, upstream) => ({ ...headers, host: upstream }),
+    { host: "{upstream}", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
+  // What Next would have written anyway cannot be told from what this proxy wrote.
+  ["a proxy that sends the upstream as Host and as X-Forwarded-Host, with X-Forwarded-Proto http", "https://board.example.test",
+    (headers, upstream) => ({ ...headers, host: upstream, "x-forwarded-host": upstream, "x-forwarded-proto": "http" }),
+    { host: "{upstream}", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
+  ["a proxy that sends localhost and describes the request in Forwarded", "https://board.example.test",
+    (headers) => ({ ...headers, host: "localhost", forwarded: `host=${headers.host};proto=https` }),
+    { host: "localhost", forwardedHost: null, forwardedProto: null, forwarded: "host=board.example.test;proto=https", unknown: ["forwardedHost", "forwardedProto"] }],
+  ["a proxy that keeps the name and writes the upstream port", "https://board.example.test",
+    (headers) => ({ ...headers, host: `${name(headers.host)}:8898` }),
+    { host: "board.example.test:8898", forwardedHost: null, forwardedProto: null, forwarded: null, unknown: ["forwardedHost", "forwardedProto"] }],
+  ["a proxy that writes the upstream port into Host and the bare name into X-Forwarded-Host", "https://board.example.test",
+    (headers) => ({ ...headers, host: `${name(headers.host)}:8898`, "x-forwarded-host": name(headers.host), "x-forwarded-proto": "https" }),
+    { host: "board.example.test:8898", forwardedHost: "board.example.test", forwardedProto: "https", forwarded: null, unknown: [] }],
+];
+test.each(REWRITTEN)("the address check fails behind %s and reports what arrived", async (_shape, address, shape, seen) => {
+  let upstream = "";
+  const check = await checkBehind(address, (headers, to) => shape(headers, upstream = to));
+  expect(check.code).toBe("host-rewritten");
+  expect(check.expected).toBe("board.example.test");
+  expect(check.seen).toEqual(Object.fromEntries(Object.entries(seen).map(([key, value]) => [key, value === "{upstream}" ? upstream : value])) as SeenRequest);
+});
+
+/** A name of exactly `length` characters in labels a resolver would accept. */
+const longName = (length: number) => `${"abcdefghi.".repeat(30).slice(0, length - 14)}x.example.test`;
+
+test("a name longer than the 200 characters the box shows still checks ok when the proxy keeps Host", async () => {
+  expect(await checkBehind(`http://${longName(204)}:{port}`, (headers) => headers)).toMatchObject({ code: "ok" });
+});
+
+test("a Host that only starts with a 200-character address is another site's", async () => {
+  const address = longName(200);
+  const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}.evil.example` }));
+  expect(check.code).toBe("host-rewritten");
+  expect(check.expected).toBe(address);
+  // The box shows 200 characters of a header and marks the cut.
+  expect(check.seen?.host).toBe(`${address.slice(0, 199)}…`);
+});
+
+test("a Host longer than any address names none", async () => {
+  const address = longName(250);
+  const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}${".".repeat(11)}` }));
+  expect(check.code).toBe("host-rewritten");
+  expect(check.seen?.host).toHaveLength(200);
+});
+
+test("an answer this server's own route never recorded proves nothing about the address", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  // Something else answers at the address in the self-check's own words.
+  const other = http.createServer((incoming, outgoing) => {
+    outgoing.writeHead(200, { "content-type": "application/json" });
+    outgoing.end(JSON.stringify({ host: incoming.headers.host, vouched: false }));
+  });
+  const port = await listen(other);
+  try { expect((await checkAddress(new URL(`http://127.0.0.1:${port}`))).code).toBe("unverified"); }
+  finally { await close(other); }
+});
+
+test("a probe's nonce admits one request", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  const viewer = await routeServer();
+  const replays: number[] = [];
+  const forward = http.request;
+  const front = http.createServer((incoming, outgoing) => {
+    const send = (done: (status: number, body: Buffer) => void) => {
+      const upstream = forward({ host: "127.0.0.1", port: viewer.port, path: incoming.url, method: "POST", headers: incoming.headers }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => done(response.statusCode ?? 0, Buffer.concat(chunks)));
+      });
+      upstream.end();
+    };
+    send((status, body) => send((replay) => {
+      replays.push(replay);
+      outgoing.writeHead(status, { "content-type": "application/json" });
+      outgoing.end(body);
+    }));
+  });
+  const port = await listen(front);
+  try {
+    expect((await checkAddress(new URL(`http://127.0.0.1:${port}`))).code).toBe("ok");
+    expect(replays.length).toBeGreaterThan(0);
+    expect(new Set(replays)).toEqual(new Set([401]));
+  } finally { await close(front); await close(viewer.server); }
 });
 
 test("pairing probe through remote and trusted gateway entries burns the vouched code", async () => {
@@ -537,10 +717,7 @@ test("a code minted for an unverified address redeems through the real routes wh
 
 test("without a vouching entry a proxy that rewrites the Host still refuses to mint", async () => {
   process.env.LLV_TOKEN = "test-access-key";
-  const rewriting = http.createServer((_incoming, outgoing) => {
-    outgoing.writeHead(200, { "content-type": "application/json" });
-    outgoing.end(JSON.stringify({ host: "localhost", vouched: false }));
-  });
+  const rewriting = http.createServer((incoming, outgoing) => void answerAsRoute(incoming, outgoing, { host: "localhost" }));
   const port = await listen(rewriting);
   try {
     fs.mkdirSync(path.dirname(selfFile()), { recursive: true });

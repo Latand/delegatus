@@ -152,6 +152,11 @@ function processIdentity(pid: number): string | null {
   return windowsProcessIdentity(pid);
 }
 
+/** Windows keeps no exited-but-unreaped process state under a pid. */
+function processExited(): boolean {
+  return false;
+}
+
 /**
  * `Win32_Process` already counts user and kernel time per process, so the CPU
  * reading the liveness verdict wants costs nothing beyond the snapshot that was
@@ -227,6 +232,7 @@ export const windowsBackend: ProcBackend = {
   readCwd,
   readPpid,
   processIdentity,
+  processExited,
   processCpuMs,
   readEnvVar,
   listProcesses,

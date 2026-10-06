@@ -5,13 +5,20 @@
    file; it never signals a process itself. The two sides agree on the JSON
    shape alone. */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { sameProcess } from "./pid";
 import type { ProcessError, ProcessStateName } from "./types";
 
 export type LauncherRole = "web" | "runtime-host";
+
+/** Companion control files never overwrite the request they describe. */
+export function launcherControlFile(requestFile: string, role: "trial" | "adopt" | "launcher" | "recovery"): string {
+  const name = basename(requestFile);
+  if (!/^request(?:-[^/\\]+)?\.json$/.test(name)) throw new Error("Invalid launcher request filename");
+  return join(dirname(requestFile), name.replace(/^request/, role));
+}
 
 export interface LauncherProcess {
   state: ProcessStateName;
@@ -25,7 +32,9 @@ export interface LauncherProcess {
 
 export interface LauncherRecord {
   version: 1;
-  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1 };
+  launcher: { pid: number; startIdentity: string | null; autoAdmission?: 1; relaunch?: 1; protocol?: string; revision?: string | null;
+    requestId?: string | null; state?: string; error?: ProcessError | null };
+  installRoot?: string;
   /** null for a packaged install: it is updated by its package manager. */
   checkout: string | null;
   releasesDir: string;
@@ -63,7 +72,7 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
   } catch {
     return null;
   }
-  const launcher = parsed.launcher as { pid?: unknown; startIdentity?: unknown; autoAdmission?: unknown } | undefined;
+  const launcher = parsed.launcher as LauncherRecord["launcher"] | undefined;
   const web = processEntry(parsed.web);
   const runtimeHost = processEntry(parsed.runtimeHost);
   if (parsed.version !== 1 || !launcher || typeof launcher.pid !== "number" || !web || !runtimeHost) return null;
@@ -71,7 +80,11 @@ export function readLauncherRecord(file: string): LauncherRecord | null {
   return {
     version: 1,
     launcher: { pid: launcher.pid, startIdentity: typeof launcher.startIdentity === "string" ? launcher.startIdentity : null,
-      ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}) },
+      ...(launcher.autoAdmission === 1 ? { autoAdmission: 1 as const } : {}),
+      ...(launcher.relaunch === 1 ? { relaunch: 1 as const } : {}),
+      ...(typeof launcher.protocol === "string" ? { protocol: launcher.protocol } : {}),
+      revision: launcher.revision ?? null, requestId: launcher.requestId ?? null, state: launcher.state, error: launcher.error ?? null },
+    ...(typeof parsed.installRoot === "string" ? { installRoot: parsed.installRoot } : {}),
     checkout: typeof parsed.checkout === "string" ? parsed.checkout : null,
     releasesDir: parsed.releasesDir as string,
     releasePointer: parsed.releasePointer as string,
@@ -89,12 +102,19 @@ export function launcherAlive(record: LauncherRecord, same: typeof sameProcess =
   return record.launcher.startIdentity !== null && same({ pid: record.launcher.pid, startIdentity: record.launcher.startIdentity });
 }
 
+/** Publish atomically without replacing another process's durable custody. */
+export function publishLauncherRequest(file: string, request: unknown): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(request)}\n`, { mode: 0o600, flag: "wx" });
+    linkSync(temporary, file);
+  } finally { rmSync(temporary, { force: true }); }
+}
+
 /** Files one restart request for the launcher to pick up. Answers its id. */
 export function requestRestart(record: LauncherRecord, role: LauncherRole): string {
   const requestId = randomUUID();
-  mkdirSync(dirname(record.requestFile), { recursive: true, mode: 0o700 });
-  const temporary = `${record.requestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify({ requestId, role, requestedAt: new Date().toISOString() })}\n`, { mode: 0o600 });
-  renameSync(temporary, record.requestFile);
+  publishLauncherRequest(record.requestFile, { requestId, role, requestedAt: new Date().toISOString() });
   return requestId;
 }

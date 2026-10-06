@@ -47,6 +47,7 @@ import {
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatBindPending,
+  seatFailureCopy,
   seatRequestSettled,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
@@ -995,6 +996,8 @@ function OrchestratorDraft({
   const { t } = useLocale();
   const errored = state.kind === "intent-error";
   const rotate = mode === "rotate";
+  /* A cause with a plain sentence replaces the recorded text and the hint. */
+  const failureCopy = errored ? seatFailureCopy(state.error, state.retry) : null;
   /* A stale incumbent (#1452): the draft started from the current default, so
      the incumbent's own text is offered explicitly, for as long as the text in
      the box is not already it. */
@@ -1051,13 +1054,15 @@ function OrchestratorDraft({
                 ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
                 : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
             </p>
-            <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary">
-              {state.error}
+            <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
+              {failureCopy ? t(failureCopy.text) : state.error}
             </pre>
-            <p className="mt-1 text-caption text-muted">
-              {t(state.retry === "same"
-                ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
-                : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
+            <p className="mt-1 text-caption text-muted" data-orchestrator-failure-hint>
+              {t(failureCopy
+                ? failureCopy.hint
+                : state.retry === "same"
+                  ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
+                  : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
             </p>
           </div>
         ) : (
@@ -1337,6 +1342,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
       </p>
     );
   }
+  const failureCopy = seatFailureCopy(transition.error, "fresh");
   return (
     <div
       className="shrink-0 border-b border-danger/40 bg-danger-soft px-3 py-1.5"
@@ -1347,7 +1353,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
-      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary">{transition.error}</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
 }

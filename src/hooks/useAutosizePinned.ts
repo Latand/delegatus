@@ -41,8 +41,19 @@ export function useAutosizePinned(
        captured first and restored after. */
     const prevTop = el.scrollTop;
     const atEnd = caretAtEnd(el.selectionStart, el.selectionEnd, el.value.length);
+    /* The box the field sits in keeps its height through the measurement.
+       Reading `scrollHeight` lays the page out with the field at 0px, and
+       without this everything above the composer was laid out that much
+       taller for that one pass: a transcript a few lines long fitted its
+       scroller whole, the browser took its scroll offset to zero, and it came
+       back off its tail with the "down" row drawn over a seat's 72px of
+       transcript (#1734). */
+    const holder = el.parentElement;
+    const heldMinHeight = holder?.style.minHeight ?? "";
+    if (holder) holder.style.minHeight = `${holder.getBoundingClientRect().height}px`;
     el.style.height = "0px";
     el.style.height = clampHeight(el.scrollHeight, maxPx, minPx) + "px";
+    if (holder) holder.style.minHeight = heldMinHeight;
     if (shouldPin({ pinned, caretAtEnd: atEnd })) {
       el.scrollTop = el.scrollHeight;
     } else {

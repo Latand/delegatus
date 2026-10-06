@@ -8,6 +8,18 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Added
+- **Update replaces the whole installation.** Checkout and packaged updates
+  replace the resident launcher, Viewer and runtime host together, verify their
+  serving identities, and restore the previous release on failure. Recovery
+  Viewers re-adopt their launcher; manual and older installs receive the exact
+  prerequisite action. Checkout `deploy_exact_sha` uses the same durable apply
+  and settlement path ([#2495]).
+- **Busy installations drain admitted work before an automatic update.** New
+  autonomous work waits while the original cohort finishes. The hold survives
+  recovery, both restart roles and rollback. After six hours the dialog names
+  the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+
 ### Changed
 - **A task card is dragged by any part of it, and the drag keeps up with the
   pointer.** On a desktop a press anywhere on the card, the title, the
@@ -39,6 +51,34 @@ guarantees for the 1.x series.
   failed too. A start that arrives while the connection is being checked waits
   for that check and gets the tool only once it is confirmed. The rotation banner and the "not delivered" reasons on this path read in
   the interface language, one line per cause, each with what to do.
+- **Legacy launcher upgrades restore the prior serving release.** If an older
+  launcher already published a candidate and switched only the web process,
+  the one-time bootstrap captures rollback from the verified serving host.
+  A failed host or web start restores both processes on that release; an entry
+  that cannot load is refused before restart ([#2495]).
+- **The host deploy command authenticates on team installations.**
+  `scripts/rebuild.sh` uses the existing controller credential for admission
+  and status polling. The client connects only to a validated loopback address,
+  refuses redirects, and keeps credentials out of arguments and output. Receipt
+  replay and deployment exit codes are preserved ([#2495]).
+- **Bun-only MCP startup checks use the shipped launcher modules.** The macOS
+  newcomer fixture and the hermetic MCP fixtures now copy the published `bin`
+  directory, including platform identity and launcher helpers, so new imports
+  are covered automatically ([#2495]).
+
+- **An automatic update's final check compares admitted work by identity.**
+  Journal writes of a turn that is already running no longer refuse the
+  restart, so **Deploy now** reaches it; a turn or a stage that starts during
+  admission still refuses it. A refused admission keeps the cohort, the
+  operator's decision and the cumulative wait ([#2495]).
+
+### Maintainer notes
+- The installed `braces` dependency carries the runtime mitigation from upstream
+  tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
+  parent-cycle regressions in the release gates. The locally fixed advisory
+  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream release.
+- Release-pointer reads and update admission retain main's asynchronous Git
+  checks together with durable drain custody.
 
 ## [1.9.0] — 2026-10-01
 
@@ -1933,3 +1973,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2385]: https://github.com/Latand/delegatus/pull/2385
 [#2387]: https://github.com/Latand/delegatus/pull/2387
 [#2388]: https://github.com/Latand/delegatus/pull/2388
+[#2430]: https://github.com/Latand/delegatus/pull/2430
+[#2495]: https://github.com/Latand/delegatus/pull/2495
+[#2496]: https://github.com/Latand/delegatus/issues/2496

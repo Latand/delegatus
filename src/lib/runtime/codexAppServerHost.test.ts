@@ -1,7 +1,7 @@
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
-import { saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
 import { CodexAppServerHost, redactCodexHostDiagnostic, rolloutTurnsFromDisk } from "./codexAppServerHost";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
@@ -26,7 +26,11 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeVoiceDeliveries, type RuntimeVoiceDelivery } from "./voiceDelivery";
+import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
+import { observeCodexSubagentEvent } from "./codexSubagentDetection";
+import { lifecycleEventId, queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import { projectVoiceDeliveryBodies } from "./voiceBodyProjection";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
 import type { NativeQueuedSubmission } from "./nativeCodexQueue";
@@ -39,12 +43,16 @@ import {
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
 let metadataState: string;
 let previousMetadataState: string | undefined;
+let restoreFeatures: () => void;
+const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.collab=false", "-c", "features.plugins=false"];
 beforeEach(() => {
+  restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
   previousMetadataState = process.env.LLV_STATE_DIR;
   metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
   process.env.LLV_STATE_DIR = metadataState;
 });
 afterEach(() => {
+  restoreFeatures();
   if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousMetadataState;
   fs.rmSync(metadataState, { recursive: true, force: true });
@@ -125,6 +133,137 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
   }
 });
 
+test("fresh and adopted app-server hosts enforce native delegation with Telegram connected or left out", async () => {
+  for (const connected of [false, true]) for (const allowed of [false, true]) for (const resumed of [false, true]) {
+    clearTelegramConnection();
+    const session = connected ? saveTelegramSession("placeholder-session-for-policy-grant-test") : null;
+    if (session) writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+      identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
+    const server = new FakeAppServer("policy-thread");
+    server.features = { memory_tool: true, telepathy: true, connectors: true, unlisted_worker: true };
+    server.mcpServers.telegram = { url: "http://127.0.0.1:8809/mcp", enabled: true };
+    const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+    const options = { cwd: "/repo", allowSubagents: allowed, mcpServers: ["viewer", "telegram"],
+      env: { NODE_ENV: "test" as const, [TELEGRAM_CONNECTOR_TOKEN_ENV]: "B".repeat(43) },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    const host = resumed ? await CodexAppServerHost.adopt("policy-thread", options) : await CodexAppServerHost.start(options);
+    try {
+      expect(captured.args).toContain(`agents.enabled=${allowed}`);
+      expect(captured.args?.includes('approvals_reviewer="user"')).toBe(!allowed);
+      const params = server.requests.find((request) => request.method === (resumed ? "thread/resume" : "thread/start"))?.params as Record<string, unknown> | undefined;
+      const config = params?.config;
+      expect(config).toMatchObject({ agents: { enabled: allowed }, features: { multi_agent: allowed },
+        mcp_servers: { viewer: { enabled: true }, telegram: { enabled: connected } } });
+      expect(captured.options?.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBe(session?.connectorToken);
+      if (!connected) expect(params?.developerInstructions).toBe(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
+      if (!allowed) {
+        expect(config).toMatchObject({ approvals_reviewer: "user" });
+        expect(config).toMatchObject({ features: { memory_tool: false, telepathy: false, connectors: false, unlisted_worker: false } });
+        expect(params).toMatchObject({ approvalsReviewer: "user" });
+      } else {
+        expect(config).not.toHaveProperty("approvals_reviewer");
+        expect(params).not.toHaveProperty("approvalsReviewer");
+      }
+      for (const feature of ["multi_agent_v2", "future_worker"]) {
+        expect(captured.args?.includes(`features.${feature}=false`)).toBe(!allowed);
+        if (!allowed) expect(config).toMatchObject({ features: { [feature]: false } });
+      }
+    } finally { await host.release(); }
+  }
+});
+
+test("failed app-server feature discovery releases scratch and never starts a host", async () => {
+  const restore = setCodexFeatureReaderForTest(() => { throw new Error("fixture inventory failure"); });
+  let launches = 0;
+  let releases = 0;
+  try {
+    await expect(CodexAppServerHost.start({ cwd: "/repo", releaseCleanup: () => { releases += 1; }, spawnProcess: () => { launches += 1; throw new Error("must not spawn"); } })).rejects.toThrow("fixture inventory failure");
+    expect(launches).toBe(0);
+    expect(releases).toBe(1);
+  } finally { restore(); }
+});
+
+test("native Guardian review notifications enter the durable ledger without action contents", async () => {
+  const server = new FakeAppServer("guardian-policy-thread");
+  const eventStore = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  try {
+    for (const threadId of ["another-thread", "guardian-policy-thread"]) {
+      for (const phase of ["started", "completed"]) server.notify(`item/autoApprovalReview/${phase}`, {
+        threadId, turnId: "guardian-policy-turn", reviewId: "guardian-review-fixture",
+        action: "PRIVATE GUARDIAN ACTION", review: { status: "inProgress" }, startedAtMs: 0,
+      });
+    }
+    const items = eventStore.load("guardian-policy-thread").filter((event) => event.kind === "item");
+    expect(items).toMatchObject([
+      { phase: "started", item: { type: "autoApprovalReview", id: "guardian-review-fixture" } },
+      { phase: "completed", item: { type: "autoApprovalReview", id: "guardian-review-fixture" } },
+    ]);
+    expect(JSON.stringify(items)).not.toContain("PRIVATE GUARDIAN ACTION");
+  } finally { await host.release(); }
+});
+
+test("adopted native history respects pre-admission and allowed times while denied activity alerts", async () => {
+  const threadId = randomUUID();
+  const artifactPath = path.join(metadataState, `rollout-${threadId}.jsonl`);
+  const registry = new AgentRegistry(path.join(metadataState, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  function admit(allowSubagents: boolean) {
+    const launchProfile = emptyLaunchProfile({ cwd: metadataState, title: "Exercise native history admission", allowSubagents });
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: metadataState, origin: { kind: "operator" }, launchProfile });
+    if (begun.kind !== "created") throw new Error("expected launch receipt");
+    const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: threadId },
+      artifactPath, cwd: metadataState, accountId: null, launchProfile, status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null });
+    if (settled.kind !== "settled") throw new Error("expected settled launch");
+    return settled.conversation;
+  }
+  admit(true);
+  const allowedAt = new Date().toISOString();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const conversation = admit(false);
+  const deniedAt = new Date().toISOString();
+  const history = [
+    { id: "pre-admission", at: "2000-01-01T00:00:00.000Z" },
+    { id: "allowed-history", at: allowedAt },
+    { id: "denied-history", at: deniedAt },
+  ];
+  fs.writeFileSync(artifactPath, history.map(({ id, at }) => JSON.stringify({ timestamp: at, type: "response_item",
+    payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: id, arguments: "{}" } })).join("\n") + "\n");
+  const native = (id: string) => ({ type: "collabAgentToolCall", id, tool: "spawnAgent", prompt: "PRIVATE NATIVE CONTENT" });
+  const store = new FileRuntimeEventStore(path.join(metadataState, "events"));
+  // Older durable ledgers had no activity timestamp.
+  store.append(threadId, { kind: "item", turnId: "history-turn", item: native("pre-admission"), phase: "completed", seq: 1 });
+  // Timestamped durable items must retain their original permission interval.
+  store.append(threadId, { kind: "item", turnId: "history-turn", item: native("allowed-ledger"), phase: "completed", seq: 2,
+    activityAt: allowedAt });
+  const server = new FakeAppServer(threadId, threadId, false, [{ id: "history-turn", status: "completed",
+    items: [...history.map(({ id }) => native(id)), native("unknown-history")] }], { type: "idle" });
+  const host = await CodexAppServerHost.adopt(threadId, { cwd: metadataState, allowSubagents: false,
+    eventStore: store, spawnProcess: fakeSpawn(server) });
+  const reader = host.attach(0)[Symbol.asyncIterator]();
+  try {
+    for (let remaining = store.load(threadId).length; remaining > 0; remaining--) {
+      const next = await reader.next();
+      if (!next.done) observeCodexSubagentEvent(registry, artifactPath, next.value);
+    }
+    const replayed = queryLifecycleEvents({ conversationId: conversation.id }).events;
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.id).toBe(lifecycleEventId(`codex-subagent-policy:${conversation.id}`));
+    server.notify("item/completed", { threadId, turnId: "current-turn", item: native("current-denied") });
+    const current = await reader.next();
+    expect(current.done).toBeFalse();
+    if (!current.done) {
+      observeCodexSubagentEvent(registry, artifactPath, current.value);
+      observeCodexSubagentEvent(registry, artifactPath, current.value);
+      expect(current.value).toMatchObject({ kind: "item", activityAt: expect.any(String), item: { id: "current-denied", type: "collabAgentToolCall" } });
+    }
+    const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.at).toBe(deniedAt);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  } finally { await reader.return?.(); await host.release(); }
+});
+
 class FailingEventStore implements RuntimeEventStore {
   readonly stored: RuntimeEvent[] = [];
   appendAttempts = 0;
@@ -174,6 +313,7 @@ class FakeAppServer extends EventEmitter {
      with excludeTurns succeeds and omits thread.turns. */
   paginatedResume = false;
   shellPolicy: Record<string, unknown> = {};
+  features: Record<string, unknown> = {};
   mcpServers: Record<string, unknown> = {
     playwright: { command: "npx", enabled: true },
     "telegram-readonly": { command: "uv", enabled: true },
@@ -292,6 +432,7 @@ class FakeAppServer extends EventEmitter {
       config: {
         mcp_servers: this.mcpServers,
         shell_environment_policy: this.shellPolicy,
+        features: this.features,
       },
     });
     if (method === "thread/start" || method === "thread/resume") {
@@ -608,7 +749,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
 
-    expect(captured.args).toEqual(["app-server", "--enable", "realtime_conversation"]);
+    expect(captured.args).toEqual([...DENIED_FEATURE_ARGS, "app-server", "--enable", "realtime_conversation"]);
     expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
       config: {
         mcp_servers: {
@@ -640,6 +781,7 @@ describe("CodexAppServerHost", () => {
         : await CodexAppServerHost.start(options);
 
       expect(captured.args).toEqual([
+        ...DENIED_FEATURE_ARGS,
         "-c", `default_permissions=${JSON.stringify(permissionProfile)}`,
         "-c", permissionProfileConfig,
         "app-server", "--enable", "realtime_conversation",
@@ -1881,7 +2023,8 @@ describe("CodexAppServerHost", () => {
     expect(JSON.stringify(items)).toContain("truncated");
     expect(await host.send({ id: "post-shrink", text: "ping" })).toMatchObject({ outcome: "turn-started" });
     await host.release();
-  }, 30_000);
+  // The 25 MiB replay is CPU-bound; allow headroom for concurrent pinned-runtime gates.
+  }, 60_000);
 
   test("inline image history in the replay envelope reaches the ledger only as a bounded reference", async () => {
     const threadId = "image-replay-thread";
@@ -2052,6 +2195,7 @@ describe("CodexAppServerHost", () => {
       spawnProcess: fakeSpawn(server, captured),
     });
     expect(captured.args).toEqual([
+      ...DENIED_FEATURE_ARGS,
       "-c",
       "cli_auth_credentials_store=file",
       "app-server",

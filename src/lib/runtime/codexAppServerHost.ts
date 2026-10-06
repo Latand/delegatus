@@ -25,6 +25,8 @@ import { signalDetachedProcessGroup, signalProcessGroup, type ProcessSignal } fr
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
+import { nativeCodexActivityMethod } from "./codexSubagentDetection";
 import { installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -1435,7 +1437,17 @@ export class CodexAppServerHost implements EngineHost {
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
+    const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
+    let features: ReturnType<typeof readCodexFeatures>;
+    try { features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env); }
+    catch (error) { options.releaseCleanup?.(); throw error; }
+    const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
+    const granted = grantedPlugins(options.plugins);
+    if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     const args = [
+      "-c", `agents.enabled=${options.allowSubagents === true}`,
+      ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
+      ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1447,7 +1459,6 @@ export class CodexAppServerHost implements EngineHost {
       "--enable",
       "realtime_conversation",
     ];
-    const granted = grantedPlugins(options.plugins);
     let telegram: TelegramLaunchGrant;
     try {
       telegram = await resolveTelegramLaunchGrant(
@@ -1467,7 +1478,7 @@ export class CodexAppServerHost implements EngineHost {
     const childEnv = telegram.env;
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnProcess(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", args, {
+      child = spawnProcess(binary, args, {
         cwd: options.cwd,
         env: childEnv,
         detached: true,
@@ -1512,6 +1523,7 @@ export class CodexAppServerHost implements EngineHost {
            environment, so only a thread whose app-server holds one goes
            over HTTP. */
         viewerMcpTransportForLaunch(childEnv),
+        features,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       if (memoryHook) {
@@ -1532,6 +1544,7 @@ export class CodexAppServerHost implements EngineHost {
           ? { permissions: options.permissionProfile }
           : { sandbox: options.sandbox ?? "read-only" }),
         approvalPolicy: options.approvalPolicy ?? "never",
+        ...(options.allowSubagents === true ? {} : { approvalsReviewer: "user" }),
       };
       /* A new thread reads its developer instructions as it builds its first
          context. A resumed thread keeps the context it already has and sends
@@ -3139,6 +3152,9 @@ export class CodexAppServerHost implements EngineHost {
 
   private emit(event: UnsequencedEvent): void {
     if (this.ledgerFailed) return;
+    if (event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined) {
+      event = { ...event, activityAt: new Date().toISOString() };
+    }
     /* Recorded here rather than at each call site, so every path that ends a
        turn — a terminal notification, a resume that finds it already over, an
        error that terminalizes it — leaves the same evidence for the voice
@@ -3195,7 +3211,9 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private restoreEvents(): number {
-    const stored = this.eventStore.load(this.identity.threadId);
+    const stored = this.eventStore.load(this.identity.threadId).map((event) =>
+      event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
+        ? { ...event, activityAt: null } : event);
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
     this.attentions.clear();
     this.clearVoiceStreamTimers();
@@ -3347,7 +3365,8 @@ export class CodexAppServerHost implements EngineHost {
           completedItems.set(key, recorded - 1);
           continue;
         }
-        this.emit({ kind: "item", turnId, item, phase: "completed" });
+        this.emit({ kind: "item", turnId, item, phase: "completed",
+          ...(nativeCodexActivityMethod(item) ? { activityAt: null } : {}) });
       }
     }
     if (status === "completed" || status === "interrupted" || status === "failed" || status === "error") {
@@ -3980,6 +3999,15 @@ export class CodexAppServerHost implements EngineHost {
        it — or refusing only its `serverRequest/resolved` and stranding the
        attention it opened — would strand work the parent delegated. */
     if (this.foreignThreadNotification(params)) return;
+    if (method === "item/autoApprovalReview/started" || method === "item/autoApprovalReview/completed") {
+      const reviewId = stringField(params, "reviewId");
+      if (reviewId) this.emit({
+        kind: "item", turnId: turnId ?? this.activeTurnId,
+        item: { type: "autoApprovalReview", id: reviewId },
+        phase: method.endsWith("/started") ? "started" : "completed",
+      });
+      return;
+    }
     if (method === "turn/started" && turnId) {
       if (reconcileBufferedLifecycle) {
         const historicalStart = this.events.some((event) => event.kind === "turn-started" && event.turnId === turnId);

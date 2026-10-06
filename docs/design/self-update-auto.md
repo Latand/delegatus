@@ -26,10 +26,54 @@ waits; the dialog and the update history show an automatic update as such;
 checkout installs whose HEAD moved past the release pointer are left alone;
 managed installs keep their behaviour unless the same rule applies cleanly.
 
-Everything below is validated against the quote. What it does not demand is in
-"Deferred" at the end.
+The originating requirement above is retained. The current delivery contract
+is the section below. The original design and implementation sketches that
+follow are historical: #2430 delivered bounded drain and #2495 delivered the
+coherent launcher apply described in [self-update-every-install.md](self-update-every-install.md).
+Those sketches preserve the original reasoning and evidence; their 24-hour
+notice, separate manual restarts, and deferred drain policy are superseded.
 
-## Summary of the decisions
+## Current drain and apply contract
+
+- A selected green automatic target starts a durable drain cohort and holds
+  new admission immediately. Work already admitted keeps its custody and can
+  finish. The hold covers new pipeline stages, automatic flow rounds, seat
+  sends and structured delivery; queued work remains durable.
+- The cohort records its target, identity and start time. A newer green tip
+  does not replace an owned target. Restart recovery restores the same cohort
+  and hold from durable records. An unreadable custody record remains held
+  for repair.
+- The Update surface shows the actual blockers: running turns and stages,
+  operator activity, another update or restart, insufficient memory, and
+  unreadable activity. Normal admission still requires the quiet probes,
+  fresh green authorization, and the launcher's final checks.
+- After **six hours** blocked, a Needs-you decision offers **Deploy now** and
+  **Keep waiting**. Replies are operator-only and fenced by the cohort id.
+  Keep waiting preserves the hold and waits for normal quiet admission.
+  Deploy now permits admission despite activity blockers; it still refuses
+  another update/restart, unreadable activity or insufficient memory, and
+  retains every green, authentication and health gate. The bound itself
+  never forces an interruption. Work that starts after the request is filed
+  was never let go and refuses the admission. A refused admission keeps the
+  cohort, the decision and the cumulative wait. It puts the previous release
+  pointer back while the candidate's directory stays, so the next tick
+  publishes the same build again without an install or a build (and without
+  waiting for build memory) and then admits the same cohort again.
+- Once admitted, the transaction owns custody independently of the automatic
+  setting. Turning the switch off stops future admission; accepted work keeps
+  its hold through handoff, crashes and rollback until verified settlement.
+- A capable checkout or package launcher applies one relaunch request, moving
+  the launcher, Viewer and runtime host together. Success requires coherent
+  serving identities and health. Rollback retains custody until the prior
+  release is coherently serving and verified. The legacy two-request path is
+  reserved for launchers without relaunch support; prerequisite actions are
+  described in [the install contract](self-update-every-install.md).
+
+The implementation is in `src/lib/selfUpdate/{service,auto,drain,apply}.ts`,
+with the launcher handoff in `bin/{launcher-relaunch,self-update-supervisor}.mjs`.
+The six-hour bound is `DRAIN_NOTICE_MS` in `drain.ts`.
+
+## Summary of the original decisions (historical, superseded)
 
 - **Green** is read from the pull request that produced the target commit,
   because CI here runs only on pull requests and a commit on `main` carries no
@@ -286,7 +330,7 @@ admitted before the gate is checked by the final quiet reads. If it began, the
 launcher discards the request and releases the gate; the next quiet window can
 try again. A gate has a five-minute upper bound if the launcher disappears.
 
-### 2.4 Order: web first, then the runtime host
+### 2.4 Original order: web first, then the runtime host (historical)
 
 Each restart waits for its own quiet moment. Web goes first because:
 
@@ -303,41 +347,22 @@ files on disk.
 
 ## 3. The wait and its bound
 
-The bound is a notice. The automatic path takes no action at it:
+The current [drain and apply contract](#current-drain-and-apply-contract)
+holds new admission as soon as a green target owns a cohort. Existing admitted
+work finishes under that cohort's custody. Blockers remain visible while the
+hold is active.
 
-- While a built target waits, the dialog shows since when and each blocker
-  with its count: "2 agent turns running", "1 pipeline stage running", "you
-  were active 3 min ago", "an update or restart is in progress", "less than
-  4 GB of free memory", "cannot read what agents are doing".
-- After **24 hours** without a quiet moment, the dialog adds that the update
-  has waited over a day, that it applies at the next quiet moment, and how to
-  apply it now by hand (restart web, then the runtime host). The seat tick
-  gives the orchestrator seat of the install's own project (the project
-  `projectInfoFromCwd` resolves for the checkout) a signal, so the operator
-  hears about it without opening the dialog: `self-update: <sha> built and
-  waiting 24 h for a quiet moment (2 agent turns, 1 stage)`. The signal goes
-  into `signals()` beside `deploy` and `host-retirement`
-  (`src/lib/monitor/seatTickSources.ts:1204`).
-- The wait continues after the notice. A newer green tip replaces the target
-  and is built (building disturbs nothing), and the waiting clock keeps its
-  original start.
+After six hours blocked, the operator chooses Deploy now or Keep waiting in
+Needs-you. The decision is fenced by the cohort identity and preserves the
+security and health checks described above. Keep waiting retains the hold;
+the bound alone takes no disruptive action. A newer tip cannot silently
+replace the cohort's owned target.
 
-24 hours sits just above the longest observed stretch without ten quiet
-minutes (22.4 h). A notice sooner than that would fire on an ordinary busy
-day.
+The original design used a 24-hour notice, based on an observed 22.4-hour busy
+stretch, and deferred drain. #2430 superseded that policy with immediate drain
+and the six-hour operator decision.
 
-Two alternatives were weighed and left out:
-
-- **Interrupting at the bound.** The specification prefers waiting, and the
-  operator was told the update waits while work runs.
-- **Holding new work at the bound** ("drain"): stop starting new pipeline
-  stages until running turns end, then apply. This never cuts a turn and
-  bounds the wait to the longest running turn. It costs held lanes, needs a
-  hold in the pipeline controller and a visible "held for an update" state on
-  the board, and is a second disturbance of its own. It is in "Deferred",
-  with the numbers that would justify it.
-
-## 4. The automatic run
+## 4. The original automatic run (historical, superseded)
 
 ### 4.1 Where it runs
 
@@ -766,12 +791,11 @@ green, quiet, with their tests), the automatic path (service, auto, history,
 route, deadlines, rollback, prune, signal), and the surface (dialog, copy,
 reload row, evidence).
 
-## Deferred — not currently justified
+## Original deferred list (historical)
 
-- **Holding new work to end a long wait ("drain").** After the bound, stop
-  starting new pipeline stages until running turns end, then install. It
-  becomes justified if the 24-hour notice keeps firing. On this host's week it
-  would have fired on the 22.4 h stretch only.
+- **Drain was delivered by #2430.** Immediate admission hold, durable cohort
+  custody and the six-hour operator choice follow the
+  [current contract](#current-drain-and-apply-contract).
 - **Interrupting at the bound.** The specification prefers waiting.
 - **Managed installs.** They need a "promote when quiet" phase inside the
   runtime host's deployment coordinator, which holds a built, health-checked
@@ -781,8 +805,8 @@ reload row, evidence).
   The next green merge carries the same code.
 - **Authenticated GitHub reads** (private repositories, a higher rate limit),
   and forges other than github.com.
-- **A Needs-you item** for a long wait or a failure. The seat tick signal
-  carries both to the orchestrator for now.
+- **The long-wait Needs-you item was delivered by #2430.** It carries the
+  Deploy now / Keep waiting decision under the current drain contract.
 - **Restoring the pointer after a manual restart falls back**, and **pruning
   on manual-only installs.** Both are the operator's to see today. They could
   share the automatic path's code later.

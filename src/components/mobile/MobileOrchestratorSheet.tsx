@@ -39,6 +39,7 @@ import {
   telegramActionLine,
   type SeatSubmitFailure,
   type SeatTransition,
+  seatFailureCopy,
 } from "../orchestrator/seatState";
 import type { SeatConfirmLaunch } from "../orchestrator/useSeatConfirm";
 import { humanizeDuration } from "../turnDuration";
@@ -1310,6 +1311,7 @@ function MandateView({ seat }: { seat: OrchestratorSeat }) {
     exactly when the operator is deciding whether to try again. */
 function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" | "same"; rotate: boolean }) {
   const { t } = useLocale();
+  const failureCopy = seatFailureCopy(error, retry);
   return (
     <div className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2.5" role="alert" data-orchestrator-intent-error>
       <p className="flex items-center gap-1.5 text-ui font-semibold text-danger">
@@ -1318,13 +1320,15 @@ function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" |
           ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
           : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
       </p>
-      <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary">
-        {error}
+      <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
+        {failureCopy ? t(failureCopy.text) : error}
       </pre>
-      <p className="mt-1 text-caption text-muted">
-        {t(retry === "same"
-          ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
-          : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
+      <p className="mt-1 text-caption text-muted" data-orchestrator-failure-hint>
+        {t(failureCopy
+          ? failureCopy.hint
+          : retry === "same"
+            ? rotate ? "orchPanel.rotateErrorUnknownHint" : "orchPanel.errorUnknownHint"
+            : rotate ? "orchPanel.rotateErrorHint" : "orchPanel.errorHint")}
       </p>
     </div>
   );
@@ -1340,13 +1344,14 @@ function TransitionCard({ transition }: { transition: SeatTransition }) {
       </p>
     );
   }
+  const failureCopy = seatFailureCopy(transition.error, "fresh");
   return (
     <div className="shrink-0 rounded-surface border border-danger/40 bg-danger-soft px-3 py-2" role="alert" data-orchestrator-intent-error>
       <p className="flex items-center gap-1.5 text-ui font-semibold text-danger">
         <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
-      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary">{transition.error}</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
 }

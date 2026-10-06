@@ -6,7 +6,7 @@
    restart runs. The runner never starts or stops a process. Commands go
    through an injected port so tests stub them. */
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { setPriority } from "node:os";
 
@@ -32,6 +32,23 @@ export interface StepPorts {
   now(): number;
   abort?(): void;
   childAlive?(): boolean;
+  /** The commit whose build passed the ready check in this directory, when
+      the directory records one; a new build withdraws the record first. */
+  builtRevision?(dir: string): string | null;
+  markBuilt?(dir: string, sha: string | null): void;
+}
+
+/** Written by the ready step: the build in this release directory passed its
+    check for the named commit, so a later run of the same target reuses it. */
+const BUILT_MARKER = join(".next", "DELEGATUS_RELEASE_READY");
+
+export function builtRevision(dir: string): string | null {
+  try { return readFileSync(join(dir, BUILT_MARKER), "utf8").trim() || null; } catch { return null; }
+}
+
+/** Whether `dir` holds a build of `sha` that already passed the ready check. */
+export function releaseBuilt(dir: string, sha: string): boolean {
+  return builtRevision(dir) === sha && existsSync(join(dir, ".next", "BUILD_ID"));
 }
 
 export interface RunnerConfig {
@@ -91,7 +108,7 @@ export class UpdateRunner {
     };
   }
 
-  async start(target: string, meta: { short?: string; version?: string; trigger?: "operator" | "auto" } = {}): Promise<void> {
+  async start(target: string, meta: { short?: string; version?: string; trigger?: "operator" | "seat" | "auto" } = {}): Promise<void> {
     if (this.state.state === "running") throw new Error("an update is already running");
     this.state = {
       ...idleUpdate(CHECKOUT_STEPS),
@@ -228,6 +245,11 @@ export class UpdateRunner {
         throw new StepError({ kind: "memory", availableMb: available, neededMb: MIN_AVAILABLE_MB }, `Not enough free memory (${available} MB available, ${MIN_AVAILABLE_MB} needed)`);
       }
     };
+    /* A refused admission or a failed switch puts the previous release back
+       while the candidate's directory stays. The same target then needs its
+       pointer again, never another install and build. */
+    const reusable = async () => this.ports.builtRevision?.(release) === target && this.ports.buildIdReadable(release)
+      && (await this.ports.revParse("HEAD", release)).trim() === target;
     switch (name) {
       case "fetch": {
         const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
@@ -238,7 +260,7 @@ export class UpdateRunner {
           // that revision. Verify it is still on main before building it;
           // manual updates retain the exact-tip check and rewrites fail closed.
           const ancestry = ["git", "merge-base", "--is-ancestor", target, fetched];
-          const ancestor = this.state.trigger === "auto"
+          const ancestor = (this.state.trigger === "auto" || this.state.trigger === "seat")
             && await this.ports.run(ancestry, { cwd: checkout, env, onLine: (line) => push(line), lowPriority: true }) === 0;
           if (!ancestor) {
             throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
@@ -252,15 +274,19 @@ export class UpdateRunner {
         if (this.ports.exists(release)) return command(["git", "checkout", "--detach", target], release);
         return command(["git", "worktree", "add", "--detach", release, target], checkout);
       case "install":
+        if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }
         guardMemory();
         return command([bun, "install", "--frozen-lockfile"], release);
       case "build":
+        if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; the build is reused`, false); return null; }
         guardMemory();
+        this.ports.markBuilt?.(release, null);
         return command([bun, "run", "build"], release);
       case "ready": {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
+        this.ports.markBuilt?.(release, target);
         await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
@@ -307,6 +333,11 @@ export function realPorts(publish: (release: Release) => void | Promise<void>): 
     },
     exists: (path) => existsSync(path),
     buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")),
+    builtRevision,
+    markBuilt: (dir, sha) => {
+      if (sha === null) rmSync(join(dir, BUILT_MARKER), { force: true });
+      else writeFileSync(join(dir, BUILT_MARKER), `${sha}\n`);
+    },
     publish,
     now: () => Date.now(),
   };

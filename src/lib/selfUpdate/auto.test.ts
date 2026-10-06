@@ -1,14 +1,14 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
-import type { LauncherRecord } from "./launcher";
+import { launcherControlFile, type LauncherRecord } from "./launcher";
 import { headOf } from "./release";
 import { targetOnCurrentBranch } from "./git";
-import { createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
+import { admittedRecords, createLauncherRecord, readStartIdentity as launcherStartIdentity, watchRestartRequests } from "../../../bin/self-update-supervisor.mjs";
 import { sameProcess } from "./pid";
 import { procBackend } from "../proc";
 import { activeRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
@@ -21,7 +21,8 @@ import { listPresence, resetPresenceForTest } from "../view/presenceStore";
 import { statePath } from "../configDir";
 import { NextRequest } from "next/server";
 import { spawnSync } from "node:child_process";
-import { UpdateRunner } from "./steps";
+import { realPorts, UpdateRunner } from "./steps";
+import { ReleasePointer, releaseDirFor } from "./release";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 
 const root = mkdtempSync("/var/tmp/self-update-auto-");
@@ -716,7 +717,7 @@ async function postTypingPresence(role: string): Promise<void> {
   expect(listPresence().some((session) => session.viewSessionId === payload.viewSessionId)).toBe(true);
 }
 
-test.each(["accepted-disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission rechecks %s after its Git observation", async (change) => {
+test.each(["accepted-disable", "work-starts", "manual-build", "snapshot-build", "quiet-build"] as const)("final launcher admission preserves pending custody or rechecks %s after its Git observation", async (change) => {
   const h = scenario();
   const checkout = join(h.dir, "admission-checkout"); mkdirSync(checkout);
   const git = Bun.which("git")!;
@@ -779,15 +780,16 @@ test.each(["accepted-disable", "work-starts", "manual-build", "snapshot-build", 
       expect(await service.setAuto(false)).toMatchObject({ ok: true });
       expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
     } else if (change.endsWith("-build")) {
-      expect(await service.startUpdate("manual-build-during-admission")).toMatchObject({ ok: true });
-      expect((await service.snapshot()).busy).toBe("update");
+      expect(await service.startUpdate("manual-build-during-admission")).toMatchObject({ ok: false, status: 409, code: "busy-restart-web" });
+      expect(existsSync(join(h.dir, "apply.json"))).toBe(false);
     } else h.setStage(true);
     writeFileSync(released, "");
-    // A persisted accepted request owns custody after switch-off. New work,
-    // builds and restarts still veto admission after the last observation.
-    expect(await admission).toBe(change === "accepted-disable");
-    if (change === "accepted-disable") expect(h.pending()?.requestId).toBe(requestId);
-    else expect(h.pending()).toBeNull();
+    // A persisted accepted request owns custody after switch-off, and a build
+    // refused at the custody write leaves it in place. New work still vetoes
+    // admission after the last observation.
+    expect(await admission).toBe(change !== "work-starts");
+    if (change === "work-starts") expect(h.pending()).toBeNull();
+    else expect(h.pending()).toMatchObject({ requestId, role: "web", target: sha });
   } finally {
     writeFileSync(released, ""); await admission;
     await service.setAuto(false);
@@ -1359,6 +1361,196 @@ test("timer ticks renew the drain while an earlier observation is still waiting"
   } finally { resume(); await firstTick; service.stop(); }
 });
 
+test("a capable launcher receives a single relaunch under automatic drain custody", async () => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET, rollbackPointer: null });
+    expect(typeof request.autoGateId).toBe("string");
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(true);
+    await service.autoTick();
+    expect(JSON.parse(readFileSync(h.record.requestFile, "utf8")).requestId).toBe(request.requestId);
+  } finally { service.stop(); }
+});
+
+
+test.each(["token", "adopted"] as const)("unsafe legacy %s auto admission never takes custody", async shape => {
+  const h = scenario();
+  if (shape === "token") h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+  else h.deps.mode = async () => ({ mode: "checkout", reason: null, record: h.record, supervision: "adopted" });
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(readAuto(join(h.dir, "auto.json")).drain?.admitted).not.toBe(true);
+    expect(existsSync(h.record.requestFile)).toBe(false);
+    expect(existsSync(join(h.dir, "apply.json"))).toBe(false);
+    expect(await service.setAuto(false)).toMatchObject({ ok: true }); await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(await service.setAuto(true)).toMatchObject({ ok: false, status: 409 });
+  } finally { service.stop(); }
+});
+
+test("cold unsafe legacy admission without an owned operation releases its orphan hold", async () => {
+  const h = scenario(); h.deps.env = { LLV_TOKEN: "fixture-bearer" };
+  const since = new Date(h.deps.now()).toISOString();
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), enabled: false,
+    drain: { id: "orphan-legacy", target: { sha: TARGET, short: TARGET.slice(0, 7), version: "1", date: "" }, since, overranAt: null, blockers: null, admitted: true } });
+  writeDrain(join(h.dir, "auto-drain.json"), { id: "orphan-legacy", target: TARGET, since, until: 0, persistent: true });
+  const service = h.service();
+  try { await service.autoTick(); expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull(); }
+  finally { service.stop(); }
+});
+
+
+test.each(["gate-removed", "gate-expired", "work-started", "launcher-changed", "issuer-changed"] as const)("relaunch dispatch refuses stale custody at the ancestry barrier: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const service = h.service();
+  let release!: () => void, entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const arrival = new Promise<void>(resolve => { entered = resolve; });
+  let dispatched = 0;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { dispatched++; }, {
+    intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = readFileSync(h.record.requestFile, "utf8");
+    const apply = readFileSync(join(h.dir, "apply.json"), "utf8");
+    const drain = readFileSync(join(h.dir, "auto-drain.json"), "utf8");
+    const gateFile = restartGateFile(h.record.requestFile);
+    h.deps.targetOnBranch = async () => { entered(); await barrier; return true; };
+    const polling = watcher.poll(); await arrival;
+    if (change === "gate-removed") rmSync(gateFile);
+    if (change === "gate-expired") {
+      const gate = JSON.parse(readFileSync(gateFile, "utf8"));
+      writeFileSync(gateFile, JSON.stringify({ ...gate, until: 0 }));
+    }
+    if (change === "issuer-changed") {
+      const gate = JSON.parse(readFileSync(gateFile, "utf8"));
+      writeFileSync(gateFile, JSON.stringify({ ...gate, issuerPid: -1 }));
+    }
+    if (change === "work-started") h.setTurn(true);
+    if (change === "launcher-changed") h.record.launcher.startIdentity = "successor-launcher";
+    const heldGate = existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null;
+    release(); await polling;
+    expect(dispatched).toBe(0);
+    expect(readFileSync(h.record.requestFile, "utf8")).toBe(request);
+    expect(readFileSync(join(h.dir, "apply.json"), "utf8")).toBe(apply);
+    expect(readFileSync(join(h.dir, "auto-drain.json"), "utf8")).toBe(drain);
+    expect(existsSync(gateFile) ? readFileSync(gateFile, "utf8") : null).toBe(heldGate);
+    expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ state: "rejected" });
+  } finally { release(); watcher.stop(); service.stop(); }
+});
+
+test.each(["journal-traffic", "stage-started", "turn-started"] as const)("a forced drain admits the work it let go and nothing newer: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const sessions = [{ conversationId: "conversation_let_go", engine: "codex", host: "hosted", turn: "running" }];
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [...sessions] }) as never;
+  // The Viewer's own evidence names registry records by launch. A turn that
+  // is already running moves their status and timestamps with every event.
+  let events = 0;
+  h.deps.quiet!.dispatchVersion = () => JSON.stringify(admittedRecords({ receipts: {},
+    entries: { conversation_let_go: { claimEpoch: 1, pendingAction: null, status: events % 2 ? "working" : "live", updatedAt: String(events++) } } }));
+  const service = h.service();
+  let release!: () => void, entered!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const arrival = new Promise<void>(resolve => { entered = resolve; });
+  let dispatched = 0;
+  const watcher = watchRestartRequests(h.record.requestFile, async () => { dispatched++; }, {
+    intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+  });
+  const file = join(h.dir, "auto.json");
+  try {
+    await service.autoTick(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    const waiting = readAuto(file);
+    expect(waiting.drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_let_go");
+    expect(await service.decideDrain(waiting.drain!.id, "deploy-now")).toEqual({ ok: true });
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET });
+    h.deps.targetOnBranch = async () => { entered(); await barrier; return true; };
+    const polling = watcher.poll(); await arrival;
+    // The launcher reads this state directory; the open turn keeps writing.
+    for (const name of ["runtime-events-forced-drain.sqlite", "runtime-events-forced-drain.sqlite-wal", "state.sqlite-wal"]) writeFileSync(join(dirname(dirname(h.record.requestFile)), name), `event ${change} ${events}`);
+    if (change === "stage-started") h.setStage(true);
+    if (change === "turn-started") sessions.push({ conversationId: "conversation_new", engine: "claude", host: "hosted", turn: "running" });
+    release(); await polling;
+    if (change === "journal-traffic") {
+      expect(dispatched).toBe(1);
+      expect(existsSync(`${h.record.requestFile}.result.json`)).toBe(false);
+      return;
+    }
+    expect(dispatched).toBe(0);
+    expect(JSON.parse(readFileSync(`${h.record.requestFile}.result.json`, "utf8"))).toMatchObject({ requestId: request.requestId, state: "rejected" });
+    // The Viewer settles the refusal through its real snapshot, against a
+    // host that answers with the identity the launcher recorded.
+    h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+    await SelfUpdateService.prototype.snapshot.call(service);
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8"))).toMatchObject({ requestId: request.requestId, state: "failed", admissionRefused: true });
+    const refused = readAuto(file);
+    expect(refused.enabled).toBe(true); expect(refused.off).toBeNull();
+    expect(refused.waitingSince).toBe(waiting.waitingSince); expect(refused.waitingTarget).toBe(TARGET);
+    expect(refused.drain).toMatchObject({ id: waiting.drain!.id, since: waiting.drain!.since, overranAt: waiting.drain!.overranAt, force: true, admitted: false });
+    expect(typeof refused.drain?.acknowledgedAt).toBe("string");
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(waiting.drain!.id);
+    // The decision is not asked a second time, and the same cohort is
+    // admitted again once the newer work is gone.
+    expect(await service.decideDrain(waiting.drain!.id, "keep-waiting")).toMatchObject({ ok: false });
+    h.setStage(false); sessions.length = 1;
+    // The refusal also asks for a fresh check; admission follows it.
+    for (let tick = 0; tick < 100 && !existsSync(h.record.requestFile); tick++) { await service.autoTick(); await Bun.sleep(5); }
+    const again = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(again).toMatchObject({ role: "relaunch", target: TARGET });
+    expect(again.requestId).not.toBe(request.requestId);
+    expect(await service.admitAutoRestart(again.requestId, again.autoGateId)).toBe(true);
+    expect(readAuto(file).waitingSince).toBe(waiting.waitingSince);
+  } finally { release(); watcher.stop(); service.stop(); }
+});
+
+/* The launcher's load check runs after its request was admitted and can take
+   half a minute. Work started in that window is filed in the Viewer's
+   database, so the launcher asks the Viewer again before it stops anything.
+   By then it has taken the request and holds a preflight trial in its place. */
+test.each(["journal-traffic", "stage-started", "turn-started", "another-trial", "starting-trial"] as const)("the admission asked after the launcher load check sees work started during it: %s", async change => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const sessions = [{ conversationId: "conversation_let_go", engine: "codex", host: "hosted", turn: "running" }];
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [...sessions] }) as never;
+  let events = 0;
+  h.deps.quiet!.dispatchVersion = () => JSON.stringify(admittedRecords({ receipts: {},
+    entries: { conversation_let_go: { claimEpoch: 1, pendingAction: null, status: events % 2 ? "working" : "live", updatedAt: String(events++) } } }));
+  const service = h.service();
+  const file = join(h.dir, "auto.json");
+  const state = dirname(dirname(h.record.requestFile));
+  try {
+    await service.autoTick(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect(await service.decideDrain(readAuto(file).drain!.id, "deploy-now")).toEqual({ ok: true });
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target: TARGET });
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(true);
+    // The registry is in sqlite: nothing in the state directory names a record.
+    expect(existsSync(join(state, "agent-registry.json"))).toBe(false);
+    const apply = readFileSync(join(h.dir, "apply.json"), "utf8");
+    // The launcher takes the request: its preflight trial replaces the file.
+    const trial = { requestId: request.requestId, target: request.target, rollbackPointer: request.rollbackPointer, previousEntry: "/fixture/bin/cli.mjs", state: "preflight", at: new Date(h.deps.now()).toISOString() };
+    writeFileSync(launcherControlFile(h.record.requestFile, "trial"), `${JSON.stringify(
+      change === "another-trial" ? { ...trial, requestId: "another-request" } : change === "starting-trial" ? { ...trial, state: "starting" } : trial)}\n`);
+    rmSync(h.record.requestFile);
+    // The open turn keeps writing through the load check.
+    for (const name of ["runtime-events-load-check.sqlite", "runtime-events-load-check.sqlite-wal", "state.sqlite-wal"]) writeFileSync(join(state, name), `event ${change} ${events}`);
+    if (change === "stage-started") h.setStage(true);
+    if (change === "turn-started") sessions.push({ conversationId: "conversation_new", engine: "claude", host: "hosted", turn: "running" });
+    expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(change === "journal-traffic");
+    // Asking consumes nothing: the accepted apply is as it was.
+    expect(readFileSync(join(h.dir, "apply.json"), "utf8")).toBe(apply);
+    if (change === "journal-traffic") {
+      // With no request and no trial there is nothing left to admit.
+      rmSync(launcherControlFile(h.record.requestFile, "trial"));
+      expect(await service.admitAutoRestart(request.requestId, request.autoGateId)).toBe(false);
+    }
+  } finally { service.stop(); }
+});
+
 test("ending the drain delivers a held autonomous message once without any other wake", async () => {
   const { StructuredDeliveryQueue } = await import("../runtime/structuredDeliveryQueue");
   const h = scenario();
@@ -1411,3 +1603,71 @@ test("ending the drain delivers a held autonomous message once without any other
     expect(writes).toEqual(["held-operation"]);
   } finally { service.stop(); }
 });
+
+
+/* The real pointer, the real runner and the real snapshot: a refused admission
+   puts the previous release back, and the candidate it built is selected
+   again without an install or a build. */
+test("a refused automatic admission is admitted again without building the release twice", async () => {
+  const h = scenario(); h.record.launcher.relaunch = 1;
+  const checkout = join(h.dir, "checkout"); mkdirSync(checkout);
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  const commit = (label: string) => { git(checkout, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", label); return git(checkout, "rev-parse", "HEAD"); };
+  git(checkout, "init", "-q", "-b", "main");
+  const old = commit("serving"); const target = commit("candidate");
+  git(checkout, "checkout", "-q", "--detach", old);
+  h.record.checkout = checkout; h.record.web.revision = h.record.runtimeHost.revision = old.slice(0, 7);
+  // The candidate as the ready step left it: built, recorded and published.
+  const dir = releaseDirFor(h.record.releasesDir, target);
+  git(checkout, "worktree", "add", "-q", "--detach", dir, target);
+  mkdirSync(join(dir, ".next")); writeFileSync(join(dir, ".next", "BUILD_ID"), "fixture");
+  const commands: string[][] = [];
+  const pointer = new ReleasePointer(h.record.releasePointer, checkout);
+  const ports = (publish: Parameters<typeof realPorts>[0]) => ({ ...realPorts(publish),
+    run: async (argv: string[]) => { commands.push(argv); return 0; },
+    revParse: async (ref: string, cwd: string) => ref === "HEAD" ? git(cwd, "rev-parse", "HEAD") : target });
+  ports(() => {}).markBuilt!(dir, target);
+  await pointer.publish({ sha: target, dir });
+  const revision = { sha: target, short: target.slice(0, 7), version: "1", date: "" };
+  writeAuto(join(h.dir, "auto.json"), { ...readAuto(join(h.dir, "auto.json")), green: { [target]: { state: "green" } } });
+  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  h.deps.createRunner = (config, publish, onChange) => new UpdateRunner(config, ports(publish), onChange);
+  const service = new SelfUpdateService(h.deps);
+  const until = async (read: () => boolean) => { const deadline = Date.now() + 5_000; while (!read() && Date.now() < deadline) await Bun.sleep(10); expect(read()).toBe(true); };
+  try {
+    expect((await service.snapshot()).installed.sha).toBe(target);
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    const request = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(request).toMatchObject({ role: "relaunch", target, rollbackPointer: null });
+    expect(commands).toEqual([]);
+    // The launcher refuses: work started that the admission never saw.
+    writeFileSync(`${h.record.requestFile}.result.json`, JSON.stringify({ requestId: request.requestId, state: "rejected", detail: "The Viewer did not admit the relaunch after the launcher load check" }));
+    await service.snapshot();
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8"))).toMatchObject({ requestId: request.requestId, state: "failed", admissionRefused: true });
+    expect(existsSync(h.record.releasePointer)).toBe(false); expect(existsSync(h.record.requestFile)).toBe(false);
+    expect((await service.snapshot()).installed.sha).toBe(old);
+    expect(readAuto(join(h.dir, "auto.json"))).toMatchObject({ enabled: true, off: null, drain: { target: revision, admitted: false } });
+    // The next tick selects the same candidate again.
+    await service.autoTick();
+    await until(() => existsSync(h.record.releasePointer));
+    expect(JSON.parse(readFileSync(h.record.releasePointer, "utf8"))).toMatchObject({ sha: target, dir });
+    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", `git checkout --detach`]);
+    expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
+    // Every runner step is done; install and build ran no command.
+    const update = (await service.snapshot()).update;
+    expect(update).toMatchObject({ target, trigger: "auto" });
+    expect(update.steps.filter(step => step.name !== "switch").map(step => [step.name, step.state, step.exitCode])).toEqual(
+      [["fetch", "done", 0], ["checkout", "done", 0], ["install", "done", null], ["build", "done", null], ["ready", "done", null]]);
+    // And the cohort is admitted again, with a new request for the same release.
+    // The finished run starts ticks of its own; a tick that finds one running returns at once.
+    for (let attempt = 0; attempt < 50 && !existsSync(h.record.requestFile); attempt++) { await service.autoTick(); h.advance(60_000); await Bun.sleep(10); }
+    const again = JSON.parse(readFileSync(h.record.requestFile, "utf8"));
+    expect(again).toMatchObject({ role: "relaunch", target });
+    expect(again.requestId).not.toBe(request.requestId);
+    expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
+  } finally { service.stop(); }
+}, 30_000);
