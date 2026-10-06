@@ -8,6 +8,7 @@ import { expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { NOT_CARRIED_DELIVERY_REASONS } from "@/lib/accounts/migration/intentLiveness";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -35,7 +36,8 @@ function request(body: unknown, headers: Record<string, string> = { host: "127.0
 }
 
 for (const sqliteMode of ["off", "sqlite"] as const) {
-  for (const scenario of ["initial", "legacy-failure", "compacted-failure", "host-rejected"] as const) {
+  for (const scenario of ["initial", "legacy-failure", "compacted-failure", "host-rejected",
+    "migration-unverified", "migration-owner-only", "migration-lost", "migration-lost-owner-only"] as const) {
     for (const origin of [{ kind: "operator" }, {
       kind: "agent", role: "orchestrator", project: "repo-source", conversationId: "conversation_source",
     }] satisfies MessageOrigin[]) {
@@ -69,6 +71,20 @@ for (const sqliteMode of ["off", "sqlite"] as const) {
           if (scenario === "host-rejected") {
             journal.transitionOperation(operationId, "rejected", { reason: "structured host delivery failed" });
             registry.recordDeliveryOutcome(held.id, "failed", "structured host delivery failed");
+          } else if (scenario.startsWith("migration-")) {
+            journal.transitionOperation(operationId, "delivering");
+            const unverified = scenario === "migration-unverified" || scenario === "migration-owner-only";
+            journal.transitionOperation(operationId, unverified ? "uncertain" : "failed", {
+              reason: NOT_CARRIED_DELIVERY_REASONS.attempted,
+            });
+            registry.recordDeliveryOutcome(held.id, "failed", NOT_CARRIED_DELIVERY_REASONS.attempted,
+              unverified ? "unverified" : "lost");
+            if (scenario.endsWith("owner-only")) {
+              // The attempted operation keeps its durable owner after the
+              // reservation is removed, including older persisted records.
+              registry.discardDelivery(held.id);
+              expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toBeUndefined();
+            }
           } else if (scenario !== "initial") {
             journal.transitionOperation(operationId, "delivering");
             journal.transitionOperation(operationId, "uncertain", { reason: "confirmation lost" });
@@ -87,12 +103,35 @@ for (const sqliteMode of ["off", "sqlite"] as const) {
             { method: "DELETE", headers: { host: "127.0.0.1" } },
           ), operationId, { enabled: () => true, client: () => client, registry: () => registry,
             kick: () => { throw new Error("discard must not wake delivery"); } });
+          if (scenario.startsWith("migration-lost")) {
+            // A confirmed loss stays resolved in both registry storage paths.
+            expect(registry.discardDeliveryForOperation(conversation.id, operationId, "delivery-discarded", "unverified"))
+              .toBeNull();
+            const response = await discard();
+            expect(response.status).toBe(409);
+            expect(await response.json()).toMatchObject({ error: "delivery outcome is already resolved" });
+            const reopenedRegistry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode });
+            reopened = reopenedRegistry;
+            expect(sendReceiptFor(reopenedRegistry.deliverySnapshotForOperation(operationId), operationId))
+              .toMatchObject({ state: "failed", reason: NOT_CARRIED_DELIVERY_REASONS.attempted, resend: "safe" });
+            return;
+          }
+          if (scenario.startsWith("migration-")) {
+            expect(sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId))
+              .toMatchObject({ state: "failed", duplicateRisk: true, resend: "verify-first" });
+          }
           const response = await discard();
           expect(await response.json()).toMatchObject({ receipt: { status: "failed", reason: "delivery-discarded" } });
           expect(response.status).toBe(200);
           expect((await discard()).status).toBe(200);
           expect(journal.claimDeliveryAction(operationId, "retry")).toMatchObject({ winner: "discard", replayed: true });
           expect(() => journal.retryOperation(operationId)).toThrow("discarded runtime operations cannot retry");
+          const retry = await handleRuntimeRetry(request({ action: "retry-uncertain" }), operationId, {
+            enabled: () => true, client: () => client, registry: () => registry,
+            recordRetryAttempt: () => { throw new Error("discarded delivery must not retry"); },
+            kick: () => { throw new Error("discarded delivery must not wake delivery"); },
+          });
+          expect(retry.status).toBe(409);
           const reopenedRegistry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode });
           reopened = reopenedRegistry;
           expect(sendReceiptFor(reopenedRegistry.deliverySnapshotForOperation(operationId), operationId))

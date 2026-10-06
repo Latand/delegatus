@@ -9494,8 +9494,10 @@ export class AgentRegistry {
       // A legacy failure with no disposition retains duplicate risk, exactly
       // like an explicit unverified failure. The owner survives compaction and
       // is the durable record in that case; there is no reservation to mutate.
+      // An explicit unverified disposition also covers account switches after
+      // an attempt; the migration reason alone cannot establish a known loss.
       const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
-        error === reason || ((terminalDisposition === null || terminalDisposition === "unverified")
+        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
           && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
       if (!delivery) {
         if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
