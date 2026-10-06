@@ -210,6 +210,8 @@ export interface RuntimeReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: OperationKind;
+  /** Kill authorship, derived by the journal from the admitted idle fence. */
+  origin?: "system" | "operator";
   status: ReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -227,6 +229,8 @@ export interface RuntimeReceipt {
   resend?: "not-needed" | "safe" | "verify-first";
   revision: number;
 }
+
+export { runtimeReceiptIsAutomaticRetirement } from "@/lib/runtime/contracts";
 
 export interface RuntimeEdge {
   id: string;

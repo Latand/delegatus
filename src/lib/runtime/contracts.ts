@@ -244,6 +244,8 @@ export interface RuntimeOperationReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: RuntimeOperationKind;
+  /** Kill authorship, derived from the admitted onlyIfIdle fence. */
+  origin?: "system" | "operator";
   status: RuntimeReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -275,6 +277,11 @@ export interface RuntimeOperationReceipt {
   revision: number;
 }
 export type RuntimeReceipt = RuntimeOperationReceipt;
+
+/** Automatic lifecycle work has its own audit receipt outside message history. */
+export function runtimeReceiptIsAutomaticRetirement(receipt: Pick<RuntimeOperationReceipt, "kind" | "origin">): boolean {
+  return receipt.kind === "kill" && receipt.origin === "system";
+}
 
 /** `interrupt-then-turn-started`: the running turn was interrupted and this
     message started the next one (docs/design/copilot-engine.md 3.4). */

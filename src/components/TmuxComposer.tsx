@@ -121,7 +121,7 @@ import {
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
 import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey } from "./runtime/deliveryNotice";
-import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
+import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, runtimeReceiptIsAutomaticRetirement, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
 import { commitBridgeTurn, useBridgeTurnStartDrain } from "@/hooks/useBridgeReportRelay";
@@ -434,7 +434,7 @@ export function RuntimeComposerReceipts({
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Current original-operation evidence must survive text-based history folding.
   // Repeated snapshots share one row; a different operation cannot resolve it.
-  const currentReceipts = mergeRuntimeReceipts(receipts, []);
+  const currentReceipts = mergeRuntimeReceipts(receipts, []).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt));
   const unknownReceipts = currentReceipts.filter(receiptHasUnknownFate);
   const ordinaryReceipts = currentReceipts.filter((receipt) => !receiptHasUnknownFate(receipt));
   const attemptGroups = [
@@ -2121,7 +2121,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     [...immediateRuntimeReceipts.filter((receipt) => receipt.conversationId === cardId), ...readRecoveryReceipts(cardId)],
     outbox.flatMap((entry) => entry.deliveryReceipt?.conversationId === cardId
       && (entry.deliveryReceipt.idempotencyKey === entry.id || retryParentOperationId(entry.deliveryReceipt)) ? [entry.deliveryReceipt] : []),
-  )).map((receipt) => {
+  )).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt)).map((receipt) => {
     const entry = outbox.find((entry) => entry.deliveryUncertain
       && (entry.id === receipt.idempotencyKey || entry.deliveryReceipt?.operationId === receipt.operationId));
     const priorSafeAttempt = entry?.deliveryReceipt?.resend === "safe"
@@ -4842,6 +4842,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      never disagree about what the conversation is doing. Desktop passes no slot
      and keeps its plain send. */
   const phoneState = chatState(file);
+  // A structured host can finish while the scanner still holds an open turn.
+  // Its current turn axes decide whether the composer offers an interrupt.
+  const turnWorking = structuredSession
+    ? structuredSession.session.turn === "running" || structuredSession.session.turn === "interrupt_requested"
+      || Boolean(structuredSession.session.activeTurnId)
+    : phoneState === "working";
   /* Respawn answers to the HOST, not to the turn (#1487). A host stopped after
      its turn settled is not a killed conversation — the bar reads «done» — but
      it is still a conversation with nobody to send to, and its way back is the
@@ -4851,7 +4857,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const slotKind = composerSlotKind({
     killed: hostGone,
     offline: runtimeOffline && !contextOffline,
-    working: phoneState === "working",
+    working: turnWorking,
     hasDraft: composerHasDraft,
   });
 

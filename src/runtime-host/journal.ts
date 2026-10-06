@@ -502,7 +502,7 @@ export class RuntimeJournal {
       const existing = this.db.query<{ operation_id: string; request_hash: string; receipt_json: string }, [string, string]>("SELECT operation_id, request_hash, receipt_json FROM operations WHERE conversation_id = ? AND idempotency_key = ?").get(command.conversationId, command.idempotencyKey);
       if (existing) {
         if (existing.request_hash !== requestHash) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another request");
-        const result = { operationId: existing.operation_id, receipt: JSON.parse(existing.receipt_json) as RuntimeOperationReceipt, replayed: true };
+        const result = { operationId: existing.operation_id, receipt: this.presentReceipt(JSON.parse(existing.receipt_json) as RuntimeOperationReceipt), replayed: true };
         this.db.exec("COMMIT");
         return result;
       }
@@ -634,7 +634,7 @@ export class RuntimeJournal {
   operationResult(operationId: string): RuntimeOperationResult | null {
     this.assertHealthy();
     const row = this.db.query<{ operation_id: string; receipt_json: string }, [string]>("SELECT operation_id, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
-    return row ? { operationId: row.operation_id, receipt: JSON.parse(row.receipt_json) as RuntimeOperationReceipt, replayed: false } : null;
+    return row ? { operationId: row.operation_id, receipt: this.presentReceipt(JSON.parse(row.receipt_json) as RuntimeOperationReceipt), replayed: false } : null;
   }
 
   /** The journal owns operation identity, so this is the single durable
@@ -868,6 +868,7 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
         ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),
         ...(nativeEntry ? { nativeQueue: nativeQueueReceipt(nativeEntry) } : {}),
         ...(deliveredVersion ? { text: deliveredVersion.text.slice(0, 240), imageCount: deliveredVersion.images.length,
@@ -1102,14 +1103,30 @@ export class RuntimeJournal {
       throw new Error("runtime session identity is invalid");
     }
     const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
-    if (session) return { ...presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
+    if (session) return { ...this.presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
     if (!artifactPath) return null;
     const row = this.db.query<{ state_json: string }, [string]>(
       "SELECT state_json FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.artifactPath') = ? ORDER BY id LIMIT 1",
     ).get(artifactPath);
     if (!row) return null;
     const matched = JSON.parse(row.state_json) as RuntimeSession;
-    return { ...presentSession(matched), retirementBlocked: this.retirementBlocked(matched.conversationId) };
+    return { ...this.presentSession(matched), retirementBlocked: this.retirementBlocked(matched.conversationId) };
+  }
+
+  /** Older receipts recover kill authorship from their durable command. Audit
+      events and their hashes remain intact; reasons never classify an origin. */
+  private presentReceipt(receipt: RuntimeOperationReceipt): RuntimeOperationReceipt {
+    if (receipt.kind !== "kill" || receipt.origin !== undefined) return receipt;
+    const row = this.db.query<{ automatic: number | null }, [string]>(`
+      SELECT json_type(request_json, '$.onlyIfIdle') = 'object' AS automatic
+      FROM operations WHERE operation_id = ? AND json_extract(request_json, '$.kind') = 'kill'
+    `).get(receipt.operationId);
+    return row ? { ...receipt, origin: row.automatic ? "system" : "operator" } : receipt;
+  }
+
+  private presentSession(session: RuntimeSession): RuntimeSession {
+    const presented = presentSession(session);
+    return { ...presented, recentReceipts: presented.recentReceipts.map((receipt) => this.presentReceipt(receipt)) };
   }
 
   snapshot(): RuntimeSnapshot {
@@ -1126,11 +1143,11 @@ export class RuntimeJournal {
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
         filesRevision: Number(this.meta("files_revision")),
-        sessions: this.snapshotSessionValues(voiceBodiesFor).map(presentSession),
+        sessions: this.snapshotSessionValues(voiceBodiesFor).map((session) => this.presentSession(session)),
         attentions: this.entityValues<RuntimeAttention>("attention"),
         recentOperations: visibleReceipts(
           this.recentEntityValues<RuntimeOperationReceipt>("operation", 100),
-        ).map(runtimePresentationReceipt),
+        ).map((receipt) => this.presentReceipt(runtimePresentationReceipt(receipt))),
         edges: this.snapshotEdgeValues(now),
         flows: this.scopedValues<RuntimeSnapshot["flows"][number]["value"]>("flow"),
         workflows: this.scopedValues<RuntimeSnapshot["workflows"][number]["value"]>("workflow"),
@@ -1184,7 +1201,7 @@ export class RuntimeJournal {
     for (const row of rows) {
       const durableEvent = toEvent(row);
       const receipt = durableEvent.kind === "receipt"
-        ? runtimePresentationReceipt(durableEvent.payload as unknown as RuntimeOperationReceipt)
+        ? runtimePresentationReceipt(this.presentReceipt(durableEvent.payload as unknown as RuntimeOperationReceipt))
         : null;
       const event = receipt ? {
         ...durableEvent,
@@ -2168,6 +2185,7 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
+      ...(command.kind === "kill" ? { origin: command.onlyIfIdle ? "system" as const : "operator" as const } : {}),
       status,
       turnId,
       queuePosition,

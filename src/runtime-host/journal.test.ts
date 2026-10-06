@@ -3858,6 +3858,90 @@ test.each(["queued", "delivering", "uncertain", "native-queue"])("automatic reti
 });
 
 
+test("idle health with delayed text replay defers stale retirement fences and a fresh attempt retires", () => {
+  const dir = sandbox("retirement-replay");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_replayed_final";
+  const sessionKey = { engine: "codex" as const, sessionId: "finished-thread" };
+  const scope = { type: "session" as const, id: conversationId };
+  try {
+    journal.append({ scope, kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    for (let index = 0; index < 8; index++) {
+      const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+      // The host's idle projection overtakes its sequential text event pump.
+      journal.append({ scope, kind: "delta", payload: { conversationId, turnId: "finished-turn", text: "earlier text " } });
+      expect(journal.readSession({ conversationId })).toMatchObject({ turn: "idle", activeTurnId: null, retirementBlocked: false });
+      const deferred = journal.executeOperation({ kind: "kill", conversationId, sessionKey, onlyIfIdle,
+        operationId: `replay-retire-${index}`, idempotencyKey: `replay-retire-${index}` });
+      expect(deferred.receipt).toMatchObject({ kind: "kill", origin: "system", status: "rejected", reason: "idle-retirement-deferred" });
+    }
+    // A delta between admission and the executor's claim also preserves the fence.
+    const fence = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+    journal.executeOperation({ kind: "kill", conversationId, sessionKey, onlyIfIdle: fence,
+      operationId: "claim-race", idempotencyKey: "claim-race" });
+    journal.append({ scope, kind: "turn-ended", payload: { conversationId, turnId: "finished-turn", outcome: "completed" } });
+    expect(journal.transitionOperation("claim-race", "delivering").receipt)
+      .toMatchObject({ origin: "system", status: "failed", reason: "idle-retirement-deferred" });
+    const retry = journal.executeOperation({ kind: "kill", conversationId, sessionKey,
+      onlyIfIdle: { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" },
+      operationId: "fresh-retire", idempotencyKey: "fresh-retire" });
+    expect(retry.receipt).toMatchObject({ origin: "system", status: "queued" });
+    expect(journal.transitionOperation(retry.operationId, "delivering").receipt.status).toBe("delivering");
+    expect(journal.transitionOperation(retry.operationId, "delivered").receipt).toMatchObject({ origin: "system", status: "delivered" });
+    expect(journal.readSession({ conversationId })!.host).toBe("dead");
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy retirement origin is recovered from commands on readback, snapshot and replay", () => {
+  const dir = sandbox("retirement-origin");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const conversationId = "conversation_legacy_retirement";
+  const sessionKey = { engine: "codex" as const, sessionId: "legacy-thread" };
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    for (const automatic of [true, false]) {
+      const operationId = automatic ? "legacy-automatic" : "legacy-operator";
+      const result = journal.executeOperation({ kind: "kill", conversationId, sessionKey, operationId, idempotencyKey: operationId,
+        ...(automatic ? { onlyIfIdle: { revision: 999, writerClaim: "fixture:1" } } : {}),
+      });
+      const legacy = { ...result.receipt };
+      delete legacy.origin;
+      const db = new Database(filename);
+      try {
+        db.query("UPDATE operations SET receipt_json = ? WHERE operation_id = ?").run(JSON.stringify(legacy), operationId);
+      } finally { db.close(); }
+      const event = journal.append({ scope: { type: "operation", id: operationId }, kind: "receipt",
+        payload: legacy as unknown as Record<string, unknown> });
+      const origin = automatic ? "system" : "operator";
+      expect(journal.operationResult(operationId)!.receipt.origin).toBe(origin);
+      expect(journal.readSession({ conversationId })!.recentReceipts.find(receipt => receipt.operationId === operationId)?.origin).toBe(origin);
+      const snapshot = journal.snapshot();
+      expect(snapshot.recentOperations.find(receipt => receipt.operationId === operationId)?.origin).toBe(origin);
+      expect(snapshot.sessions[0].recentReceipts.find(receipt => receipt.operationId === operationId)?.origin).toBe(origin);
+      expect(journal.replay(event.seq - 1).events[0].payload.origin).toBe(origin);
+    }
+    // Reopening verifies the durable event hash chain before admitting reads.
+    const reopened = new RuntimeJournal(filename, { structuredHosts: true });
+    try {
+      expect(reopened.operationResult("legacy-automatic")!.receipt.origin).toBe("system");
+      expect(reopened.operationResult("legacy-operator")!.receipt.origin).toBe("operator");
+    } finally { reopened.close(); }
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test.each(["work-first", "retirement-first"])("automatic retirement claim serializes new work: %s", (ordering) => {
   const dir = sandbox("retirement-claim");
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });

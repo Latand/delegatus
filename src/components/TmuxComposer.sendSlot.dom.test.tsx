@@ -23,7 +23,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { emptyStore } from "@/components/runtime/runtimeModel";
+import { emptyStore, applyEvent } from "@/components/runtime/runtimeModel";
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { setRuntimeBusForTests, type RuntimeBus, type RuntimeBusState } from "@/hooks/runtimeBus";
 import { setLocale } from "@/lib/i18n";
@@ -88,6 +88,7 @@ beforeEach(() => {
   setLocale("en");
   connection = "live";
   calls.length = 0;
+  for (const key of Object.keys(STATES)) delete STATES[key];
   setRuntimeBusForTests(testBus);
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -185,6 +186,40 @@ test("an idle conversation keeps the ordinary send", async () => {
   const { host, root } = await render(conversation({ proc: null, pid: null, activity: "idle", lastTurn: { startedAt: Date.now() - 900_000, endedAt: Date.now() - 800_000 } }));
   expect(slotKind(host)).toBe("send");
   flushSync(() => root.unmount());
+});
+
+test.each(["en", "uk"] as const)("structured turn completion clears Stop despite a stale scanner turn in %s", async (locale) => {
+  setLocale(locale);
+  const file = conversation({ conversationId: "conversation_slot" });
+  const state = stateFor("live");
+  const running = applyEvent(state.store, {
+    schemaVersion: 1, seq: 1, eventId: "host-running", revision: 1,
+    scope: { type: "session", id: "conversation_slot" }, kind: "session-status",
+    payload: { conversationId: "conversation_slot", sessionKey: { engine: "codex", sessionId: "slot-thread" },
+      hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: "slot-turn",
+      artifactPath: file.path, provenance: "structured", capabilities: { steer: true, structuredAttention: true } },
+  });
+  if (running.outcome !== "applied") throw new Error("running fixture event was refused");
+  state.store = running.store;
+  const { host, root } = await render(file);
+  try {
+    expect(slotKind(host)).toBe("stop");
+    await act(async () => {
+      const idle = applyEvent(state.store, {
+        schemaVersion: 1, seq: 2, eventId: "host-idle", revision: 2,
+        scope: { type: "session", id: "conversation_slot" }, kind: "session-status",
+        payload: { conversationId: "conversation_slot", turn: "idle", activeTurnId: null },
+      });
+      if (idle.outcome !== "applied") throw new Error("idle fixture event was refused");
+      STATES.live = { ...state, store: idle.store };
+      for (const listener of listeners) listener();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(slotKind(host)).toBe("send");
+    expect(file.lastTurn!.endedAt).toBeNull();
+  } finally {
+    flushSync(() => root.unmount());
+  }
 });
 
 test("offline, the slot is Queue and says the text is delivered on reconnect", async () => {
