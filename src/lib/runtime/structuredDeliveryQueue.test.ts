@@ -2883,7 +2883,7 @@ test.each(["native-queue", "native-inject", "structured-image-v1", "native-turn-
 });
 
 
-test.each(["unchanged", "active", "claim-cancelled", "unreadable"] as const)("idle continuation execution preserves its fence: %s", scenario => {
+test.each(["unchanged", "active", "claim-cancelled", "unreadable", "post-claim-cancelled", "post-claim-unreadable", "missing-guard"] as const)("idle continuation execution preserves its fence: %s", scenario => {
   let status = "queued";
   let reads = 0;
   let sends = 0;
@@ -2896,6 +2896,10 @@ test.each(["unchanged", "active", "claim-cancelled", "unreadable"] as const)("id
       if (scenario === "unreadable" && status === "delivering") throw new Error("journal unavailable");
       return { status, revision: 1 } as Awaited<ReturnType<NonNullable<StructuredDeliveryQueuePort["status"]>>>;
     },
+    ...(scenario === "missing-guard" ? {} : { idleContinuationCurrent: async () => {
+      if (scenario === "post-claim-unreadable") throw new Error("session unavailable");
+      return scenario !== "post-claim-cancelled";
+    } }),
     hostClaim: async () => "owner:1",
     transition: async (_operation, next) => { status = next === "delivering" && scenario === "claim-cancelled" ? "failed" : next; },
   }, () => ({ ...host(async entry => {
@@ -2906,6 +2910,60 @@ test.each(["unchanged", "active", "claim-cancelled", "unreadable"] as const)("id
   return queue.drain().then(() => {
     expect(reads).toBeGreaterThan(0);
     expect(sends).toBe(scenario === "unchanged" ? 1 : 0);
-    if (scenario === "active" || scenario === "claim-cancelled") expect(status).toBe("failed");
+    if (["active", "claim-cancelled", "post-claim-cancelled", "missing-guard"].includes(scenario)) expect(status).toBe("failed");
+    if (scenario === "post-claim-unreadable") expect(status).toBe("queued");
   });
+});
+
+
+test.each(["before-claim", "after-claim", "serialized-control"] as const)("provider continuation dispatch orders cancellation at %s", async timing => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { runtimeIdleKillMatches } = await import("./contracts");
+  const { invalidateProviderContinuation } = await import("@/lib/pipelines/engine");
+  const { default: path } = await import("node:path");
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `dispatch-${timing}.sqlite`), { structuredHosts: true });
+  const conversationId = `conversation_dispatch_${timing}`;
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "dispatch-generation" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture:1", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const session = journal.readSession({ conversationId })!;
+  const fence = { revision: session.revision, writerClaim: session.writerClaim! };
+  journal.executeOperation({ kind: "send", conversationId, operationId: `automatic-${timing}`, idempotencyKey: `automatic-${timing}`,
+    text: "continue", policy: "queue", turnId: null, onlyIfIdle: fence });
+  const order: string[] = [];
+  const cancellations: Promise<void>[] = [];
+  const cancel = () => invalidateProviderContinuation(conversationId, { append: async event => {
+    order.push("cancel-acknowledged");
+    return journal.append(event);
+  } } as import("./client").RuntimeHostClient);
+  if (timing === "before-claim") await cancel();
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => journal.effectBatch(100, ["runtime.send"]),
+    status: async id => journal.operationResult(id)?.receipt ?? null,
+    hostClaim: async () => "fixture:1",
+    idleContinuationCurrent: async (id, expected) => {
+      const current = journal.readSession({ conversationId: id })!;
+      return runtimeIdleKillMatches({ ...current, retirementBlocked: false }, current.sessionKey, expected);
+    },
+    transition: async (id, next, details) => {
+      journal.transitionOperation(id, next, details);
+      if (next === "delivering") {
+        if (timing === "after-claim") journal.append({ scope: { type: "session", id: conversationId }, kind: "pipeline.provider-continuation-cancelled", payload: { conversationId } });
+        if (timing === "serialized-control") cancellations.push(cancel());
+      }
+    },
+  }, () => ({ ...host(async () => {
+    await Promise.resolve();
+    order.push("send");
+    return { outcome: "turn-started" as const, turnId: "automatic-turn" };
+  }), health: async () => idleState("dispatch-generation") }));
+  try {
+    await queue.drain();
+    await Promise.all(cancellations);
+    expect(order).toEqual(timing === "serialized-control" ? ["send", "cancel-acknowledged"]
+      : timing === "before-claim" ? ["cancel-acknowledged"] : []);
+    expect(journal.operationResult(`automatic-${timing}`)!.receipt.status).toBe(timing === "serialized-control" ? "delivered" : "failed");
+  } finally { journal.close(); }
 });

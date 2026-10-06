@@ -3,6 +3,7 @@ import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
+import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
@@ -43,6 +44,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Re-read the idle revision after claiming an automatic continuation. */
+  idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
   /** Hold a fresh autonomous turn while original accepted work settles. */
@@ -949,7 +952,7 @@ export class StructuredDeliveryQueue {
     }
   }
 
-  private async drainTarget(effects: DeliveryEffect[]): Promise<boolean> {
+  private async drainTarget(effects: DeliveryEffect[], guardedLease?: ActuationLease): Promise<boolean> {
     let updateHeld = false;
     if (this.port.handoffHeld?.()) return true;
     if (effects.length > 0 && effects.every(effect => effect.kind === "native-queue")
@@ -1047,6 +1050,12 @@ export class StructuredDeliveryQueue {
     let hold = readHold();
     for (const effect of effects) {
       if (this.port.handoffHeld?.()) return true;
+      if (effect.kind === "send" && effect.onlyIfIdle && !guardedLease) {
+        const blocked = await withConversationActuation(effect.conversationId,
+          lease => this.drainTarget([effect], lease));
+        if (blocked) return true;
+        continue;
+      }
       /* #862: a compaction in flight holds back everything that would write to
          the thread — messages and reconfigures — but never another control.
          Kill is the operator's safety valve and interrupt/answer are how a turn
@@ -1184,6 +1193,10 @@ export class StructuredDeliveryQueue {
         && !!this.port.autonomousTurnHeld?.(effect.operationId, durableStatuses.get(effect.operationId)?.admittedAt
           ?? durableStatuses.get(effect.operationId)?.at);
       if (!host) {
+        if (effect.kind === "send" && effect.onlyIfIdle) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          continue;
+        }
         if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
@@ -1198,6 +1211,10 @@ export class StructuredDeliveryQueue {
       if (!state.readable) return this.fenceUnavailable();
       const health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
+        if (effect.kind === "send" && effect.onlyIfIdle) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          continue;
+        }
         if (heldForUpdate()) { updateHeld = true; continue; }
         if (this.awaitingContendedRecovery(effect.operationId)) return true;
         if (!await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" })) continue;
@@ -1320,6 +1337,18 @@ export class StructuredDeliveryQueue {
         const claimed = await this.readStatus(effect.operationId);
         if (!claimed.readable || claimed.value?.status !== "delivering") {
           if (!claimed.readable) this.retrySoon();
+          continue;
+        }
+        const current = await readEvidence(() => this.port.idleContinuationCurrent?.(effect.conversationId, effect.onlyIfIdle!) ?? false);
+        if (!current.readable) {
+          // The claim succeeded and no host call began. Retry this same fenced
+          // operation when its session evidence is readable again.
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "idle continuation fence unavailable" });
+          this.retrySoon();
+          return true;
+        }
+        if (!current.value) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
           continue;
         }
       }
