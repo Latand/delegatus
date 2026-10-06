@@ -18525,12 +18525,15 @@ describe("compact card menu and overflow menus: today and built", () => {
               for (const block of ["center", "end"] as const) {
                 await showCard(page, id);
                 await page.evaluate(([selector, how]) => document.querySelector(selector!)?.scrollIntoView({ block: how as ScrollLogicalPosition }), [`${card(id)} [data-menu]`, block] as const);
-                await page.waitForTimeout(60);
+                await page.waitForTimeout(200);
                 /* A Done card ages off the board, or folds behind the column's count, while the walk is on its way to it. */
                 if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) break;
                 if (block === "center") tally.cards += 1;
                 await openCardMenu(page, id);
                 const button = `${card(id)} [data-menu]`;
+                /* The menu is placed once, when it opens. A board that moves the card under an open menu (a turn ends, a card ages off) is no fault of the placement. */
+                const opened = await page.locator(button).first().boundingBox();
+                const stayed = async () => { const now = await page.locator(button).first().boundingBox().catch(() => null); return Boolean(opened && now && Math.abs(now.x - opened.x) <= 1 && Math.abs(now.y - opened.y) <= 1); };
                 const side = (await corner(page, null))?.side ?? "below";
                 tally.sides[side] = (tally.sides[side] ?? 0) + 1;
                 /* One state: it stays in the window and off its own ⋯, and its section rows say what they do. */
@@ -18538,7 +18541,7 @@ describe("compact card menu and overflow menus: today and built", () => {
                   const state = await read(page, MENU);
                   if (state && !state.inside) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: leaves the window ${JSON.stringify(state.box)}`);
                   if (state?.grammar.length) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: ${state.grammar.join("; ")}`);
-                  if (await covers(page, button)) { tally.covered += 1; failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: the menu covers its own ⋯ ${JSON.stringify(state?.box ?? null)}`); }
+                  if (await covers(page, button) && await stayed()) { tally.covered += 1; failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: the menu covers its own ⋯ ${JSON.stringify(state?.box ?? null)}`); }
                 };
                 /* False once the card has left the board under the walk (a Done card ages off it), which takes its menu along. */
                 const opens = async (section: string, name: string): Promise<boolean> => {

@@ -44,8 +44,12 @@ critic left open on it:
 The two lines of words make the card's menu 300×280 at rest and 300×356 at its
 tallest (Appearance open), against 300×257 and 300×341 as drawn; the separator
 between the cells and the priority row was taken out to stay inside 360 px.
-The board's ⋯ rests at 256×192. The built measurements are in
-`evidence/compact-card-menu/built.json`.
+A pipeline's page is 300×290–342. The board's ⋯ rests at 256×192 against
+256×491, and its two pages are 256×218 and 256×238. On the phone the card's
+sheet is 390×376 against 390×445 and the task's ⋯ is 390×270 against 390×401.
+The built measurements are in `evidence/compact-card-menu/built.json`: 228
+states, with 166 section openings on 32 cards at each desktop size that moved
+nothing and covered no ⋯, and 92 double clicks that sent no write.
 
 ## The request
 

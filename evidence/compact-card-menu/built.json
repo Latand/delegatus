@@ -1,0 +1,4946 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "comparedWithToday": true,
+  "taps": {
+    "built/1440-light-en": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1440-light-uk": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1440-dark-en": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1440-dark-uk": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1000-light-en": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1000-light-uk": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1000-dark-en": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    },
+    "built/1000-dark-uk": {
+      "move to Done": 2,
+      "move to Waiting": 2,
+      "hide from board": 2,
+      "rename": 2,
+      "description": 2,
+      "priority High": 2,
+      "colour": 3,
+      "pause the pipeline": 3
+    }
+  },
+  "acted": {
+    "colour": true,
+    "priority": true,
+    "move": true,
+    "hide": true,
+    "keys": true,
+    "shortcut": true
+  },
+  "said": {
+    "built/1440-light-en": {
+      "hide": "Hide: nothing stops",
+      "high": "Top of the Inbox",
+      "low": "Bottom of the Inbox"
+    },
+    "built/1440-light-uk": {
+      "hide": "Сховати: нічого не зупиняється",
+      "high": "Угорі Вхідних",
+      "low": "Унизу Вхідних"
+    },
+    "built/1440-dark-en": {
+      "hide": "Hide: nothing stops",
+      "high": "Top of the Inbox",
+      "low": "Bottom of the Inbox"
+    },
+    "built/1440-dark-uk": {
+      "hide": "Сховати: нічого не зупиняється",
+      "high": "Угорі Вхідних",
+      "low": "Унизу Вхідних"
+    },
+    "built/1000-light-en": {
+      "hide": "Hide: nothing stops",
+      "high": "Top of the Inbox",
+      "low": "Bottom of the Inbox"
+    },
+    "built/1000-light-uk": {
+      "hide": "Сховати: нічого не зупиняється",
+      "high": "Угорі Вхідних",
+      "low": "Унизу Вхідних"
+    },
+    "built/1000-dark-en": {
+      "hide": "Hide: nothing stops",
+      "high": "Top of the Inbox",
+      "low": "Bottom of the Inbox"
+    },
+    "built/1000-dark-uk": {
+      "hide": "Сховати: нічого не зупиняється",
+      "high": "Угорі Вхідних",
+      "low": "Унизу Вхідних"
+    },
+    "built/390-light-en phone-task": {
+      "hide": "Hide: nothing stops"
+    },
+    "built/390-light-uk phone-task": {
+      "hide": "Сховати: нічого не зупиняється"
+    },
+    "built/390-dark-en phone-task": {
+      "hide": "Hide: nothing stops"
+    },
+    "built/390-dark-uk phone-task": {
+      "hide": "Сховати: нічого не зупиняється"
+    }
+  },
+  "insets": {
+    "built/390-light-en phone-card": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        119.3,
+        119.3,
+        119.3
+      ]
+    },
+    "built/390-light-en phone-task": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        88.5,
+        88.5,
+        88.5,
+        88.5
+      ]
+    },
+    "built/390-light-uk phone-card": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        119.3,
+        119.3,
+        119.3
+      ]
+    },
+    "built/390-light-uk phone-task": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        88.5,
+        88.5,
+        88.5,
+        88.5
+      ]
+    },
+    "built/390-dark-en phone-card": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        119.3,
+        119.3,
+        119.3
+      ]
+    },
+    "built/390-dark-en phone-task": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        88.5,
+        88.5,
+        88.5,
+        88.5
+      ]
+    },
+    "built/390-dark-uk phone-card": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        119.3,
+        119.3,
+        119.3
+      ]
+    },
+    "built/390-dark-uk phone-task": {
+      "left": 12,
+      "right": 12,
+      "widths": [
+        88.5,
+        88.5,
+        88.5,
+        88.5
+      ]
+    }
+  },
+  "stability": {
+    "built/1440-light-uk": {
+      "cards": 32,
+      "openings": 166,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "below": 38,
+        "beside": 26
+      }
+    },
+    "built/1000-light-uk": {
+      "cards": 32,
+      "openings": 166,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "beside": 64
+      }
+    }
+  },
+  "doubles": {
+    "built/1440-light-en board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "built/1440-light-uk board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "built/1000-light-en board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "built/1000-light-uk board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "built/1440-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
+    },
+    "built/1000-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
+    }
+  },
+  "reach": {
+    "1440-light-en card": [],
+    "1440-light-en conversation": [],
+    "1440-light-uk card": [],
+    "1440-light-uk conversation": [],
+    "1440-dark-en card": [],
+    "1440-dark-en conversation": [],
+    "1440-dark-uk card": [],
+    "1440-dark-uk conversation": [],
+    "1000-light-en card": [],
+    "1000-light-en conversation": [],
+    "1000-light-uk card": [],
+    "1000-light-uk conversation": [],
+    "1000-dark-en card": [],
+    "1000-dark-en conversation": [],
+    "1000-dark-uk card": [],
+    "1000-dark-uk conversation": []
+  },
+  "sheets": [
+    "sheet-card-menu.png",
+    "sheet-other-menus.png"
+  ],
+  "failures": [],
+  "readings": [
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        716,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        716,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        716,
+        250,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        716,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        723,
+        201,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        1111,
+        201,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        948,
+        43.5,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1440-light-en-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        948,
+        43.5,
+        256,
+        181.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1440-light-en-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        222.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1440-light-en-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1440-light-en-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        486,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        486,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        486,
+        536,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        486,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        1104,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        1104,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        1104,
+        250,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        1104,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        963,
+        371,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        963,
+        371,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        716,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        716,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        716,
+        250,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        716,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        723,
+        201,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        1111,
+        201,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        948,
+        43.5,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1440-light-uk-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        948,
+        43.5,
+        256,
+        217.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1440-light-uk-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        237.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1440-light-uk-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1440-light-uk-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        486,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        486,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        486,
+        536,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        486,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        1104,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        1104,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        1104,
+        250,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        1104,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        963,
+        371,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        963,
+        371,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        716,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        716,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        716,
+        250,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        716,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        723,
+        201,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        1111,
+        201,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        948,
+        43.5,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1440-dark-en-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        948,
+        43.5,
+        256,
+        181.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1440-dark-en-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        222.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1440-dark-en-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1440-dark-en-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        486,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-en-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        486,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-en-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        486,
+        536,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-en-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        486,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-en-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        1104,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        1104,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        1104,
+        250,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        1104,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        963,
+        371,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        963,
+        371,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-en-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        716,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        716,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        716,
+        250,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        716,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        723,
+        201,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        1111,
+        201,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        948,
+        43.5,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1440-dark-uk-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        948,
+        43.5,
+        256,
+        217.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1440-dark-uk-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        237.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1440-dark-uk-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1440-dark-uk-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        486,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-uk-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        486,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-uk-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        486,
+        536,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-uk-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        486,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-dark-uk-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        1104,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        1104,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        1104,
+        250,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        1104,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        963,
+        371,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        963,
+        371,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-dark-uk-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        641,
+        623,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        641,
+        623,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        353,
+        84,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1000-light-en-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        353,
+        84,
+        256,
+        181.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1000-light-en-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        222.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1000-light-en-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1000-light-en-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        619,
+        273,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-light-en-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        619,
+        273,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-light-en-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        641,
+        623,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        641,
+        623,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        353,
+        84,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1000-light-uk-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        353,
+        84,
+        256,
+        217.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1000-light-uk-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        237.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1000-light-uk-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1000-light-uk-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        619,
+        273,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-light-uk-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        619,
+        273,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-light-uk-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        641,
+        623,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        641,
+        623,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        353,
+        84,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1000-dark-en-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        353,
+        84,
+        256,
+        181.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1000-dark-en-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        222.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1000-dark-en-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1000-dark-en-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        290
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-en-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        619,
+        273,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-dark-en-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        619,
+        273,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-dark-en-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "column",
+      "state": "assigned",
+      "box": [
+        641,
+        623,
+        300,
+        69.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-column-assigned.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "column",
+      "state": "done",
+      "box": [
+        641,
+        623,
+        300,
+        56.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 1,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-column-done.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "rest",
+      "box": [
+        353,
+        84,
+        256,
+        192
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "file": "built/1000-dark-uk-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open merging",
+      "box": [
+        353,
+        84,
+        256,
+        217.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 4,
+      "clipped": [],
+      "file": "built/1000-dark-uk-board-open_merging.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        237.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "file": "built/1000-dark-uk-board-open_seat.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "clipped": [],
+      "file": "built/1000-dark-uk-header-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-bottom_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-bottom_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-bottom_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "bottom card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-bottom_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-right_edge_card.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-right_edge_card_open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-right_edge_card_open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "card",
+      "state": "right-edge card, open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-dark-uk-card-right_edge_card_open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "rest",
+      "box": [
+        619,
+        273,
+        300,
+        162.4
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-dark-uk-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "conversation",
+      "state": "open more",
+      "box": [
+        619,
+        273,
+        300,
+        332.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1000-dark-uk-conversation-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone-card",
+      "state": "rest",
+      "box": [
+        0,
+        468,
+        390,
+        376
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-light-en-phone-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone-board",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "clipped": [],
+      "file": "built/390-light-en-phone-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone-task",
+      "state": "rest",
+      "box": [
+        0,
+        574.5,
+        390,
+        269.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-light-en-phone-task-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone-conversation",
+      "state": "rest",
+      "box": [
+        0,
+        138,
+        390,
+        706
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "file": "built/390-light-en-phone-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone-card",
+      "state": "rest",
+      "box": [
+        0,
+        468,
+        390,
+        376
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-light-uk-phone-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone-board",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "clipped": [],
+      "file": "built/390-light-uk-phone-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone-task",
+      "state": "rest",
+      "box": [
+        0,
+        574.5,
+        390,
+        269.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-light-uk-phone-task-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone-conversation",
+      "state": "rest",
+      "box": [
+        0,
+        138,
+        390,
+        706
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "file": "built/390-light-uk-phone-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone-card",
+      "state": "rest",
+      "box": [
+        0,
+        468,
+        390,
+        376
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-dark-en-phone-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone-board",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "clipped": [],
+      "file": "built/390-dark-en-phone-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone-task",
+      "state": "rest",
+      "box": [
+        0,
+        574.5,
+        390,
+        269.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-dark-en-phone-task-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone-conversation",
+      "state": "rest",
+      "box": [
+        0,
+        138,
+        390,
+        706
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "file": "built/390-dark-en-phone-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone-card",
+      "state": "rest",
+      "box": [
+        0,
+        468,
+        390,
+        376
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-dark-uk-phone-card-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone-board",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "clipped": [],
+      "file": "built/390-dark-uk-phone-board-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone-task",
+      "state": "rest",
+      "box": [
+        0,
+        574.5,
+        390,
+        269.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "file": "built/390-dark-uk-phone-task-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone-conversation",
+      "state": "rest",
+      "box": [
+        0,
+        138,
+        390,
+        706
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "file": "built/390-dark-uk-phone-conversation-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "rest",
+      "box": [
+        1008,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-waiting-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open appearance",
+      "box": [
+        1008,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-waiting-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open pipeline",
+      "box": [
+        1008,
+        250,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-waiting-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open more",
+      "box": [
+        1008,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-en-card-waiting-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "rest",
+      "box": [
+        682,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open appearance",
+      "box": [
+        682,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines",
+      "box": [
+        682,
+        536,
+        300,
+        286
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 1",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines_pipeline_1.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 2",
+      "box": [
+        682,
+        536,
+        300,
+        316.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines_pipeline_2.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 3",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines_pipeline_3.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 4",
+      "box": [
+        682,
+        536,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines_pipeline_4.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 5",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_pipelines_pipeline_5.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open more",
+      "box": [
+        682,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-en-card-many-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "rest",
+      "box": [
+        1008,
+        250,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-waiting-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open appearance",
+      "box": [
+        1008,
+        250,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-waiting-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open pipeline",
+      "box": [
+        1008,
+        250,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-waiting-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open more",
+      "box": [
+        1008,
+        250,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "below",
+      "file": "built/1440-light-uk-card-waiting-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "rest",
+      "box": [
+        682,
+        536,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open appearance",
+      "box": [
+        682,
+        536,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines",
+      "box": [
+        682,
+        536,
+        300,
+        286
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 1",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines_pipeline_1.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 2",
+      "box": [
+        682,
+        536,
+        300,
+        341.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines_pipeline_2.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 3",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines_pipeline_3.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 4",
+      "box": [
+        682,
+        536,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines_pipeline_4.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 5",
+      "box": [
+        682,
+        536,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_pipelines_pipeline_5.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open more",
+      "box": [
+        682,
+        536,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1440-light-uk-card-many-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-waiting-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-waiting-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-waiting-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-waiting",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-waiting-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines",
+      "box": [
+        634,
+        336,
+        300,
+        286
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 1",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines_pipeline_1.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 2",
+      "box": [
+        634,
+        336,
+        300,
+        316.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines_pipeline_2.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 3",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines_pipeline_3.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 4",
+      "box": [
+        634,
+        336,
+        300,
+        302.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines_pipeline_4.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 5",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_pipelines_pipeline_5.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "card-many",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-en-card-many-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-waiting-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-waiting-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open pipeline",
+      "box": [
+        634,
+        336,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-waiting-open_pipeline.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-waiting",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-waiting-open_more.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "rest",
+      "box": [
+        634,
+        336,
+        300,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-rest.png"
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open appearance",
+      "box": [
+        634,
+        336,
+        300,
+        356
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 24,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_appearance.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines",
+      "box": [
+        634,
+        336,
+        300,
+        286
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 1",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines_pipeline_1.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 2",
+      "box": [
+        634,
+        336,
+        300,
+        341.6
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines_pipeline_2.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 3",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines_pipeline_3.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 4",
+      "box": [
+        634,
+        336,
+        300,
+        327.5
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines_pipeline_4.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open pipelines, pipeline 5",
+      "box": [
+        634,
+        336,
+        300,
+        329.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_pipelines_pipeline_5.png",
+      "shift": 0
+    },
+    {
+      "side": "built",
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "card-many",
+      "state": "open more",
+      "box": [
+        634,
+        336,
+        300,
+        348
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "clipped": [],
+      "stands": "beside",
+      "file": "built/1000-light-uk-card-many-open_more.png",
+      "shift": 0
+    }
+  ]
+}
