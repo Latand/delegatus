@@ -173,10 +173,17 @@ Keys: Left and Right step through the round's pictures, 1 to 9 toggle a
 variant, Escape closes and asks first when a comment was typed or dictated and
 not saved. A text field and a playing video keep their own keys.
 
-Rendered evidence is one `describe` block in
-`src/components/kanban/kanbanBoard.browser.test.tsx` over the `?proto=1`
-scenario of the board fixture, at 1440, 1000 and 390, in English and
-Ukrainian, light and dark. The seat's composer is drawn by the board, so the
-notice and its jump are measured there and the conversation driver is
-unchanged. Readings are in `evidence/prototype-review/readings.json`; frames
-stay under `$HOME/Projects/delegatus-wt/handoff/prototype-review/`.
+Rendered evidence comes from the two existing drivers. One `describe` block
+in `src/components/kanban/kanbanBoard.browser.test.tsx` runs the `?proto=1`
+scenario of the board fixture at 1440, 1000 and 390, in English and Ukrainian,
+light and dark: the card button, the notice in the orchestrator's pane and on
+the phone's seat card with its jump, the needs-you count with the waiting
+reviews' rows and their jump (the count falls by one with each saved choice),
+and every state of the review. One `describe` block in
+`src/components/conversation/conversationWindow.browser.test.tsx` opens the
+orchestrator's composer on the phone (`?case=prototype-notice`) and reads the
+notice above the message field, the count folded behind it, the unfolded list
+and the jump into the review, in both languages and both themes. Readings are
+in `evidence/prototype-review/readings.json` and
+`evidence/prototype-review/composer-notice.json`; frames stay under
+`$HOME/Projects/delegatus-wt/handoff/prototype-review/`.

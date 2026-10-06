@@ -1,0 +1,602 @@
+{
+  "driver": "src/components/conversation/conversationWindow.browser.test.tsx",
+  "readings": {
+    "phone-390-en-light-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readySearch results layoutGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Search results layout»",
+          "titleClear": true,
+          "titleCut": false
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "and 2 more prototypes",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          134.6,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-light-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readySearch results layoutGo to prototype",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            539,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Search results layout»",
+          "titleClear": true,
+          "titleCut": false
+        },
+        {
+          "task": "t-links",
+          "text": "Prototype readyRelease notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            593,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Release notes links, smaller arrows and a title long enough to be cut»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Upload progress sheet»",
+          "titleClear": true,
+          "titleCut": false
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Show fewer",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          77.1,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-light-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        137,
+        390,
+        707
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-en-dark-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readySearch results layoutGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Search results layout»",
+          "titleClear": true,
+          "titleCut": false
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "and 2 more prototypes",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          134.6,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-dark-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Prototype readySearch results layoutGo to prototype",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            539,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Search results layout»",
+          "titleClear": true,
+          "titleCut": false
+        },
+        {
+          "task": "t-links",
+          "text": "Prototype readyRelease notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            593,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Release notes links, smaller arrows and a title long enough to be cut»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            260.5,
+            647,
+            116.5,
+            44
+          ],
+          "actionLabel": "Go to the prototype «Upload progress sheet»",
+          "titleClear": true,
+          "titleCut": false
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Show fewer",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          77.1,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-en-dark-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        137,
+        390,
+        707
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-uk-light-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "і ще 2 прототипи",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          106.8,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-light-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            539,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Прототип готовийПосилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            593,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Панель перебігу завантаження»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Показати менше",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          105.2,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-light-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        137,
+        390,
+        707
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    },
+    "phone-390-uk-dark-notice": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "2",
+        "text": "і ще 2 прототипи",
+        "expanded": "false",
+        "box": [
+          10,
+          698,
+          106.8,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-dark-notice-all": {
+      "waiting": "3",
+      "rows": [
+        {
+          "task": "t-search",
+          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "box": [
+            10,
+            536,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            539,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-links",
+          "text": "Прототип готовийПосилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "box": [
+            10,
+            590,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            593,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися»",
+          "titleClear": true,
+          "titleCut": true
+        },
+        {
+          "task": "t-upload",
+          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "box": [
+            10,
+            644,
+            370,
+            50
+          ],
+          "action": [
+            268.8,
+            647,
+            108.2,
+            44
+          ],
+          "actionLabel": "Перейти до прототипу «Панель перебігу завантаження»",
+          "titleClear": true,
+          "titleCut": true
+        }
+      ],
+      "more": {
+        "folded": "0",
+        "text": "Показати менше",
+        "expanded": "true",
+        "box": [
+          10,
+          698,
+          105.2,
+          44
+        ]
+      },
+      "field": [
+        19,
+        759,
+        352,
+        32
+      ],
+      "fieldEnabled": true,
+      "overlaps": [],
+      "outside": 0,
+      "overflowX": 0,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "phone-390-uk-dark-jump": {
+      "review": "t-search",
+      "round": "r-search",
+      "variants": 2,
+      "sheet": [
+        0,
+        137,
+        390,
+        707
+      ],
+      "sheetInside": true,
+      "overflowX": 0
+    }
+  },
+  "failures": []
+}

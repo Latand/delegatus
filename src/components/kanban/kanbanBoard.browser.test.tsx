@@ -18176,6 +18176,48 @@ describe("prototype review on a task: the card's button, the review and the orch
             await shot("cards");
           }
 
+          /* 1b. A waiting review is counted where everything that needs the
+             operator is counted, and its row goes to the task and opens the
+             review. The three waiting tasks stand beside the board's other
+             waits; the choice saved further down takes exactly one of them out. */
+          const needsYouCount = () => page.evaluate((phone) => {
+            if (phone) return Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0");
+            return Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN");
+          }, size.phone);
+          const tabCount = async () => Number(/^\((\d+)\)/.exec(await page.title())?.[1] ?? "0");
+          const waitingBefore = await needsYouCount();
+          {
+            const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+            await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+            await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
+            await settle();
+            const rows = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-needs-you-row]`)].map((row) => ({
+              id: row.dataset.needsYouRow, prototype: row.dataset.attentionPrototype ?? row.querySelector<HTMLElement>("[data-attention-prototype]")?.dataset.attentionPrototype ?? null,
+              text: row.textContent, dismiss: Boolean(row.querySelector("[data-needs-you-dismiss]")), height: Math.round(row.getBoundingClientRect().height),
+            })), LIST);
+            const geometry = await measure(page, LIST, { rows: `${LIST} [data-needs-you-row]` });
+            const prototypes = rows.filter((row) => row.prototype);
+            record("needs-you", { count: waitingBefore, tab: await tabCount(), rows: rows.length, prototypes: prototypes.map((row) => ({ task: row.prototype, height: row.height, dismiss: row.dismiss })), overlaps: geometry.overlaps, outside: geometry.outside.filter((entry) => !size.phone || !/^rows/.test(entry)) });
+            await shot("needs-you");
+            if (JSON.stringify(prototypes.map((row) => row.prototype).sort()) !== JSON.stringify(["t-links", "t-search", "t-upload"])) failures.push(`${label}: the needs-you list names the waiting reviews of ${JSON.stringify(prototypes.map((row) => row.prototype))}`);
+            if (rows.length !== waitingBefore || (!size.phone && await tabCount() !== waitingBefore)) failures.push(`${label}: the needs-you control counts ${waitingBefore}, the tab ${await tabCount()} and the list holds ${rows.length} rows`);
+            if (geometry.overlaps.length || prototypes.some((row) => row.dismiss || !row.text?.includes(tr("proto.notice.ready")) || (size.phone && row.height < 44))) failures.push(`${label}: a waiting review's needs-you row is broken: ${JSON.stringify({ prototypes, overlaps: geometry.overlaps })}`);
+            await page.locator(`${LIST} [data-attention-prototype="t-links"]`).click();
+            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            const landed = await page.evaluate((phone) => ({
+              review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null,
+              round: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
+              task: phone ? Boolean(document.querySelector('[data-phone-task-prototype="t-links"]')) : Boolean(document.querySelector('[data-kanban-board] .card[data-id="task:t-links"]')),
+            }), size.phone);
+            record("needs-you-jump", landed);
+            if (landed.review !== "t-links" || landed.round !== "r-links-2" || !landed.task) failures.push(`${label}: the needs-you row did not go to the task and open its waiting round: ${JSON.stringify(landed)}`);
+            await closeReview();
+            if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
+            else if (await page.locator("[data-needs-you-close]").count()) await page.locator("[data-needs-you-close]").click();
+            await settle();
+          }
+
           /* 2. The orchestrator's notice and its jump. */
           if (!size.phone) {
             /* Where the seat is folded to its strip, the strip carries the notice as one chip; unfolded, the composer carries the lines. */
@@ -18380,6 +18422,13 @@ describe("prototype review on a task: the card's button, the review and the orch
             await page.waitForTimeout(400);
           }
 
+          /* The choice took exactly this review out of the count. */
+          await page.waitForFunction(({ phone, want }) => (phone
+            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
+            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 1 }, { timeout: 10_000 }).catch(() => {});
+          const waitingAfterChoice = await needsYouCount();
+          if (waitingAfterChoice !== waitingBefore - 1) failures.push(`${label}: ${waitingAfterChoice} wait after the choice, expected ${waitingBefore - 1}`);
+
           /* 11. One variant, saved into a project with no orchestrator. */
           await openTask("t-upload");
           if (size.phone) await page.locator('[data-phone-task-prototype="t-upload"]').click();
@@ -18401,6 +18450,14 @@ describe("prototype review on a task: the card's button, the review and the orch
           if (!unsent?.includes(tr("proto.delivery.no-orchestrator"))) failures.push(`${label}: with no orchestrator the review says ${unsent}`);
           await closeReview();
           if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
+
+          await page.waitForFunction(({ phone, want }) => (phone
+            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
+            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 2 }, { timeout: 10_000 }).catch(() => {});
+          const waitingAfterBoth = await needsYouCount();
+          record("needs-you-after", { before: waitingBefore, afterChoice: waitingAfterChoice, afterBoth: waitingAfterBoth, tab: await tabCount() });
+          /* The newer round of the links task still waits, with the board's other waits. */
+          if (waitingAfterBoth !== waitingBefore - 2) failures.push(`${label}: ${waitingAfterBoth} wait after two choices, expected ${waitingBefore - 2}`);
 
           /* 12. A newer round after a decision, and the earlier round still opens. */
           await openTask("t-links");
