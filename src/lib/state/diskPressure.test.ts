@@ -188,7 +188,7 @@ test.skipIf(process.platform === "win32")("shared agent sandboxes and tmux state
   fs.symlinkSync(namespace, path.join(fixture, "proc/42/ns/mnt"));
   fs.symlinkSync("/", via);
   process.env.LLV_STATE_DIR = state;
-  const config = agentConfigSandboxRoot({ TMPDIR: temp }, "/repo/account-a");
+  const config = agentConfigSandboxRoot({ NODE_ENV: "test", TMPDIR: temp }, "/repo/account-a");
   const sandbox = path.dirname(config);
   const tmux = path.join(temp, "llv-tmux-cwd");
   const manual = path.join(temp, "manual-output");
