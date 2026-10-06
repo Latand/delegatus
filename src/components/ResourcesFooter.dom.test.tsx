@@ -342,9 +342,9 @@ test("the rail keeps the table's stamp and the Viewer section between polls", ()
   expect(first.data).toMatchObject({ sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER });
 });
 
-/* The compact drawings of the sidebar design prototypes (docs/design/sidebar-redesign.md): the amber dot of an
-   aged reading says why, on a line and on a gauge, as today's full block does. */
-for (const density of ["line", "gauge"] as const) {
+/* The desktop sidebar's drawings (docs/design/sidebar-redesign.md): the amber dot of an aged reading says why,
+   on the one-line block and behind "All windows", as the phone's full block does. */
+for (const density of ["line", "detail"] as const) {
   test(`a ${density} footer names why its memory reading is stale`, async () => {
     const realTimeout = globalThis.setTimeout;
     const realFetch = globalThis.fetch;
@@ -372,10 +372,11 @@ for (const density of ["line", "gauge"] as const) {
       /* What is left, in words: the bar beside it draws the same share. */
       expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
       expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
-      if (density === "line") {
-        expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
-        expect(element.textContent).toContain("9.0 GiB free");
-      }
+      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
+      expect(element.textContent).toContain("9.0 GiB free");
+      /* How old the reading is stands on the screen only behind "All windows". */
+      expect(element.querySelector("[data-meter-note]")?.textContent ?? "").toContain(density === "detail" ? "captured" : "");
+      expect(Boolean(element.querySelector("[data-meter-note]"))).toBe(density === "detail");
     } finally {
       flushSync(() => { root.unmount(); });
       element.remove();

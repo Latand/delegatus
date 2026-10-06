@@ -2,12 +2,12 @@ import type { ReactNode } from "react";
 
 /**
  * How much room a rail footer block takes (docs/design/sidebar-redesign.md).
- * `full` is the footer the product ships; `line` and `gauge` exist for the
- * sidebar design prototypes and nothing in the product asks for them.
- * A line is one row per block in a shared three-column grid; a gauge is one
- * square per block for a rail too narrow for words.
+ * `line` is the desktop sidebar's system block: one row per reading in a
+ * shared three-column grid. `detail` is the same block after "All windows":
+ * the same rows, and under each account every limit window with its reset.
+ * `full` is the phone's drawing, which the sidebar does not use.
  */
-export type RailFooterDensity = "full" | "line" | "gauge";
+export type RailFooterDensity = "full" | "line" | "detail";
 
 /** Where a footer line starts: the left edge the rail's project names and section labels share. */
 export const LINE_EDGE = "pl-[19px] pr-3";
@@ -27,25 +27,30 @@ export function ReserveBar({ percent, color, className = "w-10" }: { percent: nu
 }
 
 /** One footer line: a name in the first column, what is left and its bar at the right edge. */
-export function MeterLine({ label, value, percent, color }: { label: ReactNode; value: ReactNode; percent: number | null; color: string }) {
+export function MeterLine({ label, value, percent, color, bar = true }: { label: ReactNode; value: ReactNode; percent: number | null; color: string; bar?: boolean }) {
   return (
     <span data-meter-line="" className="flex h-[22px] items-center gap-2">
       <span data-meter-label="" className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{label}</span>
       <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{value}</span>
-      <ReserveBar percent={percent} color={color} />
+      {bar ? <ReserveBar percent={percent} color={color} /> : null}
     </span>
   );
 }
 
-/** One footer square: a mark above its bar, and a second bar when the block has two readings. */
-export function MeterGauge({ mark, percent, color, second }: { mark: ReactNode; percent: number | null; color: string; second?: { percent: number; color: string } }) {
+/**
+ * One limit window behind "All windows": its name, what is left and the bar of
+ * that share on the grid of the lines above it, then when it resets.
+ */
+export function WindowLine({ label, left, value, color, note }: { label: string; left: number; value: ReactNode; color: string; note?: ReactNode }) {
   return (
-    <span className={`flex w-10 flex-col items-center justify-center ${second ? "h-10 gap-[3px]" : "h-9 gap-[5px]"}`}>
-      <span className="flex h-3.5 items-center text-[9.5px] font-bold leading-none text-secondary">{mark}</span>
-      <ReserveBar percent={percent} color={color} className="w-6" />
-      {second ? <ReserveBar percent={second.percent} color={second.color} className="w-6" /> : null}
+    <span data-meter-window="" className="block">
+      <span data-meter-line="" className="flex h-[20px] items-center gap-2">
+        <span data-meter-label="" className="min-w-0 flex-1 truncate text-[11px] text-secondary">{label}</span>
+        <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{value}</span>
+        <ReserveBar percent={left} color={color} />
+      </span>
+      {/* A reset with the hour an old reading was taken runs to a second line; it is never cut. */}
+      {note ? <span data-meter-note="" className="-mt-0.5 block break-words pb-1 text-[10px] leading-[13px] text-muted">{note}</span> : null}
     </span>
   );
 }
-
-export const GAUGE_BUTTON = "flex items-center justify-center rounded-[9px] hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";

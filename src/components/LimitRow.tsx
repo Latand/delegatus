@@ -2,6 +2,7 @@
 
 import { type Locale, translate, useLocale } from "@/lib/i18n";
 import type { LimitWindow } from "@/lib/types";
+import { WindowLine } from "./railFooterDensity";
 import { formatResetClock, formatResetEta } from "./rateLimit";
 
 export function barColor(leftPercent: number, engineColor: string): string {
@@ -40,6 +41,30 @@ export function LimitRow({ label, window: value, engineColor, now, staleHint }: 
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** {@link LimitRow} on the grid of the desktop sidebar's system block: one line, then the reset under it. */
+export function LimitWindowLine({ label, window: value, engineColor, now, staleHint }: {
+  label: string;
+  window: LimitWindow | null;
+  engineColor: string;
+  now: number;
+  staleHint?: string | null;
+}) {
+  const { t } = useLocale();
+  if (!value) return null;
+  const left = Math.max(0, Math.min(100, 100 - value.usedPercent));
+  const color = barColor(left, engineColor);
+  const note = [value.resetsAt ? t("limits.reset", { eta: formatResetEta(value.resetsAt, now), at: formatResetClock(value.resetsAt, now) }) : null, staleHint].filter(Boolean).join(" · ");
+  return (
+    <WindowLine
+      label={label}
+      left={left}
+      color={color}
+      note={note || undefined}
+      value={<>{t("limits.left")} <span className={`font-bold ${left <= 30 ? "" : "text-primary"}`} style={left <= 30 ? { color } : undefined}>{Math.round(left)}%</span></>}
+    />
   );
 }
 

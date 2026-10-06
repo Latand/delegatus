@@ -18,7 +18,6 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
-import { parseRailVariant, RailPrototypeFrame } from "@/components/kanban/sidebarVariants.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -433,8 +432,7 @@ if (ASKS_YOU) {
   });
 }
 /* t-links: a simple chain parked on a decision. */
-/* The sidebar frames print this question on the project's row, so they get it in the frame's language. */
-const linksImpl = add(conversation("links-impl", new URLSearchParams(location.search).has("rail") ? L("Which of the two anchors should win?", "Який із двох якорів має перемогти?") : "Which of the two anchors should win?", { mtime: now - 17 * MIN, engine: "codex", model: "gpt-5.6", waitingInput: { since: now - 17 * MIN } }));
+const linksImpl = add(conversation("links-impl", "Which of the two anchors should win?", { mtime: now - 17 * MIN, engine: "codex", model: "gpt-5.6", waitingInput: { since: now - 17 * MIN } }));
 /* t-limits: build failed, the fail edge started diagnose, which needs a decision. */
 const limitsBuild = add(conversation("limits-build", "Rate limited before the verdict", { mtime: now - 3 * 24 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const limitsDiag = add(conversation("limits-diag", "Retry on another account, or wait for the reset?", { mtime: now - 3 * 24 * 60 * MIN + 20 * MIN }));
@@ -549,14 +547,13 @@ const ledgerBuild = OVERVIEW_SCOPE ? add(conversation("ledger-build", "Reconcili
 const ledgerQuiet = OVERVIEW_SCOPE ? add(conversation("ledger-quiet", "Archived last quarter", { project: LEDGER, mtime: now - 4 * 60 * MIN, lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 } })) : null;
 const meshAsk = OVERVIEW_SCOPE ? add(conversation("mesh-ask", "Which of the two meshes keeps the old ids?", { project: MESH, engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } })) : null;
 const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the migration notes", { project: MESH, mtime: now - 6 * 60 * MIN })) : null;
-/* The sidebar design lane (docs/design/sidebar-redesign.md): `?rail=few|many` fills the project list with invented
+/* The left sidebar (docs/design/sidebar-redesign.md): `?rail=few|many` fills the project list with invented
    projects in every state a row has (waiting on the operator, working, quiet, known to the catalog only, crowned,
-   archived, a name longer than the row), and `?railv=1|2|3` draws that list in one of the numbered variants. */
+   archived, a name longer than the row). */
 const RAIL = new URLSearchParams(location.search).get("rail");
 /* The states a frame of the default list cannot show: `copilot` signs a Copilot account in, `stale` ages the memory
    and Claude readings and fails the Codex read, `empty`, `loading` and `unreachable` are the list's own three notices. */
 const RAIL_STATE = RAIL ? new URLSearchParams(location.search).get("railstate") : null;
-const RAIL_VARIANT = parseRailVariant(location.search);
 const railCatalog: { project: string; displayName: string; conversations: number; smt: number }[] = [];
 const RAIL_LONG = "northwind-customer-data-platform-migration";
 if (RAIL) {
@@ -3180,4 +3177,4 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-pre
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : RAIL_VARIANT !== null ? <RailPrototypeFrame variant={RAIL_VARIANT}><Viewer /></RailPrototypeFrame> : <Viewer />);
+) : <Viewer />);

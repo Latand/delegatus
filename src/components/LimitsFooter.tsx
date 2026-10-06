@@ -16,9 +16,9 @@ import { TelegramFooterRow } from "./TelegramConnect";
 import { ChevronDown, Loader2 } from "./icons";
 import { formatQuotaAsOf, localeBcp47 as bcp47, windowLabel } from "./rateLimit";
 import { engineTintOf, fmtAge } from "./utils";
-import { barColor, LimitRow } from "./LimitRow";
+import { barColor, LimitRow, LimitWindowLine } from "./LimitRow";
 import { EngineMark } from "./EngineMark";
-import { GAUGE_BUTTON, MeterGauge, ReserveBar, type RailFooterDensity } from "./railFooterDensity";
+import { LINE_EDGE, ReserveBar, type RailFooterDensity } from "./railFooterDensity";
 
 const POLL_MS = 60_000;
 
@@ -146,7 +146,7 @@ function EngineLimitsBlock({
   onSwitched,
   density = "full",
 }: {
-  /** `line` and `gauge` are the sidebar design prototypes' compact drawings. */
+  /** `line` and `detail` are the desktop sidebar's drawings; `full` is the phone's. */
   density?: RailFooterDensity;
   engine: Engine;
   label: string;
@@ -265,7 +265,6 @@ function EngineLimitsBlock({
   const visibleFailureReason = accounts.status === "loading" || identityPending ? null : failureReason;
 
   if (density !== "full") {
-    const gauge = density === "gauge";
     const windows = accountLimits ? [
       accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
       accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
@@ -277,23 +276,6 @@ function EngineLimitsBlock({
     /* The line says what is left of the tightest window, and the bar draws that same share. */
     const left = effective ? effective.percent : null;
     const color = effective ? barColor(effective.percent, tint.color) : tint.color;
-    const panels = (
-      <>
-        {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
-        {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
-      </>
-    );
-    if (gauge) {
-      return (
-        <div ref={containerRef} className="relative" data-engine-limits={engine}>
-          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`relative ${GAUGE_BUTTON} ${anyStale ? "opacity-60" : ""}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
-            <MeterGauge mark={<EngineMark engine={engine} size={14} />} percent={left} color={color} />
-            {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warning" /> : null}
-          </button>
-          {panels}
-        </div>
-      );
-    }
     return (
       <div ref={containerRef} className="relative" data-engine-limits={engine}>
         <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
@@ -318,7 +300,21 @@ function EngineLimitsBlock({
             <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 truncate px-1.5 text-right text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
           )}
         </div>
-        {panels}
+        {/* Behind "All windows" a failed read says why in full, under its account. */}
+        {density === "detail" && visibleFailureReason ? <div data-meter-note="" className={`${LINE_EDGE} -mt-0.5 break-words pb-1 text-[10px] leading-[13px] text-muted ${anyStale ? "opacity-60" : ""}`}>{visibleFailureReason}</div> : null}
+        {density === "detail" && hasWindows ? (
+          /* Behind "All windows": the plan, then every window with its reset, on the edge the account starts on. */
+          <div data-limits-windows="" className={`${LINE_EDGE} pb-1 ${anyStale ? "opacity-60" : ""}`}>
+            {accountLimits?.plan ? <span data-meter-note="" className="-mt-0.5 block truncate pb-0.5 text-[10px] leading-[13px] text-muted">{label} · {accountLimits.plan}</span> : null}
+            <LimitWindowLine label={windowLabel(t, "session", accountLimits!.session?.windowMinutes)} window={accountLimits!.session} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.session?.stale), quota.session?.observedAt ?? null, locale)} />
+            <LimitWindowLine label={windowLabel(t, "weekly", accountLimits!.weekly?.windowMinutes)} window={accountLimits!.weekly} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.weekly?.stale), quota.weekly?.observedAt ?? null, locale)} />
+            {quota.tiers.map((tier) => (
+              <LimitWindowLine key={tier.value.tier} label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} window={tier.value} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(tier.stale, tier.observedAt, locale)} />
+            ))}
+          </div>
+        ) : null}
+        {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
+        {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
       </div>
     );
   }
@@ -436,7 +432,7 @@ export function LimitsFooter({ density = "full" }: { density?: RailFooterDensity
   // Each engine's account list governs its switcher visibility. Both remain
   // mounted through empty limits, initial loading, and account refresh failures.
   return (
-    <div className={density === "gauge" ? "flex shrink-0 flex-col items-center gap-0.5 empty:hidden" : `shrink-0 border-t border-border empty:hidden ${density === "line" ? "py-0.5" : ""}`}>
+    <div className={`shrink-0 border-t border-border empty:hidden ${density === "full" ? "" : "py-0.5"}`}>
       <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
       <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
       {/* GitHub Copilot accounts and their monthly transcript quota. */}

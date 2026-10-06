@@ -7,7 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
-import { GAUGE_BUTTON, LINE_EDGE, MeterGauge, MeterLine, type RailFooterDensity } from "./railFooterDensity";
+import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -220,30 +220,29 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
     />
   ) : null;
   if (density !== "full") {
-    const gauge = density === "gauge";
-    /* On a line the dot follows the name it qualifies; a gauge has only its corner. */
-    const staleDot = staleReason ? <span className={`h-1.5 w-1.5 rounded-full bg-warning ${gauge ? "absolute right-1 top-1" : "ml-1.5 inline-block align-middle"}`} data-testid="resources-stale-dot" title={staleReason} /> : null;
+    /* The dot follows the name it qualifies. */
+    const staleDot = staleReason ? <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-warning align-middle" data-testid="resources-stale-dot" title={staleReason} /> : null;
     return (
-      <div ref={panelRef} className={`relative shrink-0 ${gauge ? "" : "border-t border-border"}`} data-resources-footer>
+      <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>
         <button
           type="button"
           aria-expanded={open}
           aria-label={t("resources.openAria")}
           title={reading}
           onClick={() => setOpen((value) => !value)}
-          className={gauge ? GAUGE_BUTTON : `block w-full ${LINE_EDGE} py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+          className={`block w-full ${LINE_EDGE} py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
         >
-          {gauge ? (
-            <MeterGauge mark={t("resources.ram")} percent={system ? ramAvailPct : null} color={ramColor(ramAvailPct)} second={system && system.swapTotal > 0 ? { percent: 100 - swapUsedPct, color: swapColor(swapUsedPct) } : undefined} />
-          ) : system ? (
+          {system ? (
             <>
               <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
               {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              {/* Behind "All windows": what Delegatus itself holds, and how old the reading is. */}
+              {density === "detail" && viewer ? <span className="block" data-testid="resources-viewer-line" title={t("resources.viewerHint")}><MeterLine label={t("resources.viewer")} value={viewerAmount(viewer, t)} percent={null} color="var(--color-muted)" bar={false} /></span> : null}
+              {density === "detail" ? <span data-meter-note="" className="block break-words pb-0.5 text-[10px] leading-[13px] text-muted">{t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}</span> : null}
             </>
           ) : (
             <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
           )}
-          {gauge ? staleDot : null}
         </button>
         {cleanup}
       </div>

@@ -2,7 +2,9 @@
 
 **Originating requirement** (operator's verdict on two redesign attempts, 2026-10-06, as paraphrased in the lane's specification): the orchestrator conversation looks good and stays; the pipelines interface is well thought out and stays; "the left sidebar does not look good and has odd moments". The redesign is targeted: Delegatus keeps its structure and its visual language, and only the named surfaces are redrawn, each in its own lane, to the quality of the best parts of today's interface. No liquid glass.
 
-This note covers the desktop sidebar. It is a design: nothing here ships. The three variants are working prototypes drawn on the real product components, and the product keeps drawing today's rail unless the kanban evidence fixture asks for a variant.
+**Variant 1 was built and is the product's sidebar** (operator's decision, 2026-10-06: sidebar variant 1, without the question line). Section 8 says what was built, what changed against the drawing and where its evidence is. Sections 1 to 7 are the design as it was written and judged: in them "today" is the sidebar that variant 1 replaced, and the prototype file, the variant switch (`?railv=`, `?railask=`, `?railopen=`) and the driver block they name were removed with the build.
+
+This note covers the desktop sidebar. When it was written it was a design: the three variants were working prototypes drawn on the real product components, and the product kept drawing the sidebar of section 1 unless the kanban evidence fixture asked for a variant.
 
 Prior work: `search_transcripts` ("left sidebar redesign variants footer memory swap accounts") found the two closed concept lanes and the usage audit, and no earlier decision about the rail itself. The inventory in `docs/design/interface-redesign-usage-audit.md` (on the audit lane's branch) was the starting point; every row below was checked against the source at this commit.
 
@@ -163,3 +165,41 @@ The readings each frame is judged by are committed in `evidence/sidebar-redesign
 - `sheet-compare-all.png`: today and all three, whole frames
 - `sheet-compare-rails-<size>-<scheme>-<lang>.png`: the rails alone at full size, one sheet per combination
 - `v<N>-<state>-<size>-<scheme>-<lang>.png`: the frames
+
+## 8. What was built
+
+`ProjectRail` in `src/components/ProjectRail.tsx` is variant 1 for every user of the desktop layout. Variants 2 and 3, the question line, `sidebarVariants.prototype.tsx`, the context that let the fixture swap the drawing, and the gauge drawing of the footer blocks are gone. The phone is unchanged: it draws its project picker with `MobileProjectSheet`, and the footer blocks keep their `full` drawing for it.
+
+Built as drawn in section 3: one left edge at 19 px for every name and label; a column for each mark that exists only while some project carries the mark; a short age in the last column; "Pinned" and "Projects" sections with their counts, the crown on the label of the first; the archive as a labelled fold with its count, its rows without the crown control; Overview with the totals of both marks; the filter with its glyph and, on a first run, the labelled "Create project" button across the row; the system block of one line per reading behind the same fold and the same stored key as before.
+
+Every function of section 1 is in the built sidebar, at the place the "1 Tidied" column of section 4 names. The strings the prototype carried in its own table are i18n keys now (`rail.pinned`, `rail.rowNeedsYou`, `rail.rowWorking`, `rail.rowConversations`, `rail.rowUpdated`, `rail.age*`, `rail.footerDetail*`, `rail.footerCompact*`), in English and Ukrainian with the Ukrainian plural forms.
+
+Changed against the drawing, each from the design critique's open notes on variant 1:
+
+1. **"All windows" has the block's left edge.** The drawing swapped the lines for the old full blocks, which start at 14 px, put the Telegram icon before its word again and fill the memory bar as memory is used. The built mode keeps the same lines and adds under each account its plan and every limit window on the same grid: the window's name, what is left, a bar of that share, and the reset under it. Memory adds what Delegatus itself holds and the age of the reading. A failed read's reason is whole under its account there. Every bar in the block draws what is left, in both modes. The choice is stored under `llv:rail-footer-detail:v1`.
+2. **The switch reads as a control.** "All windows" / "Compact" has a frame, where the drawing had bare words.
+3. **"Pinned" carries its count** as "Projects" and "Archive" do, and the driver checks each count against the rows under it.
+4. **The crown control and the age never share a place.** The control shows while the pointer is on the row or the keyboard is on the control, and the age of that row is hidden for exactly as long. The driver reaches a control with Tab alone and fails if the age under it is drawn, if a mark is under it, or if any other row shows a control or hides its age.
+
+The cost section's list for variant 1 stands for the built sidebar, with two changes: reset times and the plan tier are one press away and no longer need the old blocks; a reset line with the hour of an old reading runs to a second line and is never cut. The check of the name's second line in engines other than Chromium is still owed: this machine has Chromium only.
+
+**Evidence.** Driver: the block "the left sidebar: one tidy panel with a compact system block" in `src/components/kanban/kanbanBoard.browser.test.tsx`, over the same fixture with `?rail=few|many`, `?railstate=`, `?railview=overview` and `?railarchive=1`, which are data scenarios and switch no drawing.
+
+```
+LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> SIDEBAR_FRAMES_DIR=<a directory outside the checkout> \
+  SIDEBAR_TODAY_DIR=<frames of the replaced sidebar> \
+  bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one tidy panel"
+```
+
+Frames at 1440x900 and 1000x700, light and dark, en and uk, in eight states: few (Overview selected), a project selected, the system block folded, sixteen projects, the empty list of a first run, the loading list, the unreachable catalog, the archive unfolded. Then once each at 1440x900 light: the header menu and the create form in both languages, a Copilot account and its account list, aged and failed readings, "All windows" (also with Copilot, with aged readings, and reached by its own switch), the accounts panel, the burndown chart, the sessions cleanup, the Telegram panel, and a crown control reached by the pointer and by the keyboard.
+
+The replaced sidebar cannot be drawn by the product any more, so its side of every comparison is a frame the design lane's block wrote at the commit before the build (`v0-<state>-…png`, shot in the same eight states) and handed to the run through `SIDEBAR_TODAY_DIR`. Its numbers come from `evidence/sidebar-redesign/measurements.json`, which stays as the design lane committed it; the built sidebar's readings are in `evidence/sidebar-redesign/built.json`, each with the replaced sidebar's reading of the same frame beside it.
+
+The driver fails on: a sidebar that is not 248 px or a board whose width differs from the one beside the replaced sidebar; two left edges for names and labels, for a mark column or for the lines of the system block, or an edge that is not 19 px; a section with no count or a count that differs from its rows; a label, a reading, a control word or a project name that is cut or leaves the sidebar, in either language; a bar more than two points from the reading beside it; an account name cut on an engine line; a failed read's reason that is cut with no tooltip completing it, or cut behind "All windows" with no whole line under its account; a state whose own element is absent from the frame; an archive label off the edge or an unfolded archive without both rows; a list no taller than the replaced sidebar's or with fewer rows in view; a panel outside the window; a crown control over an age or a mark; a page error.
+
+Frames and sheets are not committed; they are in `$HOME/Projects/delegatus-wt/handoff/ui-built/sidebar/`:
+
+- `sheet-compare-<size>-<scheme>-<lang>.png`: every state as "today | built", the sidebars alone at full size, one sheet per combination
+- `sheet-compare-whole-light-<lang>.png`: whole frames of three states, so what is outside the sidebar can be compared
+- `sheet-built-states.png`: the states shot once
+- `built-<state>-<size>-<scheme>-<lang>.png`: the frames
