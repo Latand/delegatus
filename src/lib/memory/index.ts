@@ -7,7 +7,10 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { directoryProjectId, localRepositoryProjectId } from "@/lib/projects/identity";
+import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
+import type { MemoryTurnReason } from "./viewTypes";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
 import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
@@ -103,6 +106,9 @@ export class MemoryIndex {
         );
         CREATE TABLE IF NOT EXISTS memory_injection_activity (
           month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
+        );
+        CREATE TABLE IF NOT EXISTS memory_last_turn (
+          project TEXT PRIMARY KEY, conversation TEXT, request TEXT, started_at REAL, reason TEXT, expires REAL
         );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
       `);
@@ -256,43 +262,58 @@ export class MemoryIndex {
     return this.database().query<{ channel: string; outcome: string; score: number | null; conversationId: string | null }, [string]>("SELECT channel, outcome, score, conversation_id AS conversationId FROM memory_offers WHERE memory_id = ? ORDER BY at").all(id);
   }
 
-  injectionCandidates(prompt: string, project: string, engine: string, conversation: string, requestDeadline = Infinity): Candidate[] {
+  injectionCandidates(prompt: string, project: string, engine: string, conversation: string, requestDeadline = Infinity, options: { cwd?: string; reason?: (reason: MemoryTurnReason) => void } = {}): Candidate[] {
     // A native store can contain thousands of near matches. Optional retrieval
     // has its own short CPU budget and abandons incomplete filtering entirely.
     const deadline = Math.min(requestDeadline, performance.now() + 100);
     const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
     // A pending confirmation may exclude an otherwise eligible candidate.
     // Drain bounded batches and abstain until that ledger is complete.
-    if (!this.replayConfirmedInjections()) return [];
+    if (!this.replayConfirmedInjections()) { options.reason?.("ledgerPending"); return []; }
     const query = queryFor(prompt, "recall");
     if (!query) return [];
     const db = this.database();
     db.exec("PRAGMA busy_timeout = 50");
     try {
       check();
-      this.normalizeProjects(db);
+      // Retrieval is read-only: a writer must not turn alias recovery into
+      // an empty result. Refresh normalizes the derivative independently.
       const canonical = canonicalProject(project);
-      const hits = db.query<MemoryItem, [string, string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
-        WHERE memory_fts MATCH ? AND (e.project = ? OR e.scope = 'global')
-          AND e.engine != ? AND e.engine != 'shared' AND e.kind != 'instruction'
-        ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT 128 OFFSET ?`);
-      const native: MemoryItem[] = [];
-      const nativePage = db.query<MemoryItem, [string, string, string, string, number]>("SELECT * FROM memory_entries WHERE (engine = ? AND (? = 'codex' OR scope = 'global' OR project = ?)) OR (kind = 'instruction' AND (scope = 'global' OR project = ?)) ORDER BY id LIMIT 128 OFFSET ?");
-      for (let offset = 0; ; offset += 128) {
-        check();
-        const page = nativePage.all(engine, engine, canonical, canonical, offset);
-        native.push(...page);
-        if (page.length < 128) break;
+      const keys = new Set([canonical]);
+      for (const key of Object.keys(projectAliasSnapshot().aliases)) {
+        check(); if (canonicalProject(key) === canonical) keys.add(key);
       }
+      // These earlier identities are provably the caller's exact folder,
+      // including a deleted checkout recovered by the scanner's durable map.
+      if (options.cwd && canonicalProject(projectInfoFromCwd(options.cwd)?.project ?? "") === canonical) {
+        const folders = new Set([options.cwd, projectRootForCwd(options.cwd)].filter((folder): folder is string => Boolean(folder)));
+        for (const folder of folders) {
+          const previous = [directoryProjectId(folder), localRepositoryProjectId(folder), folder.replace(/[^a-zA-Z0-9]/g, "-")];
+          for (const key of previous) if (key && (canonicalProject(key) === key || canonicalProject(key) === canonical)) keys.add(key);
+        }
+      }
+      const projectKeys = JSON.stringify([...keys]);
+      const hits = db.query<MemoryItem, [string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
+        WHERE memory_fts MATCH ? AND (e.project IN (SELECT value FROM json_each(?)) OR e.scope = 'global')
+          AND e.engine != 'shared' AND e.kind != 'instruction'
+        ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT 128 OFFSET ?`);
+      // Being present in an engine's private store does not prove a topic
+      // reached this turn. The decision model judges both engines' offers.
+      // Only instructions are known to be loaded independently of recall.
+      const native = db.query<MemoryItem, [string, string]>("SELECT * FROM memory_entries WHERE kind = 'instruction' AND engine = ? AND (scope = 'global' OR project IN (SELECT value FROM json_each(?)))").all(engine, projectKeys);
       check();
       const offered = new Set(db.query<{ memory_id: string }, [string]>("SELECT memory_id FROM memory_offers WHERE conversation_id = ? AND channel = 'inject'").all(conversation).map(r => r.memory_id));
+      const earlier = db.query<MemoryItem, [string]>(`SELECT DISTINCT e.* FROM memory_entries e JOIN memory_offers o ON o.memory_id = e.id
+        WHERE o.conversation_id = ? AND o.channel = 'inject'`).all(conversation);
+      native.push(...earlier);
+      check();
       const kept: MemoryItem[] = [];
       for (let offset = 0; ; offset += 128) {
         check();
-        const page = hits.all(query, canonical, engine, offset);
+        const page = hits.all(query, projectKeys, offset);
         for (const hit of page) {
           check();
-          if (hit.engine === engine || hit.engine === "shared" || hit.kind === "instruction" || offered.has(hit.id)
+          if (offered.has(hit.id)
             || JSON.parse(hit.flags).includes("retired") || native.some(own => { check(); return nativeMatch(hit, own); })
             || kept.some(own => nativeMatch(hit, own))) continue;
           kept.push(hit);
@@ -302,7 +323,7 @@ export class MemoryIndex {
       }
       check();
       return kept;
-    } catch { return []; }
+    } catch { options.reason?.(performance.now() >= deadline ? "candidateTimeout" : "failed"); return []; }
     finally { db.exec("PRAGMA busy_timeout = 5000"); }
   }
 
@@ -533,12 +554,29 @@ export class MemoryIndex {
     return { ...counts, delivered };
   }
 
+  recordLastTurn(project: string, conversation: string, request: string, startedAt: number, reason: MemoryTurnReason, expires: number | null = null) {
+    this.hookDatabase(db => db.query(`INSERT INTO memory_last_turn VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project) DO UPDATE SET conversation = excluded.conversation, request = excluded.request,
+        started_at = excluded.started_at, reason = excluded.reason, expires = excluded.expires
+      WHERE excluded.started_at >= memory_last_turn.started_at`).run(canonicalProject(project), conversation, request, startedAt, reason, expires));
+  }
+
+  lastTurn(project: string): MemoryTurnReason | null {
+    // Reading confirmed offers also replays retained delivery receipts.
+    if (!this.replayConfirmedInjections()) throw Error("memory ledger replay incomplete");
+    const rows = this.database().query<{ project: string; reason: MemoryTurnReason; started_at: number; expires: number | null }, []>(
+      "SELECT project, reason, started_at, expires FROM memory_last_turn ORDER BY started_at DESC").all();
+    const row = rows.find(row => canonicalProject(row.project) === canonicalProject(project));
+    return row?.reason === "prepared" && row.expires !== null && Date.now() >= row.expires + 30000 ? "unconfirmed" : row?.reason ?? null;
+  }
+
   claimHook(conversation: string, request: string) {
     return this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_hook_attempts VALUES (?, ?)").run(conversation, request).changes === 1);
   }
 
   recordInjection(entries: Array<Pick<Candidate, "id" | "title"> & { score: number }>, requestId: string, conversation: string, at = new Date().toISOString()) {
     this.hookDatabase(db => db.transaction(() => {
+      db.query("UPDATE memory_last_turn SET reason = 'delivered' WHERE conversation = ? AND request = ?").run(conversation, requestId);
       for (const entry of entries) {
         db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, at, entry.score);
         // A historical offer keeps its name when the derivative is refreshed.

@@ -122,6 +122,105 @@ describe("shared memory settings", () => {
     }
   }, 90000);
 
+  browserTest("confirmed Claude seat memories and last-turn reasons render in en and uk", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/memory/settings/route");
+    const { offerForHook } = await import("@/lib/memory/controller");
+    const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+    const { memoryIndex } = await import("@/lib/memory/service");
+    const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
+    const { offeredMemoryForTranscript } = await import("@/lib/memory/offers");
+    const crypto = await import("node:crypto");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-browser-")), previous = { ...process.env }, originalFetch = globalThis.fetch;
+    process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.OPENROUTER_API_KEY = "fixture"; delete process.env.PORT;
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+    const project = (await import("@/lib/scanner/describe")).projectInfoFromCwd(root)!.project;
+    const reservation = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project,
+      role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+      launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic seat conversation" }) });
+    if (reservation.kind === "conflict") throw Error("fixture seat conflict");
+    const receipt = reservation.receipt;
+    const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+    const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+    const line = (uuid: string, text: string) => JSON.stringify({ type: "user", uuid, promptSource: "sdk", timestamp: "2026-10-06T12:00:00Z", message: { role: "user", content: text } });
+    const prompt = "Update widget parser", lines = [line("fixture-opening", "Review widget parser"), line("fixture-relay", "Machine wake: widget parser work is ready")];
+    fs.writeFileSync(transcript, lines.join("\n") + "\n");
+    registry.settleSpawn(receipt.launchId, { key: { engine: "claude", sessionId: session }, artifactPath: transcript, cwd: root,
+      accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    // The project's route reads the same isolated ledger the hook writes.
+    setSharedMemoryEnabled("fixture-project", true);
+    setSharedMemoryEnabled(project, true);
+    const source = path.join(root, "widget.md");
+    fs.writeFileSync(source, "---\nname: Widget parser rule\ndescription: Widget parser needs escaped delimiters.\ntype: project\n---\nUse escaped delimiters.\n");
+    await memoryIndex().refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project }]);
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(session, { id: "fixture-relay", text: "Machine wake: widget parser work is ready", origin: { kind: "agent" } }, "queued-next-turn");
+    ledger.confirmDelivered(session, "fixture-relay", "fixture-relay");
+    ledger.recordQueued(session, { id: "fixture-operator", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+      const body = await request.json(); return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
+    } });
+    globalThis.fetch = ((url, init) => originalFetch(String(url).includes("openrouter.ai") ? `http://127.0.0.1:${endpoint.port}` : url, init)) as typeof fetch;
+    const headers = { "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) };
+    const out = path.resolve(".artifacts/shared-memory-seat"); fs.mkdirSync(out, { recursive: true });
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let launched: Awaited<ReturnType<typeof chromium.launchServer>> | undefined;
+    let browser: Awaited<ReturnType<typeof chromium.connect>> | undefined;
+    let browserPid: number | undefined;
+    const measurements: unknown[] = [];
+    try {
+      expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, delegatus_delivery_id: "fixture-operator" })).toContain("Widget parser rule");
+      await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { delegatus_confirm: true, delegatus_emitted_at: Date.now() });
+      lines.push(line("fixture-current", prompt)); fs.appendFileSync(transcript, lines.at(-1)! + "\n"); ledger.confirmDelivered(session, "fixture-operator", "fixture-current");
+      const memoryOffers = offeredMemoryForTranscript(transcript);
+      expect(memoryOffers["fixture-current"]).toEqual(["Widget parser rule"]);
+      server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+        "/api/fixture/memory-turn": { lines, memoryOffers, messages: { "fixture-opening": { origin: "operator" }, "fixture-relay": { origin: "agent" }, "fixture-current": { origin: "operator" } } },
+        "/api/memory/settings": () => GET(new NextRequest(`http://localhost/api/memory/settings?project=${project}`)),
+        "/api/asks-you/key": { present: true, source: "env" },
+        "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      });
+      launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      browserPid = launched.process().pid; fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+      browser = await chromium.connect(launched.wsEndpoint());
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), "delivered");
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "?seat-memory", { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          const offer = page.locator("[data-memory-offer]"); await offer.waitFor();
+          expect(await offer.count()).toBe(1); expect(await offer.textContent()).toContain("Widget parser rule");
+          expect(await offer.locator("..").textContent()).toContain(prompt);
+          await page.screenshot({ path: path.join(out, `${lang}-${width}-offer.png`) });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          for (const reason of ["delivered", "noCandidates", "noMatches", "candidateTimeout", "timeout", "failed", "prepared", "capped", "unprovenOrigin", "ledgerPending", "unconfirmed"] as const) {
+            memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), reason);
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+            const last = page.locator("[data-memory-last-turn]");
+            await page.waitForFunction(text => document.querySelector("[data-memory-last-turn]")?.textContent?.trim() === text, translate(lang, `memory.last.${reason}`));
+            await last.scrollIntoViewIfNeeded();
+            const box = await last.evaluate(el => {
+              const row = el.closest("[data-memory-setting]")!; const r = el.getBoundingClientRect();
+              return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, overflow: row.scrollWidth - row.clientWidth, text: el.textContent?.trim() };
+            });
+            expect(box.top).toBeGreaterThanOrEqual(0); expect(box.bottom).toBeLessThanOrEqual(900);
+            expect(box.left).toBeGreaterThanOrEqual(0); expect(box.right).toBeLessThanOrEqual(width); expect(box.overflow).toBeLessThanOrEqual(1);
+            measurements.push({ lang, width, reason, ...box, pageErrors });
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${reason}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/seat-turn.json", JSON.stringify(measurements, null, 2) + "\n");
+    } finally {
+      await browser?.close(); await launched?.close(); server?.stop(); endpoint.stop(true);
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+      memoryIndex().close(); setAgentRegistryForTests(null); globalThis.fetch = originalFetch;
+      for (const key of ["LLV_STATE_DIR", "OPENROUTER_API_KEY", "PORT"]) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 90000);
+
   browserTest("status, shared key and ledger stay readable in en and uk at 1440 and 390", async () => {
     const { NextRequest } = await import("next/server");
     const memory = await import("@/app/api/memory/settings/route");

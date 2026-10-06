@@ -492,6 +492,17 @@ Why the hook and why the delivery path was set aside:
 | Engine `UserPromptSubmit` hook | Documented in both engines. Context stays separate from the operator's text. Covers prompts typed in a terminal inside a Delegatus-launched session. Claude launches already get a managed hook file. | Codex requires trust for an unmanaged hook, and hooks under the app-server host are unverified (phase 3 probe). |
 | Delegatus delivery (`src/lib/delivery.ts:728`) | One place, engine-neutral. | Changes the text the operator sent, enters the transcript and the search index as the operator's words, and touches the 32 000-byte envelope and the dedup markers. |
 
+The operator-turn correction supersedes the candidate exclusion in step 2:
+index presence alone gives no evidence that a topic was loaded into this
+conversation. Candidates from both engines now reach the decision model.
+Loaded instructions, retired entries, previous offers and their near matches
+remain excluded. Retrieval reads the canonical alias family and the verified
+caller's earlier folder identities without rewriting project rows in the hook.
+Refresh still normalizes the derivative separately. A missing Asks-you store
+is a first reservation; the Asks-you switch does not gate shared memory.
+The existing status row includes the last project turn's result, and confirmed
+emission names use the existing offer below that operator message.
+
 ### 4.5 Usefulness: how an entry proves itself or retires
 
 | Signal | How it is read | Weight |

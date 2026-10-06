@@ -79,3 +79,24 @@ test("each empty injection outcome has a numeric activity counter", async () => 
   expect(await injectMemory(input, p)).toContain("m_fixture");
   expect(events).toEqual(["decisions", "prepared"]);
 });
+
+test("last-turn reasons distinguish every stop without exposing errors", async () => {
+  const p = ports();
+  const cases = [
+    { ports: { ...p, enabled: () => false }, reason: "projectOff" },
+    { ports: { ...p, ownsTraffic: () => false }, reason: "notOwner" },
+    { ports: { ...p, deadline: 0 }, reason: "timeout" },
+    { ports: { ...p, reserve: () => false }, reason: "capped" },
+    { ports: { ...p, reserve: () => { throw Error("private failure"); } }, reason: "failed" },
+    { ports: { ...p, candidates: () => [] }, reason: "noCandidates" },
+    { ports: { ...p, decide: async () => ({ scores: { m_fixture: .1 }, cost: .001 }) }, reason: "noMatches" },
+    { ports: { ...p, decide: () => new Promise<never>(() => {}) }, reason: "timeout" },
+    { ports: { ...p, signal: AbortSignal.abort() }, reason: "cancelled" },
+  ];
+  for (const row of cases) {
+    let reason = "";
+    const start = performance.now();
+    expect(await injectMemory(input, { ...row.ports, reason: value => { reason = value; } })).toBe("");
+    expect(reason).toBe(row.reason); expect(performance.now() - start).toBeLessThan(250);
+  }
+});

@@ -13,6 +13,7 @@ import { nativeHookCursor } from "./native";
 import { memoryTurnContext } from "./context";
 import { decideMemories, injectMemory } from "./injection";
 import { memoryIndex } from "./service";
+import type { MemoryTurnReason } from "./viewTypes";
 import { sharedMemoryEnabled } from "./settings";
 // Selected names are provisional durable evidence until stdout confirmation;
 // selection expiry and bounded confirmation retention are separate deadlines.
@@ -21,6 +22,10 @@ export async function offerForHook(request: Request, input: Record<string, unkno
   const hookId = request.headers.get("x-llv-memory-hook") ?? "";
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
+  const startedAt = performance.timeOrigin + performance.now();
+  let lastTurn: { project: string; conversation: string; request: string } | undefined;
+  let reason: MemoryTurnReason = "invalidTurn";
+  let candidateReason: MemoryTurnReason | undefined;
   let counted = input.delegatus_confirm === true;
   let possibleOperator = false;
   let outcome: "skipped" | "failed" = "skipped";
@@ -46,6 +51,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (!cwd || input.cwd !== cwd) return "";
     const project = conversation?.projectOwnership?.project || projectInfoFromCwd(cwd)?.project;
     if (!project) return "";
+    lastTurn = { project, conversation: conversationId, request: hookId };
+    reason = "unprovenOrigin";
     const index = memoryIndex();
     let prompt = input.prompt, origin = "unknown", requestId = "";
     if (engine === "codex") {
@@ -119,10 +126,15 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       index.recordNativeTurn(conversationId, requestId, transcript ?? "", cursor.offset, prompt);
     }
     if (origin !== "operator") { possibleOperator = false; return ""; }
-    if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic() || !sharedMemoryEnabled(project)) return "";
+    lastTurn.request = requestId;
+    if (!Number.isFinite(remaining) || remaining <= 0) { reason = "timeout"; return ""; }
+    if (request.signal.aborted) { reason = "cancelled"; return ""; }
+    if (!viewerReleaseOwnsTraffic()) { reason = "notOwner"; return ""; }
+    if (!sharedMemoryEnabled(project)) { reason = "projectOff"; return ""; }
     const key = readOpenRouterApiKey();
-    if (!key) return "";
-    if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
+    if (!key) { reason = "noKey"; return ""; }
+    if (performance.now() >= deadline) { reason = "timeout"; return ""; }
+    if (!index.claimHook(conversationId, requestId)) { possibleOperator = false; return ""; }
     const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt, conversationId) : [];
     // Recall terms follow the research order within the bounded transcript view.
     const recallQuery = [prompt, ...context.slice().reverse().map(turn => turn.text)].join("\n");
@@ -135,7 +147,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       deadline, signal: request.signal,
       activity: event => { try { index.recordInjectionActivity(event); } catch { /* optional ledger */ } },
       enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
-      candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline),
+      reason: value => { reason = value === "noCandidates" && candidateReason ? candidateReason : value; },
+      candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline, { cwd, reason: value => { candidateReason = value; } }),
       reserve: ceiling => {
         mutateOperatorAsks(file => {
           if (file.spend.usd + ceiling > readAsksYouSettings().capUsd) { file.spend.capped++; return; }
@@ -150,8 +163,9 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         index.recordPreparedInjection(entries, requestId, conversationId, hookId, expires);
       },
     });
-  } catch { outcome = "failed"; return ""; }
+  } catch { outcome = "failed"; reason = "failed"; return ""; }
   finally {
+    if (possibleOperator && lastTurn) { try { memoryIndex().recordLastTurn(lastTurn.project, lastTurn.conversation, lastTurn.request, startedAt, reason, expires); } catch { /* optional status */ } }
     if (possibleOperator && !counted) { try { memoryIndex().recordInjectionActivity(outcome); } catch { /* optional ledger */ } }
   }
 }

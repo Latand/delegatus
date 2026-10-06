@@ -29,7 +29,7 @@ test("a contended derivative never holds hook claims or ledger writes behind SQL
     }
   } finally { db.exec("ROLLBACK"); db.close(); index.close(); }
 }, 20000);
-test("large mirrored stores fail open within the candidate budget", () => {
+test("large mirrored stores return bounded unique candidates within the candidate budget", () => {
   const index = new MemoryIndex();
   index.search({ query: "widget" });
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
@@ -47,13 +47,13 @@ test("large mirrored stores fail open within the candidate budget", () => {
       }
     })();
     const start = performance.now();
-    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toEqual([]);
+    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toHaveLength(30);
     expect(performance.now() - start).toBeLessThan(500);
     // An aborted scan must leave its prepared statements reusable.
-    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toEqual([]);
+    expect(index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation")).toHaveLength(30);
   } finally { db.close(); index.close(); }
 }, 20000);
-test("injection candidates exclude native near matches and foreign projects; opening updates the injection ledger", async () => {
+test("injection candidates deduplicate both engines and exclude foreign projects; opening updates the injection ledger", async () => {
   const index = new MemoryIndex();
   const note = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nmetadata:\n  type: project\n---\n${description}\n`;
   try {
@@ -64,7 +64,7 @@ test("injection candidates exclude native near matches and foreign projects; ope
       { path: fixture("native.md", "v1\n## User preferences\n- Widget encoding uses eight byte blocks for every record.\n"), engine: "codex", sourceKind: "codex_summary" },
     ]);
     const candidates = index.injectionCandidates("widget", "project-a", "codex", "conversation-fixture");
-    expect(candidates.map(c => c.title)).toEqual(["Widget cache"]);
+    expect(candidates.map(c => c.title)).toEqual(["Widget cache", "Widget encoding"]);
     index.recordInjection(candidates.map(c => ({ ...c, score: .8 })), "turn-fixture", "conversation-fixture");
     index.recordInjection(candidates.map(c => ({ ...c, score: .8 })), "turn-fixture", "conversation-fixture");
     expect(index.offers(candidates[0].id)).toMatchObject([{ channel: "inject", score: .8 }]);
@@ -75,7 +75,7 @@ test("injection candidates exclude native near matches and foreign projects; ope
     expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("opened");
     index.recordCitations("conversation-fixture", "<oai-mem-citation>\n<citation_entries>\ncross.md:7-8|note=[cache rule]\n</citation_entries>\n</oai-mem-citation>");
     expect(index.offers(candidates[0].id).find(offer => offer.channel === "inject")!.outcome).toBe("cited");
-    expect(index.turnOffers("conversation-fixture")).toMatchObject([{ requestId: "turn-fixture", title: "Widget cache" }]);
+    expect(index.turnOffers("conversation-fixture").map(offer => offer.title).sort()).toEqual(["Widget cache", "Widget encoding"]);
   } finally { index.close(); }
 });
 test("another project's native Claude note cannot suppress a global cross-engine offer", async () => {
@@ -87,10 +87,10 @@ test("another project's native Claude note cannot suppress a global cross-engine
       { path: fixture("native-b.md", `---\nname: Widget parser\ndescription: ${summary}\nmetadata:\n  type: project\n---\n${summary}\n`), engine: "claude", sourceKind: "claude_memory", project: "project-b" },
     ]);
     expect(index.injectionCandidates("widget parser", "project-a", "claude", "conversation-a")).toHaveLength(1);
-    expect(index.injectionCandidates("widget parser", "project-b", "claude", "conversation-b")).toHaveLength(0);
+    expect(index.injectionCandidates("widget parser", "project-b", "claude", "conversation-b")).toHaveLength(1);
   } finally { index.close(); }
 });
-test("native FTS hits do not consume the thirty cross-engine candidate places", async () => {
+test("both engines compete for thirty bounded candidate places", async () => {
   const index = new MemoryIndex();
   try {
     const native = Array.from({ length: 30 }, (_, i) => ({
@@ -98,7 +98,7 @@ test("native FTS hits do not consume the thirty cross-engine candidate places", 
       engine: "claude" as const, sourceKind: "claude_memory" as const, project: "project-a",
     }));
     await index.refresh([...native, { path: fixture("cross-candidate.md", "v1\n## User preferences\n- Widget delimiters require a quoted encoding policy for every parser.\n"), engine: "codex", sourceKind: "codex_summary" }]);
-    expect(index.injectionCandidates("widget", "project-a", "claude", "candidate-fixture")).toHaveLength(1);
+    expect(index.injectionCandidates("widget", "project-a", "claude", "candidate-fixture")).toHaveLength(30);
   } finally { index.close(); }
 });
 test("citation accounting stays inside the hook budget for a large source and long offer ledger", async () => {
@@ -490,5 +490,28 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} two queued id
     fs.appendFileSync(transcript, line + "\n");
     expect(index.terminalOrigin("queued-conversation", "native:synthetic-second", prompt, transcript, engine)).toBe("unknown");
     expect(index.terminalOrigin("queued-conversation", "native:synthetic-typed", prompt, transcript, engine)).toBe("unknown");
+  } finally { index.close(); }
+});
+
+test("candidate scope reads an alias chain during writer contention without rewriting old rows", async () => {
+  const index = new MemoryIndex();
+  await index.refresh([{ path: fixture("old-project.md", "---\nname: Widget parser\ndescription: Widget delimiters require paired escaping.\ntype: project\n---\nWidget delimiters require paired escaping.\n"),
+    engine: "claude", sourceKind: "claude_memory", project: "fixture-older-key" }]);
+  persistProjectAliases([{ source: "fixture-older-key", target: "fixture-intermediate", displayName: "Widgets" },
+    { source: "fixture-intermediate", target: "fixture-current-key", displayName: "Widgets" }]);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite")); db.exec("BEGIN IMMEDIATE");
+  try {
+    expect(index.injectionCandidates("widget delimiters", "fixture-current-key", "codex", "fixture-conversation")).toHaveLength(1);
+    expect(db.query("SELECT project FROM memory_entries").get()).toEqual({ project: "fixture-older-key" });
+  } finally { db.exec("ROLLBACK"); db.close(); index.close(); }
+});
+
+test("candidate deadline reports retrieval timeout separately from an empty index", () => {
+  const index = new MemoryIndex();
+  let reason = "";
+  try {
+    expect(index.injectionCandidates("widget", "fixture-project", "claude", "fixture-conversation", performance.now() - 1,
+      { reason: value => { reason = value; } })).toEqual([]);
+    expect(reason).toBe("candidateTimeout");
   } finally { index.close(); }
 });

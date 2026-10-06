@@ -13,6 +13,7 @@ import { memoryHookSource } from "./hook";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
+import { localRepositoryProjectId, directoryProjectId } from "@/lib/projects/identity";
 import { readOperatorAsks } from "@/lib/asks/store";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { offeredMemoryForTranscript } from "./offers";
@@ -529,3 +530,109 @@ for (const mode of ["unproven authorship", "expired deadline", "agent delivery",
   expect(await prepareForHook(request, input)).toBe("");
   expect(memoryIndex().injectionActivity().skipped).toBe(mode === "agent delivery" || mode === "no capability" ? 0 : 1);
 });
+
+for (const oldKey of ["directory", "local repository", "path", "alias"] as const) for (const sourceEngine of ["claude", "codex"] as const) test(`Claude seat operator hook selects ${sourceEngine} (${oldKey}) memories after a relay with old folder keys and no asks store`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-turn-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  // A repository acquired its remote after these memories were indexed.
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
+  const project = projectInfoFromCwd(root)!.project;
+  const reservation = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project,
+    role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic seat conversation" }) });
+  if (reservation.kind === "conflict") throw Error("fixture seat conflict");
+  const receipt = reservation.receipt;
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+  const opening = "Review widget parser delimiter escaping";
+  const relay = "Machine wake: widget parser work is ready";
+  const prompt = "Update widget parser delimiter escaping";
+  const line = (role: string, text: string, uuid: string) => JSON.stringify({ type: role, uuid, ...(role === "user" ? { promptSource: "sdk" } : {}), message: { role, content: [{ type: "text", text }] } });
+  fs.writeFileSync(transcript, [line("user", opening, "fixture-opening"), line("assistant", "I will check the parser.", "fixture-reply"),
+    line("user", relay, "fixture-relay"), line("assistant", "The work is queued.", "fixture-machine-reply")].join("\n") + "\n");
+  registry.settleSpawn(receipt.launchId, { key: { engine: "claude", sessionId: session }, artifactPath: transcript, cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  setSharedMemoryEnabled(project, true);
+  const ledger = new FileClaudeDeliveryLedger();
+  ledger.recordQueued(session, { id: "fixture-relay-delivery", text: relay, origin: { kind: "agent" } }, "queued-next-turn");
+  ledger.confirmDelivered(session, "fixture-relay-delivery", "fixture-relay");
+  const sources = ["older", "current"].map((name, n) => {
+    const source = path.join(root, name + ".md");
+    fs.writeFileSync(source, sourceEngine === "claude"
+      ? `---\nname: Widget ${name} rule\ndescription: Widget parser ${name} delimiter policy.\ntype: project\n---\nWidget ${name} policy requires ${n + 2} escape characters.\n`
+      : `cwd: ${root}\n# Widget ${name} rule\n- Widget parser ${name} delimiter policy requires ${n + 2} escape characters.\n`);
+    return { path: source, engine: sourceEngine, sourceKind: sourceEngine === "claude" ? "claude_memory" as const : "rollout_summary" as const, project };
+  });
+  await memoryIndex().refresh(sources);
+  // Retained rows predate the alias pass; this read must recover their scope.
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  const previousKey = oldKey === "directory" ? directoryProjectId(root) : oldKey === "local repository" ? localRepositoryProjectId(root)!
+    : oldKey === "path" ? root.replace(/[^a-zA-Z0-9]/g, "-") : "fixture-old-repository";
+  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(previousKey, sources[0].path); db.close();
+  if (oldKey === "alias") fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({ schemaVersion: 1,
+    aliases: { [previousKey]: "fixture-intermediate", "fixture-intermediate": project }, displayNames: { [project]: "Widgets" } }));
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "operator-asks.json"))).toBe(false);
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "asks-you-settings.json"))).toBe(false);
+  let decisionCalls = 0, candidateCount = 0, failDecision = false;
+  const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    decisionCalls++; const body = await request.json(); candidateCount = Object.keys(body.questions).length;
+    if (failDecision) return new Response(null, { status: 503 });
+    expect(body.state.latestOperatorMessage).toBe(prompt);
+    expect(body.state.precedingTurns).toContain("machine:");
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
+  } });
+  globalThis.fetch = ((url, init) => originalFetch(String(url).includes("openrouter.ai") ? `http://127.0.0.1:${endpoint.port}` : url, init)) as typeof fetch;
+  const turn = "fixture-operator-delivery";
+  ledger.recordQueued(session, { id: turn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+  let pending = Promise.resolve("");
+  const hookServer = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    pending = prepareForHook(request, await request.json()); return Response.json({ block: await pending });
+  } });
+  const queue = path.join(root, "queue.jsonl");
+  fs.writeFileSync(queue, JSON.stringify({ id: turn, digest: crypto.createHash("sha256").update(prompt).digest("hex") }) + "\n");
+  const hook = Bun.spawn([process.execPath, "-e", memoryHookSource(`http://127.0.0.1:${hookServer.port}`, null, queue)], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: capability } });
+  try {
+    hook.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt })); hook.stdin.end();
+    expect(await hook.exited).toBe(0);
+    const output = await new Response(hook.stdout).text(); await pending;
+    expect(output).toContain("Delegatus shared memory");
+    expect(candidateCount).toBe(2); expect(decisionCalls).toBe(1);
+    expect(readOperatorAsks().spend.calls).toBe(1);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
+    expect(memoryIndex().injectionActivity()).toMatchObject({ decisions: 1, delivered: 1 });
+    fs.appendFileSync(transcript, line("user", prompt, "fixture-current") + "\n");
+    ledger.confirmDelivered(session, turn, "fixture-current");
+    const names = offeredMemoryForTranscript(transcript);
+    expect(names["fixture-current"]).toHaveLength(2); expect(names["fixture-relay"]).toBeUndefined();
+    const feed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const items = feed.feed(fs.readFileSync(transcript, "utf8").trim().split("\n"), 0, false).items.map(e => e.item);
+    expect(provenanceLookupFor({ memoryOffers: names }, items).memoryFor!(items.find(i => i.kind === "sysmsg" && i.deliveredMessage?.engineMessageId === "fixture-current")!)).toHaveLength(2);
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+    const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt: relay, delegatus_delivery_id: "fixture-relay-delivery" };
+    expect(await offerForHook(request, input)).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    const nextTurn = "fixture-next-operator";
+    ledger.recordQueued(session, { id: nextTurn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: nextTurn })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("noCandidates");
+    expect(decisionCalls).toBe(1);
+    const fresh = path.join(root, "fresh.md");
+    fs.writeFileSync(fresh, "---\nname: Widget integrity\ndescription: Widget checksum protects immutable release manifests.\ntype: project\n---\nWidget integrity validates sealed package manifests before promotion.\n");
+    await memoryIndex().refresh([{ path: fresh, engine: "claude", sourceKind: "claude_memory", project }]);
+    writeAsksYouSettings({ capUsd: 0 });
+    ledger.recordQueued(session, { id: "fixture-capped", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: "fixture-capped" })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("capped"); expect(decisionCalls).toBe(1);
+    expect(readOperatorAsks().spend.capped).toBe(1);
+    writeAsksYouSettings({ capUsd: 1 }); failDecision = true;
+    ledger.recordQueued(session, { id: "fixture-failed", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: "fixture-failed" })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("failed"); expect(decisionCalls).toBe(2);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
+  } finally { hook.kill(); await hook.exited; await pending; hookServer.stop(true); endpoint.stop(true); }
+}, 5000);
