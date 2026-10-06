@@ -17962,7 +17962,8 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
    * phone, light and dark, en and uk: empty, runtime chosen, a long prompt, an attachment, a refused launch,
    * the narrowest column, and the draft a task card's own «+ Agent» opens. Five more states are drawn once per
    * look, at 1440 in the light theme in English: a handoff draft, the reviewer's and the deployer's own
-   * fields, a signed-out account, and an image capability that could not be read. Design evidence only: the
+   * fields, a signed-out account, and an image capability that could not be read. Look 3 adds `scrolled`
+   * wherever its field column is cut: the column after its «More fields below» chip was pressed. Design evidence only: the
    * frames and the contact sheets go to `NEW_AGENT_OUT`, outside the repository, and the block asserts that
    * every look keeps every option of the draft and measures what each look promises about its geometry.
    *
@@ -18143,6 +18144,45 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               expect(new Set(tops).size, `${label(state)} summary rows`).toBe(1);
               return tops.length;
             };
+            /* Closing clears the draft, so the close button keeps away from what is pressed while writing: the
+               image picker stays last in the composer's row, as in the orchestrator's composer, with the close
+               button on another row or 24 px off; and where a look seats it beside its summary words, 24 px
+               from the nearest of them. */
+            const closeGeometry = async (state: string) => {
+              if (look === 0) return null;
+              const read = await inner.evaluate((names) => {
+                const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
+                const rect = (element: Element | null | undefined) => {
+                  if (!element || !element.getClientRects().length) return [];
+                  const box = element.getBoundingClientRect();
+                  return [{ left: Math.round(box.left), top: Math.round(box.top), right: Math.round(box.right), bottom: Math.round(box.bottom) }];
+                };
+                const row = pane?.querySelector('[data-testid="composer-options-row"]');
+                return {
+                  close: rect(pane?.querySelector("[data-na-close]"))[0] ?? null,
+                  image: [...(row?.querySelectorAll(`[aria-label="${names.image}"]`) ?? [])].flatMap(rect)[0] ?? null,
+                  controls: [...(row?.querySelectorAll("button, label, select, [role=radio]") ?? [])].flatMap(rect),
+                  words: [...(pane?.querySelectorAll("[data-na-open]") ?? [])].flatMap(rect),
+                };
+              }, { pane: tr("draft.paneAria"), image: tr("draft.addImages") });
+              type Box = { left: number; top: number; right: number; bottom: number };
+              const sameRow = (a: Box, b: Box) => a.top < b.bottom && b.top < a.bottom;
+              const apart = (a: Box, b: Box) => Math.max(b.left - a.right, a.left - b.right);
+              expect(read.close, `${label(state)} close button`).not.toBeNull();
+              const close = read.close!;
+              const beside = read.words.filter((word) => sameRow(close, word)).map((word) => apart(close, word));
+              const geometry: Record<string, unknown> = { closeToWord: beside.length ? Math.min(...beside) : null };
+              if (beside.length) expect(Math.min(...beside), `${label(state)} close button to the nearest word`).toBeGreaterThanOrEqual(24);
+              if (!view.touch) {
+                expect(read.image, `${label(state)} image picker`).not.toBeNull();
+                const image = read.image!;
+                geometry.imageLast = read.controls.every((control) => control.right <= image.right);
+                geometry.closeToImage = sameRow(close, image) ? apart(close, image) : "another row";
+                expect(geometry.imageLast, `${label(state)} image picker last in its row`).toBe(true);
+                if (sameRow(close, image)) expect(apart(close, image), `${label(state)} close button to the image picker`).toBeGreaterThanOrEqual(24);
+              }
+              return geometry;
+            };
             if (extra) {
               const found: Record<string, number> = {};
               if (pass === "handoff") {
@@ -18170,13 +18210,15 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               for (const [name, count] of Object.entries(found)) expect(count, `${label(pass)} ${name}`).toBe(1);
             } else if (pass === "task-card") {
               await shoot("task-card");
+              const close = await closeGeometry("task-card");
+              if (look > 0 && look < 3) readings.push({ look, view: view.name, scheme, lang, state: pass, geometry: { ...close }, pageErrors });
               if (look === 3) {
                 /* The sheet names the card it was opened for, and the button it hangs from says it is open. */
                 const sheetTask = await draft.locator("[data-na-task]").innerText();
                 expect(cardTitle.length, label("card title")).toBeGreaterThan(0);
                 expect(sheetTask, label("task named in the sheet")).toContain(cardTitle);
                 expect(await app.locator("[data-add-agent][data-na-anchor-open]").first().getAttribute("aria-expanded"), label("anchor open")).toBe("true");
-                readings.push({ look, view: view.name, scheme, lang, state: pass, found: { taskInSheet: 1, anchorOpen: 1 }, task: cardTitle, pageErrors });
+                readings.push({ look, view: view.name, scheme, lang, state: pass, found: { taskInSheet: 1, anchorOpen: 1 }, task: cardTitle, geometry: { ...close }, pageErrors });
               }
             } else if (pass === "narrow") {
               await reveal("runtime");
@@ -18184,7 +18226,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
               await prompt.fill(SHORT[lang]);
               await shoot("narrow");
-              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow") }, pageErrors });
+              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow"), ...await closeGeometry("narrow") }, pageErrors });
             } else {
               await shoot("empty");
               /* The role comes first: it sets the runtime its preset names. Then Codex, pressed only when the
@@ -18199,7 +18241,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
               await draft.locator(`select[aria-label="${tr("draft.speedAria")}"]`).first().selectOption("fast");
               await shoot("chosen");
-              const chosen = { ...await runtimeGeometry("chosen"), summaryWords: await oneRow("chosen") };
+              const chosen = { ...await runtimeGeometry("chosen"), summaryWords: await oneRow("chosen"), ...await closeGeometry("chosen") };
               await prompt.fill(LONG[lang]);
               await shoot("long");
               await prompt.fill(SHORT[lang]);
@@ -18234,6 +18276,33 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
                   expect(within(sheetBox), label("sheet in the window")).toBe(true);
                   expect(within(launch), label("launch in the window")).toBe(true);
                   expect(within(message), label("refusal in the window")).toBe(true);
+                  /* Fields the window cuts are announced: whenever the column holds more than it shows, the cue
+                     stands over its lower edge, inside the sheet and above the foot. At 1000x700 the Builder's
+                     parameters are below the cut, so the cue has to be there; pressing it brings them up and
+                     the upper edge then says what was left above. */
+                  const columnState = () => inner.evaluate(() => {
+                    const column = document.querySelector<HTMLElement>("[data-na-sheet] [data-na-fields]")!;
+                    return { scrollHeight: column.scrollHeight, clientHeight: column.clientHeight, scrollTop: Math.round(column.scrollTop) };
+                  });
+                  const column = await columnState();
+                  const cue = app.locator('[data-na-sheet] [data-na-more="below"]');
+                  const cut = column.scrollHeight - column.clientHeight - column.scrollTop > 1;
+                  Object.assign(refused, { fields: column, cue: await cue.count() });
+                  if (view.name === "desktop-1000") expect(cut, label("fields cut at 1000x700")).toBe(true);
+                  expect(await cue.count(), label("cue over cut fields")).toBe(cut ? 1 : 0);
+                  if (cut) {
+                    const cueBox = await box(cue.locator("button"));
+                    const foot = await box(app.locator("[data-na-sheet] [data-na-foot]"));
+                    expect(cueBox.bottom, label("cue above the foot")).toBeLessThanOrEqual(foot.top);
+                    expect(within(cueBox), label("cue in the window")).toBe(true);
+                    await cue.locator("button").click();
+                    await page.waitForTimeout(200);
+                    const after = await columnState();
+                    expect(after.scrollTop, label("cue scrolls the fields")).toBeGreaterThan(0);
+                    expect(await app.locator('[data-na-sheet] [data-na-more="above"]').count(), label("cue over what scrolled away")).toBe(1);
+                    Object.assign(refused, { scrolledTo: after.scrollTop });
+                    await shoot("scrolled");
+                  }
                 }
               }
               /* Every option of the draft, found in this look: a folded group is opened first, as it is for the operator. */
@@ -18293,7 +18362,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
       for (const look of [1, 2, 3]) {
         await sheet(path.join(out, `sheet-look${look}.png`), `Creating a new agent — ${titles[look]} — each row: today, then look ${look}, at 1440, 1000 and the phone`, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
           name: `${scheme} · ${lang}`,
-          rows: [...STATES, ...(scheme === "light" ? EXTRAS : [])].map((state) => ({
+          rows: [...STATES, "scrolled", ...(scheme === "light" ? EXTRAS : [])].map((state) => ({
             state,
             frames: views.flatMap((view) => [frame(0, view.name, scheme!, lang!, state), frame(look, view.name, scheme!, lang!, state)]),
           })),
@@ -18303,7 +18372,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
         ["desktop-1440", "light", "en"], ["desktop-1000", "dark", "uk"], ["phone-390", "light", "uk"],
       ].map(([view, scheme, lang]) => ({
         name: `${view} · ${scheme} · ${lang}`,
-        rows: [...STATES, ...(view === "desktop-1440" ? EXTRAS : [])].map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
+        rows: [...STATES, "scrolled", ...(view === "desktop-1440" ? EXTRAS : [])].map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
       })));
     }
     if (complete) {

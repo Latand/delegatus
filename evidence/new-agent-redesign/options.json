@@ -677,6 +677,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -692,7 +695,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -780,6 +799,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -795,7 +817,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -826,6 +864,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -841,7 +882,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -872,6 +929,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -887,7 +947,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -918,6 +994,9 @@
         "alone": 0,
         "rows": 1,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -933,7 +1012,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -964,6 +1059,9 @@
         "alone": 0,
         "rows": 1,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -979,7 +1077,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -1010,6 +1124,9 @@
         "alone": 0,
         "rows": 1,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -1025,7 +1142,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -1056,6 +1189,9 @@
         "alone": 0,
         "rows": 1,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "engineToModel": 26
       },
       "pageErrors": []
@@ -1071,7 +1207,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -1101,7 +1253,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1118,7 +1271,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1150,7 +1304,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1168,7 +1323,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1198,7 +1354,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1215,7 +1372,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1247,7 +1405,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1265,7 +1424,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -1295,7 +1455,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 464
       },
       "pageErrors": []
     },
@@ -1310,7 +1473,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 348
       },
       "pageErrors": []
     },
@@ -1397,7 +1576,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 464
       },
       "pageErrors": []
     },
@@ -1412,7 +1594,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 348
       },
       "pageErrors": []
     },
@@ -1442,7 +1640,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 464
       },
       "pageErrors": []
     },
@@ -1457,7 +1658,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 348
       },
       "pageErrors": []
     },
@@ -1487,7 +1704,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 464
       },
       "pageErrors": []
     },
@@ -1502,7 +1722,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 348
       },
       "pageErrors": []
     },
@@ -1532,7 +1768,10 @@
         "cut": [],
         "alone": 0,
         "rows": 1,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1547,7 +1786,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1577,7 +1832,10 @@
         "cut": [],
         "alone": 0,
         "rows": 1,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1592,7 +1850,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1622,7 +1896,10 @@
         "cut": [],
         "alone": 0,
         "rows": 1,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1637,7 +1914,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1667,7 +1960,10 @@
         "cut": [],
         "alone": 0,
         "rows": 1,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1682,7 +1978,23 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 320
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "geometry": {
+        "closeToWord": 29,
+        "imageLast": true,
+        "closeToImage": 560
       },
       "pageErrors": []
     },
@@ -1712,7 +2024,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1729,7 +2042,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1761,7 +2075,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1779,7 +2094,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1809,7 +2125,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1826,7 +2143,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1858,7 +2176,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1876,7 +2195,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": 3
+        "summaryWords": 3,
+        "closeToWord": 25
       },
       "pageErrors": []
     },
@@ -1907,6 +2227,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 988,
           "top": 54,
@@ -1925,7 +2248,13 @@
           "top": 772,
           "right": 1415,
           "bottom": 802
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 468,
+          "scrollTop": 0
+        },
+        "cue": 0
       },
       "pageErrors": []
     },
@@ -1940,7 +2269,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -1955,6 +2287,11 @@
         "anchorOpen": 1
       },
       "task": "Worker waiting for a seat",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2041,6 +2378,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 988,
           "top": 54,
@@ -2059,7 +2399,13 @@
           "top": 772,
           "right": 1415,
           "bottom": 802
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 468,
+          "scrollTop": 0
+        },
+        "cue": 0
       },
       "pageErrors": []
     },
@@ -2074,7 +2420,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2089,6 +2438,11 @@
         "anchorOpen": 1
       },
       "task": "Worker waiting for a seat",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2118,6 +2472,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 988,
           "top": 54,
@@ -2136,7 +2493,13 @@
           "top": 772,
           "right": 1415,
           "bottom": 802
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 468,
+          "scrollTop": 0
+        },
+        "cue": 0
       },
       "pageErrors": []
     },
@@ -2151,7 +2514,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2166,6 +2532,11 @@
         "anchorOpen": 1
       },
       "task": "Worker waiting for a seat",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2195,6 +2566,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 988,
           "top": 54,
@@ -2213,7 +2587,13 @@
           "top": 772,
           "right": 1415,
           "bottom": 802
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 468,
+          "scrollTop": 0
+        },
+        "cue": 0
       },
       "pageErrors": []
     },
@@ -2228,7 +2608,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2243,6 +2626,11 @@
         "anchorOpen": 1
       },
       "task": "Worker waiting for a seat",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2272,6 +2660,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 404,
           "top": 94,
@@ -2290,7 +2681,14 @@
           "top": 645,
           "right": 831,
           "bottom": 675
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 339,
+          "scrollTop": 0
+        },
+        "cue": 1,
+        "scrolledTo": 129
       },
       "pageErrors": []
     },
@@ -2305,7 +2703,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2320,6 +2721,11 @@
         "anchorOpen": 1
       },
       "task": "Repair old links in the release notes",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2349,6 +2755,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 404,
           "top": 94,
@@ -2367,7 +2776,14 @@
           "top": 645,
           "right": 831,
           "bottom": 675
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 339,
+          "scrollTop": 0
+        },
+        "cue": 1,
+        "scrolledTo": 129
       },
       "pageErrors": []
     },
@@ -2382,7 +2798,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2397,6 +2816,11 @@
         "anchorOpen": 1
       },
       "task": "Repair old links in the release notes",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2426,6 +2850,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 404,
           "top": 94,
@@ -2444,7 +2871,14 @@
           "top": 645,
           "right": 831,
           "bottom": 675
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 339,
+          "scrollTop": 0
+        },
+        "cue": 1,
+        "scrolledTo": 129
       },
       "pageErrors": []
     },
@@ -2459,7 +2893,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2474,6 +2911,11 @@
         "anchorOpen": 1
       },
       "task": "Repair old links in the release notes",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2503,6 +2945,9 @@
         "alone": 0,
         "rows": 2,
         "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row",
         "sheet": {
           "left": 404,
           "top": 94,
@@ -2521,7 +2966,14 @@
           "top": 645,
           "right": 831,
           "bottom": 675
-        }
+        },
+        "fields": {
+          "scrollHeight": 468,
+          "clientHeight": 339,
+          "scrollTop": 0
+        },
+        "cue": 1,
+        "scrolledTo": 129
       },
       "pageErrors": []
     },
@@ -2536,7 +2988,10 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
       },
       "pageErrors": []
     },
@@ -2551,6 +3006,11 @@
         "anchorOpen": 1
       },
       "task": "Repair old links in the release notes",
+      "geometry": {
+        "closeToWord": null,
+        "imageLast": true,
+        "closeToImage": "another row"
+      },
       "pageErrors": []
     },
     {
@@ -2579,7 +3039,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2596,7 +3057,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2628,7 +3090,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2646,7 +3109,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2676,7 +3140,8 @@
         "cut": [],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2693,7 +3158,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2725,7 +3191,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     },
@@ -2743,7 +3210,8 @@
         ],
         "alone": 0,
         "rows": 2,
-        "summaryWords": null
+        "summaryWords": null,
+        "closeToWord": null
       },
       "pageErrors": []
     }

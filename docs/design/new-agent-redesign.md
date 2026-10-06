@@ -42,25 +42,25 @@ Line numbers are for `src/components/DraftAgentPane.tsx` unless a file is named.
 
 | # | Option | Control today | Where |
 | --- | --- | --- | --- |
-| 1 | Engine | three radios (Claude, Codex, Copilot) in the tinted header | `:936`; `EngineRadioGroup`, `src/components/draft/AgentLaunchControls.tsx:306` |
-| 2 | Account | select at the header's left edge, cut to 112 px | `:934`; `LaunchAccountSelect`, `src/components/draft/AgentLaunchControls.tsx:353` |
-| 3 | Model | select in the fourth strip | `:980`; `src/components/ReasoningControls.tsx:54` |
+| 1 | Engine | three radios (Claude, Codex, Copilot) in the tinted header | `:935`; `EngineRadioGroup`, `src/components/draft/AgentLaunchControls.tsx:306` |
+| 2 | Account | select at the header's left edge, cut to 112 px | `:933`; `LaunchAccountSelect`, `src/components/draft/AgentLaunchControls.tsx:353` |
+| 3 | Model | select in the fourth strip | `:979`; `src/components/ReasoningControls.tsx:54` |
 | 4 | Effort | select beside the model | `src/components/ReasoningControls.tsx:74` |
 | 5 | Speed (Codex) | select beside the effort | `src/components/ReasoningControls.tsx:90` |
-| 6 | Working folder | picker in the second strip | `:956`; `src/components/DirectoryPicker.tsx` |
+| 6 | Working folder | picker in the second strip | `:955`; `src/components/DirectoryPicker.tsx` |
 | 7 | Task | the card the draft was opened from; the draft sits in that card | `src/components/kanban/KanbanDrafts.tsx:37` |
-| 8 | Role | select in the third strip | `:966`; `RoleSection` `:162`, select `:192` |
+| 8 | Role | select in the third strip | `:965`; `RoleSection` `:162`, select `:192` |
 | 9 | Role parameters | one select per parameter, each with a helper line | `:208` |
 | 10 | Role prompt preview | a folded `details` | `:233` |
-| 11 | Reviewer's conversation, deployer's confirmation | appear when the role asks | `:837`, `:862` |
+| 11 | Reviewer's conversation, deployer's confirmation | appear when the role asks | `:839`, `:859` |
 | 12 | Handoff source | the heading says which conversation the draft continues | `:909` |
-| 13 | Prompt | the shared composer's field | `:1028`; `src/components/ComposerBar.tsx` |
+| 13 | Prompt | the shared composer's field | `:1027`; `src/components/ComposerBar.tsx` |
 | 14 | Images | picker in the composer's second row, thumbnails under it | `src/components/ComposerBar.tsx:524`, `:819` |
 | 15 | Voice | the composer's microphone | `src/components/ComposerBar.tsx` |
 | 16 | Launch | the composer’s send button, tinted by the engine | `:887` |
-| 17 | Cancel | a bordered 12 px cross at the header's right edge | `:945` |
+| 17 | Cancel | a bordered 12 px cross at the header's right edge | `:942` |
 | 18 | Errors | refused launch (`src/components/DraftLaunchStatus.tsx:27`), composer status (`src/components/ComposerBar.tsx:873`), a signed-out account with its sign-in route (`src/components/ComposerBar.tsx:829`), the image capability alert with Retry (`:867`) | |
-| 19 | Launch in flight | the prompt as the operator's bubble and a status line | `:993` |
+| 19 | Launch in flight | the prompt as the operator's bubble and a status line | `:992` |
 
 ## 3. What is crooked
 
@@ -156,9 +156,12 @@ settings scroll.
 The prompt field, and under it one row that says in words what the agent will
 run on: «Codex · GPT-6-Astra · high · fast · Account B», the folder, the role.
 The row never wraps: when it runs out, the runtime is cut with an ellipsis and
-the folder and the role keep their words. The image picker and the close
-button end the same row, inside the composer's frame, so the draft has no
-gutter of its own. Pressing a word opens that group's controls directly under
+the folder and the role keep their words. The row is inside the composer's
+frame, so the draft has no gutter of its own. It starts with the close button,
+a rule and 24 px apart from the first word, and ends with the image picker,
+which keeps the far right as it does in the orchestrator's composer. Closing
+clears the draft without asking, so the close button stands away from the
+picker, the microphone and the launch. Pressing a word opens that group's controls directly under
 the row and nothing else; pressing it again folds them. The runtime group is
 the engine chips over the runtime grid. A handoff draft names the conversation
 it continues on a line above the field. An operator who accepts the defaults
@@ -174,7 +177,13 @@ names the draft, and under it the task whose button opened it. Inside, a
 captioned column that scrolls on its own: engine, the runtime grid, directory,
 role. The composer is the sheet's foot: the prompt (five lines at most, then
 it scrolls), the thumbnails, the launch and every error stay in the window
-whatever the role adds above. On the phone the same column fills the pane.
+whatever the role adds above. When the column holds more than the window
+shows, the foot gives room back (the prompt shows three lines) and the cut
+edge says so: the fields fade out under a chip, «More fields below», that
+scrolls to them when pressed, and the upper edge fades the same way once
+something has scrolled above it. A role's parameters, or the deployer's
+required field, are never cut without that sign. On the phone the same column
+fills the pane.
 
 ## 5. Where each option is
 
@@ -195,7 +204,7 @@ whatever the role adds above. On the phone the same column fills the pane.
 | Images | composer | composer | composer | composer, in the foot |
 | Voice | composer | composer | composer | composer |
 | Launch | composer | composer | composer | composer, in the foot |
-| Cancel | bordered cross, header | 28 px close, heading | 28 px close, end of the summary row | 28 px close, heading |
+| Cancel | bordered cross, header | 28 px close, heading | 28 px close, start of the summary row, a rule apart from the words | 28 px close, heading |
 | Refused launch | under the composer, bottom of the card | under the runtime grid | under the summary row and whatever it opened | foot of the sheet |
 | Signed-out account and its sign-in | under the composer | under the runtime grid, next to the account | under the summary row | foot of the sheet |
 | Image capability alert with Retry | above the composer | above the field | above the field | foot of the sheet, above the field |
@@ -208,7 +217,7 @@ whatever the role adds above. On the phone the same column fills the pane.
 | The blank area's hint («Choose an engine and a directory, write the first prompt…») and the engine badge above it | `:1002` to `:1008` | 1, 2, 3 | The field's placeholder says the same in six words, and the blank area is gone with the fixed height. |
 | The handoff hint («The new agent will first read the parent conversation's transcript…») | `:1007` | 1, 2, 3 | The seeded prompt of a handoff draft already says which file the agent reads. |
 | The handoff source's path as a line of text | `:1009` to `:1013` | 1, 2, 3 | It stays as the tooltip of the line that names the source. |
-| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. Look 3 keeps the chip. |
+| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2; on the phone 1, 2, 3 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. Look 3 keeps the chip on the desktop; on the phone it is gone in all three. |
 | The card's own title («Untitled task») and foot around the draft | board | 1, 2 | Two titles for one draft. |
 | The draft card itself and its fixed conversation height | board | 3 (card), 1 and 2 (height) | Look 3 seats no card; looks 1 and 2 are as tall as their content. |
 | The 4 px engine-coloured bar and the status dot of the header | `:931`, `:934` | 1, 2, 3 | The chosen engine chip and the launch button carry the engine's colour. |
@@ -249,7 +258,8 @@ open: under the header's button that is the right column of the orchestrator's
 conversation, and beside a card's button it is part of the next column. It
 changes nothing in either, and both are back when the sheet closes, but look 1
 and look 2 cover nothing at all. At 1000x700 with a role chosen the field
-column scrolls inside the sheet. In return the columns never move when a draft
+column scrolls inside the sheet, and the sheet has to say so, which is one
+more piece of chrome (the chip over the cut edge). In return the columns never move when a draft
 opens.
 
 **All three, on the phone at 320 px.** The phone draws its selects at 16 px.
@@ -288,8 +298,9 @@ images still in place, the narrowest column, the draft a task card's own button
 opens) at 1440x900, 1000x700 and a 390 px phone, light and dark, in English and
 Ukrainian. Five more states are drawn once per look, at 1440 in the light
 theme in English: a handoff draft, the reviewer's field, the deployer's field,
-a signed-out account, and an image capability that could not be read. That is
-340 frames, one contact sheet per look beside today's form, and one sheet
+a signed-out account, and an image capability that could not be read. Look 3
+adds one frame wherever its field column is cut (at 1000x700): the column after
+the «More fields below» chip was pressed. That is 344 frames, one contact sheet per look beside today's form, and one sheet
 comparing all four. The frames and sheets are written outside the repository
 and are not committed.
 
@@ -305,7 +316,15 @@ Beside the options, the driver measures what the looks promise
 - look 3: the sheet starts at or below the bottom edge of the board's bar and
   lies inside the window, and so do the launch button and the refusal, with
   the Builder role, the long prompt and two images; the sheet opened from a
-  card names that card, and the card's button reports `aria-expanded`.
+  card names that card, and the card's button reports `aria-expanded`;
+  whenever the field column holds more than it shows, the «More fields below»
+  chip stands over the cut edge, above the foot and inside the window, and at
+  1000x700 with the Builder role it has to be there; pressing it scrolls the
+  column, and the upper edge then carries its own fade;
+- looks 1 to 3, the desktop widths: the image picker is the last control of
+  the composer's row, and the close button is on another row or at least
+  24 px from it; look 2, every size: the close button is at least 24 px from
+  the nearest summary word.
 
 Limits of the prototypes: a look overrides the board's rules for a draft card
 and the order of the composer's parts from a style block of its own, where a

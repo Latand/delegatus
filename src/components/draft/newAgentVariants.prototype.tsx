@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRightLeft } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { effortTierLabel, roleName } from "@/components/builderCopy";
@@ -94,6 +94,7 @@ const BOARD_CSS = `
 [data-na-form][data-na-reorder] > [data-testid="composer-input-unit"] { order: 1; }
 [data-na-draft="2"] [data-na-reorder] [data-testid="composer-options-row"] > div:first-child { display: contents; }
 [data-na-sheet] textarea { max-height: 96px; }
+[data-na-sheet][data-na-tight] textarea { max-height: 58px; }
 [data-na-phone] [role="radio"] { position: relative; }
 [data-na-phone] [role="radio"]::before { content: ""; position: absolute; inset: -9px 0; }
 .kb [data-na-anchor-open], [data-na-anchor-open] { background: var(--surface-well) !important; color: var(--color-primary) !important; }
@@ -102,8 +103,8 @@ const BOARD_CSS = `
 /* The captions a shipped look would add to the catalog: the product names these fields only in the default
    option of each select («model: default») and in its accessibility labels, which are sentences. */
 const CAPTIONS = {
-  en: { model: "Model", effort: "Effort", speed: "Speed", account: "Account", task: "Task" },
-  uk: { model: "Модель", effort: "Міркування", speed: "Швидкість", account: "Акаунт", task: "Задача" },
+  en: { model: "Model", effort: "Effort", speed: "Speed", account: "Account", task: "Task", more: "More fields below" },
+  uk: { model: "Модель", effort: "Міркування", speed: "Швидкість", account: "Акаунт", task: "Задача", more: "Нижче є ще поля" },
 } as const;
 
 function useCaptions() {
@@ -114,10 +115,10 @@ function useCaptions() {
 const CAPTION = "min-w-0 truncate text-label font-semibold text-muted first-letter:uppercase";
 const ICON_BUTTON = "inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
-function Close({ parts, phone, style }: { parts: DraftLayoutParts; phone: boolean; style?: CSSProperties }) {
+function Close({ parts, phone }: { parts: DraftLayoutParts; phone: boolean }) {
   const { t } = useLocale();
   return (
-    <button type="button" style={style} className={`${ICON_BUTTON} ${phone ? "h-11 w-11" : "h-7 w-7"}`} aria-label={t("draft.dismiss")} title={t("draft.dismiss")} onClick={parts.onClose}>
+    <button type="button" data-na-close="" className={`${ICON_BUTTON} ${phone ? "h-11 w-11" : "h-7 w-7"}`} aria-label={t("draft.dismiss")} title={t("draft.dismiss")} onClick={parts.onClose}>
       <X className="h-4 w-4" aria-hidden />
     </button>
   );
@@ -331,7 +332,10 @@ type Group = "runtime" | "folder" | "role";
 /**
  * Look 2. One line: the prompt, and under it what the agent will run on, said
  * in words on a single row. A word that is pressed opens its own controls
- * directly under that row and nothing else.
+ * directly under that row and nothing else. The row starts with the close
+ * button, a rule apart from the words, and ends with the image picker, which
+ * keeps the far right as it does in the orchestrator's composer: closing
+ * clears the draft, so it stands away from everything pressed while writing.
  */
 function OneLine(parts: DraftLayoutParts) {
   const { t } = useLocale();
@@ -388,13 +392,19 @@ function OneLine(parts: DraftLayoutParts) {
       ) : open === "folder" ? <FolderField parts={parts} openSignal={folderSignal} bare /> : <RoleField parts={parts} bare />}
     </div>
   ) : null;
+  const dismiss = (
+    <>
+      <Close parts={parts} phone={phone} />
+      <span aria-hidden className="mx-2 h-4 w-px shrink-0 bg-border" />
+    </>
+  );
   if (phone) {
     return (
       <PhonePane look={2} parts={parts} settings={(
         <>
           <div className="flex min-w-0 items-center gap-1">
+            {dismiss}
             {words}
-            <Close parts={parts} phone />
           </div>
           {editor}
         </>
@@ -405,13 +415,15 @@ function OneLine(parts: DraftLayoutParts) {
     <Shell look={2} parts={parts} phone={false} className="gap-1.5">
       <Source parts={parts} />
       <Launching parts={parts} />
-      {/* One row inside the composer's own frame: the words, the image picker, the close button. */}
-      <Prompt parts={parts} leftSlot={<>{words}<Close parts={parts} phone={false} style={{ order: 1 }} /></>} below={editor} />
+      {/* One row inside the composer's own frame: the close button, the words, and the image picker last. */}
+      <Prompt parts={parts} leftSlot={<>{dismiss}{words}</>} below={editor} />
     </Shell>
   );
 }
 
 const SHEET_WIDTH = 440;
+/** What the foot gives back to the fields when they do not fit: the prompt shows three lines in place of five. */
+const TIGHT_GAIN = 38;
 
 /** The control the operator pressed: the card's own «+ Agent», or the header's. */
 function sheetAnchor(band: string, createLabel: string): HTMLElement | null {
@@ -433,7 +445,10 @@ interface SheetPlace {
  * Look 3. A sheet at the button: no card joins a column until an agent exists.
  * The fields are a captioned column that scrolls on its own; the composer, its
  * thumbnails and its errors are the sheet's foot and never leave the window.
- * The sheet starts under the board's bar and names the task it was opened for.
+ * When the column holds more than the window shows, the foot shortens its
+ * prompt and each cut edge says so: a fade, and below it a chevron that scrolls
+ * to the next fields. The sheet starts under the board's bar and names the task
+ * it was opened for.
  */
 function AnchoredSheet(parts: DraftLayoutParts) {
   const { t } = useLocale();
@@ -442,6 +457,7 @@ function AnchoredSheet(parts: DraftLayoutParts) {
   const sheet = useRef<HTMLElement | null>(null);
   const fields = useRef<HTMLDivElement | null>(null);
   const [place, setPlace] = useState<SheetPlace | null>(null);
+  const [cut, setCut] = useState({ above: false, below: false, tight: false });
   const createLabel = t("dash.createMenu");
   useLayoutEffect(() => {
     if (phone) return;
@@ -481,6 +497,18 @@ function AnchoredSheet(parts: DraftLayoutParts) {
       }
       const task = (parts.band ? element?.closest(".card")?.querySelector("h3.title")?.textContent?.trim() : "") ?? "";
       const maxHeight = ceiling - next.top;
+      const column = fields.current;
+      if (column) {
+        const hidden = column.scrollHeight - column.clientHeight;
+        const above = column.scrollTop > 1;
+        const below = hidden - column.scrollTop > 1;
+        const spare = maxHeight - (sheet.current?.offsetHeight ?? 0);
+        /* The shorter prompt stays until the sheet has room for the longer one again, so the two never alternate. */
+        setCut((current) => {
+          const tight = hidden > 1 || (current.tight && spare < TIGHT_GAIN);
+          return current.above === above && current.below === below && current.tight === tight ? current : { above, below, tight };
+        });
+      }
       setPlace((current) => (current && current.left === next.left && current.top === next.top && current.maxHeight === maxHeight && current.task === task ? current : { ...next, maxHeight, task }));
     };
     update();
@@ -506,6 +534,7 @@ function AnchoredSheet(parts: DraftLayoutParts) {
           ref={sheet}
           data-na-draft={3}
           data-na-sheet=""
+          data-na-tight={cut.tight ? "" : undefined}
           data-na-handoff={parts.src ? "" : undefined}
           role="dialog"
           aria-label={t("draft.paneAria")}
@@ -523,8 +552,25 @@ function AnchoredSheet(parts: DraftLayoutParts) {
             </div>
             <Close parts={parts} phone={false} />
           </header>
-          <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-3 pt-1.5">
-            {column(false)}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-3 pt-1.5">
+              {column(false)}
+            </div>
+            {cut.above ? <span aria-hidden data-na-more="above" className="pointer-events-none absolute inset-x-0 top-0 h-5 border-t border-border" style={{ background: "linear-gradient(to bottom, var(--surface-raised), transparent)" }} /> : null}
+            {cut.below ? (
+              <div data-na-more="below" className="pointer-events-none absolute inset-x-0 bottom-0 flex h-14 items-end justify-center pb-1.5" style={{ background: "linear-gradient(to top, var(--surface-raised) 40%, transparent)" }}>
+                <button
+                  type="button"
+                  aria-label={captions.more}
+                  title={captions.more}
+                  onClick={() => fields.current?.scrollBy({ top: fields.current.clientHeight - 56 })}
+                  className="pointer-events-auto inline-flex h-6 items-center gap-1 rounded-full border border-border bg-raised pl-1.5 pr-2 text-caption font-semibold text-secondary shadow-1 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {captions.more}
+                </button>
+              </div>
+            ) : null}
           </div>
           <div data-na-foot="" className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pb-3 pt-2.5">
             <Launching parts={parts} />
