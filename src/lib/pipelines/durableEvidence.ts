@@ -307,8 +307,11 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     if (codex) {
       const prompt = codexNativeUserPrompt(record);
       if (!prompt) return [];
-      const origin = decodeCodexStructuredUserText(prompt.text).origin;
-      const automatic = origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role);
+      let automatic = false;
+      try {
+        const origin = decodeCodexStructuredUserText(prompt.text).origin;
+        automatic = origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role);
+      } catch { /* Unavailable metadata leaves this prompt external. */ }
       return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
     }
     if (record.type !== "user") return [];
@@ -317,7 +320,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
     const author = provenance[stringValue(record.uuid) ?? ""];
     const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
-    if (!human && (kind === "task-notification" || kind === "wakeup"
+    if (!human && (kind === "task" || kind === "task-notification" || kind === "wakeup"
       || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup")) return [{ ts, recordIndex, origin: "harness" as const }];
     // Native human rows may have no authorship fields. Their prose alone
     // cannot establish a harness wake or a metadata envelope.

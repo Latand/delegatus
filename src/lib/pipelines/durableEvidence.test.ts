@@ -19,6 +19,24 @@ function writeTranscript(name: string, records: Record<string, unknown>[]): stri
 
 const PASS_TEXT = "done\n\n```json\n{\"status\":\"pass\"}\n```";
 
+test("Codex unavailable prompt metadata stays external without losing terminal evidence", async () => {
+  const cut = Date.parse("2026-10-05T10:00:00Z");
+  const file = writeTranscript("codex-unavailable-prompt.jsonl", [
+    { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete",
+      error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
+    { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message",
+      message: `<!-- llv:structured-user ctx=a.${"A".repeat(43)}.${"B".repeat(16)} -->\nWait for my review` } },
+    { type: "event_msg", timestamp: new Date(cut + 2000).toISOString(), payload: { type: "agent_message", message: PASS_TEXT } },
+    { type: "event_msg", timestamp: new Date(cut + 3000).toISOString(), payload: { type: "task_complete" } },
+  ]);
+  for (const afterCut of [undefined, cut]) {
+    expect(await durableStageTurnEvidence("codex", file, undefined, undefined, undefined, afterCut)).toMatchObject({
+      turn: "terminal", message: { text: PASS_TEXT },
+      prompts: [{ ts: cut + 1000, origin: "external" }], externalPromptAfterCut: true,
+    });
+  }
+});
+
 for (const engine of ["claude", "codex"] as const) {
   test(`${engine} reads the full assistant brief before stage_report and the later closing message`, async () => {
     const before = "2026-07-18T10:02:00.000Z";
@@ -670,10 +688,16 @@ test("quota prompt provenance keeps human overrides and excludes tool results", 
     { type: "user", timestamp: "2026-10-05T16:56:00Z", origin: { kind: "task-notification" }, promptSource: "system", message: { content: "<task-notification>done</task-notification>" } },
     { type: "user", timestamp: "2026-10-05T16:56:01Z", origin: { kind: "human" }, turnOrigin: "task_notification", promptSource: "typed", message: { content: "<task-notification>human words</task-notification>" } },
     { type: "user", timestamp: "2026-10-05T16:56:02Z", message: { content: [{ type: "tool_result", content: "Tool finished" }] } },
+    { type: "user", timestamp: "2026-10-05T16:56:03Z", origin: "task", message: { content: "Task finished" } },
+    { type: "user", timestamp: "2026-10-05T16:56:04Z", origin: { kind: "task" }, message: { content: "Task finished" } },
+    { type: "user", timestamp: "2026-10-05T16:56:05Z", origin: "task", promptSource: "typed", message: { content: "Wait for my review" } },
   ]);
   expect((await durableStageTurnEvidence("claude", file))?.prompts).toEqual([
     { ts: Date.parse("2026-10-05T16:56:00Z"), origin: "harness" },
     { ts: Date.parse("2026-10-05T16:56:01Z"), origin: "external" },
+    { ts: Date.parse("2026-10-05T16:56:03Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:04Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:05Z"), origin: "external" },
   ]);
 });
 

@@ -19032,6 +19032,58 @@ function expectProviderParkAt(pipeline: Pipeline, at: string): void {
 }
 
 // Recovery regressions use the existing injected controller ports.
+test.each([false, true])("Codex unavailable prompt metadata lets both lanes settle (reverse=%s)", async reverse => {
+  const h = harness();
+  const stages: import("./types").PipelineStageInput[] = [{ id: "check", kind: "run", engine: "codex", role: { roleId: "reviewer" }, access: "read-only", prompt: "Check", next: null }];
+  await create(h.ports, stages as never);
+  const second = await createPipelineFromRequest({ task: "Check another lane", spec: "AC1", repoDir: "/other-repo", stages,
+    src: "/codex/creator.jsonl", publication: "internal" }, h.ports);
+  expect(second.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(2);
+  const at = Date.parse(h.ports.now()) + 100_000;
+  const files = [false, true].map(unavailable => stageTranscript(`unavailable-marker-lane-${unavailable}`, [
+    ...(unavailable ? [{ type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "user_message",
+      message: `<!-- llv:structured-user ctx=a.${"A".repeat(43)}.${"B".repeat(16)} -->\nWait for my review` } }] : []),
+    { type: "event_msg", timestamp: new Date(at + 1000).toISOString(), payload: { type: "agent_message", message: 'Done\n```json\n{"status":"pass"}\n```' } },
+    { type: "event_msg", timestamp: new Date(at + 2000).toISOString(), payload: { type: "task_complete" } },
+  ]));
+  readFixtures(h, { "/codex/stage-1.jsonl": files[0]!, "/codex/stage-2.jsonl": files[1]! });
+  h.setConversationActive(false);
+  h.setPaneAlive(false);
+  if (reverse) savePipelines(loadPipelines().reverse());
+  for (let tick = 0; tick < 4; tick++) await tickPipelines([], h.ports);
+  expect(loadPipelines()).toHaveLength(2);
+  for (const lane of loadPipelines()) {
+    expect(lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+    expect(lane.state).toBe("completed");
+  }
+});
+
+test("Codex unavailable prompt metadata cancels a parked quota retry", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000, true);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toMatch(/Automatic retry|Автоповтор/);
+  const cut = f.now();
+  f.advance(1000);
+  const file = stageTranscript("unavailable-marker-parked", [providerQuotaRecord("codex", cut),
+    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message",
+      message: `<!-- llv:structured-user ctx=a.${"A".repeat(43)}.${"B".repeat(16)} -->\nWait for my review` } },
+    providerQuotaRecord("codex", f.now() + 500),
+  ]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+  await tickPipelines([], f.h.ports);
+  f.advance(31 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+});
+
 for (const parked of [false, true]) {
   test(`recorded report wins with an unreadable transcript, parked=${parked}`, async () => {
     const h = harness();
@@ -22148,7 +22200,7 @@ for (const parked of [false, true]) {
 }
 
 for (const mode of ["running", "pinned-park", "pool-park"] as const) {
-  for (const wrapper of ["task-notification", "wakeup"] as const) {
+  for (const wrapper of ["task-notification", "wakeup", "task", "bare-task"] as const) {
     test.each(["native-human", "ledger-human", "harness"] as const)(`Claude ${mode} ${wrapper} %s authorship controls quota recovery`, async author => {
       const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, mode !== "pool-park");
       const lane = loadPipelines()[0]!;
@@ -22162,12 +22214,13 @@ for (const mode of ["running", "pinned-park", "pool-park"] as const) {
       await tickPipelines([], f.h.ports);
       const initial = f.now();
       f.advance(1_000);
-      const text = `<${wrapper}>Please wait for my review before continuing.</${wrapper}>`;
+      const tag = wrapper === "task" || wrapper === "bare-task" ? "task-notification" : wrapper;
+      const text = `<${tag}>Please wait for my review before continuing.</${tag}>`;
       const notice = (at: number) => ({ type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
         message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } });
       const file = stageTranscript(`claude-native-wrapper-${mode}-${wrapper}-${author}`, [notice(initial),
         { type: "user", uuid: "wrapper-user", isMeta: false, timestamp: f.h.ports.now(), message: { content: text },
-          ...(author === "native-human" ? {} : { origin: { kind: wrapper }, promptSource: "system" }) }, notice(f.now() + 500)]);
+          ...(author === "native-human" ? {} : { origin: wrapper === "bare-task" ? "task" : { kind: wrapper }, promptSource: "system" }) }, notice(f.now() + 500)]);
       if (author === "ledger-human") {
         const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
         const ledger = new FileClaudeDeliveryLedger();

@@ -1933,8 +1933,8 @@ export class CodexAppServerHost implements EngineHost {
         ),
       },
     ];
-    if (currentTurn && this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
     if (currentTurn) {
+      if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
       try {
         const result = await this.rpc("turn/steer", {
           threadId: this.identity.threadId,
@@ -1942,9 +1942,10 @@ export class CodexAppServerHost implements EngineHost {
           input,
           clientUserMessageId: entry.id,
         });
-        const turnId = turnIdFromResult(result, "turn/steer");
-        const receipt = await this.awaitDeliveryConfirmation(entry, { outcome: "steered", turnId });
-        return receipt;
+        return this.awaitDeliveryConfirmation(entry, {
+          outcome: "steered",
+          turnId: turnIdFromResult(result, "turn/steer"),
+        });
       } catch (error) {
         if (/expectedTurnId|active turn|stale/i.test(safeError(error))) {
           return { outcome: "rejected", reason: "stale-turn" };
@@ -1962,8 +1963,7 @@ export class CodexAppServerHost implements EngineHost {
     const turnId = turnIdFromResult(result, "turn/start");
     this.activeTurnId = turnId;
     this.notifyStateListeners();
-    const receipt = await this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
-    return receipt;
+    return this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
   }
 
   /** Persisted-thread snapshot for materialization evidence: full-history
@@ -3337,15 +3337,10 @@ export class CodexAppServerHost implements EngineHost {
 
   private async confirmedDelivery(entry: QueueEntry, firstDispatch = false): Promise<DeliveryReceipt | null> {
     const known = this.confirmedDeliveries.get(entry.id);
-    if (known) {
-      const receipt = this.confirmedReceipt(entry, known);
-      return receipt;
-    }
+    if (known) return this.confirmedReceipt(entry, known);
     const persistedRead = rolloutConfirmedDelivery(this.identity.path, entry);
     const persisted = persistedRead instanceof Promise ? await persistedRead : persistedRead;
-    if (persisted) {
-      return persisted;
-    }
+    if (persisted) return persisted;
     // The journal already established this operation's first actuation. Keep
     // local duplicate/collision checks, but do not scan unrelated native
     // history to authorize a newly admitted message. Recovery remains below.
@@ -3364,9 +3359,7 @@ export class CodexAppServerHost implements EngineHost {
     if (this.dead) throw new Error(safeError(this.failure ?? "Codex app-server host is unavailable"));
     this.rememberConfirmedDeliveries(thread);
     const recovered = this.confirmedDeliveries.get(entry.id);
-    if (!recovered) return null;
-    const receipt = this.confirmedReceipt(entry, recovered);
-    return receipt;
+    return recovered ? this.confirmedReceipt(entry, recovered) : null;
   }
 
   private awaitDeliveryConfirmation(entry: QueueEntry, receipt: DeliveryReceipt): Promise<DeliveryReceipt> {
