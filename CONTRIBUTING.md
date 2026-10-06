@@ -283,8 +283,13 @@ when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
 CI OCR. The two required privacy checks remain strict and unchanged; local
 hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
-Docker PR builds are limited to image inputs, with a 45-minute timeout and
-cancellation of superseded runs. Main and v* tag image publishing are preserved,
+Docker PR builds are limited to image inputs, with a 40-minute build deadline,
+bounded builder cleanup, a 45-minute job timeout, and cancellation of superseded
+or closed runs. Merge-batch branches skip image verification. App changes verify
+amd64; image recipes, installation and native runtime inputs verify both Linux
+architectures. One PR build and one publication can run at once in separate
+single-build slots, leaving publication independent of the PR queue.
+Main and v* tag image publishing are preserved,
 as are npm publishing and the in-image candidate rehearsal.
 
 `scripts/rebuild.test.ts` exercises the actual host deploy command against a
