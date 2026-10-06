@@ -300,6 +300,11 @@ guarantees for the 1.x series.
   admission still refuses it. A refused admission keeps the cohort, the
   operator's decision and the cumulative wait ([#2495]).
 
+### Security
+- Two dependencies were updated for published security advisories:
+  `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h) and `source-map-js` to 1.2.2
+  (GHSA-68fv-2mgg-jv7q).
+
 ### Maintainer notes
 - The local hooks now compare with the merge base: touched tests run one
   file per process on the head and on the base, and only new failures block
