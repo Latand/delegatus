@@ -37,6 +37,9 @@ auto updates off, no auto drain, no pending named service job, and
 procedure before this one can pass preflight. Credentials stay inside the
 process and its owned MCP child; arbitrary transport exception messages are
 withheld from logs.
+The MCP child pins both `LLV_STATE_DIR` and `DELEGATUS_STATE_DIR` to the plan
+and removes spawn capability, conversation and transcript credentials under
+both prefixes before the entry point folds aliases.
 
 Protected-host capture requires a complete, current `agent_activity` selection.
 The endpoint caps selection at 200 and has no pagination cursor. Preflight

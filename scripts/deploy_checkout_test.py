@@ -517,6 +517,53 @@ class CheckoutIntegration(unittest.TestCase):
 
 
 class TransportContracts(unittest.TestCase):
+    def assert_folded_mcp_environment(self, prefixes):
+        import shutil
+        alias = pathlib.Path(__file__).resolve().parent.parent / "bin/envAlias.mjs"
+        bun = shutil.which("bun")
+        self.assertIsNotNone(bun)
+        with tempfile.TemporaryDirectory(prefix="delegatus-mcp-env-test-") as root:
+            checkout = pathlib.Path(root) / "checkout"
+            (checkout / "bin").mkdir(parents=True)
+            state = pathlib.Path(root) / "planned-state"
+            other_state = pathlib.Path(root) / "inherited-state"
+            state.mkdir()
+            other_state.mkdir()
+            (checkout / "bin/mcp-server.mjs").write_text(
+                "import " + json.dumps(alias.as_uri()) + ";\n"
+                "import { createInterface } from 'node:readline';\n"
+                "for await (const line of createInterface({input: process.stdin})) {\n"
+                " const r = JSON.parse(line);\n"
+                " if (!('id' in r)) continue;\n"
+                " const credentials = Object.fromEntries(Object.entries(process.env).filter(\n"
+                "  ([name]) => /^(LLV|DELEGATUS)_SPAWN_(CAPABILITY|CONVERSATION_ID|TRANSCRIPT_PATH)$/.test(name)));\n"
+                " const result = r.method === 'tools/call' ? {structuredContent: {ok: true,\n"
+                "  stateDir: process.env.LLV_STATE_DIR, token: process.env.LLV_TOKEN, credentials}} : {};\n"
+                " console.log(JSON.stringify({jsonrpc: '2.0', id: r.id, result}));\n"
+                "}\n")
+            inherited = {"LLV_STATE_DIR": str(other_state), "DELEGATUS_STATE_DIR": str(state if prefixes else other_state),
+                         "LLV_TOKEN": "synthetic-inherited", "DELEGATUS_TOKEN": "synthetic-alias"}
+            for prefix in prefixes:
+                for suffix in ["CAPABILITY", "CONVERSATION_ID", "TRANSCRIPT_PATH"]:
+                    inherited[prefix + "SPAWN_" + suffix] = "synthetic-" + prefix.lower() + suffix.lower()
+            with patch.dict(os.environ, inherited):
+                probe = deploy.Mcp(checkout, state, "synthetic-planned", bun)
+                try:
+                    observed = probe.call("agent_activity", {})
+                finally:
+                    probe.close()
+            self.assertEqual(observed["credentials"], {})
+            self.assertEqual(observed["stateDir"], str(state))
+            self.assertEqual(observed["token"], "synthetic-planned")
+
+    def test_mcp_entry_alias_fold_preserves_the_planned_state_and_token(self):
+        self.assert_folded_mcp_environment([])
+
+    def test_mcp_entry_alias_fold_cannot_restore_spawn_credentials(self):
+        for prefixes in [["LLV_"], ["DELEGATUS_"], ["LLV_", "DELEGATUS_"]]:
+            with self.subTest(prefixes=prefixes):
+                self.assert_folded_mcp_environment(prefixes)
+
     def test_http_uses_only_its_ephemeral_listener_and_refuses_redirects(self):
         import http.server
         import threading

@@ -220,10 +220,14 @@ def command(args, cwd=None):
 class Mcp:
     """Owns only its recorded child; reconnects after restart transport failures."""
     def __init__(self, checkout, state, token, bun):
-        self.env = {**os.environ, "LLV_STATE_DIR": str(state), "LLV_TOKEN": token, "DELEGATUS_TOKEN": token}
+        # The MCP entry folds DELEGATUS_* over LLV_* before loading. Pin both
+        # state spellings and remove both credential spellings before spawning.
+        self.env = {**os.environ, "LLV_STATE_DIR": str(state), "DELEGATUS_STATE_DIR": str(state),
+                    "LLV_TOKEN": token, "DELEGATUS_TOKEN": token}
         self.env["PATH"] = str(pathlib.Path(bun).parent) + os.pathsep + self.env.get("PATH", "")
-        for key in ["LLV_SPAWN_CAPABILITY", "LLV_SPAWN_CONVERSATION_ID", "LLV_SPAWN_TRANSCRIPT_PATH"]:
-            self.env.pop(key, None)
+        for prefix in ["LLV_", "DELEGATUS_"]:
+            for suffix in ["SPAWN_CAPABILITY", "SPAWN_CONVERSATION_ID", "SPAWN_TRANSCRIPT_PATH"]:
+                self.env.pop(prefix + suffix, None)
         self.checkout, self.bun = checkout, bun
         self.child = None
         self.buffer = b""
