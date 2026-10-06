@@ -224,10 +224,21 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   };
   const markBroken = (id: string) => setBroken((held) => (held.has(id) ? held : new Set([...held, id])));
 
+  /* A decision cannot be changed once saved, so nothing saves while speech is
+     still being recorded or transcribed: the comment would go without it. The
+     button and the shortcut both come through here. */
+  const savable = Boolean(round) && draft.chosen.length > 0 && !review.saving && dictation.phase === "idle";
+  /* A held key repeats before the first request has redrawn anything. */
+  const saveInFlight = useRef(false);
   const save = async () => {
-    if (!round || !draft.chosen.length || review.saving) return;
-    const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment });
-    if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+    if (!round || !savable || saveInFlight.current) return;
+    saveInFlight.current = true;
+    try {
+      const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment });
+      if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
+    } finally {
+      saveInFlight.current = false;
+    }
   };
 
   const title = t("proto.title");
@@ -558,7 +569,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             <MicButtonView {...dictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
-        <button type="button" className={PRIMARY} data-prototype-save="" disabled={!draft.chosen.length || review.saving || dictation.phase !== "idle"} onClick={() => void save()}>
+        <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
           {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
           {t("proto.save")}
         </button>

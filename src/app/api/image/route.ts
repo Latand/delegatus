@@ -1,9 +1,10 @@
+import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { admittedAs, lexicalAllowedRoots, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal } from "@/lib/artifact/localFile";
 import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -53,6 +54,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
   if (!mime) return NextResponse.json({ error: "not an image" }, { status: 400 });
 
   let data: Buffer;
+  let handle: fsp.FileHandle | undefined;
   try {
     // Resolve symlinks and re-check containment: a symlink under a root with an
     // image extension must not read a file outside it (e.g. ~/x.png → /etc/shadow).
@@ -60,11 +62,18 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
     if (!realpathAdmitted(admission, real, await realAllowedRoots())) {
       return NextResponse.json({ error: "path not allowed" }, { status: 403 });
     }
-    const stat = await fs.stat(real);
-    if (!stat.isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
-    data = await fs.readFile(real);
-  } catch {
+    /* The path was judged; the bytes come from the descriptor, and only when
+       the open file lies at that path. A directory swapped for a link after
+       the check must not answer with another place's picture. */
+    handle = await openAdmitted(real);
+    if (!(await handle.stat()).isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
+    data = await handle.readFile();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") return NextResponse.json({ error: "path not allowed" }, { status: 403 });
     return NextResponse.json({ error: "file not found" }, { status: 404 });
+  } finally {
+    await handle?.close().catch(() => {});
   }
   /* The extension names the type; the bytes must agree, as /api/artifact
      requires, so a renamed text file is never handed out as an image. */

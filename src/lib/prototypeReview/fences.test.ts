@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { GET as frameGET } from "@/app/api/artifact/frame/[...rest]/route";
 import { GET as artifactGET } from "@/app/api/artifact/route";
 import { GET as imageGET } from "@/app/api/image/route";
+import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { stateDir } from "@/lib/configDir";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
+import type { PrototypeDelivery } from "./decision";
 import { publishPOST, reviewGET, reviewPOST } from "./http";
 import { admittedSource, PROTOTYPE_LIMITS } from "./input";
 import { prototypeMediaGET } from "./media";
@@ -42,20 +45,26 @@ async function read() { return (await (await reviewGET(request(`/api/tasks/${TAS
  * the window in which a path check and an open disagree, made exact.
  */
 async function swapDuringOpen(swapped: string,outside: string,target: string,run: () => Promise<void>) {
-  const open = fs.open.bind(fs), stat = fs.stat.bind(fs), lstat = fs.lstat.bind(fs);
+  const open = fs.open.bind(fs), stat = fs.stat.bind(fs), lstat = fs.lstat.bind(fs), readFile = fs.readFile.bind(fs);
   let state: "before" | "swapped" | "restored" = "before";
   const swapIn = async (file: unknown) => {
     if (file !== target || state !== "before") return;
     state = "swapped"; await fs.rename(swapped,`${swapped}.held`); await fs.symlink(outside,swapped);
   };
+  const restore = async (file: unknown) => {
+    if (file === target && state === "swapped") { state = "restored"; await fs.unlink(swapped); await fs.rename(`${swapped}.held`,swapped); }
+  };
   const spies = [
+    /* A read that opens the path a second time is an open like any other. */
+    spyOn(fs,"readFile").mockImplementation((async (file: never,...rest: never[]) => {
+      await swapIn(file);
+      try { return await readFile(file,...rest); } finally { await restore(file); }
+    }) as never),
     spyOn(fs,"stat").mockImplementation((async (file: never,...rest: never[]) => { await swapIn(file); return stat(file,...rest); }) as never),
     spyOn(fs,"lstat").mockImplementation((async (file: never,...rest: never[]) => { await swapIn(file); return lstat(file,...rest); }) as never),
     spyOn(fs,"open").mockImplementation((async (file: never,...rest: never[]) => {
       await swapIn(file);
-      try { return await open(file,...rest); } finally {
-        if (file === target && state === "swapped") { state = "restored"; await fs.unlink(swapped); await fs.rename(`${swapped}.held`,swapped); }
-      }
+      try { return await open(file,...rest); } finally { await restore(file); }
     }) as never),
   ];
   try { await run(); } finally { for (const spy of spies) spy.mockRestore(); }
@@ -183,6 +192,120 @@ test("no path route reads a stored copy, by its own path or through a link, and 
     const served = await imageGET(request(own.url!));
     expect(served.status).toBe(200); await served.arrayBuffer();
   } finally { process.env.HOME = home; }
+});
+
+/** The three routes that read a file by its path. */
+const pathRoutes = (file: string) => [
+  () => imageGET(request(`/api/image?path=${encodeURIComponent(file)}`)),
+  () => artifactGET(request(`/api/artifact?path=${encodeURIComponent(file)}`)),
+  () => frameGET(request(frameUrl(mintFrameScope(path.dirname(file)),path.basename(file)))),
+];
+/** Each path route, asked for a picture whose directory leads to `elsewhere` for exactly as long as the open takes. */
+async function swappedUnderEveryPathRoute(target: string,elsewhere: string,foreign: string) {
+  const own = await fs.readFile(target);
+  for (const route of pathRoutes(target)) {
+    await swapDuringOpen(path.dirname(target),elsewhere,target,async () => {
+      const response = await route();
+      expect(Buffer.from(await response.arrayBuffer()).includes(foreign)).toBe(false);
+      expect(response.status).toBe(403);
+    });
+    const restored = await route();
+    expect(restored.status).toBe(200); expect(Buffer.from(await restored.arrayBuffer())).toEqual(own);
+  }
+}
+
+test("a directory swapped for a link to a round while a path route opens its picture serves no stored copy", async () => {
+  const home = process.env.HOME;
+  process.env.HOME = await fs.realpath(path.dirname(stateDir()));
+  try {
+    const id = await publish(await input("swap-path-routes"));
+    const media = roundMedia(loadTasks()[0]!.prototypeReviews![0]!).find(entry => entry.mime === "image/png")!;
+    const stored = await fs.readFile(path.join(roundDirectory(id),mediaFilename(media)));
+    expect(stored.includes("inside!!")).toBe(true);
+    // An ordinary picture the routes serve, under the stored copy's own name.
+    const allowed = path.join(await source(),mediaFilename(media));
+    await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
+    await swappedUnderEveryPathRoute(allowed,await fs.realpath(roundDirectory(id)),"inside!!");
+    // The review's own URL still serves the operator.
+    const own = (await read()).rounds[0]!.variants[0]!.frames[0]!.image;
+    const served = await imageGET(request(own.url!));
+    expect(served.status).toBe(200); expect(Buffer.from(await served.arrayBuffer())).toEqual(stored);
+  } finally { process.env.HOME = home; }
+});
+
+test("a directory swapped for a link out of the roots while a path route opens its picture serves nothing from there", async () => {
+  const base = await directory(os.tmpdir(),"prototype-roots-");
+  const outside = path.join(base,"outside"); await fs.mkdir(outside);
+  const home = process.env.HOME, evidence = process.env.LLV_EVIDENCE_ROOTS;
+  process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
+  process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
+  try {
+    const allowed = path.join(await source(),"shot.png");
+    await fs.writeFile(allowed,Buffer.concat([PNG,Buffer.from("allowed!")]));
+    await fs.writeFile(path.join(outside,"shot.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
+    expect((await imageGET(request(`/api/image?path=${encodeURIComponent(path.join(outside,"shot.png"))}`))).status).toBe(403);
+    await swappedUnderEveryPathRoute(allowed,outside,"OUTSIDE!");
+  } finally {
+    process.env.HOME = home;
+    if (evidence === undefined) delete process.env.LLV_EVIDENCE_ROOTS; else process.env.LLV_EVIDENCE_ROOTS = evidence;
+  }
+});
+
+const lockLeftovers = async () => (await fs.readdir(path.join(stateDir(),"prototype-reviews"))).filter(name => name.includes(".decision.lock")).sort();
+
+test("the lock queues of rounds no task holds leave with the next publication; a held round keeps its own, pictures retired or not", async () => {
+  const body = await input("locks");
+  const decide = async (id: string) => expect((await reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen." }),TASK)).status).toBe(200);
+  for (let n = 0; n < 5; n += 1) {
+    saveTasks([task()]);
+    await decide(await publish({ ...body, clientRequestId: `locks-${n}` }));
+    saveTasks([]);
+  }
+  saveTasks([task()]);
+  const kept = await publish({ ...body, clientRequestId: "locks-kept" });
+  await decide(kept);
+  expect(await lockLeftovers()).toEqual([`${kept}.decision.lock.write-locks`]);
+  const rounds = PROTOTYPE_LIMITS.storedRounds;
+  try {
+    Reflect.set(PROTOTYPE_LIMITS,"storedRounds",1);
+    const next = await publish({ ...body, clientRequestId: "locks-next" });
+    // The kept round's pictures are retired; its decision is still read under its lock.
+    expect(loadTasks()[0]!.prototypeReviews!.find(round => round.id === kept)!.mediaRemovedAt).toBeDefined();
+    await publish({ ...body, clientRequestId: "locks-after" });
+    expect(await lockLeftovers()).toEqual([`${kept}.decision.lock.write-locks`]);
+    expect((await read()).rounds.find(round => round.id === kept)!.decision!.comment).toBe("Chosen.");
+    expect(next).not.toBe(kept);
+  } finally { Reflect.set(PROTOTYPE_LIMITS,"storedRounds",rounds); }
+});
+
+test("a publication's cleanup during a save leaves the save its lock: a second save, a read and a retry wait and one message goes", async () => {
+  saveTasks([task(),task("task-other")]);
+  const body = await input("lock-held");
+  const id = await publish(body);
+  let sends = 0, sent = false, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const delivery: PrototypeDelivery = {
+    recover: async () => sent ? { state: "sent", operationId: "operation-1" } : null,
+    send: async () => { sends += 1; await gate; sent = true; return { state: "sent", operationId: "operation-1" }; },
+    retry: async () => { throw new Error("nothing failed, so nothing is retried"); },
+  };
+  const world = { caller: () => ({ conversationId: null, project: null }), stage: () => null, orchestrator: () => "conversation_seat" };
+  const save = () => reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen once." }),TASK,world,delivery);
+  const first = save();
+  for (let n = 0; sends === 0 && n < 500; n += 1) await Bun.sleep(5);
+  expect(sends).toBe(1);
+  const waiting = [save(),reviewGET(request("/review"),TASK,world,delivery),reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery)];
+  await Bun.sleep(30);
+  // Another task's publication runs the cleanup while the lock is held and queued for.
+  await publish({ ...body, taskId: "task-other", clientRequestId: "lock-held-other" });
+  const queue = path.join(stateDir(),"prototype-reviews",`${id}.decision.lock.write-locks`);
+  expect((await fs.readdir(queue)).length).toBe(4);
+  expect(await lockLeftovers()).toEqual([`${id}.decision.lock.write-lock`,`${id}.decision.lock.write-locks`]);
+  release();
+  for (const response of [await first,...await Promise.all(waiting)]) expect(response.status).toBe(200);
+  expect(sends).toBe(1);
+  expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery).toMatchObject({ state: "sent", operationId: "operation-1" });
+  expect(await fs.readdir(queue)).toEqual([]);
 });
 
 test("a task's history keeps a bounded number of rounds: superseded undecided rounds leave first and decisions never do", async () => {

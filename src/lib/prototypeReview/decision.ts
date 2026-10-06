@@ -1,4 +1,3 @@
-import path from "node:path";
 import { NextRequest } from "next/server";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { handleRuntimeRetry } from "@/lib/runtime/http";
@@ -7,7 +6,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
-import { findPrototypeRound, mutatePrototypeRound, prototypeRoot } from "./store";
+import { decisionLock, findPrototypeRound, mutatePrototypeRound } from "./store";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 
@@ -71,7 +70,7 @@ function recordDelivery(taskId: string,reviewId: string,result: PrototypeDeliver
 export async function refreshPrototypeDelivery(taskId: string,reviewId: string,delivery = prototypeDelivery): Promise<void> {
   const held = findPrototypeRound(taskId,reviewId)?.decision;
   if (!held?.delivery.conversationId || held.delivery.state === "sent") return;
-  await withFileTransaction(path.join(prototypeRoot(),`${reviewId}.decision.lock`),"prototype decision is busy",async () => {
+  await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
     const decision = findPrototypeRound(taskId,reviewId)?.decision;
     if (!decision?.delivery.conversationId || decision.delivery.state === "sent") return;
     /* Under the decision's lock no send is in flight here. A message the send
@@ -86,7 +85,7 @@ export async function decidePrototype(request: NextRequest,taskId: string,input:
   world: PrototypeWorld = prototypeWorld, delivery: PrototypeDelivery = prototypeDelivery): Promise<void> {
   const reviewId = input.reviewId;
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
-  await withFileTransaction(path.join(prototypeRoot(),`${reviewId}.decision.lock`),"prototype decision is busy",async () => {
+  await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
     let decision = mutatePrototypeRound(taskId,reviewId,(round,task) => {
       if (!("retry" in input)) {
         if (!Array.isArray(input.chosen) || !input.chosen.length || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length

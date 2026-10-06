@@ -4,9 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parseByteRange } from "@/lib/artifact/serve";
-import { streamWindow } from "@/lib/artifact/localFile";
+import { openedAt, streamWindow } from "@/lib/artifact/localFile";
 import { PrototypeError } from "./input";
-import { openedAt } from "./pinned";
 import { prototypeRoot, roundMedia, sniffPrototype, storedMediaPath } from "./store";
 import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
 

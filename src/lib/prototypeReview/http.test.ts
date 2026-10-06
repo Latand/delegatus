@@ -20,6 +20,7 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { prototypeWorld } from "./world";
 import { GET as tasksGET } from "@/app/api/tasks/route";
 import { PATCH as taskPATCH } from "@/app/api/tasks/[id]/route";
+import { DELETE as assignmentDELETE, PATCH as assignmentPATCH } from "@/app/api/tasks/[id]/assignment/route";
 import { taskAcknowledgement } from "@/lib/mcp/listAnswers";
 import type { PrototypeWorld } from "./world";
 import type { PublishPrototypeInput, PrototypeReviewRead } from "./types";
@@ -314,4 +315,32 @@ test("generic task reads and write acknowledgements do not bypass prototype acce
   const service = createMcpToolService({ ...viewerMcpBindings(), board_snapshot: async () => ({ tasks: loadTasks() }) }, new MemoryMcpReceiptStore());
   const snapshot = await service.callTool("board_snapshot", { clientRequestId: "prototype-board-read" });
   expect(snapshot.ok).toBe(true); expect(JSON.stringify(snapshot)).not.toContain("Private review comment");
+});
+
+test("no task answer hands a review to a capability caller: an assignment that changes nothing and a dismissal", async () => {
+  saveTasks([{ ...task(), assignments: [{ launchId: "launch-ghost", conversationId: "conversation_ghost", path: null, panePid: null, state: "linked" as const, error: null, at: "2026-10-01T00:00:00Z", engine: "codex" as const }] }]);
+  const id = await publish(await fullInput("private-assignment"));
+  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Private review comment" }), "task-prototype");
+  expect(JSON.stringify(loadTasks()[0])).toContain("Private review comment");
+  const context = { params: Promise.resolve({ id: "task-prototype" }) };
+  const call = (method: string, body: unknown, agent: boolean) => new NextRequest("http://localhost/api/tasks/task-prototype/assignment", { method, body: JSON.stringify(body),
+    headers: { host: "localhost", "sec-fetch-site": "same-origin", ...(agent ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {}) } });
+  const answers = [
+    await assignmentDELETE(call("DELETE", { launchId: "nothing-to-remove" }, true), context),
+    await assignmentPATCH(call("PATCH", { launchId: "launch-ghost", conversationId: "conversation_ghost", dismiss: "launch-did-not-start" }, true), context),
+  ];
+  for (const answer of answers) {
+    expect(answer.status).toBe(200);
+    const body = await answer.json();
+    for (const field of ["prototypeReviews", "prototypeReviewReplica", "prototypeReview"]) expect(body.task).not.toHaveProperty(field);
+    expect(JSON.stringify(body)).not.toContain("Private review comment");
+    expect(JSON.stringify(body)).not.toContain("prototype-decision:");
+  }
+  // The operator's interface redraws the card from the same answer: the summary, and no round.
+  const operator = await (await assignmentDELETE(call("DELETE", { launchId: "nothing-to-remove" }, false), context)).json();
+  expect(operator.task.prototypeReview).toMatchObject({ rounds: 1 });
+  expect(operator.task).not.toHaveProperty("prototypeReviews");
+  expect(JSON.stringify(operator)).not.toContain("prototype-decision:");
+  // The review's own read is untouched.
+  expect((await read()).rounds[0]!.decision!.comment).toBe("Private review comment");
 });

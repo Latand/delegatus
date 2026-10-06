@@ -26,10 +26,13 @@ routes enforce the existing origin and team fences and the caller's project.
 The roots are checked against the file that was opened. `O_NOFOLLOW` guards
 only a path's last component, so a directory above it swapped for a link
 between the check and the open would hand back a file from elsewhere. After
-the open, `openedAt` (`src/lib/prototypeReview/pinned.ts`) asks the kernel for
+the open, `openedAt` (`src/lib/artifact/localFile.ts`) asks the kernel for
 the open file's own name (`/proc/self/fd`) and requires the admitted path;
 where the platform publishes no such name the path is resolved again and must
-lead to the same inode. Publication copies and both media routes use it. The
+lead to the same inode. Publication copies and both media routes use it, and
+so do the path routes (`/api/image?path=`, `/api/artifact`, the report frame
+route) through `openAdmitted`: they keep a descriptor only when the open file
+lies at the path that was admitted, and read every byte from it. The
 store's root is resolved once and may be reached through a link (a chosen
 `LLV_STATE_DIR`); nothing below the root may be a link, and a read reports a
 copy as available by the same test the route serves it by.
@@ -44,8 +47,10 @@ manifest, its task and its caller.
 
 A task's review belongs to its project, and the board reads have no project
 fence. A caller that presents a capability therefore gets `/api/files`,
-`/api/tasks` and a task write's answer without the review summary and without
-`prototypeReviewNotices`; `/api/files` keeps that body in a cache scope of its
+`/api/tasks` and every task write's answer (create, edit, assignment, send,
+spawn, curator) without the rounds, the summary and
+`prototypeReviewNotices`; the write answers share one projection,
+`taskForResponse`, which leaves the operator's interface the summary; `/api/files` keeps that body in a cache scope of its
 own, so the operator's cached body, its ETag and its deltas never reach an
 agent. Agents read a review through `read_prototype_review`, which checks the
 project.
@@ -89,6 +94,11 @@ then recorded as `failed`, which is what offers the retry. The retry checks
 admission and receipt again before it sends, so repeating it, or reloading,
 never sends twice, and a message that is in flight stays `pending` with no
 retry.
+
+The decision's lock is one per round, and taking it leaves a queue directory
+beside the store's copies. The next publication removes the queue and any lock
+file of a round no task holds any more; a round a task still holds, its
+pictures retired or not, keeps both.
 
 The interface imports client-safe contracts from
 `src/lib/prototypeReview/types.ts` and these hooks from

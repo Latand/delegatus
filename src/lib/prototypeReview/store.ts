@@ -8,17 +8,35 @@ import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
-import { openedAt } from "./pinned";
+import { openedAt } from "@/lib/artifact/localFile";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
 };
 export const prototypeRoot = () => statePath("prototype-reviews");
+/** The lock one round's decision is taken, read back and retried under. */
+export function decisionLock(reviewId: string): string {
+  return path.join(prototypeRoot(), `${reviewId}.decision.lock`);
+}
+const DECISION_LOCK_LEFTOVER = /^(pr_[a-f0-9]{32})\.decision\.lock\.write-locks?$/;
 /** Under the publication lock, retire only directories marked by this store. */
 async function removeOrphanCopies(): Promise<void> {
-  const live = new Set(loadTasks().flatMap(task => (task.prototypeReviews ?? []).filter(round => !round.mediaRemovedAt).map(round => round.id)));
+  const rounds = loadTasks().flatMap(task => task.prototypeReviews ?? []);
+  const live = new Set(rounds.filter(round => !round.mediaRemovedAt).map(round => round.id));
+  /* A round keeps its decision after its pictures are retired, so its lock is
+     kept for as long as a task holds the round at all. */
+  const held = new Set(rounds.map(round => round.id));
   for (const entry of await fs.readdir(prototypeRoot(), { withFileTypes: true })) {
+    /* A decision's lock leaves a queue directory behind every time it is
+       taken. Once no task holds the round nothing can be decided, read back or
+       retried under it, so the queue and a lock file a stopped process left go
+       with the round; a round a task still holds keeps both, waiters included. */
+    const lock = DECISION_LOCK_LEFTOVER.exec(entry.name);
+    if (lock) {
+      if (!held.has(lock[1]!)) await fs.rm(path.join(prototypeRoot(), entry.name), { recursive: true, force: true });
+      continue;
+    }
     if (!entry.isDirectory() || !/^(pr_[a-f0-9]{32}|\.publish-[A-Za-z0-9]+)$/.test(entry.name)) continue;
     if (live.has(entry.name)) continue;
     const directory = path.join(prototypeRoot(), entry.name);

@@ -1,4 +1,4 @@
-import type { promises as fsp } from "node:fs";
+import { constants as FS, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -115,6 +115,44 @@ export async function realAllowedRoots(): Promise<AllowedRoots> {
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...(await Promise.all(stores.map(real))).filter((store): store is string => store !== null)])];
   return { home, evidence, fenced };
+}
+
+/**
+ * Whether an open descriptor is the file at `expected`, a path whose links
+ * are already resolved. `O_NOFOLLOW` guards only the last component, so a
+ * directory above it swapped for a link between the check and the open hands
+ * back a file from somewhere else under the same name. The kernel's own name
+ * for the open file settles it where the platform publishes one
+ * (`/proc/self/fd`): it names the file that was opened, whatever the path says
+ * by now. Elsewhere the path is resolved again after the open and must still
+ * lead to the same inode.
+ */
+export async function openedAt(handle: fsp.FileHandle, expected: string): Promise<boolean> {
+  const held = await fs.readlink(`/proc/self/fd/${handle.fd}`).catch(() => null);
+  if (held !== null) return held === expected;
+  try {
+    if (await fs.realpath(expected) !== expected) return false;
+    const [named, pinned] = await Promise.all([fs.stat(expected), handle.stat()]);
+    return named.ino === pinned.ino && named.dev === pinned.dev;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Opens a path whose links were resolved and whose place was admitted, and
+ * hands the descriptor back only when the open file is the one at that place.
+ * The roots and the fenced stores were judged on the path; this is what makes
+ * that judgement hold for the bytes, and every read after it goes through the
+ * descriptor. A file that turns out to lie elsewhere fails as a link at the
+ * last component does (`ELOOP`). `O_NONBLOCK` keeps a pipe under the name from
+ * holding the open; the caller's own check refuses anything that is no file.
+ */
+export async function openAdmitted(real: string): Promise<fsp.FileHandle> {
+  const handle = await fs.open(real, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  if (await openedAt(handle, real)) return handle;
+  await handle.close().catch(() => {});
+  throw Object.assign(new Error("the opened file is not the admitted one"), { code: "ELOOP" });
 }
 
 /**

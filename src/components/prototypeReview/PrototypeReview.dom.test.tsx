@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
 import { installActEnv } from "@/test-helpers/actEnv";
+import type { DictationPhase, UseDictationOptions } from "@/hooks/useDictation";
 import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -27,6 +28,21 @@ Object.assign(globalThis, {
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
 
+/* The real dictation hook with its phase held where a case puts it: a
+   recording needs a microphone this DOM has none of. With no phase held the
+   hook answers as it does everywhere else. */
+const realDictation = { ...await import("@/hooks/useDictation") };
+let heldPhase: DictationPhase | null = null;
+let dictationOptions: UseDictationOptions | null = null;
+mock.module("@/hooks/useDictation", () => ({
+  ...realDictation,
+  useDictation: (options: UseDictationOptions) => {
+    dictationOptions = options;
+    const held = realDictation.useDictation(options);
+    return heldPhase ? { ...held, phase: heldPhase } : held;
+  },
+}));
+
 const { PrototypeReview } = await import("./PrototypeReview");
 
 const media = (id: string) => ({ id: id.repeat(64), mime: "image/png" as const, bytes: 8, available: false, url: null });
@@ -44,6 +60,7 @@ const realFetch = globalThis.fetch;
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = null;
+  heldPhase = null;
   globalThis.fetch = realFetch;
   dom.document.body.innerHTML = "";
 });
@@ -76,4 +93,53 @@ test("the comment is saved as it was written: edge spaces and line breaks reach 
   await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
   expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [2], comment: written }]);
   expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe(written);
+});
+
+test("nothing saves while speech is recorded or transcribed, by the button or by Ctrl+Enter; afterwards the whole comment saves once", async () => {
+  const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];
+  let saved: { chosen: number[]; comment: string } | undefined;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      posted.push(body);
+      saved = { chosen: body.chosen, comment: body.comment };
+    }
+    return new Response(JSON.stringify(reviewRead(saved)), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="1"]')!.click(); });
+  type FieldProps = { onChange: (event: { target: { value: string } }) => void; onKeyDown: (event: { key: string; ctrlKey: boolean; metaKey: boolean; preventDefault: () => void }) => void };
+  const fieldProps = () => {
+    const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+    return (field as unknown as Record<string, FieldProps>)[Object.keys(field).find((key) => key.startsWith("__reactProps$"))!]!;
+  };
+  const shortcut = async (meta: boolean) => act(async () => {
+    fieldProps().onKeyDown({ key: "Enter", ctrlKey: !meta, metaKey: meta, preventDefault: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  for (const phase of ["starting", "rec", "busy"] as const) {
+    heldPhase = phase;
+    await act(async () => { fieldProps().onChange({ target: { value: "Typed prefix" } }); });
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    await shortcut(false);
+    await shortcut(true);
+    await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(posted).toEqual([]);
+  }
+  /* The recording ends and its words land in the field. */
+  heldPhase = null;
+  await act(async () => { dictationOptions!.onLiveCommit("and the spoken rest."); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+  /* Pressed twice before the first answer is back. */
+  await act(async () => {
+    const props = fieldProps();
+    for (let press = 0; press < 2; press += 1) props.onKeyDown({ key: "Enter", ctrlKey: true, metaKey: false, preventDefault: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [1], comment: "Typed prefix and the spoken rest." }]);
+  expect(document.querySelector("[data-prototype-comment]")?.textContent).toBe("Typed prefix and the spoken rest.");
 });

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
 import type { PrototypeReviewRead, PrototypeMediaView, PrototypeReviewSummary } from "./types";
@@ -17,6 +18,14 @@ export function withoutPrototypeReviews<T extends BoardTask>(tasks: readonly T[]
     delete task.prototypeReviews; delete task.prototypeReviewReplica; delete task.prototypeReview;
     return task;
   });
+}
+/** The one shape a task takes in an HTTP answer, whichever route answers:
+    the review's summary for the operator's interface, and nothing of the
+    review for a caller that presents a capability. A route that hands back a
+    task after a write passes it through here, so no acknowledgement carries
+    the rounds, the comment or the message sent to the orchestrator. */
+export function taskForResponse<T extends BoardTask>(request: { headers: Headers }, task: T): BoardTask {
+  return request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) ? withoutPrototypeReviews([task])[0]! : withPrototypeReviewSummaries([task])[0]!;
 }
 export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
   if (!task.prototypeReviews?.length && task.prototypeReviewReplica) return { taskId: task.id,

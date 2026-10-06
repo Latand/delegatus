@@ -14,7 +14,7 @@ import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
-import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { taskForResponse, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 export const runtime = "nodejs";
@@ -113,5 +113,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   }
   /* An icon that names no lucide icon, or a colour that is no task colour, was
      clamped to none, and says so (#2102). */
-  return NextResponse.json({ ok: true, task: result.task, ...(result.notes ? { notes: result.notes } : {}) });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...(result.notes ? { notes: result.notes } : {}) });
 }

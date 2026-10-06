@@ -18373,6 +18373,10 @@ describe("prototype review on a task: the card's button, the review and the orch
           await page.waitForTimeout(1_200);
           await shot("dictating");
           await frameCheck("dictating");
+          /* A saved decision cannot be changed, so the shortcut saves nothing while the recording runs. */
+          await page.locator("[data-prototype-comment-field]").press("Control+Enter");
+          await page.waitForTimeout(300);
+          if ((await posts()).some((post) => post.taskId === "t-search") || await page.locator(`${scope} [data-prototype-decision]`).count()) failures.push(`${label}: Ctrl+Enter saved the decision while the comment was still being dictated`);
           await stop.click();
           const spoken = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
           await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, spoken, { timeout: 10_000 });
