@@ -60,7 +60,7 @@ const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rar
   { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] },
   { id: "design", rows: [{ roleId: "architect" }] },
   { id: "coordinate", rows: [{ roleId: "orchestrator" }] },
-  { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }, { roleId: "maintainer" }, { roleId: "merger" }] },
+  { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }, { roleId: "maintainer" }, { roleId: "merger" }, { roleId: "issue-reporter" }] },
 ];
 
 const ALL_ROWS = GROUPS.flatMap((group) => group.rows);
@@ -88,6 +88,7 @@ function rowLabel(row: RowKey, t: TFunction): string {
     "prod-auditor": "onboarding.agents.role.prodAuditor",
     deployer: "onboarding.agents.role.deployer",
     merger: "onboarding.agents.role.merger",
+    "issue-reporter": "onboarding.agents.role.issueReporter",
   };
   return t(keys[row.roleId]);
 }
