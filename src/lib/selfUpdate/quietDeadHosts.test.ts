@@ -124,24 +124,41 @@ test("a conversation whose host is gone and whose turn settled does not block th
   expect(result).toMatchObject({ quiet: true, blockers: { turns: 0, turnList: [], discounted: 1 } });
 });
 
-test("an admitted resume remains protected while its live claim owner starts the host", async () => {
-  const fixture = ended("settled");
+test.each((["retained", "cleared", "missing"] as const).flatMap((columns) =>
+  (["admission", "host"] as const).map((phase) => ({ columns, phase }))))(
+"an admitted resume with $columns host columns remains protected during $phase", async ({ columns, phase }) => {
   const launchProfile = emptyLaunchProfile({ cwd: directory });
-  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
-  registry.upsert({ ...entry, launchProfile, structuredHost: {
+  const fixture = columns === "missing" ? (() => {
+    const artifactPath = transcript("settled");
+    const at = new Date(Date.now() - 12 * 60 * 60_000).toISOString();
+    writeFileSync(artifactPath, readFileSync(artifactPath, "utf8").trim().split("\n")
+      .map((line) => JSON.stringify({ ...JSON.parse(line), timestamp: at })).join("\n") + "\n");
+    registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "fixture", launchProfile,
+      turn: { state: "idle", source: "assistant", terminalAt: at }, observedAt: at }]);
+    const conversation = registry.ensureConversation("codex", artifactPath, "fixture");
+    return { artifactPath, conversation, key: { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id } };
+  })() : ended("settled");
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`];
+  if (entry) registry.upsert({ ...entry, launchProfile, structuredHost: columns === "cleared" ? null : {
     kind: "codex-app-server", endpoint: "stdio:released", process: null,
     eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
   } });
   const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: directory, transport: "structured", accountId: "fixture",
     conversationId: fixture.conversation.id, purpose: "resume-successor", expectedArtifactPath: fixture.artifactPath, launchProfile });
   if (begun.kind !== "created") throw new Error("resume receipt unavailable");
-  const journal = new RuntimeJournal(join(directory, "admitted-resume.sqlite"), { structuredHosts: true });
+  const journal = new RuntimeJournal(join(directory, `admitted-resume-${columns}-${phase}.sqlite`), { structuredHosts: true });
+  let releaseAdmission!: () => void;
+  const admitted = new Promise<void>((resolve) => { releaseAdmission = resolve; });
   const client = {
     snapshot: async () => journal.snapshot(),
     readSession: async (query: Parameters<RuntimeJournal["readSession"]>[0]) => journal.readSession(query),
     append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
     operation: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
-    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
+      const reply = journal.executeOperation(command);
+      if (phase === "admission" && command.kind === "spawn") { entered(); await admitted; }
+      return reply;
+    },
     operationStatus: async (id: string) => journal.operationResult(id),
     transitionOperation: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => journal.transitionOperation(...args),
     effectBatch: async () => [],
@@ -154,21 +171,23 @@ test("an admitted resume remains protected while its live claim owner starts the
     spec: { command: "codex", cwd: directory, windowName: "resume", engine: "codex", transcript: fixture.artifactPath, launchProfile },
     account: { engine: "codex", accountId: "fixture", kind: "managed", home: directory, transcriptRoot: directory, env: { NODE_ENV: "test" } },
     "prompt": "", registry, client,
-  } as Parameters<typeof spawnStructuredConversation>[0], { startHost: async () => { entered(); return held; } });
+  } as Parameters<typeof spawnStructuredConversation>[0], { startHost: async () => { if (phase === "host") entered(); return held; } });
   const outcome = launch.catch((error: unknown) => error);
   const p = { ...ports([]), runtimeSnapshot: async () => journal.snapshot() };
   try {
     await reached;
     expect(journal.snapshot().sessions).toMatchObject([{ host: "registering", turn: "unknown" }]);
     const claimed = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
-    expect(claimed).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: null, writerClaimEpoch: 1 } });
-    expect(claimed.claimOwner).toBeTruthy();
     const now = Date.now();
     const before = quietDispatchVersion(p, now);
     expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0 } });
+    expect(claimed).toMatchObject({ status: columns === "missing" ? "unhosted" : "dead", claimEpoch: 1,
+      structuredHost: { process: null, writerClaimEpoch: 1 } });
+    expect(claimed.claimOwner).toBeTruthy();
     expect(quietDispatchVersion(p, now)).toBe(before);
     expect((await agentActivity(fixture.conversation.id)).filter(livenessRecordIsLive)).toHaveLength(1);
   } finally {
+    releaseAdmission();
     rejectHost(new Error("owned test startup cleanup"));
     await outcome;
     journal.close();
@@ -233,7 +252,7 @@ test("a turn that is really running and a stage that is really running still blo
   }
 });
 
-const lane = (id: string, cursor: "running" | "reviewing", attempt: Record<string, unknown>) => ({ id, task: "Finish the work", state: "running",
+const lane = (id: string, cursor: "running" | "reviewing" | "spawning", attempt: Record<string, unknown>) => ({ id, task: "Finish the work", state: "running",
   cursor: { stageId: "stage", state: cursor }, runs: [{ stageId: "stage", attempts: [attempt] }] });
 
 test("a stage whose conversation nothing resolves stops blocking after five minutes and stays counted", async () => {
@@ -1099,4 +1118,208 @@ test("a path-only owner reads its current hosted turn even when registry and tra
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
   }
+});
+
+test.each(["live", "missing", "unreadable", "reused"] as const)("a %s previous reviewer is judged after ready creates the next round", async (identityState) => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const fixture = boundHeadlessReviewer(identity, identity.startIdentity, true);
+  try {
+    const flow = loadFlows()[0]!;
+    flow.state = "fixing";
+    flow.rounds.at(-1)!.n = 1;
+    flow.rounds.at(-1)!.verdict = "REQUEST_CHANGES";
+    flow.rounds.at(-1)!.relayedAt = new Date(Date.now() - 60_000).toISOString();
+    flow.rounds.at(-1)!.startedAt = new Date(Date.now() - 120_000).toISOString();
+    saveFlows([flow]);
+    expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+    const at = new Date().toISOString();
+    writeFileSync(fixture.previous.artifactPath, [
+      JSON.stringify({ timestamp: at, type: "session_meta", payload: { id: fixture.previous.key.sessionId, cwd: directory } }),
+      JSON.stringify({ timestamp: at, type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({ timestamp: at, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "REVIEW_READY: repair complete" }] } }),
+      JSON.stringify({ timestamp: at, type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+    await tickFlows([{ path: fixture.previous.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture" } as never]);
+    const changed = loadFlows()[0]!;
+    expect(changed.state).toBe("spawning");
+    expect(changed.rounds).toHaveLength(2);
+    expect(changed.rounds.map((round) => round.n)).toEqual([1, 2]);
+    expect(flowAwaitingAdmission(changed)).toBe(true);
+    expect(captureProcessIdentity(child.pid)).toMatchObject(identity);
+    const past = changed.rounds[0]!;
+    if (identityState === "missing") past.reviewerIdentity = null;
+    if (identityState === "reused") past.reviewerIdentity = `${identity.startIdentity}-reused`;
+    saveFlows([changed]);
+    const production = productionLivenessSources();
+    const described = await production.describeTranscript(fixture.reviewer.artifactPath);
+    const sources = { ...production, selectInventory: undefined,
+      listFiles: async () => [{ ...described, activity: "idle", activityReason: null, mtime: (Date.now() - 12 * FIVE_MINUTES) / 1000 }] as never,
+      probe: { ...production.probe, processIdentity: (pid: number) => identityState === "unreadable" && pid === child.pid ? null : production.probe.processIdentity(pid) },
+    };
+    const p = { ...fixture.p, turnLiveness: turnEvidenceReader(() => sources) };
+    const held = identityState !== "reused";
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: !held, blockers: { turns: held ? 1 : 0, stages: held ? 1 : 0 } });
+    }
+    const targeted = await agentLivenessSnapshot({ conversationId: fixture.reviewer.conversation.id, liveOnly: true }, sources);
+    const corpus = await agentLivenessSnapshot({ liveOnly: true }, sources);
+    expect(targeted.conversations.filter(livenessRecordIsLive)).toHaveLength(held ? 1 : 0);
+    expect(corpus.conversations.filter((record) => record.conversationId === fixture.reviewer.conversation.id).filter(livenessRecordIsLive)).toHaveLength(held ? 1 : 0);
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+    expect((await agentLivenessSnapshot({ liveOnly: true }, sources)).conversations
+      .filter((record) => record.conversationId === fixture.reviewer.conversation.id).filter(livenessRecordIsLive)).toHaveLength(0);
+  } finally {
+    saveFlows([]);
+    child.kill();
+    await child.exited;
+    fixture.journal.close();
+  }
+});
+
+
+
+test("an expired unregistered path-only attempt releases its stage", async () => {
+  const artifactPath = transcript("open");
+  const old = new Date(Date.now() - 12 * 60 * 60_000).toISOString();
+  writeFileSync(artifactPath, readFileSync(artifactPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.stringify({ ...JSON.parse(line), timestamp: old })).join("\n") + "\n");
+  expect(Object.values(registry.readOnlySnapshot().conversations).some((conversation) => conversation.generations.some((generation) => generation.path === artifactPath))).toBe(false);
+  const orphan = { conversation: { id: `conversation_${randomUUID()}` }, artifactPath };
+  const journal = journalOf("path-only-expired-stage", [{ ...row(orphan, "hosted"), sessionKey: { engine: "codex", sessionId: "legacy-path-owner" } }]);
+  const p = { ...ports([], [lane("lane_path_only", "running", { conversationId: null, agentPath: artifactPath })]), runtimeSnapshot: async () => journal.snapshot() };
+  try {
+    const direct = await p.turnLiveness!({ conversationId: "stage:lane_path_only", artifactPath }, {});
+    expect(direct).toMatchObject({ record: { host: { state: "unknown" }, reason: "launch_unproven_expired", turnState: "busy" }, registryHost: null });
+    expect(livenessRecordIsLive(direct.record!)).toBe(false);
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+    }
+  } finally { journal.close(); }
+});
+
+
+test("a live path-only attempt remains protected beyond the unresolved bound", async () => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const fixture = hosted("open", identity);
+  const p = ports([], [lane("lane_path_only_live", "running", { conversationId: null, agentPath: fixture.artifactPath })]);
+  try {
+    const now = Date.now();
+    const direct = await p.turnLiveness!({ conversationId: "stage:lane_path_only_live", artifactPath: fixture.artifactPath }, {});
+    expect(direct).toMatchObject({ registryHost: { processAlive: true } });
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+  } finally { child.kill(); await child.exited; }
+});
+
+test.each(["unbound", "path", "hosted", "legacy-path"] as const)("a historical %s reviewer keeps custody after the attempt switches owners", async (binding) => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const implementer = ended("settled");
+  const reviewer = binding === "hosted" || binding === "legacy-path" ? hosted("open", identity) : ended("open");
+  reviewFlow("flow_historical", implementer.artifactPath, "spawning", {
+    n: 1, verdict: "REQUEST_CHANGES",
+    ...(binding === "legacy-path" ? { reviewerPath: reviewer.artifactPath } : binding === "hosted" ? { reviewerConversationId: reviewer.conversation.id } : {
+      reviewerPid: identity.pid, reviewerIdentity: null,
+      ...(binding === "path" ? { reviewerPath: reviewer.artifactPath } : {}),
+    }),
+  });
+  const flow = loadFlows()[0]!;
+  flow.rounds.push(newRound(flow, "button", null));
+  saveFlows([flow]);
+  const p = { ...ports([], [lane("lane_historical", "reviewing", {
+    conversationId: implementer.conversation.id, agentPath: implementer.artifactPath, flowId: flow.id,
+  })]), flows: loadFlows };
+  try {
+    expect(flowAwaitingAdmission(loadFlows()[0]!)).toBe(true);
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
+    }
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  } finally { saveFlows([]); child.kill(); await child.exited; }
+});
+
+test.each(["missing", "unreadable", "unbound"] as const)("a %s stage owner has a stable unresolved bound and stays diagnosed", async (binding) => {
+  const artifactPath = binding === "unbound" ? null : transcript("none");
+  if (binding === "missing") rmSync(artifactPath!);
+  const p = ports([], [lane("lane_unresolved_path", "running", { conversationId: null, agentPath: artifactPath })]);
+  // Simulate a scanner read that cannot describe the still-named artifact.
+  if (binding === "unreadable") p.turnLiveness = turnEvidenceReader(() => ({ ...productionLivenessSources(), describeTranscript: async () => null }));
+  const now = Date.now();
+  expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 1, unresolvedBlocking: 1 } });
+  // Reloaded attempt objects retain the same unresolved identity.
+  p.pipelines = () => [lane("lane_unresolved_path", "running", { conversationId: null, agentPath: artifactPath })] as never;
+  expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES - 1, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 1, unresolvedBlocking: 1 } });
+  for (const at of [now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+    expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: true, blockers: { stages: 0, unresolved: 1, unresolvedBlocking: 0, unresolvedGraceMs: FIVE_MINUTES } });
+  }
+});
+
+test("a path-only dead owner releases immediately and an admitted launch retains custody", async () => {
+  const fixture = ended("open");
+  const p = ports([], [lane("lane_path_dead", "running", { conversationId: null, agentPath: fixture.artifactPath })]);
+  const now = Date.now();
+  expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { stages: 0, unresolved: 0 } });
+  p.pipelines = () => [lane("lane_path_dispatch", "spawning", { conversationId: null, agentPath: fixture.artifactPath, launchId: "admitted-launch" })] as never;
+  for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+    expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+  }
+});
+
+test("the admission fence observes historical reviewer custody and a path-only binding", () => {
+  const implementer = ended("settled");
+  reviewFlow("flow_custody_fence", implementer.artifactPath, "spawning", { n: 1, reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity });
+  const flow = loadFlows()[0]!;
+  flow.rounds.push(newRound(flow, "button", null));
+  saveFlows([flow]);
+  const p = { ...ports([], [lane("lane_custody_fence", "running", { conversationId: null, agentPath: null })]), flows: loadFlows };
+  try {
+    const now = Date.now();
+    const before = quietDispatchVersion(p, now);
+    flow.rounds[0]!.reviewerIdentity = "changed-start-identity";
+    saveFlows([flow]);
+    const changed = quietDispatchVersion(p, now);
+    expect(changed).not.toBe(before);
+    p.pipelines = () => [lane("lane_custody_fence", "running", { conversationId: null, agentPath: implementer.artifactPath })] as never;
+    expect(quietDispatchVersion(p, now)).not.toBe(changed);
+  } finally { saveFlows([]); }
+});
+
+test.each(["missing", "dead", "live"] as const)("a current path-only %s reviewer is judged through owner evidence", async (state) => {
+  const implementer = ended("open");
+  const reviewer = state === "live" ? hosted("open", captureProcessIdentity(process.pid)!) : ended("open");
+  if (state === "missing") rmSync(reviewer.artifactPath);
+  reviewFlow("flow_current_path", implementer.artifactPath, "reviewing", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: null, reviewerPid: null,
+    spawnStartedAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString(),
+  });
+  const production = productionLivenessSources();
+  const disk = registry.readOnlySnapshot();
+  // An orphaned legacy pane path has neither a conversation nor a process row.
+  if (state === "missing") {
+    const flow = loadFlows()[0]!;
+    flow.reviewerMode = "pane";
+    saveFlows([flow]);
+    delete disk.conversations[reviewer.conversation.id];
+    delete disk.entries[`codex:${reviewer.key.sessionId}`];
+  }
+  const p = { ...ports([], [lane("lane_current_path", "reviewing", {
+    conversationId: implementer.conversation.id, agentPath: implementer.artifactPath, flowId: "flow_current_path",
+  })]), flows: loadFlows,
+    turnLiveness: turnEvidenceReader(() => ({ ...production, registrySnapshot: () => disk })) };
+  try {
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES - 1, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      const held = state === "live" || state === "missing" && at - now < FIVE_MINUTES;
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: !held, blockers: {
+        stages: held ? 1 : 0, unresolved: state === "missing" ? 1 : 0, unresolvedBlocking: state === "missing" && held ? 1 : 0,
+      } });
+    }
+  } finally { saveFlows([]); }
 });

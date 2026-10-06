@@ -1306,12 +1306,13 @@ test.each(["codex", "claude"] as const)("%s stale-live recovery converges regist
   });
   expect(registry.snapshot().entries[`${engine}:${sessionId}`]).toMatchObject({
     status: "idle",
-    claimEpoch: 1,
+    // The setup claim advances the stale writer's epoch 4 before host startup.
+    claimEpoch: 5,
     pendingAction: null,
     structuredHost: {
       process: owner,
       activeTurnRef: null,
-      writerClaimEpoch: 1,
+      writerClaimEpoch: 5,
     },
   });
   expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({

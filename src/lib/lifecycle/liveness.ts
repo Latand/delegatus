@@ -389,7 +389,7 @@ function hostEvidence(
   return { state: young ? "unknown" : "gone", kind: "none", pid: null };
 }
 
-/** Process ownership survives changes to the flow's control phase. */
+/** Process ownership survives control phases and later review rounds. */
 function headlessHostEvidence(
   flows: readonly Flow[],
   transcriptPath: string | null,
@@ -398,19 +398,20 @@ function headlessHostEvidence(
   registry: LivenessRegistrySnapshot,
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
   const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
-  let gone: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
+  let fallback: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless") continue;
-    const round = flow.rounds.at(-1);
-    if (!round || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
-      || (!transcriptPath || round.reviewerPath !== transcriptPath)
-      && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
-    const verdict = headlessRoundProcess(round, probe);
-    const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
-    if (verdict !== "gone") return host;
-    gone = host;
+    for (const round of flow.rounds) {
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
+        || (!transcriptPath || round.reviewerPath !== transcriptPath)
+        && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
+      const verdict = headlessRoundProcess(round, probe);
+      const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
+      if (verdict === "alive") return host;
+      if (!fallback || verdict === "unproven") fallback = host;
+    }
   }
-  return gone;
+  return fallback;
 }
 
 /**
@@ -692,13 +693,14 @@ function activeHeadlessTranscriptPaths(
   const paths = new Set<string>();
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless") continue;
-    const round = flow.rounds.at(-1);
-    if (!round || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
-    const path = round?.reviewerPath
-      ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
-    // Selection must retain every owner the final liveOnly predicate protects.
-    // An unreadable identity cannot drop a recorded PID before it is judged.
-    if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
+    for (const round of flow.rounds) {
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
+      const path = round.reviewerPath
+        ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
+      // Selection must retain every owner the final liveOnly predicate protects.
+      // An unreadable identity cannot drop a recorded PID before it is judged.
+      if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
+    }
   }
   return paths;
 }

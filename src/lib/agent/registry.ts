@@ -7016,15 +7016,32 @@ export class AgentRegistry {
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
   }
 
-  /** Atomically claims a stale structured row and advances its writer fence. */
+  /** Atomically claims a stale structured row and advances its writer fence.
+      Resume setup may seed a missing entry for imported history in this lock. */
   claimStructuredHost(
     key: SessionKey,
     owner: ProcessIdentity,
-    options: { allowUnhosted?: boolean; reclaimUnverifiedOwner?: boolean } = {},
+    options: {
+      allowUnhosted?: boolean;
+      reclaimUnverifiedOwner?: boolean;
+      setupHost?: StructuredHostColumns;
+      setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
+    } = {},
   ): AgentRegistryEntry | null {
     return this.mutate((file) => {
-      const entry = file.entries[sessionKeyId(key)];
-      if (!entry?.structuredHost) return null;
+      const keyId = sessionKeyId(key);
+      const existing = file.entries[keyId];
+      const entry: AgentRegistryEntry | null = existing ?? (options.allowUnhosted === true && options.setupHost && options.setupEntry
+        ? { ...clone(options.setupEntry), key, status: "unhosted" as const, host: null,
+          claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
+        : null);
+      if (!entry) return null;
+      const terminal = entry.status === "unhosted" || entry.status === "dead";
+      // A dead-host cleanup clears these columns. Resume setup must publish
+      // its writer claim before starting the replacement host, under this lock.
+      const structuredHost = entry.structuredHost
+        ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
+      if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
@@ -7035,22 +7052,28 @@ export class AgentRegistry {
          claim owner remains the writer fence. A host can publish `dead` before
          its late reap releases that claim, and its live writer must finish
          before a successor advances the epoch. */
-      const terminal = entry.status === "unhosted" || entry.status === "dead";
-      const liveHost = entry.structuredHost.process;
+      const liveHost = structuredHost.process;
       if (!terminal && liveHost && this.ownerAlive(liveHost)) return null;
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);
         const reclaimUnverifiedOwner = options.reclaimUnverifiedOwner === true
-          && entry.structuredHost.process === null
+          && structuredHost.process === null
           && priorOwner?.startIdentity === null
           && owner.startIdentity !== null;
         if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
       }
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost.writerClaimEpoch = entry.claimEpoch;
+      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
       entry.updatedAt = now();
+      if (!existing) {
+        const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
+        const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+        file.entries[keyId] = entry;
+        reboundEntryMcpGrant(file, key, this.mcpGrantPolicy);
+        advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
+      }
       return clone(entry);
     });
   }

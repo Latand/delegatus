@@ -1109,14 +1109,15 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
 });
 
 test.each([
+  { name: "exact saved identity", saved: "start", current: "start", alive: true, pid: 4242 },
   { name: "missing saved identity", saved: null, current: "start", alive: true, pid: 4242 },
   { name: "unreadable current identity", saved: "start", current: null, alive: true, pid: 4242 },
   { name: "reused PID", saved: "old-start", current: "start", alive: true, pid: 4242 },
   { name: "dead PID", saved: "start", current: "start", alive: false, pid: 4242 },
   { name: "missing PID", saved: null, current: "start", alive: true, pid: null },
-].flatMap((identity) => [false, true].map((present) => ({ ...identity, present }))))(
-  "headless selection shares the process ownership verdict: $name present=$present",
-  async ({ saved, current, alive, pid, present }) => {
+].flatMap((identity) => [false, true].flatMap((present) => [false, true].map((historical) => ({ ...identity, present, historical })))))(
+  "headless selection shares the process ownership verdict: $name present=$present historical=$historical",
+  async ({ saved, current, alive, pid, present, historical }) => {
     const candidate = "/transcripts/unverified.jsonl";
     const fallback = "/transcripts/scan-live.jsonl";
     const generation = publishedGeneration([
@@ -1126,16 +1127,16 @@ test.each([
     const held = pid !== null && alive && (!saved || !current || saved === current);
     const snapshot = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, corpusSources(generation, {
       probe: { now: () => NOW, pidAlive: () => alive, processIdentity: () => current },
-      flows: () => [{ reviewerMode: "headless", state: "reviewing", rounds: [{
+      flows: () => [{ reviewerMode: "headless", state: historical ? "spawning" : "reviewing", rounds: [{
         reviewerPath: candidate, reviewerPid: pid, reviewerIdentity: saved,
-      }] }] as unknown as Flow[],
+      }, ...(historical ? [{}] : [])] }] as unknown as Flow[],
       describeTranscript: async (target) => {
         expect(held).toBe(true);
         expect(target).toBe(candidate);
         return { path: target, project: "viewer", title: "candidate", engine: "codex", mtimeMs: NOW - 60_000,
           sizeBytes: 4096, conversationId: null, activity: null, activityReason: null };
       },
-      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 1_000 }),
+      transcriptEvidence: async (_engine, target) => ({ turn: "busy", lastRecordTs: target === candidate ? NOW - 12 * 60 * 60_000 : NOW - 1_000 }),
     }));
     expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([held ? candidate : fallback]);
     expect(snapshot.selection).toMatchObject({ recovered: held && !present ? 1 : 0, recoveryTruncated: false, selected: 1, hydrated: 1 });

@@ -154,30 +154,33 @@ function judgeStageOwner(evidence: TurnEvidence): "blocks" | "released" | "settl
 }
 
 /**
- * The reviewer a review stage's flow is running now, when the attempt may not
- * name it yet. A flow and the attempt that started it are stored apart, and the
- * attempt takes the new round's binding only on the pipeline's next pass, so
- * until then it still names the previous round's reviewer.
+ * A reviewer a review stage's flow has launched, when the attempt may not name
+ * it. Findings and a new round do not prove that a previous reviewer exited.
+ * Bound historical owners are read through the common evidence reader, and
+ * unbound recorded processes retain custody until proof of death or reuse.
  *
  * `dispatching` is a round whose launch has started and has no conversation to
  * ask about yet, so it holds the stage. The one thing that ends that hold is
  * the process the round itself records: once that process is proven gone the
  * round has no owner, and the launch markers left beside it say nothing more.
  */
-function currentReviewRound(flow: Flow | undefined, attemptConversationId: string | null, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null } | "dispatching" | "gone" | null {
-  if (!flow) return null;
-  const round = flow.rounds.at(-1);
-  if (!round) return null;
+function reviewRoundOwner(flow: Flow, round: Round, attemptConversationId: string | null, reviewerProcess: QuietPorts["reviewerProcess"]): { conversationId: string; artifactPath: string | null; historical: boolean } | "dispatching" | "gone" | null {
+  const historical = round !== flow.rounds.at(-1);
   // A bound host can still be running after findings arrive, including a
   // reviewer whose process is recorded only by the registry.
   if (round.reviewerConversationId) {
     return round.reviewerConversationId === attemptConversationId ? null
-      : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null };
+      : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null, historical };
+  }
+  const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
+  // A materialized path can outlive its registry binding. Without a recorded
+  // process, the common reader gives it the same bounded verdict as a stage.
+  if (round.reviewerPath && (historical || !recordedProcess)) {
+    return { conversationId: `flow:${flow.id}:round:${round.n}:reviewer`, artifactPath: round.reviewerPath, historical };
   }
   // A parked flow can still own a reviewer. Only active dispatch phases
   // receive protection from launch markers without a recorded process.
-  const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
-  if (!recordedProcess && (round.verdict || (flow.state !== "spawning" && flow.state !== "reviewing"))) return null;
+  if (!recordedProcess && (historical || round.verdict || (flow.state !== "spawning" && flow.state !== "reviewing"))) return null;
   if (reviewerProcess?.(round) === "gone") return "gone";
   return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
     ? "dispatching" : null;
@@ -257,9 +260,22 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
       if (["running", "reviewing"].includes(cursor.state)) {
-        const owners = conversationId ? [{ conversationId, artifactPath: attempt?.agentPath ?? null }] : [];
-        const round = currentReviewRound(flow, conversationId, ports.reviewerProcess);
-        if (round && round !== "dispatching" && round !== "gone") owners.push(round);
+        const owners: { conversationId: string; artifactPath: string | null; historical?: boolean }[] = [];
+        const attemptOwnerId = conversationId ?? `stage:${pipeline.id}:${cursor.stageId}:attempt:${attempt?.n ?? 0}`;
+        if (conversationId || attempt?.agentPath) owners.push({ conversationId: attemptOwnerId, artifactPath: attempt?.agentPath ?? null });
+        let dispatching = false;
+        let currentRoundGone = false;
+        if (flow) for (const round of flow.rounds) {
+          const owner = reviewRoundOwner(flow, round, conversationId, ports.reviewerProcess);
+          if (owner === "dispatching") dispatching = true;
+          else if (owner === "gone") currentRoundGone ||= round === flow.rounds.at(-1);
+          else if (owner) owners.push(owner);
+        }
+        // A stage without a binding or readable transcript is an unresolved
+        // owner too. Keep its identity stable across probes so its bound ages.
+        if (!owners.length && !dispatching && !currentRoundGone && !awaitingAdmission) {
+          owners.push({ conversationId: attemptOwnerId, artifactPath: null });
+        }
         // The attempt remains bound to its reviewer while the flow relays and
         // fixes. That reviewer's death says nothing about the implementer.
         const phase = flow?.pausedState ?? flow?.state;
@@ -283,11 +299,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         // running after its findings moved the flow to relaying. Read every
         // existing owner before discounting the held action. A settled owner
         // needs no verdict-collection grace here: that action is already held.
-        let released = !relayInFlight && round !== "dispatching" && (awaitingAdmission || owners.length > 0 || round === "gone");
+        let released = !relayInFlight && !dispatching && (awaitingAdmission || owners.length > 0 || currentRoundGone);
         for (const owner of owners) {
           const reading = await evidence(owner);
           const verdict = reading ? judgeStageOwner(reading) : "blocks";
-          if (verdict === "blocks" || (verdict !== "released" && !(awaitingAdmission && verdict === "settled")
+          if (verdict === "blocks" || (verdict !== "released" && !((awaitingAdmission || owner.historical) && verdict === "settled")
             && !pastBound(owner.conversationId, verdict))) released = false;
         }
         if (released) continue;
@@ -347,11 +363,12 @@ export function quietDispatchVersion(ports: QuietPorts | undefined, now: number)
   try {
     const stages = ports.pipelines().map((pipeline) => {
       const attempt = pipeline.runs?.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.findLast((attempt) => !attempt.historical);
-      return [pipeline.id, pipeline.state, pipeline.cursor?.stageId, pipeline.cursor?.state, attempt?.conversationId, attempt?.launchId, attempt?.flowId, attempt?.activation?.phase];
+      return [pipeline.id, pipeline.state, pipeline.cursor?.stageId, pipeline.cursor?.state, attempt?.conversationId, attempt?.agentPath, attempt?.launchId, attempt?.flowId, attempt?.activation?.phase];
     });
     const rounds = ports.flows?.().map((flow) => {
       const round = flow.rounds?.at(-1);
       return [flow.id, flow.state, flow.pausedState, flow.implementerConversationId, flow.implementerPath,
+        flow.rounds?.map((owner) => [owner.reviewerConversationId, owner.reviewerPath, owner.reviewerPid, owner.reviewerIdentity]),
         flow.rounds?.length, round?.launchId, round?.sessionId, round?.spawnStartedAt,
         round?.relayStartedAt, round?.relayPendingSettlement, round?.relayedAt];
     });
