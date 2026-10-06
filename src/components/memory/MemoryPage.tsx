@@ -99,9 +99,9 @@ export function useMemoryReading(): Reading {
   return reading;
 }
 
-/** The tone the rows show: a failed read is a state nobody can vouch for. */
+/** The tone the rows show: a failed read is a state nobody can vouch for, even with an earlier reading in hand. */
 function toneOf(reading: Reading): MemoryTone | "loading" {
-  if (reading.memoryError === "read" && !reading.memory) return "unknown";
+  if (reading.memoryError === "read") return "unknown";
   if (!reading.memory) return "loading";
   return memoryTone(reading.memory);
 }
@@ -163,18 +163,26 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
   const { memory, memoryError, busy, setEnabled } = reading;
   const [keyOpen, setKeyOpen] = useState(false);
   const [details, setDetails] = useState(false);
-  const tone = memoryTone(memory);
+  /* The switch keeps the last setting read; what blocks it and the month are not vouched for after a failed read. */
+  const readFailed = memoryError === "read";
+  const tone = readFailed ? "unknown" : memoryTone(memory);
   const blocked = memoryBlocked(tone);
   const staging = Boolean(memory?.staging);
   const reason = tone === "noKey" ? t(staging ? "memoryPage.reason.noKeyStaging" : "memoryPage.reason.noKey")
     : tone === "capped" ? t("memoryPage.reason.capped", { cap: money(memory?.capUsd ?? 0), date: monthResets(memory?.month, lang) })
     : tone === "notOwner" ? t("memoryPage.reason.notOwner")
-    : tone === "unknown" && (memory || memoryError === "read") ? t("memoryPage.reason.unknown") : null;
+    : tone === "unknown" && (memory || readFailed) ? t("memoryPage.reason.unknown") : null;
   const counts = memory?.counts;
   /* While memory is blocked, a month of zeros says nothing. */
   const numbers = tone !== "unknown" && counts && memory?.spentUsd !== undefined && memory.capUsd !== undefined
     && !(blocked && counts.decisions === 0 && counts.delivered === 0);
   const sheet = size === "sheet";
+  const detailsToggle = (
+    <button type="button" data-memory-details="" aria-expanded={details} onClick={() => setDetails((open) => !open)}
+      className={`font-semibold text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${sheet ? "min-h-11 self-start text-body" : "inline text-[11.5px]"}`}>
+      {t("memoryPage.details")}
+    </button>
+  );
   return (
     <div data-memory-page="" data-memory-tone={tone} className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"}`}>
       <ProjectSettingRow
@@ -190,7 +198,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
       />
       {reason ? (
         <div className={PAD[size]}>
-          <div role="status" data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
+          <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
             <span>{reason}</span>
             {tone === "noKey" && !staging && !keyOpen ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => setKeyOpen(true)}>{t("memoryPage.enterKey")}</button> : null}
             {tone === "noKey" && !staging && keyOpen ? <OpenRouterKeyField size={size} /> : null}
@@ -207,13 +215,14 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
               </div>
             ))}
           </div>
-          <span data-memory-scope="" className={`${LINE[size]} text-muted`}>{t("memoryPage.scope", { month: monthName(memory.month, lang) })}</span>
-          <button type="button" data-memory-details="" aria-expanded={details} onClick={() => setDetails((open) => !open)}
-            className={`self-start font-semibold text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${sheet ? "min-h-11 text-body" : "text-[11.5px]"}`}>
-            {t("memoryPage.details")}
-          </button>
+          {/* In the menu, Details ends the scope's own line: a refused key under a counted month still fits 360 px. */}
+          <span data-memory-scope="" className={`${LINE[size]} text-muted`}>
+            {t("memoryPage.scope", { month: monthName(memory.month, lang) })}
+            {sheet ? null : <>{" "}{detailsToggle}</>}
+          </span>
+          {sheet ? detailsToggle : null}
           {details ? (
-            <dl data-memory-table="" className={`m-0 grid grid-cols-[1fr_auto_1fr_auto] tabular-nums text-muted ${sheet ? "gap-x-3 gap-y-1.5 text-label" : "gap-x-1.5 gap-y-0.5 text-[11px]"}`}>
+            <dl data-memory-table="" className={`m-0 grid grid-cols-[1fr_auto_1fr_auto] tabular-nums text-muted ${sheet ? "gap-x-3 gap-y-1.5 text-label" : "gap-x-1.5 gap-y-0.5 text-[11px] leading-[14px]"}`}>
               {([["memoryPage.picked", counts.prepared], ["memoryPage.noCandidates", counts.noCandidates], ["memoryPage.noMatches", counts.noMatches], ["memoryPage.skipped", counts.skipped], ["memoryPage.failed", counts.failed]] as const).map(([name, value]) => (
                 <div key={name} className="contents"><dt className="whitespace-nowrap">{t(name)}</dt><dd className="m-0 mr-1.5 text-right font-semibold text-primary">{value}</dd></div>
               ))}

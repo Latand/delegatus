@@ -480,10 +480,14 @@ export function RailHeaderMenu({ project }: { project: string | null }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!open) return;
+    /* A page of the menu holds focus when it closes, so the keyboard comes back to ⋯. */
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      trigger.current?.focus();
     };
     /* pointerdown, like the QR popover's own dismissal: the QR panel opens
        INSIDE this menu, so a click on it is a click inside and the menu stays. */
@@ -501,6 +505,7 @@ export function RailHeaderMenu({ project }: { project: string | null }) {
   return (
     <div ref={ref} className="relative shrink-0">
       <button
+        ref={trigger}
         type="button"
         data-rail-menu=""
         aria-expanded={open}

@@ -36,6 +36,7 @@ globalThis.fetch = (async (input: unknown) => {
 }) as typeof fetch;
 
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
+const { RailHeaderMenu } = await import("@/components/ProjectRail");
 
 let root: Root | undefined;
 afterEach(() => {
@@ -161,4 +162,46 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='rules']"));
   expect([...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["back", "archive"]);
   expect(host).not.toBeNull();
+});
+
+test("desktop: Escape closes the menu from every page and hands focus back to ⋯", async () => {
+  const host = await mount(<RailHeaderMenu project="atlas" />);
+  const trigger = host.querySelector<HTMLButtonElement>("[data-rail-menu]")!;
+  const escape = async () => { await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); }); };
+  const pages: [string, string[]][] = [
+    ["rest", []],
+    ["help", ["[data-rail-menu-help]"]],
+    ["settings", ["[data-rail-menu-settings]"]],
+    ["memory", ["[data-rail-menu-settings]", "[data-rail-menu-memory]"]],
+    ["memory, then back", ["[data-rail-menu-settings]", "[data-rail-menu-memory]", "[data-rail-menu-back]"]],
+    ["key", ["[data-rail-menu-settings]", "[data-rail-menu-key]"]],
+  ];
+  for (const [name, path] of pages) {
+    await click(trigger);
+    for (const step of path) await click(host.querySelector(step));
+    if (path.length) expect(document.activeElement === document.body).toBe(false);
+    await escape();
+    expect([name, host.querySelector("[data-rail-menu-panel]"), trigger.getAttribute("aria-expanded")]).toEqual([name, null, "false"]);
+    expect([name, document.activeElement === trigger]).toEqual([name, true]);
+  }
+});
+
+test("phone: a page takes focus on its back row, and back returns it to the row that opened the page", async () => {
+  dom.innerWidth = 390;
+  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+  await mount(
+    <HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} rules={[{ kind: "row", key: "archive", label: "Archive", onSelect: () => {} }]} onClose={() => {}} />,
+  );
+  const row = (key: string) => document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${key}']`);
+  const press = async (key: string) => { row(key)!.focus(); await click(row(key)); };
+  for (const path of [["settings", "memory"], ["settings", "key"], ["help"], ["rules"]]) {
+    for (const key of path) {
+      await press(key);
+      expect([key, document.activeElement?.getAttribute("data-mobile2-menu-row")]).toEqual([key, "back"]);
+    }
+    for (const key of [...path].reverse()) {
+      await press("back");
+      expect([key, document.activeElement === row(key)]).toEqual([key, true]);
+    }
+  }
 });

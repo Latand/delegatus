@@ -44,7 +44,15 @@ this month», grey «Вимкнено / Off», amber «Потрібен ключ
 «Ліміт до 1 листопада / Cap until November 1»; when a release does not serve
 traffic, amber «Інший реліз / Other release». The Settings row says it short:
 «пам’ять: працює / memory: working». On the overview, which has no project,
-neither the row nor its state is drawn.
+neither the row nor its state is drawn. When a later read fails, both rows
+and the page say «Стан невідомий / State unknown» and the page names the
+failure; the switch keeps the last setting read, and the next good read
+clears it. In the menu, Details ends the month's line, so a key the route
+refuses, under a month already counted and with Details open, stays within
+360 px (355 px in uk).
+
+By keyboard, a page opens with focus on its back row, back returns focus to
+the row that opened the page, and Escape closes the desktop menu onto ⋯.
 
 The phone's board menu holds the same entries: the create actions as cells, the
 board's places as rows, then the three header cells, Settings and Help and

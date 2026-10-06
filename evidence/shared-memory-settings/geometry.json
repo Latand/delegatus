@@ -39,8 +39,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 263.875,
-      "height": 227.375,
+      "bottom": 248.75,
+      "height": 212.25,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -62,9 +62,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyThe key contains spaces or characters outside printable ASCII. Paste the key again without them.",
+      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
       "numbers": null,
-      "keyError": "The key contains spaces or characters outside printable ASCII. Paste the key again without them.",
+      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
       "pageErrors": []
     },
     {
@@ -74,8 +74,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 263.875,
-      "height": 227.375,
+      "bottom": 248.75,
+      "height": 212.25,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -97,9 +97,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Reopen Settings to check the source and retry.",
+      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
       "numbers": null,
-      "keyError": "Could not save or read the key. Reopen Settings to check the source and retry.",
+      "keyError": "Could not save or read the key. Try again.",
       "pageErrors": []
     },
     {
@@ -136,8 +136,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 260.25,
-      "height": 223.75,
+      "bottom": 239.6875,
+      "height": 203.1875,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -150,8 +150,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 57.71875
+          "left": 123.953125,
+          "right": 161.671875
         }
       ],
       "overlaps": [],
@@ -167,8 +167,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 281,
-      "height": 244.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -181,8 +181,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 57.71875
+          "left": 123.953125,
+          "right": 161.671875
         }
       ],
       "overlaps": [],
@@ -198,8 +198,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 281,
-      "height": 244.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -212,8 +212,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 57.71875
+          "left": 123.953125,
+          "right": 161.671875
         }
       ],
       "overlaps": [],
@@ -298,8 +298,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 281,
-      "height": 244.5,
+      "bottom": 260.4375,
+      "height": 223.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -312,8 +312,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 57.71875
+          "left": 123.953125,
+          "right": 161.671875
         }
       ],
       "overlaps": [],
@@ -383,8 +383,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 311.25,
-      "height": 274.75,
+      "bottom": 290.6875,
+      "height": 254.1875,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -397,8 +397,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 57.71875
+          "left": 123.953125,
+          "right": 161.671875
         }
       ],
       "overlaps": [],
@@ -452,9 +452,9 @@
       "state": "invalid-key",
       "left": 0,
       "right": 390,
-      "top": 440.75,
+      "top": 455.875,
       "bottom": 900,
-      "height": 459.25,
+      "height": 444.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -484,9 +484,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyThe key contains spaces or characters outside printable ASCII. Paste the key again without them.",
+      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
       "numbers": "0added1checked$0spent of $1",
-      "keyError": "The key contains spaces or characters outside printable ASCII. Paste the key again without them.",
+      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
       "pageErrors": []
     },
     {
@@ -495,9 +495,9 @@
       "state": "write-failed",
       "left": 0,
       "right": 390,
-      "top": 440.75,
+      "top": 455.875,
       "bottom": 900,
-      "height": 459.25,
+      "height": 444.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -527,9 +527,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Reopen Settings to check the source and retry.",
+      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
       "numbers": "0added1checked$0spent of $1",
-      "keyError": "Could not save or read the key. Reopen Settings to check the source and retry.",
+      "keyError": "Could not save or read the key. Try again.",
       "pageErrors": []
     },
     {
@@ -892,8 +892,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 328,
-      "height": 291.5,
+      "bottom": 307.4375,
+      "height": 270.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -910,8 +910,8 @@
           "right": 123.03125
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -927,8 +927,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 377.375,
-      "height": 340.875,
+      "bottom": 341.6875,
+      "height": 305.1875,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -949,14 +949,14 @@
           "right": 218
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключКлюч містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
       "numbers": "0підставлено2перевірено$0витрачено із $1",
-      "keyError": "Ключ містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
+      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
       "pageErrors": []
     },
     {
@@ -966,8 +966,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 392.5,
-      "height": 356,
+      "bottom": 341.6875,
+      "height": 305.1875,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -988,14 +988,14 @@
           "right": 218
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
       "numbers": "0підставлено2перевірено$0витрачено із $1",
-      "keyError": "Не вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
+      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
       "pageErrors": []
     },
     {
@@ -1005,8 +1005,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 294,
-      "height": 257.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1019,8 +1019,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1036,8 +1036,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 288.375,
-      "height": 251.875,
+      "bottom": 267.8125,
+      "height": 231.3125,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1050,8 +1050,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1067,8 +1067,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 294,
-      "height": 257.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1081,8 +1081,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1098,8 +1098,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 294,
-      "height": 257.5,
+      "bottom": 273.4375,
+      "height": 236.9375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1112,8 +1112,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1198,8 +1198,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 310.5,
-      "height": 274,
+      "bottom": 289.9375,
+      "height": 253.4375,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1212,8 +1212,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1283,8 +1283,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 324.25,
-      "height": 287.75,
+      "bottom": 303.6875,
+      "height": 267.1875,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -1297,8 +1297,8 @@
           "right": 226
         },
         {
-          "left": 20,
-          "right": 88.390625
+          "left": 71.703125,
+          "right": 140.09375
         }
       ],
       "overlaps": [],
@@ -1352,9 +1352,9 @@
       "state": "invalid-key",
       "left": 0,
       "right": 390,
-      "top": 422.875,
+      "top": 438,
       "bottom": 900,
-      "height": 477.125,
+      "height": 462,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -1384,9 +1384,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключКлюч містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
       "numbers": "0підставлено3перевірено$0витрачено із $1",
-      "keyError": "Ключ містить пробіли або символи поза друкованим ASCII. Вставте ключ ще раз без них.",
+      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
       "pageErrors": []
     },
     {
@@ -1395,9 +1395,9 @@
       "state": "write-failed",
       "left": 0,
       "right": 390,
-      "top": 422.875,
+      "top": 438,
       "bottom": 900,
-      "height": 477.125,
+      "height": 462,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -1427,9 +1427,9 @@
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
       "numbers": "0підставлено3перевірено$0витрачено із $1",
-      "keyError": "Не вдалося зберегти або прочитати ключ. Відкрийте налаштування ще раз, перевірте джерело й повторіть спробу.",
+      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
       "pageErrors": []
     },
     {

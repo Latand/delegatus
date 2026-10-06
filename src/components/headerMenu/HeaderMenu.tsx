@@ -262,7 +262,13 @@ export function HeaderMenuSheet(props: {
 function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClose }: Parameters<typeof HeaderMenuSheet>[0]) {
   const { t } = useLocale();
   const keepAwake = useKeepAwake();
-  const [view, setView] = useState<PhoneView>("rest");
+  /* As on the desktop: a page that opens takes focus on its back row, and back returns it to the row that opened the page. */
+  const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>({ view: "rest", focus: null });
+  useEffect(() => {
+    if (focus) document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
+  }, [view, focus]);
+  const go = (next: Exclude<PhoneView, "rest">) => setPlace({ view: next, focus: "back" });
+  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view }); };
   const close = onClose;
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
   const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
@@ -277,7 +283,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
     kind: "custom",
     key: "back",
     node: (
-      <button type="button" role="menuitem" data-mobile2-menu-row="back" className={`${SHEET_ROW} border-b border-border`} onClick={() => { if (view !== "rest") setView(PHONE_PARENT[view]); }}>
+      <button type="button" role="menuitem" data-mobile2-menu-row="back" className={`${SHEET_ROW} border-b border-border`} onClick={back}>
         <ChevronLeft className="h-[18px] w-[18px] shrink-0 text-secondary" aria-hidden />
         <span className="shrink-0 text-secondary">{t("headerMenu.back")}</span>
         <span aria-hidden className="shrink-0 font-normal text-muted">·</span>
@@ -305,9 +311,9 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         /* «Keep screen awake» (issue #712) reads the Viewer-level controller that outlives this sheet. */
         return { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> };
       case "memory":
-        return row("memory", Brain, t("headerMenu.memory"), () => setView("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
+        return row("memory", Brain, t("headerMenu.memory"), () => go("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
       case "key":
-        return row("key", KeyRound, t("providerKey.label"), () => setView("key"), <><KeyStateWord size="sheet" />{chevron}</>);
+        return row("key", KeyRound, t("providerKey.label"), () => go("key"), <><KeyStateWord size="sheet" />{chevron}</>);
       case "mapping":
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
       case "dictation":
@@ -357,9 +363,9 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
           </div>
         ),
       },
-      row("settings", Settings, t("headerMenu.settings"), () => setView("settings"), <>{project ? <MemoryStateWord short size="sheet" /> : null}<span className="tabular-nums">{settingsItems.length}</span>{chevron}</>),
-      row("help", LifeBuoy, t("headerMenu.help"), () => setView("help"), <><span className="tabular-nums">{helpItems.length}</span>{chevron}</>),
-      ...(ruleCount ? [row("rules", ListChecks, t("headerMenu.rules"), () => setView("rules"), <><span className="tabular-nums">{ruleCount}</span>{chevron}</>)] : []),
+      row("settings", Settings, t("headerMenu.settings"), () => go("settings"), <>{project ? <MemoryStateWord short size="sheet" /> : null}<span className="tabular-nums">{settingsItems.length}</span>{chevron}</>),
+      row("help", LifeBuoy, t("headerMenu.help"), () => go("help"), <><span className="tabular-nums">{helpItems.length}</span>{chevron}</>),
+      ...(ruleCount ? [row("rules", ListChecks, t("headerMenu.rules"), () => go("rules"), <><span className="tabular-nums">{ruleCount}</span>{chevron}</>)] : []),
     ];
   }
   return <MobileMenuSheet title={title} entries={entries} onClose={onClose} />;

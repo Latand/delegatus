@@ -5832,8 +5832,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
    * 390×844, light and dark, en and uk: at rest, Help open (with a member
    * signed in, the tallest state, so Sign out is measured), Settings, the
    * memory page in each of its four states (working, off, without a key, at
-   * its cap), with Details open, with the key field opened by «Enter the key»,
-   * and the key page saved, after Replace and missing. Shared memory and the
+   * its cap), with Details open, with the key field opened by «Enter the key»
+   * and a key the route refuses (a month already counted, Details open), and
+   * the key page saved, after Replace and missing. Shared memory and the
    * key are answered by the driver over the product's own two routes.
    *
    * It fails when a desktop state is taller than 360 px, when a phone state is
@@ -5863,7 +5864,6 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const SHEET = "[data-mobile2-sheet='menu']";
   const TODAY_SHEET_PX = 743;
   const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
-  const ZERO = { decisions: 0, delivered: 0, prepared: 0, noCandidates: 0, noMatches: 0, skipped: 0, failed: 0 };
   /* Today's fourteen entries, by the attribute each carries in the built menu. */
   const ENTRIES: Record<string, { desktop: string | null; phone: string | null }> = {
     language: { desktop: "[data-header-menu-page='settings'] [data-header-menu-language]", phone: null },
@@ -5927,10 +5927,13 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         const blocked = !keyPresent ? ["noKey"] : memory === "capped" ? ["capped"] : [];
         return Response.json({
           enabled, reasons: [...(enabled ? [] : ["projectOff"]), ...blocked], keySource: keyPresent ? "file" : null, capUsd: 5,
-          spentUsd: memory === "capped" ? 5 : keyPresent ? 1.214 : 0, month: "2026-10", counts: keyPresent ? COUNTS : ZERO,
+          /* A key taken away mid-month keeps the month it counted: the tallest page memory has. */
+          spentUsd: memory === "capped" ? 5 : 1.214, month: "2026-10", counts: COUNTS,
         });
       },
       "/api/asks-you/key": async (request: Request) => {
+        /* The route's own check: printable ASCII, nothing else. */
+        if (request.method === "PUT" && !/^[\x21-\x7e]+$/.test((await request.json() as { key?: string }).key ?? "")) return Response.json({ present: keyPresent, source: keyPresent ? "file" : null, error: "invalid_key" }, { status: 400 });
         if (request.method === "PUT") keyPresent = true;
         return Response.json({ present: keyPresent, source: keyPresent ? "file" : null });
       },
@@ -6001,6 +6004,18 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       for (const word of words) if (word !== now) failures.push(`${tag}: a state word reads ${word}, the route says ${now}`);
     }
 
+    /** With Details open, submits a key with a control character in it; the route refuses it and the field says why. */
+    async function refuseKey(page: Page, tag: string, lang: "en" | "uk") {
+      if (await page.locator("[data-memory-details][aria-expanded='false']").count()) await page.locator("[data-memory-details]").click();
+      const field = page.locator("[data-memory-reason] [data-provider-key]");
+      await field.locator("input").fill("pasted\u0007value");
+      await field.locator("button[type=submit]").click();
+      const alert = field.locator("[role=alert]");
+      if (!await alert.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: a refused key shows no reason`);
+      else if ((await alert.textContent())?.trim() !== translate(lang, "providerKey.invalid")) failures.push(`${tag}: the refusal is not the key's own reason`);
+      if (!await page.locator("[data-memory-table]").count()) failures.push(`${tag}: Details closed when the key was refused`);
+    }
+
     async function desktop(frame: (typeof DESKTOP)[number], scheme: Scheme, lang: "en" | "uk") {
       const at = { frame: frame.name, width: frame.width, scheme, lang };
       const open = async (member = false) => {
@@ -6045,6 +6060,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator("[data-memory-enter-key]").click();
             if (!await page.locator("[data-memory-reason] [data-provider-key] input").count()) failures.push(`${tag}: «Enter the key» did not open the field where it was pressed`);
             await capture(page, at, "desktop", "memory-noKey-field", now);
+            await refuseKey(page, tag, lang);
+            await capture(page, at, "desktop", "memory-noKey-invalid", now);
           }
           await page.locator("[data-rail-menu-back]").click();
           await page.locator("[data-rail-menu-key]").click();
@@ -6054,9 +6071,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator("[data-key-replace]").click();
             if (!await page.locator("[data-key-page] [data-provider-key] input").count()) failures.push(`${tag}: Replace did not open the field`);
             await capture(page, at, "desktop", "key-replace", now);
+            /* Escape from a page deep in the menu closes it onto ⋯, where Enter opens it again. */
+            await page.keyboard.press("Escape");
+            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the key page did not close the menu onto ⋯`);
+            await page.keyboard.press("Enter");
             /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
-            await page.locator("[data-rail-menu-back]").click();
-            await page.locator("[data-rail-menu-back]").click();
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
@@ -6092,6 +6111,15 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           await agrees(page, tag, now);
           if (now === "working") {
             await capture(page, at, "phone", "rest", now);
+            /* By keyboard: a page opens with focus on its back row, and back returns it to the row that opened it. */
+            const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-mobile2-menu-row") ?? document.activeElement?.tagName);
+            for (const opener of ["settings", "help"]) {
+              await page.locator(`${SHEET} [data-mobile2-menu-row="${opener}"]`).focus();
+              await page.keyboard.press("Enter");
+              if (await focused() !== "back") failures.push(`${tag}: ${opener} opened with focus on ${await focused()}`);
+              await page.keyboard.press("Enter");
+              if (await focused() !== opener) failures.push(`${tag}: back from ${opener} left focus on ${await focused()}`);
+            }
             await page.locator(`${SHEET} [data-mobile2-menu-row="help"]`).click();
             await capture(page, at, "phone", "help", now);
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
@@ -6110,6 +6138,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
             await capture(page, at, "phone", "memory-noKey-field", now);
+            await refuseKey(page, tag, lang);
+            await capture(page, at, "phone", "memory-noKey-invalid", now);
           }
           if (now === "working" || now === "noKey") {
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
@@ -6148,7 +6178,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         states.find((entry) => entry.surface === surface && entry.frame === frame && entry.lang === lang && entry.state === state && entry.scheme === scheme);
       for (const lang of ["en", "uk"] as const) {
         const uk = lang === "uk";
-        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-field", "memory-capped", "key", "key-replace", "key-missing"];
+        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-field", "memory-noKey-invalid", "memory-capped", "key", "key-replace", "key-missing"];
         const cells = [];
         for (const state of order) {
           const entry = of("desktop", "1440", lang, state);

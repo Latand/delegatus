@@ -80,7 +80,9 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: the numbers, the month 
   const numbers = [...host.querySelectorAll("[data-memory-numbers] b")].map(node => node.textContent);
   expect(numbers).toEqual(["61", "214", "$1.21"]);
   expect(host.querySelector("[data-memory-numbers]")!.textContent).toContain(translate(lang, "memoryPage.spentOf", { cap: "$5" }));
-  expect(host.querySelector("[data-memory-scope]")!.textContent).toBe(translate(lang, "memoryPage.scope", { month: lang === "uk" ? "жовтень" : "October" }));
+  /* In the menu, Details ends the scope's line. */
+  expect(host.querySelector("[data-memory-scope]")!.textContent).toBe(`${translate(lang, "memoryPage.scope", { month: lang === "uk" ? "жовтень" : "October" })} ${translate(lang, "memoryPage.details")}`);
+  expect(host.querySelector("[data-memory-scope] [data-memory-details]")).not.toBeNull();
   expect(host.querySelector("[data-memory-table]")).toBeNull();
   await act(async () => { host.querySelector<HTMLButtonElement>("[data-memory-details]")!.click(); });
   const cells = [...host.querySelectorAll("[data-memory-table] dt, [data-memory-table] dd")].map(node => node.textContent);
@@ -206,4 +208,30 @@ test("a completed toggle survives an older refresh and refreshes pause during a 
   await act(async () => { resolveStale(Response.json(state(false))); await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(switchOf(host).getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("[data-memory-state]")!.getAttribute("data-memory-state")).toBe("working");
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: a refresh that fails after a good read says so on the page and on both rows, and the next good read clears it`, async () => {
+  setLocale(lang);
+  let fail = false;
+  serve(() => fail ? Response.json({ error: "read_failed" }, { status: 500 }) : view("working"));
+  const host = await render();
+  const words = () => [...host.querySelectorAll("[data-memory-state]")].map((word) => word.getAttribute("data-memory-state"));
+  expect(words()).toEqual(["working", "working"]);
+  expect(host.querySelector("[role=alert]")).toBeNull();
+
+  fail = true;
+  await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(words()).toEqual(["unknown", "unknown"]);
+  expect(host.querySelector("[data-memory-page]")!.getAttribute("data-memory-tone")).toBe("unknown");
+  expect(host.querySelector("[data-memory-page] [role=alert]")?.textContent).toBe(translate(lang, "memoryPage.reason.unknown"));
+  expect(host.querySelector("[data-memory-numbers]")).toBeNull();
+  /* The switch still shows the last setting read. */
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("true");
+
+  fail = false;
+  await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(words()).toEqual(["working", "working"]);
+  expect(host.querySelector("[data-memory-page] [role=alert]")).toBeNull();
+  expect(host.querySelector("[data-memory-reason]")).toBeNull();
+  expect(host.querySelector("[data-memory-numbers]")).not.toBeNull();
 });
