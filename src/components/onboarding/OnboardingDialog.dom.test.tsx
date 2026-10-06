@@ -126,6 +126,31 @@ test("shipped xhigh rows keep cost hints without a downgrade nudge, while custom
   }
 });
 
+test("the visual critic sits in the design and critique group on Opus high, and a change to its row saves", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  rolesBody = { roles: mergeRoleDefinitions({}).map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row='visual-critic']")));
+    const row = host.querySelector("[data-mapping-row='visual-critic']")!;
+    expect(row.closest("[data-mapping-group]")?.getAttribute("data-mapping-group")).toBe("design");
+    expect(row.textContent).toContain("Visual critic");
+    const [model, effort] = row.querySelectorAll("select") as unknown as HTMLSelectElement[];
+    expect([model!.value, effort!.value]).toEqual(["opus", "high"]);
+    flushSync(() => { effort!.value = "xhigh"; effort!.dispatchEvent(new Event("change", { bubbles: true })); });
+    await until(() => requests.some((request) => request.method === "PUT" && JSON.stringify(request.body).includes("visual-critic")));
+    expect(requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).at(-1)?.body)
+      .toEqual({ overrides: { "visual-critic": { config: { engine: "claude", model: "opus", effort: "xhigh" } } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { roles: [] };
+  }
+});
+
 function key(target: EventTarget, name: string, shiftKey = false): void {
   target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, shiftKey }) as unknown as Event);
 }

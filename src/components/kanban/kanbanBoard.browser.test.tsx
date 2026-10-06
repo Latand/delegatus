@@ -204,9 +204,10 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(18);
+          expect(await page.locator("[data-mapping-row]").count()).toBe(19);
           for (const [id, expectedEffort, expectedCost] of [
             ["reviewer", "xhigh", "very-heavy"],
+            ["visual-critic", "high", "heavy"],
             ["architect", "xhigh", "very-heavy"],
             ["prod-auditor", "xhigh", "very-heavy"],
             ["merger", "high", "heavy"],
@@ -221,6 +222,10 @@ describe("shipped role defaults rendered evidence", () => {
             if (id === "issue-reporter") {
               expect(await row.innerText()).toContain(translate(locale, "onboarding.agents.role.issueReporter"));
               expect(await row.locator("select").first().inputValue()).toBe("claude-sonnet-5-5");
+            }
+            if (id === "visual-critic") {
+              expect(await row.innerText()).toContain(translate(locale, "onboarding.agents.role.visualCritic"));
+              expect(await row.locator("select").first().inputValue()).toBe("opus");
             }
             const controlsFit = await row.locator("select").evaluateAll((controls) => controls.every((control) => {
               const rect = control.getBoundingClientRect();

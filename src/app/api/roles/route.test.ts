@@ -63,7 +63,7 @@ test("roles route returns all merged role definitions with scaffold previews and
   expect(body.schemaVersion).toBe(5);
   expect(body.roles.map((role) => role.id)).toEqual([
     "orchestrator", "reviewer", "verifier", "builder", "architect",
-    "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "issue-reporter",
+    "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "issue-reporter", "visual-critic",
   ]);
   expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });

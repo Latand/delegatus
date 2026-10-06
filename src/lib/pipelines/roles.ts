@@ -18,6 +18,7 @@ export const PIPELINE_ROLE_IDS: readonly PipelineRoleId[] = [
   "prod-auditor",
   "deployer",
   "merger",
+  "visual-critic",
 ];
 
 export type PipelineRoleDefaults = {

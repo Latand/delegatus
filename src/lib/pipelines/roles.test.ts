@@ -134,6 +134,17 @@ test("a referenced role with an empty scaffold fails the create instead of persi
     .toContain("empty prompt scaffold");
 });
 
+/* A UI lane ends with a visual-critic stage: the production lookup runs it
+   read-only on the role's own Opus row, and a stage override still wins. */
+test("a visual-critic stage resolves read-only on the role's Claude Opus runtime", () => {
+  const resolved = resolvePipelineRole({ role: { roleId: "visual-critic" } }, "run", pipelineRoleLookup);
+  expect(resolved.error).toBeUndefined();
+  expect(resolved.role).toMatchObject({ roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" });
+  expect(resolved.role?.promptScaffold).toStartWith("You are a Visual-critic.");
+  expect(resolved.role?.promptScaffold).toContain("Safety fences:");
+  expect(resolvePipelineRole({ role: { roleId: "visual-critic" }, effort: "xhigh" }, "run", pipelineRoleLookup).role).toMatchObject({ effort: "xhigh", access: "read-only" });
+});
+
 test("the deployer role is refused in pipelines (no interactive confirm gate)", () => {
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run", pipelineRoleLookup).error)
     .toContain("not allowed in a pipeline");

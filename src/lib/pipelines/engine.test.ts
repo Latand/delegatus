@@ -3852,6 +3852,21 @@ test("a merger stage resolves through production role lookup during pipeline nor
   });
 });
 
+/* Every UI lane ends with a visual-critic stage: create_pipeline takes it, and
+   its agent launches read-only on the role's own Claude Opus row. */
+test("a visual-critic stage is accepted and launches read-only on the role's runtime", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  await create(h.ports, [{ id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null }] as never);
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: { ...expected, promptScaffold: expect.stringContaining("You are a Visual-critic.") } });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
+});
+
 test("review-loop onFail edges are rejected during creation and graph editing", async () => {
   const h = harness();
   savePipelines([]);

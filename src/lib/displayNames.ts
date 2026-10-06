@@ -92,6 +92,7 @@ const KNOWN_ROLE_WORDS = new Set([
   "merger",
   "verifier",
   "issue-reporter",
+  "visual-critic",
 ]);
 
 /** A role word is a single capitalized token («Orchestrator», «Prod-auditor»)

@@ -74,6 +74,7 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     maintainer: { engine: "claude", model: "opus", effort: "medium" },
     "prod-auditor": OPUS_HIGH,
     deployer: OPUS_HIGH,
+    "visual-critic": OPUS_HIGH,
   },
   codex: {
     orchestrator: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },

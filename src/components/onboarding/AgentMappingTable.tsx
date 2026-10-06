@@ -58,7 +58,7 @@ const GROUPS: readonly { id: "build" | "review" | "design" | "coordinate" | "rar
     { roleId: "builder", variant: "docs-fixes" },
   ] },
   { id: "review", rows: [{ roleId: "reviewer" }, { roleId: "reviewer", variant: "trivial" }, { roleId: "verifier" }] },
-  { id: "design", rows: [{ roleId: "architect" }] },
+  { id: "design", rows: [{ roleId: "architect" }, { roleId: "visual-critic" }] },
   { id: "coordinate", rows: [{ roleId: "orchestrator" }] },
   { id: "rare", rows: [{ roleId: "cleaner" }, { roleId: "prod-auditor" }, { roleId: "deployer" }, { roleId: "maintainer" }, { roleId: "merger" }, { roleId: "issue-reporter" }] },
 ];
@@ -89,6 +89,7 @@ function rowLabel(row: RowKey, t: TFunction): string {
     deployer: "onboarding.agents.role.deployer",
     merger: "onboarding.agents.role.merger",
     "issue-reporter": "onboarding.agents.role.issueReporter",
+    "visual-critic": "onboarding.agents.role.visualCritic",
   };
   return t(keys[row.roleId]);
 }
