@@ -24,6 +24,7 @@ import {
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
+  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
@@ -1660,12 +1661,10 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* docs/design/board-maintenance-report.md §5.5: the handoff's open-task list —
-   twelve rows of about 200 bytes on a busy board — went into the board
-   maintenance report, and the bytes it took are what a rotation of the default
-   mandate now keeps for its history. A 2 000-byte history beside a full task
-   list did not fit the envelope; beside the one pointer line it does. */
-test("a rotation of the default mandate keeps a history section the old task list pushed out", async () => {
+/* The task-list pointer leaves room for history. Required mandate rules
+   (#2518) consume the same bounded envelope: keep a fitting history and drop
+   an oversized one, while preserving both reporting and cross-project rules. */
+test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1673,13 +1672,15 @@ test("a rotation of the default mandate keeps a history section the old task lis
       prompts.push(String(body.prompt));
       return { status: 200, body: { ok: true, conversationId: successorId(2301), path: "/tmp/successor.jsonl" } };
     },
-    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(2_000) }),
+    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(historyBytes) }),
   });
   const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00002302" }, deps);
 
   expect(rotated.status).toBe(200);
-  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(false);
-  expect(historySection(prompts[0]!)).toContain("d".repeat(2_000));
+  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
+  if (dropped) expect(historySection(prompts[0]!)).toBe("");
+  else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
+  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
   expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
