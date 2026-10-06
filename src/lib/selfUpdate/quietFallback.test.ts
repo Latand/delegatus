@@ -239,6 +239,66 @@ test("an unbound registry entry still exposes its hidden live journal owner by p
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
 });
 
+function removeConversationBinding() {
+  const disk = f.registry.snapshot();
+  delete disk.conversations[f.conversation.id];
+  writeFileSync(f.registry.filename, JSON.stringify(disk));
+}
+
+function pendingEntry(kind: "active-ref" | "writer-setup", reused = false) {
+  const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+  const process = captureProcessIdentity(child.pid)!;
+  const identity = reused ? { ...process, startIdentity: "different-start" } : process;
+  f.registry.upsert({ ...entry,
+    ...(kind === "writer-setup" ? { claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(identity)}` } : {}),
+    structuredHost: { ...entry.structuredHost!, process: kind === "writer-setup" ? null : identity,
+      writerClaimEpoch: kind === "writer-setup" ? 1 : 0, activeTurnRef: kind === "active-ref" ? "new-turn" : null } });
+}
+
+for (const kind of ["active-ref", "writer-setup"] as const) {
+  for (const projected of [true, false]) {
+    test(`unbound ${kind} holds over a settled transcript ${projected ? "with" : "without"} journal projection`, async () => {
+      settleTranscript();
+      pendingEntry(kind);
+      if (projected) await fallback("idle");
+      removeConversationBinding();
+      await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+      if (!projected) expect(f.journal.snapshot().sessions).toHaveLength(0);
+      const p = ports(f.journal), now = Date.now();
+      for (const at of [now, now + 300_000, now + 12 * 60 * 60_000]) {
+        expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false,
+          blockers: { turns: 1, stages: 0, unresolved: 0 } });
+      }
+    });
+  }
+  for (const control of ["dead", "reused", "idle"] as const) {
+    test(`unbound ${kind} releases ${control} owners over a readable settled transcript`, async () => {
+      settleTranscript();
+      if (control !== "idle") pendingEntry(kind, control === "reused");
+      await fallback("idle");
+      removeConversationBinding();
+      if (control === "dead") { child.kill(); await child.exited; }
+      expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true,
+        blockers: { turns: 0, stages: 0, unresolved: 0 } });
+    });
+  }
+}
+
+for (const pending of ["active-ref", "writer-setup"] as const) for (const kind of ["live", "dead", "reused"] as const) {
+  test(`unbound ${kind} ${pending} owner keeps its process verdict without a readable transcript`, async () => {
+    pendingEntry(pending, kind === "reused");
+    await fallback("idle");
+    removeConversationBinding();
+    rmSync(f.file);
+    if (kind === "dead") { child.kill(); await child.exited; }
+    const p = ports(f.journal), now = Date.now();
+    for (const at of [now, now + 300_000, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: kind !== "live",
+        blockers: { turns: kind === "live" ? 1 : 0, unresolved: 0 } });
+    }
+  });
+}
+
 test("keyed reads retain a hidden journal turn hint over a settled transcript", async () => {
   settleTranscript();
   journalRow({ host: "unhosted", turn: "idle", activeTurnId: "new-turn" });

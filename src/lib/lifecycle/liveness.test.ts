@@ -813,6 +813,39 @@ test("a conversation's registry row says who hosts it without a transcript to re
   expect(conversationRegistryHost(registry(null), "conversation_host", probe(false))).toBeNull();
 });
 
+test("unbound registry host evidence resolves an artifact path or a session key", () => {
+  const entry = structuredEntry("/sessions/unbound.jsonl", 4242);
+  entry.structuredHost!.activeTurnRef = "new-turn";
+  const registry = { entries: { "codex:session-zombie": entry }, conversations: {} } as unknown as RegistryFile;
+  const probe = { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" };
+  const expected: ConversationRegistryHost = { state: "alive", processAlive: true, turnPending: "turn" };
+  expect(conversationRegistryHost(registry, "conversation_unbound", probe, entry.artifactPath)).toEqual(expected);
+  expect(conversationRegistryHost(registry, "codex:session-zombie", probe)).toEqual(expected);
+  expect(conversationRegistryHost(registry, "conversation_unbound", probe, "/sessions/other.jsonl")).toBeNull();
+});
+
+test("a conversation without a generation can still resolve its registered host by path", () => {
+  const entry = structuredEntry("/sessions/unbound.jsonl", 4242);
+  const registry = { entries: { "codex:session-zombie": entry },
+    conversations: { conversation_unbound: { id: "conversation_unbound", engine: "codex", generations: [] } } } as unknown as RegistryFile;
+  const probe = { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" };
+  expect(conversationRegistryHost(registry, "conversation_unbound", probe, entry.artifactPath))
+    .toEqual({ state: "alive", processAlive: true });
+});
+
+test("a bound current generation remains authoritative over a live old path", () => {
+  const old = structuredEntry("/sessions/old.jsonl", 4242);
+  const current = { ...structuredEntry("/sessions/current.jsonl", 4243), status: "dead", structuredHost: null } as AgentRegistryEntry;
+  const registry = { entries: { "codex:session-zombie": old, "codex:current": current },
+    conversations: { conversation_bound: { id: "conversation_bound", engine: "codex",
+      generations: [{ id: "session-zombie", path: old.artifactPath }, { id: "current", path: current.artifactPath }] } } } as unknown as RegistryFile;
+  const probe = { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" };
+  expect(conversationRegistryHost(registry, "conversation_bound", probe, old.artifactPath))
+    .toEqual({ state: "gone", processAlive: false });
+  delete registry.entries["codex:current"];
+  expect(conversationRegistryHost(registry, "conversation_bound", probe, old.artifactPath)).toBeNull();
+});
+
 test("a targeted query follows the registry's aliases to the conversation's transcript", async () => {
   const transcript = "/sessions/aliased.jsonl";
   const registry = {

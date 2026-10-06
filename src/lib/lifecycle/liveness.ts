@@ -639,8 +639,9 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
 }
 
 /**
- * Host evidence for a conversation's current generation, read off its registry
- * row and launch receipt (#2515).
+ * Host evidence for a conversation's current generation, or an entry whose
+ * conversation binding has not materialized, read off the same registry row
+ * and launch receipt (#2515).
  *
  * A liveness record needs a transcript the scanner can describe, so an id whose
  * transcript was deleted or moved has no record at all. The row still says who
@@ -652,12 +653,16 @@ export function conversationRegistryHost(
   registry: LivenessRegistrySnapshot,
   conversationId: string,
   probe: LivenessProbe,
+  artifactPath?: string | null,
 ): ConversationRegistryHost | null {
   const conversation = canonicalConversation(registry, conversationId);
   const generation = conversation?.generations.at(-1);
   const entry = conversation && generation
     ? registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] ?? entryForPath(registry, generation.path)
-    : null;
+    // An entry can precede its conversation/generation. The drain inventory
+    // names it by path or by its engine:sessionId key until binding catches up.
+    // A bound generation stays authoritative even if its entry is missing.
+    : (artifactPath ? entryForPath(registry, artifactPath) : null) ?? registry.entries[conversationId] ?? null;
   const registered = entry ? hostEvidence(entry, probe) : null;
   const receipt = receiptHostEvidence(registry, conversationId, probe);
   const host = registered?.state === "alive" ? registered

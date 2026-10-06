@@ -114,7 +114,7 @@ export function turnEvidenceReader(
     const host = structuredDeliveryHostForConversation(ownerId);
     return {
       record,
-      registryHost: conversationRegistryHost(registry, ownerId, liveness.probe),
+      registryHost: conversationRegistryHost(registry, ownerId, liveness.probe, artifactPath),
       headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], ownerId, artifactPath ?? null, liveness.probe, registry),
       currentTurnIdle: currentHostTurnIdle(await host?.health()),
     };
