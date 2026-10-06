@@ -1,0 +1,90 @@
+{
+  "commit": "79f0b006dbce94a7da37cde5c1fd0e2fa60274e5",
+  "frames": {
+    "en-1440-list": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "en-1440-handoff": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "en-1440-answered": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "uk-1440-list": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    },
+    "uk-1440-handoff": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    },
+    "uk-1440-answered": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    },
+    "en-390-list": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "en-390-handoff": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "en-390-answered": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "en"
+    },
+    "uk-390-list": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    },
+    "uk-390-handoff": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    },
+    "uk-390-answered": {
+      "overflow": 0,
+      "outside": 0,
+      "shortControls": [],
+      "editable": 0,
+      "lang": "uk"
+    }
+  },
+  "failures": []
+}

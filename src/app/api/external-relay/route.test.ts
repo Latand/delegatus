@@ -251,3 +251,40 @@ test("settings this install refuses answer with local codes, never the service's
       ?.concurrency,
   ).toBe(1);
 });
+test("recent answers and one exchange are read-only reads for the operator alone", async () => {
+  const { answerRecorder } = await import("@/lib/externalRelay/answers");
+  const list = await import("./relays/[id]/targets/[targetId]/answers/route");
+  const one = await import("./relays/[id]/targets/[targetId]/answers/[requestId]/route");
+  const recorder = answerRecorder({
+    requestId: "rq_route",
+    relayId: "route_relay",
+    targetId: "bot",
+    targetName: "Bot",
+    claimedAt: null,
+    input: { conversation: [{ id: "m1", text: "When is the meetup?" }], respond_to: "m1", request_text: null },
+  })!;
+  recorder.begin("claude", "opus");
+  recorder.finish({ outcome: "answered", answer: { action: "reply", text: "Thursday.", reply_to: "m1" }, delivery: "accepted" });
+  const params = (extra: Record<string, string> = {}) => ({ params: Promise.resolve({ id: "route_relay", targetId: "bot", requestId: "rq_route", ...extra }) });
+  const url = `${origin}/api/external-relay/relays/route_relay/targets/bot/answers`;
+  const listed = await list.GET(new NextRequest(url, local), params());
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toMatchObject({
+    retentionDays: 30,
+    answers: [{ requestId: "rq_route", outcome: "answered", request: "When is the meetup?", answer: "Thursday." }],
+  });
+  const shown = await one.GET(new NextRequest(`${url}/rq_route`, local), params());
+  expect(shown.status).toBe(200);
+  expect((await shown.json()).answer).toMatchObject({ requestId: "rq_route", engine: "claude", input: { respond_to: "m1" } });
+  expect((await one.GET(new NextRequest(`${url}/rq_none`, local), params({ requestId: "rq_none" }))).status).toBe(404);
+  const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
+  const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
+  setCallerConversationResolverForTests((digest) => (digest ? "agent" : null));
+  try {
+    const headers = { origin, host: "127.0.0.1:8899", [VIEWER_SPAWN_CAPABILITY_HEADER]: "A".repeat(43) };
+    expect((await list.GET(new NextRequest(url, { headers }), params())).status).toBe(403);
+    expect((await one.GET(new NextRequest(`${url}/rq_route`, { headers }), params())).status).toBe(403);
+  } finally {
+    setCallerConversationResolverForTests(null);
+  }
+});

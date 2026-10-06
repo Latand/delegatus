@@ -98,6 +98,27 @@ const messageSchema = z.object({
   text: z.string().max(16000),
   reply_to: id.nullable(),
 });
+// requester_context (relay.md §A.8): who asked, the chat's short-term memory
+// and the service's tools for the requester's role. All optional, so a request
+// without them reads, and is answered, exactly as before.
+const requesterSchema = z.object({
+  author_key: id,
+  role: z.enum(["member", "admin"]),
+  rights: z
+    .object({
+      can_restrict_members: z.boolean().optional(),
+      can_delete_messages: z.boolean().optional(),
+      can_change_info: z.boolean().optional(),
+    })
+    .optional(),
+  is_owner: z.boolean(),
+  anonymous: z.boolean(),
+});
+const toolSchema = z.object({
+  name: z.string().regex(/^[^\x00-\x1f\x7f]{1,64}$/),
+  summary: z.string().max(240),
+  mode: z.enum(["direct", "handoff"]),
+});
 export const inputSchema = z.object({
   instructions: z.string().max(32000),
   owner_instructions: z.string().max(16000).nullable(),
@@ -109,6 +130,16 @@ export const inputSchema = z.object({
   conversation: z.array(messageSchema).max(200),
   respond_to: id.nullable(),
   request_text: z.string().max(4000).nullable(),
+  requester: requesterSchema.nullish(),
+  short_term_memory: z.string().max(10000).nullish(),
+  tools: z
+    .array(toolSchema)
+    .max(128)
+    .refine(
+      (tools) => new Set(tools.map((tool) => tool.name)).size === tools.length,
+      { message: "duplicate tool name" },
+    )
+    .optional(),
 });
 export const requestSchema = z.object({
   request_id: id,
@@ -137,17 +168,36 @@ export const answerSchema = {
     reply_to: { type: ["string", "null"] },
   },
 } as const;
+/** The schema of a request that carries a tool index: a third action hands
+ * the request back to the service (§A.8), with no text and no reply target. */
+export const handoffAnswerSchema = {
+  ...answerSchema,
+  properties: {
+    ...answerSchema.properties,
+    action: { type: "string", enum: ["reply", "ignore", "handoff"] },
+  },
+} as const;
+/** Hand-off is offered only for a request whose service listed its tools. */
+export const offersHandoff = (request: ExternalRelayRequest) =>
+  (request.input.tools?.length ?? 0) > 0;
 export type ExternalRelayAnswer = {
   action: "reply" | "ignore";
   text: string;
   reply_to: string | null;
 };
+export type ExternalRelayDecision =
+  | ExternalRelayAnswer
+  | { action: "handoff"; text: ""; reply_to: null };
 export function checkedAnswer(
   value: unknown,
   request: ExternalRelayRequest,
-): ExternalRelayAnswer | null {
+): ExternalRelayDecision | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const answer = value as Record<string, unknown>;
+  if (answer.action === "handoff")
+    return offersHandoff(request)
+      ? { action: "handoff", text: "", reply_to: null }
+      : null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||

@@ -11,7 +11,8 @@ import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
-import { sampleRequest } from "./protocol.test";
+import { contextRequest, sampleRequest } from "./protocol.test";
+import { listAnswerRecords, readAnswerRecord } from "./answers";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -682,3 +683,98 @@ test("an answer admitted before drain completes normally while fresh children st
     expect(readRunLedger().runs).toEqual([]);
   } finally { fs.writeFileSync(gate, "release"); await pending; releaseDrain(drainFile(), "relay-admitted"); await server.close(); }
 });
+
+/** A Codex stub that answers with the hand-off action when its schema offers it, and records the schema and prompt it saw. */
+function handoffStub(seen: string) {
+  return stub(
+    `const a=process.argv.slice(2);const prompt=await Bun.stdin.text();const schema=await Bun.file(a[a.indexOf('--output-schema')+1]).text();await Bun.write(${JSON.stringify(seen)},JSON.stringify({schema,prompt}));await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:schema.includes('handoff')?'handoff':'reply',text:'I will mute them',reply_to:'m1'}));`,
+  );
+}
+test("a hand-off completes as declined/handoff with no text, and its exchange is recorded", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const seen = path.join(root, "handoff-seen.json");
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const outcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_handoff" }, undefined, { command: handoffStub(seen) });
+    const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: null, retry_after_s: null };
+    expect(outcome).toEqual(sent as typeof outcome);
+    expect(completions).toEqual([sent]);
+    const { schema, prompt } = JSON.parse(fs.readFileSync(seen, "utf8"));
+    expect(JSON.parse(schema).properties.action.enum).toEqual(["reply", "ignore", "handoff"]);
+    expect(prompt).toContain("<tools>");
+    const record = readAnswerRecord(paired.id, "target_1", "rq_handoff");
+    expect(record).toMatchObject({
+      state: "finished",
+      outcome: "declined:handoff",
+      answer: { action: "handoff", text: "", reply_to: null },
+      delivery: "accepted",
+      engine: "codex",
+      model: "gpt-6-sol",
+      targetName: "Target",
+    });
+    // The input is kept as received, unknown fields included.
+    expect(record?.input).toEqual(contextRequest.input);
+    expect(record?.durationMs).toBeGreaterThanOrEqual(0);
+    // Neither the lease nor the credential is written into the record.
+    const files = fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "target_1"));
+    const text = files.map((name) => fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "target_1", name), "utf8")).join("");
+    expect(text).not.toContain(sampleRequest.lease_id);
+    expect(text).not.toContain(paired.credential);
+  } finally {
+    await server.close();
+  }
+});
+test("without a tool index the schema and the answer stay as before", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const seen = path.join(root, "legacy-seen.json");
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    const outcome = await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_legacy_schema", answer: { max_chars: 100, progress: "none" } }, undefined, { command: handoffStub(seen) });
+    expect(outcome).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "I will mute them", reply_to: "m1" } });
+    expect(JSON.parse(JSON.parse(fs.readFileSync(seen, "utf8")).schema).properties.action.enum).toEqual(["reply", "ignore"]);
+    expect(readAnswerRecord(paired.id, "target_1", "rq_legacy_schema")).toMatchObject({
+      outcome: "answered", answer: { action: "reply", text: "I will mute them" }, delivery: "accepted",
+    });
+  } finally {
+    await server.close();
+  }
+});
+test("declines, lost leases and refused completions are recorded too", async () => {
+  let completeStatus = 200;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/heartbeat"))
+      return req.url.includes("rq_rec_lost")
+        ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } }
+        : { body: { status: "ok" } };
+    return completeStatus === 200
+      ? { body: { status: "accepted", duplicate: false } }
+      : { status: completeStatus, body: { error: { code: "lease_lost", message: "gone" } } };
+  });
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    paired.paused = true;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_paused" })).toMatchObject({ reason: "disabled" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_paused")).toMatchObject({ state: "finished", outcome: "declined:disabled", answer: null, delivery: "accepted", engine: null });
+    paired.paused = false;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_lost" }, undefined, { command: stub(`await Bun.stdin.text();await Bun.sleep(5000);`) })).toBeNull();
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_lost")).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null, engine: "codex" });
+    completeStatus = 409;
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_refused", kind: "other" })).toMatchObject({ reason: "unsupported_kind" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_rec_refused")).toMatchObject({ outcome: "declined:unsupported_kind", delivery: "refused" });
+    // A request whose ids cannot name a file is answered and not recorded.
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "../escape", target_id: "../x" })).toMatchObject({ reason: "invalid_request" });
+    expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "external-relay/answers", paired.id, "..", "x"))).toBe(false);
+    const listed = listAnswerRecords(paired.id, "target_1").map((row) => row.requestId);
+    expect(listed.slice(0, 3)).toEqual(["rq_rec_refused", "rq_rec_lost", "rq_rec_paused"]);
+  } finally {
+    await server.close();
+  }
+}, 15_000);

@@ -13,6 +13,8 @@ import { relayCall, ExternalRelayError } from "./client";
 import {
   answerSchema,
   checkedAnswer,
+  handoffAnswerSchema,
+  offersHandoff,
   requestSchema,
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
@@ -21,6 +23,7 @@ import {
 import { answerPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
+import { answerRecorder, type RelayAnswerDelivery } from "./answers";
 import {
   changeRun,
   dropRun,
@@ -93,13 +96,14 @@ const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   reason,
   detail: null,
 });
+/** The completion as sent, and whether the service acknowledged it. */
 async function complete(
   relay: PairedRelay,
   requestId: string,
   body: ExternalRelayCompletion,
   lastHeartbeat: () => number,
   stallMs: number,
-): Promise<ExternalRelayCompletion> {
+): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
   while (true) {
     try {
@@ -111,16 +115,18 @@ async function complete(
         relay.credential,
         { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
       );
-      return body;
+      return { body, delivery: "accepted" };
     } catch (error) {
       if (error instanceof ExternalRelayError) {
         if (error.status === 413 && body.outcome === "answered") {
           body = failed(body.lease_id, "invalid_answer");
           continue;
         }
-        if ([400, 401, 404, 409, 413, 426].includes(error.status)) return body;
+        if ([400, 401, 404, 409, 413, 426].includes(error.status))
+          return { body, delivery: "refused" };
       }
-      if (Date.now() - lastHeartbeat() > stallMs) return body;
+      if (Date.now() - lastHeartbeat() > stallMs)
+        return { body, delivery: "unconfirmed" };
       await new Promise((resolve) => setTimeout(resolve, wait));
       wait = Math.min(wait * 2, 5000);
     }
@@ -147,10 +153,35 @@ export async function runClaimedRequest(
   const requestId = request?.request_id ?? (rawId as string);
   const leaseId = request?.lease_id ?? (rawLease as string);
   let heartbeatAt = Date.now();
-  const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
-    return complete(relay, requestId, body, () => heartbeatAt, stallMs);
-  };
   if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  const rawRequest = raw as Record<string, unknown>;
+  const targetId = request?.target_id ?? rawRequest.target_id;
+  const recorder = answerRecorder({
+    requestId,
+    relayId: relay.id,
+    targetId,
+    targetName: relay.targets.find((item) => item.id === targetId)?.name ?? null,
+    claimedAt: rawRequest.claimed_at,
+    input: rawRequest.input,
+  });
+  const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
+    const sent = await complete(relay, requestId, body, () => heartbeatAt, stallMs);
+    const completion = sent.body;
+    recorder?.finish({
+      outcome:
+        completion.outcome === "answered"
+          ? "answered"
+          : `${completion.outcome}:${completion.reason}`,
+      answer:
+        completion.outcome === "answered"
+          ? completion.answer
+          : completion.outcome === "declined" && completion.reason === "handoff"
+            ? { action: "handoff", text: "", reply_to: null }
+            : null,
+      delivery: sent.delivery,
+    });
+    return completion;
+  };
   if (!request)
     return finish(
       declined(
@@ -195,6 +226,7 @@ export async function runClaimedRequest(
     if (admission === "duplicate") return null;
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
+    recorder?.begin(target.engine, target.model);
     markActive(relay, target);
     const selection = accountManager.resolveHeadlessSpawn(
       target.engine,
@@ -229,7 +261,7 @@ export async function runClaimedRequest(
         effort: target.effort,
         account: selection.account,
         ["prompt"]: answerPrompt(request),
-        schema: answerSchema,
+        schema: offersHandoff(request) ? handoffAnswerSchema : answerSchema,
         runDir,
         hardCapMs: target.hardCapMinutes * 60_000,
         runtime,
@@ -324,7 +356,11 @@ export async function runClaimedRequest(
     if (leaseUnavailable) return null;
     const completion =
       result.status === "done" ? checkedAnswer(result.answer, request) : null;
-    const body = completion
+    // A hand-off returns the request to the service, which answers it with
+    // its own agent (§A.8); it carries no text from this install.
+    const body: ExternalRelayCompletion = completion?.action === "handoff"
+      ? declined(leaseId, "handoff")
+      : completion
       ? {
           lease_id: leaseId,
           outcome: "answered" as const,
@@ -355,6 +391,9 @@ export async function runClaimedRequest(
     );
   } finally {
     for (const timer of identityTimers) clearTimeout(timer);
+    // The only way out without a completion is a lost lease.
+    if (recorder?.begun && !recorder.finished)
+      recorder.finish({ outcome: "lease_lost", answer: null, delivery: null });
     try {
       if (recorded) dropRun(requestId);
     } catch (error) {

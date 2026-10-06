@@ -17,6 +17,7 @@ import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRel
 import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./protocol.test";
+import { answerRecorder, readAnswerRecord } from "./answers";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -85,7 +86,14 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
       ownerIdentity: procBackend.processIdentity(process.pid),
       runDir: liveDir,
     });
+    // Each run's answer record is open; only the dead owner's is settled.
+    for (const requestId of ["stale", "live"])
+      answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: { request_text: requestId } })!.begin("codex", "gpt-6-sol");
     await sweepExternalRelayOrphans();
+    expect(readAnswerRecord("relay", "target", "stale")).toMatchObject({
+      state: "finished", outcome: "failed:install_restarted", delivery: "unconfirmed", input: { request_text: "stale" },
+    });
+    expect(readAnswerRecord("relay", "target", "live")).toMatchObject({ state: "running", outcome: null });
     expect(completed).toBe(1);
     expect(fs.existsSync(staleDir)).toBe(false);
     expect(fs.existsSync(liveDir)).toBe(true);
@@ -372,6 +380,7 @@ const storedTargets = (id: string) =>
   readRelayStore().relays.find((relay) => relay.id === id)?.targets;
 test("the claim loop refreshes targets first, merges them, and advertises slots from the new list", async () => {
   const slots: unknown[] = [];
+  const features: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/targets"))
       return { body: { targets: [
@@ -380,6 +389,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
       ] } };
     if (req.url?.endsWith("/requests/claim")) {
       slots.push((body as { slots: unknown }).slots);
+      features.push((body as { features?: unknown }).features);
       return { status: 204 };
     }
     return { status: 404 };
@@ -401,6 +411,8 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     ]);
     // "gone" is no longer offered and "added" waits for its settings.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
+    // The claim lists what this install implements (§A.2 rule 11).
+    expect(features[0]).toEqual(["requester_context"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();

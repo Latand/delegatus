@@ -109,6 +109,11 @@ const REASON_KEYS: Record<string, Parameters<TFunction>[0]> = {
   profile_violation: "externalRelay.reason.profileViolation",
   install_restarted: "externalRelay.reason.installRestarted",
 };
+const DELIVERY_KEYS = {
+  accepted: "externalRelay.answers.delivery.accepted",
+  refused: "externalRelay.answers.delivery.refused",
+  unconfirmed: "externalRelay.answers.delivery.unconfirmed",
+} as const;
 /** `answered`, `declined:<reason>`, `failed:<reason>`, `lease_lost`, `local_error` or `targets:<error code>`, as the poller records it. */
 export function outcomeText(t: TFunction, outcome: string): string {
   const [kind, reason] = outcome.split(":");
@@ -116,6 +121,7 @@ export function outcomeText(t: TFunction, outcome: string): string {
   if (kind === "answered") return t("externalRelay.outcome.answered");
   if (kind === "lease_lost") return t("externalRelay.outcome.leaseLost");
   if (kind === "local_error") return t("externalRelay.outcome.localError");
+  if (kind === "declined" && reason === "handoff") return t("externalRelay.outcome.handoff");
   const why = reason ? (REASON_KEYS[reason] ? t(REASON_KEYS[reason]!) : reason) : "";
   return t(kind === "declined" ? "externalRelay.outcome.declined" : "externalRelay.outcome.failed", { reason: why });
 }
@@ -350,6 +356,148 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
   );
 }
 
+type AnswerSummary = {
+  requestId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  state: "running" | "finished";
+  outcome: string | null;
+  delivery: keyof typeof DELIVERY_KEYS | null;
+  request: string;
+  answer: string | null;
+};
+type AnswerRecord = Omit<AnswerSummary, "request" | "answer"> & {
+  engine: string | null;
+  model: string | null;
+  answer: { action: string; text: string; reply_to: string | null } | null;
+  input: unknown;
+};
+type ReceivedInput = {
+  conversation?: { id?: unknown; author?: { key?: unknown; name?: unknown }; text?: unknown }[];
+  respond_to?: unknown;
+  request_text?: unknown;
+  requester?: { author_key?: unknown; role?: unknown; is_owner?: unknown; anonymous?: unknown } | null;
+  tools?: unknown[];
+};
+/** The message a received input answers, its author's name, and the request text, all as plain strings. */
+function receivedMessage(input: unknown): { text: string; author: string | null } {
+  const value = (input && typeof input === "object" ? input : {}) as ReceivedInput;
+  const conversation = Array.isArray(value.conversation) ? value.conversation : [];
+  const trigger = conversation.find((message) => message?.id === value.respond_to);
+  const parts = [typeof trigger?.text === "string" ? trigger.text : null, typeof value.request_text === "string" ? value.request_text : null].filter(Boolean);
+  return { text: parts.join("\n\n"), author: typeof trigger?.author?.name === "string" ? trigger.author.name : null };
+}
+const seconds = (ms: number | null) => ms === null ? null : (ms / 1000).toFixed(ms < 10_000 ? 1 : 0);
+
+/**
+ * The target's recent answers (relay.md §B.9): a list of the exchanges this
+ * install kept, newest first, and one exchange opened read-only in place.
+ * Every field the service or a chat participant wrote is shown as plain text.
+ */
+function RecentAnswers({ relayId, targetId }: { relayId: string; targetId: string }) {
+  const { t, locale } = useLocale();
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<{ answers: AnswerSummary[]; retentionDays: number } | null>(null);
+  const [shown, setShown] = useState<AnswerRecord | "gone" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}/targets/${encodeURIComponent(targetId)}/answers`;
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void call<{ answers: AnswerSummary[]; retentionDays: number }>(base, "GET").then((result) => {
+      if (!active) return;
+      if (result.ok && Array.isArray(result.value?.answers)) { setList(result.value); setError(null); }
+      else setError(result.ok ? "unavailable" : result.error);
+    });
+    return () => { active = false; };
+  }, [open, base]);
+  const show = async (requestId: string) => {
+    const result = await call<{ answer: AnswerRecord }>(`${base}/${encodeURIComponent(requestId)}`, "GET");
+    if (result.ok) { setShown(result.value.answer); setError(null); }
+    else if (result.error === "not_found") setShown("gone");
+    else setError(result.error);
+  };
+  const days = list?.retentionDays ?? 30;
+  const outcome = (row: { state: string; outcome: string | null }) => row.state === "running" || !row.outcome ? t("externalRelay.answers.running") : outcomeText(t, row.outcome);
+  const record = shown && shown !== "gone" ? shown : null;
+  const received = record ? receivedMessage(record.input) : null;
+  const requester = record ? ((record.input && typeof record.input === "object" ? record.input : {}) as ReceivedInput).requester : null;
+  const tools = record ? ((record.input && typeof record.input === "object" ? record.input : {}) as ReceivedInput).tools : undefined;
+  const term = "text-muted";
+  const detail = "min-w-0 break-words text-primary";
+  return (
+    <div data-external-relay-answers={targetId} className="space-y-2">
+      <button type="button" aria-expanded={open} data-external-relay-answers-toggle="" onClick={() => { setOpen((value) => !value); setShown(null); }}
+        className="min-h-11 rounded-[8px] text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        {t("externalRelay.answers.open")}
+      </button>
+      {open ? (
+        <div className="space-y-2 rounded-[8px] border border-border bg-sunken p-3">
+          {error ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-danger">{relayErrorText(t, error)}</p> : null}
+          {shown ? (
+            <div data-external-relay-exchange={record?.requestId ?? "gone"} className="space-y-3">
+              <button type="button" onClick={() => setShown(null)} className={bordered}>{t("externalRelay.answers.back")}</button>
+              {record && received ? (
+                <>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <dt className={term}>{t("externalRelay.answers.received")}</dt>
+                    <dd className={detail}>{stamp(record.startedAt, locale)}</dd>
+                    {record.durationMs !== null ? <><dt className={term}>{t("externalRelay.answers.took")}</dt><dd className={detail}>{t("externalRelay.answers.seconds", { seconds: seconds(record.durationMs) ?? "" })}</dd></> : null}
+                    {record.engine ? <><dt className={term}>{t("externalRelay.answers.answeredWith")}</dt><dd className={detail}>{[record.engine === "codex" ? "Codex" : "Claude", (record.engine === "codex" || record.engine === "claude" ? ENGINE_MODELS[record.engine].find((model) => model.id === record.model)?.label : null) ?? record.model].filter(Boolean).join(" · ")}</dd></> : null}
+                    <dt className={term}>{t("externalRelay.answers.outcome")}</dt>
+                    <dd data-external-relay-exchange-outcome={record.outcome ?? "running"} className={detail}>{outcome(record)}</dd>
+                    {record.delivery ? <><dt className={term}>{t("externalRelay.answers.delivery")}</dt><dd className={detail}>{t(DELIVERY_KEYS[record.delivery])}</dd></> : null}
+                    {requester && typeof requester.role === "string" ? <><dt className={term}>{t("externalRelay.answers.askedBy")}</dt><dd className={detail}>{[received.author, t(requester.role === "admin" ? "externalRelay.answers.role.admin" : "externalRelay.answers.role.member"), requester.is_owner === true ? t("externalRelay.answers.role.owner") : null, requester.anonymous === true ? t("externalRelay.answers.role.anonymous") : null].filter(Boolean).join(" · ")}</dd></> : null}
+                    {Array.isArray(tools) && tools.length ? <><dt className={term}>{t("externalRelay.answers.tools")}</dt><dd className={detail}>{tools.length}</dd></> : null}
+                  </dl>
+                  <section className="space-y-1">
+                    <h5 className="font-semibold text-primary">{t("externalRelay.answers.request")}</h5>
+                    <p data-external-relay-exchange-request="" className="whitespace-pre-wrap break-words rounded-[8px] bg-raised px-3 py-2 text-primary">{received.text || t("externalRelay.none")}</p>
+                  </section>
+                  <section className="space-y-1">
+                    <h5 className="font-semibold text-primary">{t("externalRelay.answers.answer")}</h5>
+                    <p data-external-relay-exchange-answer={record.answer?.action ?? "none"} className="whitespace-pre-wrap break-words rounded-[8px] bg-raised px-3 py-2 text-primary">
+                      {record.answer?.action === "reply" ? record.answer.text : record.answer?.action === "handoff" ? t("externalRelay.answers.handedOff") : record.answer?.action === "ignore" ? t("externalRelay.answers.ignored") : t("externalRelay.answers.noAnswer")}
+                    </p>
+                  </section>
+                  <details className="space-y-1">
+                    <summary className="min-h-11 cursor-pointer content-center font-semibold text-primary">{t("externalRelay.answers.input")}</summary>
+                    <pre data-external-relay-exchange-input="" className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-[8px] bg-raised p-3 font-mono text-[12px] text-primary">{JSON.stringify(record.input, null, 2)}</pre>
+                  </details>
+                </>
+              ) : <p className="text-muted">{t("externalRelay.answers.gone")}</p>}
+            </div>
+          ) : list === null ? (
+            error ? null : <p className="text-muted">{t("common.loading")}</p>
+          ) : (
+            <>
+              <p className="text-muted">{t("externalRelay.answers.kept", { days })}</p>
+              {list.answers.length ? (
+                <ul data-external-relay-answer-list="" className="space-y-2">
+                  {list.answers.map((row) => (
+                    <li key={row.requestId}>
+                      <button type="button" data-external-relay-answer={row.requestId} onClick={() => void show(row.requestId)}
+                        className="block min-h-11 w-full space-y-1 rounded-[8px] border border-border bg-raised px-3 py-2 text-left hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+                          <span className="font-semibold text-primary">{outcome(row)}</span>
+                          <span className="text-muted">{stamp(row.startedAt, locale)}{row.durationMs !== null ? ` · ${t("externalRelay.answers.seconds", { seconds: seconds(row.durationMs) ?? "" })}` : ""}</span>
+                        </span>
+                        {row.request ? <span className="block break-words text-primary">{row.request}</span> : null}
+                        {row.answer ? <span className="block break-words text-muted">{row.answer}</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p data-external-relay-answers-empty="" className="text-muted">{t("externalRelay.answers.empty", { days })}</p>}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }: {
   relay: RelayView;
   target: Target;
@@ -407,6 +555,7 @@ function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }
       </label>
       {noAccount ? <p data-external-relay-no-account="" className="rounded-[8px] bg-warning-soft px-3 py-2 text-warning">{t("externalRelay.noAccount", { engine: target.engine === "codex" ? "Codex" : "Claude" })}</p> : null}
       {!target.engine || !target.model ? <p className="text-muted">{t("externalRelay.target.needsEngine")}</p> : null}
+      <RecentAnswers relayId={relay.id} targetId={target.id} />
     </div>
   );
 }

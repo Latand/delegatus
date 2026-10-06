@@ -14,6 +14,16 @@ rule it adds or changes carries the tag **[delta]**, and §B.16 is the
 install's implementation outline. Its code claims were checked at `f5e45ff2`
 on `main`.
 
+Revision of 2026-10-06, slice 1 of the relay integration: the
+`requester_context` feature (who asked, the chat's short-term memory, the
+service's tools for the requester's role, and hand-off) and a 30-day record
+of every relayed answer. It is **implemented**, and every rule it adds or
+changes carries the tag **[rc]**. It also corrects what the install keeps
+per chat. The chat conversations of the 2026-09-29 revision are still not
+implemented: no install lists `chat_conversations` in its claim, and before
+this revision nothing of an exchange outlived its run. The probe behind the
+transport choice is `docs/design/relay-integration-probe.md`.
+
 ## Originating requirement of this revision
 
 Operator, 2026-09-29, pinned on the task "Relay contract delta: one-tap
@@ -222,7 +232,9 @@ Validation against these quotes is in the last section.
   build host (see "Evidence"). `[phase 0]` is a fact the earlier verification
   stage established, restated here without its third-party detail.
 - **[delta]** marks a rule added or changed by the revision of 2026-09-29.
-  Untagged text is Phase 1 and holds unless a tagged rule says otherwise.
+  **[rc]** marks one added or changed by the revision of 2026-10-06, which
+  is implemented. Untagged text is Phase 1 and holds unless a tagged rule
+  says otherwise.
 - The only third-party products named are the two agent engines this
   repository already launches. No account, handle, id or home path appears;
   paths are repo-relative, `$HOME`-relative or `<state>`-relative.
@@ -366,8 +378,10 @@ the code:
     7 and 8) and `chat_list` (§A.4 rows 12 and 13). An install uses an
     optional part only when the descriptor lists it. A missing array means
     none. `ClaimRequest.features` lists what the install implements:
-    `chat_conversations` (§A.6 F7, §A.8). Both sides ignore feature names
-    they do not know. The install reads the descriptor again at least once a
+    **[rc]** `requester_context` (§A.8), which the install sends on every
+    claim, and `chat_conversations` (§A.6 F7, §A.8), which is specified and
+    not yet implemented, so no install sends it today. Both sides ignore
+    feature names they do not know. The install reads the descriptor again at least once a
     day (§B.3), so a service can add a feature without a new pairing.
 
 ## A.3 Pairing
@@ -876,6 +890,33 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
       "required": ["key"],
       "properties": { "key": { "$ref": "#/$defs/ChatKey" } }
     },
+    "Requester": {
+      "type": "object",
+      "required": ["author_key", "role", "is_owner", "anonymous"],
+      "properties": {
+        "author_key": { "$ref": "#/$defs/Id" },
+        "role": { "enum": ["member", "admin"] },
+        "rights": {
+          "type": "object",
+          "properties": {
+            "can_restrict_members": { "type": "boolean" },
+            "can_delete_messages": { "type": "boolean" },
+            "can_change_info": { "type": "boolean" }
+          }
+        },
+        "is_owner": { "type": "boolean" },
+        "anonymous": { "type": "boolean" }
+      }
+    },
+    "ServiceTool": {
+      "type": "object",
+      "required": ["name", "summary", "mode"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" },
+        "summary": { "type": "string", "maxLength": 240 },
+        "mode": { "enum": ["direct", "handoff"] }
+      }
+    },
 
     "PairingStart": {
       "type": "object",
@@ -1009,7 +1050,10 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
           "items": { "$ref": "#/$defs/Message" }
         },
         "respond_to": { "anyOf": [{ "$ref": "#/$defs/Id" }, { "type": "null" }] },
-        "request_text": { "anyOf": [{ "type": "string", "maxLength": 4000 }, { "type": "null" }] }
+        "request_text": { "anyOf": [{ "type": "string", "maxLength": 4000 }, { "type": "null" }] },
+        "requester": { "anyOf": [{ "$ref": "#/$defs/Requester" }, { "type": "null" }] },
+        "short_term_memory": { "anyOf": [{ "type": "string", "maxLength": 10000 }, { "type": "null" }] },
+        "tools": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/ServiceTool" } }
       }
     },
     "Message": {
@@ -1086,7 +1130,7 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
           "properties": {
             "lease_id": { "$ref": "#/$defs/LeaseId" },
             "outcome": { "const": "declined" },
-            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error"] },
+            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff"] },
             "detail": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "type": "null" }] },
             "retry_after_s": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
           }
@@ -1179,6 +1223,28 @@ of a target's chats.
     { "chat_key": "ck_3Rw9TtYqL0pZx7VbN2mD4e", "title": "North pier club", "member_count": 42, "answered_by": "install" },
     { "chat_key": "ck_Vn2Qa8Lr5Ko1Jd6Hs3Xy0w", "title": "Helpers' room", "member_count": null, "answered_by": "service" } ],
   "next_cursor": "c2.7h3K" }
+```
+
+**[rc]** The schema above gained `Requester` and `ServiceTool`, the optional
+properties `Input.requester`, `Input.short_term_memory` and `Input.tools`,
+and the declined reason `handoff`. Tool names are unique within one request.
+The service sends the three properties, and accepts `handoff`, only for a
+pairing whose latest claim listed `requester_context` (§A.8). A synthetic
+request's new input fields, and the hand-off completion:
+
+```json
+{ "requester": { "author_key": "u_a", "role": "admin",
+    "rights": { "can_restrict_members": true, "can_delete_messages": true, "can_change_info": false },
+    "is_owner": false, "anonymous": false },
+  "short_term_memory": "The meetup moved to Friday this week.",
+  "tools": [
+    { "name": "search_docs", "summary": "Search the chat's documents.", "mode": "direct" },
+    { "name": "mute_participant", "summary": "Mute a participant for a while.", "mode": "handoff" } ] }
+```
+
+```json
+{ "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE", "outcome": "declined", "reason": "handoff",
+  "detail": null, "retry_after_s": null }
 ```
 
 ## A.6 Liveness and fallback
@@ -1383,6 +1449,76 @@ most `answer.max_chars` characters; for `ignore`, it sends `text` as `""`;
 null. A check that fails completes the lease as `failed` / `invalid_answer`.
 The relay service checks again before posting.
 
+**[rc] Requester context.** A service that implements the feature sends
+three more `Input` fields, and only to a pairing whose latest claim listed
+`requester_context`. Each is optional; absent and null mean the same, and a
+request without them is answered exactly as above.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `requester` | the relay service | Who wrote the message named by `respond_to`. `author_key` is that message's `author.key`, in the same opaque domain. `role` is `member` or `admin`; `rights` holds the admin rights the service knows of, and a missing right means false. `is_owner` says the requester owns the target; `anonymous` says an admin wrote as the chat itself. |
+| `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 10 000 characters. |
+| `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 240, and a `mode`. At most 128. |
+
+- `mode: "direct"` names a tool the install could call itself once a later
+  feature negotiates reads (reserved as `direct_reads`); `"handoff"` names
+  one only the service's own agent performs. An install that lists only
+  `requester_context` calls no tool, so to it both modes are reasons to hand
+  off. Until a pairing lists a read feature, the service SHOULD mark every
+  tool `handoff`.
+- The block informs the model and authorizes nothing. The service checks
+  every action against its own record of the message, never against what
+  the install reports.
+- Media of the triggering message and of the message it replies to travels
+  as text appended to that message's `text`: a transcript, a description, or
+  a status when neither is available. It stays within the 16 000-character
+  limit. When the window is trimmed, older messages go first; the trigger
+  and the message it replies to stay.
+- The whole `Claimed` body, serialized as UTF-8 JSON, fits
+  `Descriptor.limits.max_response_bytes`, the memory and the index included.
+  When the context the service needs cannot fit, it answers the request
+  itself.
+- No platform user or chat id enters any of the three fields.
+
+The install adds them to the prompt as escaped JSON data sections after
+`<request>`, each only when the request carries it, and names them in the
+first frame paragraph as data written by other people:
+
+```
+<requester>
+[Input.requester as JSON]
+</requester>
+<short_term_memory>
+[Input.short_term_memory as a JSON string]
+</short_term_memory>
+<tools>
+[Input.tools as JSON]
+</tools>
+[frame: as above, plus, when <tools> is present: "handoff" posts nothing
+ and hands the message back to the service, whose own assistant answers it
+ with the tools in <tools>; this agent cannot call them; choose "handoff"
+ when a good answer needs one of them]
+```
+
+**[rc] Hand-off.** When `Input.tools` lists at least one tool, the answer
+schema's `action` gains a third value; the schema stays closed and every
+property required:
+
+```json
+{ "action": { "type": "string", "enum": ["reply", "ignore", "handoff"] } }
+```
+
+Whether to hand off is the model's judgment from the index and the message;
+there is no keyword list on either side. The install completes a `handoff`
+answer as `declined` / `handoff`, with `detail` and `retry_after_s` null,
+and drops the model's `text` and `reply_to`: nothing the model wrote reaches
+the service. A `handoff` answer to a request without tools fails the answer
+check (`failed` / `invalid_answer`). On `declined` / `handoff` the service
+answers the original request with its own agent, from its own stored copy,
+with its own role checks, confirmations and charges, whatever the target's
+`fallback`, `"none"` included, and it posts no fallback notice: nothing
+failed.
+
 **[delta] The chat key.** A request MAY carry `chat: {key}`. The key is
 opaque, stable and scoped to one target:
 
@@ -1537,6 +1673,12 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 | Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and the install answers one-shot. | No `chat`: answers one-shot. |
 | Chat management (§A.4 rows 12, 13) | Two new endpoints behind `chat_list`, and the new error code `cursor_expired` | v1, additive (new endpoints the install discovers) | Never calls them. The routing rule leaves every chat on, so this install answers the chats the owner did not switch off. | Hides the chat list. |
 
+**[rc] The revision of 2026-10-06.** Additive to version 1 as well.
+
+| Change | What changes on the wire | Class | An install without the feature with a revised service | A revised install with a service without it |
+|---|---|---|---|---|
+| Requester context (§A.8) | The `requester_context` claim feature; optional `Input.requester`, `Input.short_term_memory` and `Input.tools`; media text inside `Message.text`; the declined reason `handoff` | v1, additive | Does not list the feature, so it receives none of the fields and never sends `handoff`. Media text in `Message.text` reaches it too. | Receives no fields, so it answers with the two-action schema and never hands off. |
+
 No change needs version 2, because nothing a Phase 1 party already sends or
 accepts changes meaning. Two changes were shaped to stay that way. A busy
 chat reuses the declined reason `busy` with a detail and gets no new reason,
@@ -1558,8 +1700,10 @@ pairing.
 - Serve only over TLS, set no cookies, and redirect nothing under `{api}`.
 - Say in `Descriptor.description`, which the install shows during pairing,
   that a connected target is answered on the owner's machine with the
-  owner's own agent account. **[delta]** Also say that the machine keeps one
-  conversation per chat.
+  owner's own agent account. **[delta]** Once the install lists
+  `chat_conversations`, also say that the machine keeps one conversation per
+  chat. **[rc]** Say that the machine keeps a read-only record of each
+  exchange for 30 days.
 - **[delta]** Serve `icon_url` from the descriptor's origin, as PNG, JPEG or
   WebP of at most 256 KiB (§A.2 rule 10).
 - **[delta]** Under `one_tap_pairing`: at confirmation, show the install's
@@ -1578,6 +1722,11 @@ pairing.
   into a request that carries a key. Hold a chat's next request while its
   lease lives, for pairings that list `chat_conversations` (§A.6 F7). Keep
   platform ids out of chat listings and titles (§A.4).
+- **[rc]** Send the requester context only to a pairing whose latest claim
+  listed `requester_context`, within `max_response_bytes`, and accept
+  `handoff` only from such a pairing. On `declined` / `handoff`, answer the
+  original request with the service's own agent regardless of `fallback`,
+  and take no argument of an action from the install (§A.8).
 
 ---
 
@@ -1628,6 +1777,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` before the run's ledger entry is dropped. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
@@ -1657,7 +1807,10 @@ New files:
   directory of the account's transcript store. `relays.json`, `runs.json`,
   `conversations.json` and the logs carry ids, digests, outcomes and
   durations only. A conversation is deleted by the rules of §B.14 and is
-  never backed up.
+  never backed up. **[rc]** The answer records are the one place under
+  `<state>` that holds chat text: what the service sent and what the agent
+  answered, for 30 days, never backed up, read only by the operator's own
+  routes (§B.9).
 
 ## B.3 The poller controller
 
@@ -1685,9 +1838,10 @@ Each round sends `ClaimRequest` with `wait_s` = min(25,
 `limits.max_wait_s`), `kinds: ["answer"]`, and `slots` for every enabled,
 configured target. When a run ends and frees a slot, the loop aborts its open
 poll and opens a new one with fresh slots, so the relay service never goes on
-believing a target is busy. **[delta]** It also sends `features:
-["chat_conversations"]` (§A.8). Today the claim body names only `kinds`
-(`src/lib/externalRelay/poller.ts:108` [code]).
+believing a target is busy. **[rc]** It also sends `features:
+["requester_context"]` (`CLAIM_FEATURES` in `src/lib/externalRelay/poller.ts`).
+**[delta]** The chat conversations of §B.14 add `chat_conversations` to that
+list once they are implemented; no install sends it today.
 
 **[delta] What else the controller runs**, all in the release that owns
 traffic and never in staging:
@@ -1744,13 +1898,22 @@ run whose owning Viewer is gone (its pid and identity no longer match,
 child's group if the child's own pid and identity still match
 (`terminateHeadlessReviewerGroup`, `headless.ts:118-146` [code]), completes
 the lease as `failed` / `install_restarted` (a 409 is fine), removes the run
-directory and drops the entry. Runs owned by a live Viewer are left alone. A
+directory and drops the entry. **[rc]** It also finishes that run's answer
+record as `failed:install_restarted`, delivery `unconfirmed`, if it is still
+`running`; the same pass removes expired answer records once an hour. Runs
+owned by a live Viewer are left alone. A
 new generation does not take over another generation's run; that is deferred.
 **[delta]** When the swept run was a conversation's turn, the sweep also sets
 that conversation back to `idle`. The transcript keeps whatever the
 interrupted turn wrote, and the next turn resumes it (§B.14).
 
 ## B.4 One claimed request
+
+**[rc]** Every request claimed here, unless it repeats one this install is
+already running, gets an answer record (§B.2): every completion below writes
+its terminal state, and a run that loses its lease is finished as
+`lease_lost`. A record that cannot be written is logged and changes nothing
+else.
 
 1. Validate the request against the schema and limits; otherwise complete
    `declined` / `invalid_request`.
@@ -1779,7 +1942,8 @@ interrupted turn wrote, and the next turn resumes it (§B.14).
    unsent progress label or null.
 7. A heartbeat answered 409 `lease_lost` cancels the run: kill the group,
    drop the run, complete nothing.
-8. On exit: `done` with a valid answer completes `answered`; a failing
+8. On exit: `done` with a valid answer completes `answered`; **[rc]** a
+   valid `handoff` completes `declined` / `handoff` (§A.8); a failing
    answer check completes `failed` / `invalid_answer`; `failed` completes
    `failed` / `agent_error`; `timeout` completes `failed` / `hard_cap`;
    `violation` completes `failed` / `profile_violation`.
@@ -2130,6 +2294,8 @@ and 409 in staging (`isStagingMode`):
 | `PATCH /api/external-relay/relays/[id]` | Pause or resume; target settings (engine, model, effort, project, concurrency, hard cap). |
 | `PATCH /api/external-relay/relays/[id]/targets/[targetId]` | Forwards `answered_by` and `fallback` to the relay service. |
 | `DELETE /api/external-relay/relays/[id]` | Unpairs: `DELETE {api}/pairing`, then removes the relay locally; when the service is unreachable it removes it anyway and says the service could not be told, as linked installs do. **[delta]** It also deletes the relay's conversations (§B.14). |
+| **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers` | The target's answer records, newest first, at most 50: times, duration, outcome, delivery, and the first 160 characters of the message and of the answer. Reads local files only; never calls the service. |
+| **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers/[requestId]` | One record in full, the received input included; 404 once it expired. |
 | **[delta]** `GET /api/external-relay/icons/[id]` | The stored icon of a relay or a pending pairing (§B.12). |
 | **[delta]** `POST /api/external-relay/pairings/[id]/refresh` | Replaces a pending pairing's code (§B.13). |
 | **[delta]** `PATCH /api/external-relay/relays/[id]` `{acknowledged: true}` | "That's me" on an automatic completion; records a known owner (§B.13). |
@@ -2141,6 +2307,19 @@ and 409 in staging (`isStagingMode`):
 status from `relays.json` and no longer calls the service (§B.13).
 `POST /api/external-relay/pairings/[id]` `{ownerId}` stays, for the click
 fallback. Every new route has the guards above.
+
+**[rc] Recent answers.** Each target row of the relay card ends with a
+"Recent answers" / "Останні відповіді" disclosure. Opening it reads the list
+route above and shows each exchange as one button: its outcome ("Handed off
+to the service" / "Передано сервісу" for a hand-off), time and duration, and
+the beginning of the message and of the answer. A button opens that exchange
+in place, read-only: received time, duration, engine and model, outcome,
+what the service did with the completion, who asked (name, role, owner,
+anonymous) and how many service tools were listed, the message, the answer,
+and the whole input as received behind a fold. "Back to recent answers"
+returns to the list. There is no composer, no resume and no new panel.
+Everything is plain text. An empty list says no answers were kept in the
+last 30 days; a record that expired meanwhile says so.
 
 Target settings are validated against the existing catalogs:
 `validateLaunchModel` (`src/lib/agent/models.ts:84-93` [code]) and
@@ -2323,6 +2502,10 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 18 | **[delta]** `ExternalRelaySection.dom.test.tsx`, the phone driver's "external relay" case | The service's name and avatar, and the monogram, in the menu rows and the dialog title; the one-tap panel (button, QR, folded code, countdown, refresh, "Show a new code"); the "Connected as" banner with both actions and the menu badge; the click fallback naming the previous owner; a target answered by another install; the chat list with switches, member counts, "Start fresh", "Show more" and the disabled state. At 390 and 1440, in both languages, no sideways scroll and 44 px controls on the phone. The readings go to `evidence/external-relay/settings.json`. No new driver. |
 | 19 | **[delta]** manual, once per engine, in the implementing stage | A live two-turn conversation on a real signed-in account at the lowest effort. The second turn answers from a fact given only in the first. The marker probe of test 8 still holds on the resume. The PR records the outcome without identities. |
 | 20 | **[delta]** `src/lib/externalRelay/poller.test.ts` against `testRelay.ts`, which implements F1b with L7 and the F7 hold, and the stub CLI of test 4 | A target of concurrency 1 with a chat key. Request 1 is claimed and heartbeated, so the open poll lists `free: 0`. Request 2 for the same chat is queued and held (F7). Request 1 completes before the install opens its next poll. Request 2 does not fall back: it is claimed by the poll reopened after completion, within `claim_window_s`, and runs as the conversation's second turn without `chat busy`. Two controls. With L7 removed from `testRelay.ts`, request 2 falls back by F1b at once, so the test goes red. With an install that keeps its `free: 0` poll open after request 1 completes and opens no new one, request 2 is not claimed on that poll and falls back by F2 after `claim_window_s`. |
+| 21 | **[rc]** `src/lib/externalRelay/protocol.test.ts`, `src/lib/externalRelay/prompt.test.ts` | A request without the new fields parses as before and gets the Phase 1 prompt byte for byte. The new fields parse with unknown inner fields dropped; every bound refuses (129 tools, a 65-character name, a duplicate name, a 241-character summary, an unknown mode, 10 001 characters of memory, an unknown role). The sections are escaped and named as data; the hand-off rule appears only with tools. `handoff` is an answer only with tools, and drops text and `reply_to`. |
+| 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with null `detail` and `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
+| 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context"]`. Both routes keep every guard and refuse an agent caller. |
+| 24 | **[rc]** `ExternalRelaySection.dom.test.tsx`, and the `relay-answers` case of `scripts/capture-board-geometry.ts` | The disclosure, the list, one exchange read-only with no field to type into, back, empty and expired, in English and Ukrainian, chat text as plain text. The capture renders the list and one exchange in the real settings dialog at 1440 and 390 in both languages, with no sideways overflow. |
 
 ## B.12 [delta] Branding: the service's name and look
 
@@ -2515,6 +2698,12 @@ push, and only for a question (`:171-223`).
 Without a subscription, the dot and the banner are the whole notice.
 
 ## B.14 [delta] Chat conversations
+
+**[rc] Not implemented.** Nothing in this section runs today. Every request
+is answered one-shot by a fresh, session-less run (§B.5); the claim does not
+list `chat_conversations`; `Request.chat` is ignored; and the run directory
+and the `runs.json` entry are removed when the run settles. What outlives an
+exchange is its read-only answer record (§B.2), which nothing resumes.
 
 **Identity and map.** A (relay id, target id, chat key) maps to one record in
 `conversations.json` (§B.2), created by the first request with that key. The

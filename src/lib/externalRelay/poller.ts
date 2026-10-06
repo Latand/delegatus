@@ -4,9 +4,10 @@ import {
   processMatches,
   terminateHeadlessReviewerGroup,
 } from "@/lib/agent/headless";
-import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
 import { noteRelayOutcome, relayActivity } from "./activity";
+import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer } from "./answers";
 import { ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
 import {
   advertisedSlots,
@@ -45,6 +46,7 @@ type PollerController = {
   sweepTimer: ReturnType<typeof setInterval> | null;
   armed: boolean;
   targetRefreshes?: Map<string, TargetRefresh>;
+  prunedAt?: number;
 };
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayPoller?: PollerController;
@@ -99,6 +101,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
       path.basename(run.runDir).startsWith("llv-external-relay-")
     )
       fs.rmSync(run.runDir, { recursive: true, force: true });
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId);
     dropRun(run.requestId);
   }
 }
@@ -202,6 +205,9 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
     return "failed";
   }
 }
+/** What this install implements of the optional parts of v1 (§A.2 rule 11). */
+export const CLAIM_FEATURES = ["requester_context"];
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 async function poll(
   relay: PairedRelay,
   loop: PollLoop,
@@ -220,6 +226,7 @@ async function poll(
         {
           wait_s: Math.min(25, relay.limits.max_wait_s),
           kinds: ["answer"],
+          features: CLAIM_FEATURES,
           slots: advertisedSlots(relay),
         },
         relay.credential,
@@ -293,6 +300,15 @@ async function sweepAndRefresh(): Promise<void> {
     refreshExternalRelayPollers();
   } catch (error) {
     console.error("External relay poller refresh failed", error instanceof Error ? error.name : "unknown");
+  }
+  // Answer records leave once their retention has run out; only the
+  // process that owns the state directory removes them.
+  if (
+    Date.now() - (controller.prunedAt ?? 0) >= PRUNE_INTERVAL_MS &&
+    mayRunStateStartupMutation(relayAnswersRoot())
+  ) {
+    controller.prunedAt = Date.now();
+    pruneAnswerRecords();
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {
