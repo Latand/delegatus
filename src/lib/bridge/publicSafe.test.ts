@@ -26,6 +26,7 @@ const FOUND: readonly [string, string][] = [
   [`see ${["~", "notes"].join("/")} for the plan`, "path"],
   [`the state under ${["$HOME", ".config"].join("/")} moved`, "path"],
   [`${["C:", "Users", "someone", "repo"].join("\\")} failed`, "path"],
+  [`${["C:", "Evidence", "notes.txt"].join("/")} failed`, "path"],
   ["open https://example.invalid/pull/1 for details", "url"],
   ["the page on status.example.com is down", "domain"],
   ["prod on localhost:8898 answers 200", "host"],
