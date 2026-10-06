@@ -3127,7 +3127,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
-        volumes: [{ roles: [diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical" }],
+        volumes: [{ roles: [diskRole === "required-temp" ? "temp" : diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical", ...(diskRole === "required-temp" ? { provisioning: true } : {}) }],
         consumers: [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },

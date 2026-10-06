@@ -73,7 +73,7 @@ test("provisioning checks its write destinations and ignores unrelated temp volu
 test("stage config and Claude temp destinations wait when critical and resume after recovery", () => {
   const previous = process.env.LLV_STATE_DIR;
   const state = "/srv/delegatus-config/agent-log-viewer/state";
-  const source = { XDG_CONFIG_HOME: "/srv/delegatus-config", TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const source = { NODE_ENV: "test" as const, XDG_CONFIG_HOME: "/srv/delegatus-config", TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
   process.env.LLV_STATE_DIR = state;
   try {
     const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(state, "scratch/tmp") });

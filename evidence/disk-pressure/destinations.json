@@ -64,6 +64,38 @@
     "clientWidth": 248
   },
   {
+    "frame": "line-required-temp-en-light",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "line-required-temp-en-dark",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "line-required-temp-uk-light",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "line-required-temp-uk-dark",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
     "frame": "detail-state-en-light",
     "width": 248,
     "right": 248,
@@ -128,6 +160,38 @@
     "clientWidth": 248
   },
   {
+    "frame": "detail-required-temp-en-light",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "detail-required-temp-en-dark",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "detail-required-temp-uk-light",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
+    "frame": "detail-required-temp-uk-dark",
+    "width": 248,
+    "right": 248,
+    "bottom": 800,
+    "scrollWidth": 248,
+    "clientWidth": 248
+  },
+  {
     "frame": "full-state-en-light",
     "width": 390,
     "right": 390,
@@ -185,6 +249,38 @@
   },
   {
     "frame": "full-temp-uk-dark",
+    "width": 390,
+    "right": 390,
+    "bottom": 844,
+    "scrollWidth": 390,
+    "clientWidth": 390
+  },
+  {
+    "frame": "full-required-temp-en-light",
+    "width": 390,
+    "right": 390,
+    "bottom": 844,
+    "scrollWidth": 390,
+    "clientWidth": 390
+  },
+  {
+    "frame": "full-required-temp-en-dark",
+    "width": 390,
+    "right": 390,
+    "bottom": 844,
+    "scrollWidth": 390,
+    "clientWidth": 390
+  },
+  {
+    "frame": "full-required-temp-uk-light",
+    "width": 390,
+    "right": 390,
+    "bottom": 844,
+    "scrollWidth": 390,
+    "clientWidth": 390
+  },
+  {
+    "frame": "full-required-temp-uk-dark",
     "width": 390,
     "right": 390,
     "bottom": 844,

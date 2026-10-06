@@ -18621,7 +18621,7 @@ describe("disk warning destinations", () => {
     const readings: unknown[] = [];
     try {
       for (const density of ["line", "detail", "full"] as const)
-        for (const role of ["state", "temp"] as const)
+        for (const role of ["state", "temp", "required-temp"] as const)
           for (const lang of ["en", "uk"] as const)
             for (const scheme of ["light", "dark"] as const) {
               const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
@@ -18632,7 +18632,7 @@ describe("disk warning destinations", () => {
                 const notice = page.locator("[data-disk-pressure]");
                 const text = await notice.innerText();
                 const waiting = translate(lang, "resources.diskWaiting");
-                expect(text.includes(waiting)).toBe(role === "state");
+                expect(text.includes(waiting)).toBe(role !== "temp");
                 const geometry = await notice.evaluate(element => {
                   const box = element.getBoundingClientRect();
                   return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
