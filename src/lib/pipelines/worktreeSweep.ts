@@ -8,7 +8,7 @@ import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { containsGitCheckout, isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
+import { isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
@@ -57,11 +57,11 @@ import { pipelineLiteralGitEnv } from "./git";
  *   holding a queued message runs there.
  * - `uncommitted` — tracked changes or untracked files; `git worktree remove`
  *   is never forced.
- * - `ignored-files` — an ignored path that is not a rebuildable output
- *   (`node_modules`, `.next`, tool caches): a `.env`, an agent's
- *   `.claude` session files, a nested repository under an ignored
- *   `.worktrees/`. `git worktree remove` deletes ignored files without asking,
- *   and the status read above never lists them.
+ * - `ignored-files` — ignored contents without a regeneration proof, including
+ *   source, evidence, dependency trees and tool caches with unproved inputs.
+ *   Empty trees, source-backed Python bytecode and known generated files are
+ *   disposable. `git worktree remove` deletes ignored files without asking,
+ *   so every removal refreshes this inventory.
  * - `unmerged-commits` — its HEAD is not contained in the merged PR's head
  *   commit, so something was committed after the merge or never pushed. Past
  *   retention the remote proof below applies instead.
@@ -240,23 +240,14 @@ function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
   return times.length ? Math.max(...times) : 0;
 }
 
-/** Known dependency and tool caches. Generic build and test output folders
-    can hold unique captures, traces or source and require contents proof. */
-const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
-  "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit",
-  ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
-]);
+/** Individual generated file classes already covered by the sweep. Directory
+    names never establish regeneration of the files they contain. */
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
 
-/** A cache that carries its own `*` .gitignore (`.ruff_cache`, `.pytest_cache`)
-    is listed file by file, so any rebuildable directory on the path counts. */
 function rebuildable(ignored: string): boolean {
   const segments = ignored.replace(/\/+$/, "").split("/");
   const name = segments.at(-1) ?? "";
-  // Git can also report an artifact's ignored descendant directly. Output
-  // directory names inside evidence do not establish regenerability.
   if (segments.includes(".artifacts")) return false;
-  if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
 }
 
@@ -293,77 +284,20 @@ function onlyRebuildableContents(directory: string): boolean {
   } catch { return false; }
 }
 
-function emptyDirectory(directory: string): boolean {
+/** An ignored directory needs a proof for every file. Python bytecode needs
+    its source input, and known generated file classes must be regular files.
+    Symlinks and unreadable contents remain for inspection. */
+function disposableIgnored(worktree: string, ignored: string): boolean {
+  const target = path.join(worktree, ignored);
   try {
-    return fs.readdirSync(directory).length === 0;
-  } catch {
-    return false;
-  }
-}
-
-/** A Python virtual environment, whatever its directory is called. Its
-    marker identifies the container; contents still need their own proof. */
-function virtualenvRoot(worktree: string, ignored: string): string | null {
-  const segments = ignored.replace(/\/+$/, "").split("/");
-  for (let depth = 1; depth <= segments.length; depth += 1) {
-    try {
-      const directory = path.join(worktree, ...segments.slice(0, depth));
-      if (fs.lstatSync(path.join(directory, "pyvenv.cfg")).isFile()) return directory;
-    } catch { /* Not a virtual environment at this depth. */ }
-  }
-  return null;
-}
-
-/** A collapsed cache inventory must still preserve nested environments and
-    evidence containers. The outer cache name cannot prove their inputs. */
-function rebuildableCacheContents(directory: string): boolean {
-  if (containsGitCheckout(directory)) return false;
-  const pending = [directory];
-  let visited = 0;
-  try {
-    const root = fs.lstatSync(directory);
-    if (!root.isDirectory()) return root.isFile();
-    while (pending.length) {
-      const current = pending.pop()!;
-      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-        if (++visited > MEASURE_ENTRY_LIMIT) return false;
-        // Inspect the entries even when Git returned just the outer directory.
-        if (entry.name === "pyvenv.cfg") return false;
-        const child = path.join(current, entry.name);
-        if (entry.name === ".artifacts" && !emptyDirectory(child)) return false;
-        if (entry.isDirectory()) pending.push(child);
-      }
-    }
-    return true;
+    const stat = fs.lstatSync(target);
+    if (stat.isDirectory()) return onlyRebuildableContents(target);
+    return stat.isFile() && rebuildable(ignored) && (!ignored.endsWith(".pyc") || bytecodeInput(target));
   } catch { return false; }
 }
 
-/** An ignored path a removal may take after all: empty, a known generated
-    output, or a container holding only bytecode. A virtual environment can
-    also carry unique logs or source; its marker proves no file disposable. */
-function disposableIgnored(worktree: string, ignored: string, checked: Map<string, boolean>): boolean {
-  const target = path.join(worktree, ignored);
-  if (emptyDirectory(target)) return true;
-  if (ignored.split("/").includes(".artifacts")) return false;
-  if (ignored.endsWith(".pyc") && !bytecodeInput(target)) return false;
-  if (virtualenvRoot(worktree, ignored)) return onlyRebuildableContents(target);
-  let generated: string | null = null;
-  if (rebuildable(ignored)) {
-    const segments = ignored.replace(/\/+$/, "").split("/");
-    const depth = segments.findIndex((_, index) => rebuildable(segments.slice(0, index + 1).join("/")));
-    generated = path.join(worktree, ...segments.slice(0, depth + 1));
-  }
-  if (generated) {
-    let safe = checked.get(generated);
-    if (safe === undefined) { safe = rebuildableCacheContents(generated); checked.set(generated, safe); }
-    return safe;
-  }
-  return onlyRebuildableContents(target);
-}
-
 function keptIgnored(worktree: string, ignored: readonly string[]): string[] {
-  const checked = new Map<string, boolean>();
-  return ignored.filter(entry => !disposableIgnored(worktree, entry, checked));
+  return ignored.filter(entry => !disposableIgnored(worktree, entry));
 }
 
 /** The browser bundle a rendered-evidence driver writes beside its captures
@@ -1060,9 +994,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     }
 
     // Retained, settled pipeline checkouts keep their source and private files.
-    // Their own rebuildable .next goes; one kept for its ignored files or its
-    // unpublished commits also loses its root dependency tree and the evidence
-    // drivers' fixture bundles under .artifacts, and keeps everything else.
+    // The evidence drivers' fixture-only bundles carry a regeneration proof.
+    // Dependency trees and tool caches need preserved inputs; their directory
+    // names cannot authorize deleting arbitrary source or evidence.
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
       if (!remaining.has(worktree) || entry.locked || entry.prunable
@@ -1074,30 +1008,26 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         return worktree === path.join(path.dirname(source), `${path.basename(source)}-pipeline-${pipeline.id}`);
       });
       if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(readGuards(), worktree)) continue;
-      const candidates = [path.join(worktree, ".next")];
-      const kept = report.kept.find((row) => row.path === worktree);
-      if (kept && ["ignored-files", "unmerged-commits", "local-only-commits"].includes(kept.reason)) {
-        candidates.push(path.join(worktree, "node_modules"));
-        // Agent artifacts remain. Only the drivers' fixture-only bundles
-        // carry a regeneration proof; directory names cannot prove their
-        // dependency or build folders free of unique evidence.
-        const pending = [path.join(worktree, ".artifacts")];
-        let visited = 0;
-        while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
-          const current = pending.pop()!;
-          try {
-            if (!fs.lstatSync(accessible(current)).isDirectory()) continue;
-            if (fs.existsSync(path.join(accessible(current), ".git"))) continue;
-            for (const child of fs.readdirSync(accessible(current), { withFileTypes: true })) {
-              visited += 1;
-              if (!child.isDirectory() || child.name === ".git") continue;
-              const directory = path.join(current, child.name);
-              if (child.name === "node_modules" || child.name === ".next") continue;
-              if (child.name === "bundle" && fixtureBundle(accessible(directory))) candidates.push(directory);
-              else pending.push(directory);
-            }
-          } catch { /* Missing or unreadable artifacts stay. */ }
-        }
+      const candidates: string[] = [];
+      // Agent artifacts remain. Only the drivers' fixture-only bundles
+      // carry a regeneration proof; directory names cannot prove their
+      // dependency or build folders free of unique evidence.
+      const pending = [path.join(worktree, ".artifacts")];
+      let visited = 0;
+      while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
+        const current = pending.pop()!;
+        try {
+          if (!fs.lstatSync(accessible(current)).isDirectory()) continue;
+          if (fs.existsSync(path.join(accessible(current), ".git"))) continue;
+          for (const child of fs.readdirSync(accessible(current), { withFileTypes: true })) {
+            visited += 1;
+            if (!child.isDirectory() || child.name === ".git") continue;
+            const directory = path.join(current, child.name);
+            if (child.name === "node_modules" || child.name === ".next") continue;
+            if (child.name === "bundle" && fixtureBundle(accessible(directory))) candidates.push(directory);
+            else pending.push(directory);
+          }
+        } catch { /* Missing or unreadable artifacts stay. */ }
       }
       for (const next of candidates) {
         const identity = (directory: string) => {
@@ -1139,8 +1069,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (trackedNow.code !== 0 || trackedNow.stdout.length) continue;
         // A unique log or source added during any async check changes a
         // fixture bundle's classification. Keep the whole directory then.
-        if (path.basename(next) === "bundle" && !fixtureBundle(accessible(next))) continue;
-        if (!rebuildableCacheContents(accessible(next))) continue;
+        if (!fixtureBundle(accessible(next))) continue;
         if (registrationHold(root, worktree, next, accessible) || heldBy(readGuards(), worktree)) continue;
         // The last Git read also yields. Refuse a replaced checkout, cache or
         // artifact parent before recursive removal can follow its new target.
