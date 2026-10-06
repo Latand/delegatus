@@ -1,4 +1,4 @@
-import { expect, test, afterEach } from "bun:test";
+import { expect, test, afterAll, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,6 +7,12 @@ import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
 import { parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, commandRunner, type CommandRunner } from "./merge-batch";
+
+// Gates these tests start take their slot from a private directory: the
+// machine's slots are busy whenever this file runs inside a hook's own gate.
+const gateLocks = mkdtempSync(join(tmpdir(), "merge-batch-gate-locks-"));
+process.env.LLV_GATE_LOCK_DIR = gateLocks;
+afterAll(() => rmSync(gateLocks, { recursive: true, force: true }));
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
   expect(parseReviewedPrs("12@abcdef1, 13@1234567")).toEqual([
