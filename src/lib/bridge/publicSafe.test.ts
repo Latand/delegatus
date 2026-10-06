@@ -198,3 +198,36 @@ test("strict populated bare machine and node fields name remote hosts", () => {
     expect(privateClasses(`The ${field} field was missing.`, undefined, { strict: true })).toEqual([]);
   }
 });
+
+test("strict populated server fields and named servers need no local deny list", () => {
+  for (const field of ["server", "server_name", "server-name", "server name", "сервер", "ім’я сервера"]) {
+    for (const line of [`${field}=remote-worker`, `${field}: remote-worker`, `{"${field}":"remote-worker"}`]) {
+      expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+    }
+    expect(privateClasses(`The ${field} field was missing.`, undefined, { strict: true })).toEqual([]);
+  }
+  for (const line of ["The affected server was remote-worker.", "The server name is `remote-worker`.", "Сервер: remote-worker"]) {
+    expect(privateClasses(line, undefined, { strict: true })).toContain("host");
+  }
+});
+
+test("strict names include one character and names inside unspaced sentences", () => {
+  for (const [name, text] of [["李", "The reviewer 李 observed the failure."], ["李雷", "李雷看到錯誤。"], ["李雷", "先請李雷查看。"], ["A", "Reviewer A observed the failure."]]) {
+    const deny = { ...DENY, people: [name] };
+    expect(privateClasses(text, deny, { strict: true })).toContain("person");
+    expect(privateClasses(text, deny)).not.toContain("person");
+  }
+  for (const text of ["Adaline reviewed it.", "The DATA check passed."]) {
+    expect(privateClasses(text, { ...DENY, people: ["Ada", "A", " ", ""] }, { strict: true })).not.toContain("person");
+  }
+});
+
+test("strict local file URIs include slashless spellings", () => {
+  for (const uri of ["file:private-notes.txt", "FILE:private-notes.txt", "file:notes", "file:./notes", "file:../notes"]) {
+    expect(privateClasses(`The evidence is at ${uri}.`, undefined, { strict: true })).toContain("path");
+    expect(privateClasses(`[evidence](${uri})`, undefined, { strict: true })).toContain("path");
+  }
+  for (const line of ["The file: scheme was discussed.", "See src/lib/mcp/bindings.ts."]) {
+    expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
+  }
+});

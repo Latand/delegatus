@@ -696,6 +696,97 @@ test.each(["preview", "publish"])("retained names from an inactive Telegram chat
   }
 });
 
+test.each([
+  { kind: "host", text: "server_name=remote-worker" },
+  { kind: "host", text: "The affected server was remote-worker." },
+  { kind: "host", text: '{"server":"remote-worker"}' },
+  { kind: "path", text: "The evidence is at file:private-notes.txt." },
+  { kind: "path", text: "[evidence](file:private-notes.txt)" },
+])("populated servers and slashless file URIs refuse both boundaries: $text", async ({ kind, text }) => {
+  const h = harness();
+  for (const where of ["title", "body"] as const) {
+    for (const value of [text, encodeURIComponent(text), text.replace(/:/g, "&#58;")]) {
+      const report = { ...REPORT, [where]: value };
+      const refused = await h.call(REPORTER, { action: "preview", ...report });
+      expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+      expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where })]));
+      expect(fs.readdirSync(sandbox)).toEqual([]);
+    }
+  }
+  for (const where of ["title", "body"] as const) {
+    for (const value of [text, encodeURIComponent(text), text.replace(/:/g, "&#58;")]) {
+      const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
+      h.operatorSays((await shown(h, digest)).en);
+      const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
+      expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+      expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where })]));
+      expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+    }
+  }
+  expect(h.published).toEqual([]);
+});
+
+test.each([
+  { name: "李", texts: ["The reviewer 李 failed.", "李看到錯誤。", "李看到錯誤。"] },
+  { name: "李雷", texts: ["李雷看到錯誤。", "先請李雷查看。", "李雷看到錯誤。", "李**雷**看到錯誤。", "李<b>雷</b>看到錯誤。"] },
+])("production Telegram catalog protects $name at both report boundaries", async ({ name, texts }) => {
+  const transport = new FakeBotTransport();
+  const now = new Date("2026-09-24T12:00:00Z");
+  const date = Math.floor(now.getTime() / 1000) - 600;
+  const chat = { id: -1000000000303, type: "supergroup", title: "Evidence Chat" };
+  const service = new TelegramBotService({
+    ...productionTelegramBotDependencies(), transportFor: () => transport, now: () => now,
+    sleep: async () => {}, conversationTitle: () => null,
+    documentEnvironment: () => ({ home: process.env.HOME!, stateDir: privacyState }),
+  });
+  try {
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
+    await service.connect(fakeBotToken());
+    await service.stopPoller();
+    const updates: TgUpdate[] = [
+      { update_id: 1, my_chat_member: { chat: chat as never, date, new_chat_member: { status: "member" } } },
+      { update_id: 2, message: { message_id: 1, date: date + 1, chat: chat as never, from: { id: 700000505, first_name: name }, text: "A launch failed." } },
+      { update_id: 3, message: { message_id: 2, date: date + 2, chat: chat as never, from: { id: 700000506, first_name: "Ada" }, text: "A launch failed." } },
+    ];
+    transport.script("getUpdates", ok(updates));
+    expect(await service.pollOnce(new AbortController().signal)).toEqual({ next: "continue", delayMs: 0 });
+    const h = harness({ controlRead: async (url) => {
+      const params = new URLSearchParams(url.split("?")[1]);
+      return params.get("op") === "chats"
+        ? { ...service.listChats({ includeInactive: true }) }
+        : { ...service.readMessages({ chat: params.get("chat")!, limit: 100, maxChars: 1, cursor: params.get("cursor") ?? undefined }) };
+    } });
+    const values = texts.flatMap((text) => [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join("")]);
+    for (const where of ["title", "body"] as const) {
+      for (const value of values) {
+        const refused = await h.call(REPORTER, { action: "preview", ...REPORT, [where]: value });
+        expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+        expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: "person", where })]));
+        expect(fs.readdirSync(sandbox)).toEqual([]);
+      }
+    }
+    expect(await h.call(REPORTER, { action: "preview", ...REPORT, body: "Ada observed the failure." })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    for (const where of ["title", "body"] as const) {
+      for (const value of values) {
+        const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
+        h.operatorSays((await shown(h, digest)).en);
+        const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
+        expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+        expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: "person", where })]));
+        expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+      }
+    }
+    expect(h.published).toEqual([]);
+    const safe = { ...REPORT, body: `${REPORT.body}\nAdaline reviewed the failure. The server_name field was missing.` };
+    const digest = await previewed(h, safe);
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    expect(h.published).toEqual([{ ...safe, repository: REPOSITORY }]);
+  } finally {
+    await service.remove();
+  }
+});
+
 const personName = "Person Café";
 const widePersonName = personName.replace(/[A-Za-z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 0xfee0));
 test.each([
