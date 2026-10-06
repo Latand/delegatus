@@ -10,7 +10,6 @@ const files = new Set([
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
   "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
   "scripts/npm-package-smoke.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
-  "scripts/docker-pr-build.sh",
   "scripts/fixtures/usage-metrics/recorded.json", "landing/site/demo/taskIcons.json",
   // Docker copies these root files; Next loads them with NODE_ENV=production.
   ".env", ".env.local", ".env.production", ".env.production.local",
@@ -33,7 +32,7 @@ function isImageInput(file) {
 // builds both. Keep this conservative when adding platform-dependent inputs.
 function isMultiArchInput(file) {
   return ["Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml",
-    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs", "scripts/docker-pr-build.sh",
+    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs",
     "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
     "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs"].includes(file)
     || ["patches/", "vendor/", "bin/", "src/runtime-host/", "src/lib/platform/"].some(directory => file.startsWith(directory));

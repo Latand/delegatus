@@ -36,7 +36,6 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "landing/site/demo/taskIcons.json", "evals/probe.ts", "spikes/probe.mts", "test-preload.ts",
     "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
     "scripts/fixtures/usage-metrics/recorded.json", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
-    "scripts/docker-pr-build.sh",
     ".env", ".env.local", ".env.production", ".env.production.local",
     ".gitignore", "src/.gitignore", "src/components/.gitignore", "public/.gitignore",
     "bin/.gitignore", "patches/.gitignore", "vendor/.gitignore", ".github/workflows/docker-image.yml",
@@ -57,7 +56,7 @@ test("native installation and runtime inputs verify both architectures; app chan
     "patches/native.patch", "vendor/native/index.js", "bin/provision-telegram-connector.mjs",
     "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "scripts/whisper_transcribe.py",
     "scripts/published-image-entrypoint.sh", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
-    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs", "scripts/docker-pr-build.sh"]) {
+    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs"]) {
     expect(isMultiArchInput(file), file).toBe(true);
     expect(isImageInput(file), file).toBe(true);
   }
@@ -171,10 +170,14 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(build["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   const qemu = build.steps.find(step => step.uses === "docker/setup-qemu-action@v3");
   expect(qemu?.if).toBe("github.event_name != 'pull_request' || needs.scope.outputs.platforms == 'linux/amd64,linux/arm64'");
-  const verify = build.steps.find(step => step.name === "Verify PR image within a hard deadline");
+  const verify = build.steps.find(step => step.name === "Verify PR image");
   expect(verify?.if).toBe("github.event_name == 'pull_request'");
-  expect(verify?.run).toBe('bash scripts/docker-pr-build.sh "$BUILDER" "$PLATFORMS"');
-  expect(verify?.env?.PLATFORMS).toBe("${{ needs.scope.outputs.platforms }}");
+  expect(verify?.uses).toBe("docker/build-push-action@v6");
+  expect(verify?.with?.platforms).toBe("${{ needs.scope.outputs.platforms }}");
+  expect(verify?.with?.push).toBe(false);
+  expect(verify?.with?.["cache-from"]).toBe("type=gha");
+  expect(verify?.with?.["cache-to"]).toBeUndefined();
+  expect(verify?.with?.tags).toBeUndefined();
   const image = build.steps.find(step => step.name === "Publish both architectures");
   expect(image?.if).toBe("github.event_name != 'pull_request'");
   expect(image?.with?.platforms).toBe("linux/amd64,linux/arm64");
@@ -227,7 +230,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       [".babelrc", true], [".browserslistrc", true],
       ["Dockerfile.dockerignore", true], [".postcssrc.json", true], [".postcssrc.js", true],
       ["Dockerfile", true], ["package.json", true], ["bun.lock", true],
-      ["patches/native.patch", true], ["scripts/docker-pr-build.sh", true],
+      ["patches/native.patch", true],
     ] as const) {
       write(file, file.startsWith(".env") ? "LLV_STANDALONE=1\n" : "{}");
       const current = commit();
