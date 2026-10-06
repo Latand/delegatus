@@ -476,8 +476,12 @@ test("the delivered default mandate fits the delivery bound with room for a rota
    (docs/design/agent-prompt-contract.md, mandate v30), which measured 12 703;
    19 200 bytes still hold two. Raised to 13 500 for the board maintenance
    report section (docs/design/board-maintenance-report.md §8), which measured
-   13 399; 18 500 bytes still hold two. */
-const DELIVERED_DIRECTIVE_BUDGET_BYTES = 13_500;
+   13 399; 18 500 bytes still hold two. Raised to 14 600 for the bug report
+   and other-project section and the issue-reporter row (#2518), which
+   measured 14 558; 17 400 bytes still hold two. Raised to 14 700 for the
+   line that points the operator to a task's prototype review, which measured
+   14 624; 17 300 bytes still hold two. */
+const DELIVERED_DIRECTIVE_BUDGET_BYTES = 14_700;
 
 test("what delivery appends stays inside its share of the envelope", () => {
   const appended = Buffer.byteLength(orchestratorMandateForDelivery(""));

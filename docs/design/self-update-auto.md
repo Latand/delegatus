@@ -285,6 +285,78 @@ Two consequences shape the rule:
    (Claude, Codex, Copilot), orchestrator seats, deputies, flows and ad-hoc
    conversations alike. A snapshot that cannot be read is a blocker
    ("cannot read what agents are doing").
+
+   A session row is only a claim, because the host that would close a turn is
+   the one that can die with it. Each claiming row is therefore judged on the
+   record `agent_activity` answers for its conversation
+   (`agentLivenessSnapshot`, read by `turnEvidenceReader` in
+   `src/lib/selfUpdate/instance.ts`), with `livenessRecordIsLive` as the one
+   predicate both surfaces use (#2515):
+
+   - a row whose host is gone never counts, whether its turn was left open or
+     had settled; it is reported in `blockers.discounted`;
+   - a row counts while its host is alive, while a launch is inside its
+     five-minute grace, while its registry row records a process that still
+     answers, while a headless reviewer its flow round records answers under
+     its exact start identity (`headlessReviewerProcess`), and whenever a host in
+     this Viewer holds an active turn for it;
+   - a conversation with no transcript to read is judged on its registry row
+     alone (`conversationRegistryHost`): a row with no live host releases it at
+     once;
+   - a row with neither a record nor a registry row is unresolved. It counts
+     for five minutes from the first probe that saw it
+     (`UNRESOLVED_TURN_GRACE_MS`) and is reported in `blockers.unresolved`
+     for as long as it exists;
+   - evidence that cannot be read counts.
+
+   Both projections take recorded live host ownership before a registry status
+   word that can lag it, including processes that survived structured-host
+   termination. `conversationRegistryHost` derives its process verdict from
+   that same host projection, so readable transcripts and missing transcripts
+   agree about ownership.
+   An admitted structured resume also owns its setup interval through the
+   registry claim's exact live process identity and matching writer epoch.
+   This evidence protects a `registering` journal row while host startup is
+   awaited, even when the resumed registry row still says `dead`. A released,
+   stale, dead or reused claim provides no live ownership.
+   Corpus selection also retains bound headless PIDs whose identity is
+   unproven, using the same `headlessRoundProcess` verdict before filtering
+   the completed inventory. It follows conversation aliases when only a bound
+   id names the transcript, and keeps recovery bounded at 64 paths. A missing
+   PID or a proven dead or reused PID receives no process selection priority.
+
+   A fallback transcript path resolves its canonical owner through the same
+   registry generations, continuity paths and aliases as the liveness read.
+   That owner's recorded process and current Viewer host remain evidence even
+   when the transcript was deleted or the registry's status word lags. Each
+   probe reads the journal before judging stages, so a journal artifact path
+   also supplies a stage's missing binding. Cached readings include both the
+   conversation id and the effective artifact path.
+
+   The rows themselves are corrected at the source: once a minute the
+   delivery controller publishes the registry's verdict over a session row
+   that still claims an open turn for a conversation the registry proves
+   hostless (`settleHostlessSessions` in
+   `src/lib/runtime/structuredDeliveryController.ts`). The sweep runs in the
+   Viewer, which is the only process that publishes projections, and stays out
+   of startup: each ended row costs one keyed session read. A sweep makes at
+   most 64 reads. Rows not read yet go first, and what is left of the batch
+   reads again the rows read longest ago, so a session row that a late write
+   reopens after its first reading is closed on a later sweep. A launch can
+   take the conversation while the sweep waits on its read or on its write,
+   so the sweep reads the registry row again after the session row, and its
+   write names the revision of the session row it read
+   (`expectedSessionRevision`). The journal compares that revision inside the
+   transaction that records the event and refuses a row that moved, so the
+   new owner's `hosted`/`running` row and its active turn stay as written and
+   keep blocking the restart. Settlement uses `append-session-fenced`, an RPC
+   whose handler requires that revision and enforces it in the journal's
+   transaction. During web-first succession, an older runtime host rejects
+   the method and the sweep leaves the row as published. It retries after host
+   succession on the same socket; it never retries through ordinary `append`
+   or caches a capability across host generations.
+   Historical alias ids are read under their canonical owner's hostless proof,
+   so their journal rows settle even when they carry no artifact path.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -292,7 +364,63 @@ Two consequences shape the rule:
    `pending` does not block: a pending stage has nothing in flight and may
    wait hours for an account. Only pipelines in state `running` count, so the
    stale `running` attempts left on closed pipelines (five on this host) never
-   block.
+   block. A `running` or `reviewing` stage is judged on the same evidence and
+   the same `livenessRecordIsLive` predicate as a turn. It counts while its
+   conversation's host is alive, while a launch is inside its grace, while a
+   process its registry row records still answers, and while the headless
+   reviewer its flow round records answers under the exact start identity
+   saved there, with or without a transcript to read. A recorded pid that still
+   answers with an absent or unreadable start identity keeps the stage and
+   turn counted as `unproven`, including bound rounds. A missing pid adds no
+   process evidence to a bound conversation's verdict. Journal and flow owner
+   ids follow the same registry aliases, even when the journal has no artifact
+   path. A turn no process owns
+   that did not settle (open, or with no readable turn state) releases the
+   stage at once: nothing is left to finish it, and the engine replaces the
+   attempt after the restart. That covers a host that is gone and a transcript
+   that aged out of its launch grace with no host ever recorded. A turn no
+   process owns that did settle leaves the controller a verdict to read, so it
+   holds the stage for five minutes from the first probe that saw it and is
+   counted in `blockers.settled` for as long as it lasts. A registry row that
+   proves the host gone releases the stage when the transcript cannot be read,
+   and a conversation nothing resolves holds it for the same five minutes
+   (`blockers.unresolved`). A `reviewing` stage also asks about the reviewer
+   of its flow's newest round, because the attempt takes that round's binding
+   only on the pipeline's next pass: a live reviewer there, or a launch that
+   has started and names no conversation yet, keeps the stage counted. A
+   stored round may record its headless process before it names a
+   conversation. That process then answers for the round
+   (`headlessRoundProcess`): while it answers under the saved start identity
+   the stage counts for as long as it runs, and once the pid is gone or
+   answers under another start identity the round has no owner, whatever
+   launch marker is left beside it. A pid with no saved identity proves
+   nothing and keeps the stage counted.
+   Process ownership follows the recorded reviewer across `needs_decision`
+   and `paused`, including when the attempt still names the previous round.
+   It also follows the reviewer into `relaying`: the flow can read findings
+   before that process exits. A relay waiting for admission discounts only
+   its next action after checking existing owners. A live or unproven owner
+   keeps the stage counted; a settled dead owner needs no collection grace
+   for an action already held, and an unresolved owner retains the same
+   five-minute diagnostic bound. An undispatched action with no owners
+   leaves the drain quiet.
+   The review attempt remains bound to its reviewer during findings relay and
+   fixing. The stage also reads its implementer through the same liveness
+   evidence, including legacy flows that only name a transcript path and parked
+   fixing continuations. A live implementer keeps the stage protected after
+   the reviewer dies; proven absence releases it, with the existing five-minute
+   bound for settled or unresolved owners. An accepted relay keeps custody
+   before any implementer turn starts, until the flow controller records
+   settlement or clears the attempt through its bounded delivery retry path.
+   The admission fence includes implementer binding and relay settlement so
+   either changing during an awaited probe invalidates that probe.
+
+   The same headless process verdict is projected into `agent_activity` and
+   used when a transcript cannot be read. A bound reviewer's proven death or
+   replaced start identity releases its turn and stage immediately, even with
+   a fresh `starting` registry marker. A current live or unproven replacement
+   process remains protected. An unproven recorded reviewer does not age out
+   through the grace intended for launches with no process evidence.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.

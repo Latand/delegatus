@@ -785,7 +785,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:57:01 PM",
+      "time": "10/7/2026, 12:34:23 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -2277,7 +2277,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:57:32 PM",
+      "time": "10/7/2026, 12:34:44 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -3769,7 +3769,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:58:01",
+      "time": "07.10.2026, 00:35:06",
       "posts": [
         {
           "taskId": "t-search",
@@ -5261,7 +5261,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:58:30",
+      "time": "07.10.2026, 00:35:29",
       "posts": [
         {
           "taskId": "t-search",
@@ -6794,7 +6794,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:58:57 PM",
+      "time": "10/7/2026, 12:35:51 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -8327,7 +8327,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 10:59:23 PM",
+      "time": "10/7/2026, 12:36:12 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -9860,7 +9860,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 22:59:46",
+      "time": "07.10.2026, 00:36:34",
       "posts": [
         {
           "taskId": "t-search",
@@ -11393,7 +11393,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 23:00:16",
+      "time": "07.10.2026, 00:36:55",
       "posts": [
         {
           "taskId": "t-search",
@@ -12795,7 +12795,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 11:00:38 PM",
+      "time": "10/7/2026, 12:37:16 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -13445,7 +13445,7 @@
         },
         "reasons": [
           "permission prompt",
-          "gpt-5.6·16m",
+          "gpt-5.6·17m",
           "Prototype"
         ],
         "overlaps": [],
@@ -14095,7 +14095,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 11:01:03 PM",
+      "time": "10/7/2026, 12:37:38 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -15395,7 +15395,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 23:01:27",
+      "time": "07.10.2026, 00:38:01",
       "posts": [
         {
           "taskId": "t-search",
@@ -16045,7 +16045,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·16 хв",
+          "gpt-5.6·17 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -16695,7 +16695,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 23:01:51",
+      "time": "07.10.2026, 00:38:23",
       "posts": [
         {
           "taskId": "t-search",

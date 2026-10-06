@@ -1,13 +1,23 @@
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { StructuredCompactError } from "./engineHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
+
+// Command/control tests use a fake interpreter and its explicit inventory.
+let restoreFeatureReader: () => void;
+beforeEach(() => {
+  restoreFeatureReader = setCodexFeatureReaderForTest(() => parseCodexFeatures(
+    "multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true",
+  ));
+});
+afterEach(() => restoreFeatureReader());
 
 class MemoryEventStore implements RuntimeEventStore {
   private readonly events = new Map<string, RuntimeEvent[]>();

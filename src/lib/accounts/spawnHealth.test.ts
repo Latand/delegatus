@@ -14,7 +14,7 @@ const PREVIOUS_STATE = process.env.LLV_STATE_DIR;
 const PREVIOUS_HOME = process.env.LLV_CLAUDE_HOME;
 const PREVIOUS_FETCH = globalThis.fetch;
 let providerReads = 0;
-let providerReply: (() => Response) | null = null;
+let providerReply: (() => Response | Promise<Response>) | null = null;
 process.env.LLV_STATE_DIR = path.join(STATE_SANDBOX, "state");
 process.env.LLV_CLAUDE_HOME = path.join(STATE_SANDBOX, "legacy-claude");
 globalThis.fetch = (async () => {
@@ -198,6 +198,91 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
     });
   }
 }
+
+for (const phase of ["probe", "refresh"] as const) {
+  for (const policy of ["healthy alternative", "no healthy alternative", "explicit pin"] as const) test(`a changed ${phase} candidate preserves ${policy}`, async () => {
+    const { AccountAdmissionChangedError } = await import("./accountMutation");
+    const first = account("first", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const second = account("second", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const changed = new AccountAdmissionChangedError();
+    const evaluate = async (candidate: ClaudeAccount) => {
+      if (candidate.id === second.id) throw changed;
+      return policy === "no healthy alternative" ? unavailable() : current();
+    };
+    const selection = selectHealthyClaudeAccount([first, second], policy === "explicit pin" ? second.id : first.id, {
+      now: () => NOW, probe: evaluate, refresh: evaluate,
+    }, policy === "explicit pin", first.id);
+    if (policy === "healthy alternative") expect((await selection).account.id).toBe(first.id);
+    else await expect(selection).rejects.toBe(changed);
+  });
+}
+
+for (const phase of ["probe", "refresh"] as const) {
+  for (const policy of ["exhausted pin", "unavailable pin", "changed exhausted pin"] as const) test(`a changed fallback ${phase} preserves ${policy}`, async () => {
+    const { AccountAdmissionChangedError } = await import("./accountMutation");
+    const pin = account("pin", NOW + 60_000);
+    const fallback = account("fallback", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const retryAt = new Date(NOW + 3600_000).toISOString();
+    const admission = policy === "unavailable pin" ? unavailable()
+      : { kind: "retry-at", reason: "hard-limit", stale: false, retryAt } as const;
+    const fallbackChange = new AccountAdmissionChangedError();
+    const pinChange = new AccountAdmissionChangedError();
+    let fallbackEvaluated = false;
+    let rechecks = 0;
+    const evaluate = async (candidate: ClaudeAccount) => {
+      if (candidate.id === pin.id) return { ...admission, revalidate: async () => {
+        rechecks += 1;
+        if (fallbackEvaluated && policy === "changed exhausted pin") throw pinChange;
+      } };
+      fallbackEvaluated = true;
+      throw fallbackChange;
+    };
+    const selection = selectHealthyClaudeAccount([pin, fallback], pin.id, {
+      now: () => NOW, probe: evaluate, refresh: evaluate,
+    });
+    if (policy === "exhausted pin") {
+      expect(await selection).toEqual({ account: pin, admission, requestedAdmission: admission });
+      expect(fallbackEvaluated).toBe(true);
+      expect(rechecks).toBeGreaterThan(0);
+    } else await expect(selection).rejects.toBe(policy === "changed exhausted pin" ? pinChange : fallbackChange);
+  });
+}
+
+test("an expired fallback preserves the pinned selection's bounded revision retry policy", async () => {
+  const pin = account("pin", NOW + 60_000);
+  const fallback = account("fallback", NOW - 1);
+  const refreshes: { id: string; retryUnrelatedRevision: boolean | undefined }[] = [];
+  const selected = await selectHealthyClaudeAccount([pin, fallback], pin.id, {
+    now: () => NOW,
+    probe: async () => unavailable(),
+    refresh: async (candidate, retryUnrelatedRevision) => {
+      refreshes.push({ id: candidate.id, retryUnrelatedRevision });
+      return current();
+    },
+  });
+  expect(selected.account.id).toBe(fallback.id);
+  expect(refreshes).toEqual([{ id: fallback.id, retryUnrelatedRevision: true }]);
+  expect(selected.admission).toEqual(current());
+  expect(selected.requestedAdmission).toEqual(unavailable());
+});
+
+for (const phase of ["probe", "refresh"] as const) test(`the requested pin is revalidated after fallback ${phase}`, async () => {
+  const { AccountAdmissionChangedError } = await import("./accountMutation");
+  const pin = account("pin", NOW + 60_000);
+  const fallback = account("fallback", phase === "probe" ? NOW + 60_000 : NOW - 1);
+  let changed = false;
+  const change = new AccountAdmissionChangedError();
+  const selection = selectHealthyClaudeAccount([pin, fallback], pin.id, {
+    now: () => NOW,
+    probe: async (candidate) => {
+      if (candidate.id === pin.id) return { ...unavailable(), revalidate: async () => { if (changed) throw change; } };
+      changed = true;
+      return current();
+    },
+    refresh: async () => { changed = true; return current(); },
+  });
+  await expect(selection).rejects.toBe(change);
+});
 
 test("spawn selection skips an unrefreshable expired preferred Claude account and probes a healthy fallback", async () => {
   const expired = account("expired", NOW - 1, true, false);
@@ -413,6 +498,54 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
   expect(providerReads).toBe(0);
 });
 
+test("a validity probe whose catalog revision moved returns replayable admission contention", async () => {
+  const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+  const created = createManagedClaudeAccount("Revision fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const selected = listClaudeAccounts().find(candidate => candidate.id === created.id)!;
+  providerReply = () => {
+    createManagedClaudeAccount("Concurrent catalog writer");
+    return new Response(JSON.stringify({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    await expect(selectHealthyClaudeAccount([selected], selected.id)).rejects.toMatchObject({ name: "AccountAdmissionChangedError" });
+  } finally { providerReply = null; }
+});
+
+test.each(["revision", "busy"] as const)("automatic bound-project admission preserves replayable %s failures", async (failure) => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const { bindAccountToProject } = await import("./projectBindings");
+  const { resolveHealthySpawnAccount } = await import("./manager");
+  const { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE } = await import("./accountMutation");
+  const { foreignAccountHolder } = await import("./accountMutation.fixture");
+  const created = createManagedClaudeAccount("Bound admission fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const project = `repo-bound-admission-${failure}`;
+  expect(bindAccountToProject("claude", created.id, project).ok).toBe(true);
+  let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  providerReply = async () => {
+    if (failure === "revision") createManagedClaudeAccount("Concurrent bound-project writer");
+    else {
+      holder = await foreignAccountHolder();
+      holder.releaseAfter(ACCOUNT_MUTATION_ADMISSION_WAIT_MS + 150);
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const started = performance.now();
+    const error = await resolveHealthySpawnAccount("claude", undefined, project).then(() => null, (caught: unknown) => caught);
+    expect(error).toMatchObject({
+      name: failure === "revision" ? "AccountAdmissionChangedError" : "AccountMutationBusyError",
+      message: failure === "revision" ? "The account changed while preparing the launch; try again shortly." : ACCOUNT_STORE_BUSY_MESSAGE,
+    });
+    expect((error as Error).message).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+    if (failure === "busy") expect(performance.now() - started).toBeLessThan(3_000);
+  } finally {
+    providerReply = null;
+    await holder?.close();
+  }
+}, 20_000);
+
 test("concurrent admissions coalesce refresh validation for one account", async () => {
   const expired = account("concurrent", NOW - 1);
   let refreshCalls = 0;
@@ -536,4 +669,242 @@ test("shared refresh is classified separately for Fable and Sonnet without anoth
   expect(results[0].status).toBe("rejected");
   expect(results[1].status).toBe("fulfilled");
   expect(refreshes).toBe(1);
+});
+
+for (const change of ["unrelated", "catalog during refresh", "removed during refresh", "credentials during refresh"] as const)
+for (const withFallback of [false, true]) test(`a pinned expired Claude account fences ${change} (fallback: ${withFallback})`, async () => {
+  const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
+  const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
+  const { readAccountSource, writeAccountSource } = await import("./accountsStore");
+  removeStateDir();
+  const created = createManagedClaudeAccount("Expired pinned fixture");
+  fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() - 1,
+  } }), { mode: 0o600 });
+  if (withFallback) {
+    const fallback = createManagedClaudeAccount("Current refresh fallback");
+    fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+    } }), { mode: 0o600 });
+  }
+  let requests = 0;
+  providerReply = () => {
+    requests += 1;
+    if (requests === 1) {
+      if (change === "credentials during refresh") {
+        fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+          ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+        } }), { mode: 0o600 });
+      } else if (change !== "unrelated") {
+        const read = readAccountSource("claude-accounts.json");
+        if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+        const catalog = read.body as { accounts: { id: string; label: string }[] };
+        if (change === "catalog during refresh") catalog.accounts.find(row => row.id === created.id)!.label = "Changed refresh pin";
+        else catalog.accounts = catalog.accounts.filter(row => row.id !== created.id);
+        writeAccountSource("claude-accounts.json", catalog);
+      }
+      const fresh = crypto.randomUUID();
+      return Response.json({ access_token: fresh, expires_in: 3_600 });
+    }
+    if (requests === 2) recordSpawnAdmissionRejection({ clientAttemptId: "unrelated-refresh-key", requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const selection = selectHealthyClaudeAccount(listClaudeAccounts(), created.id);
+    if (change === "unrelated") {
+      const selected = await selection;
+      expect(selected.account.id).toBe(created.id);
+      expect(selected.admission).toMatchObject({ kind: "admissible", basis: "current" });
+      expect(requests).toBe(3);
+    } else {
+      await expect(selection).rejects.toMatchObject({ name: "AccountAdmissionChangedError" });
+      expect(requests).toBe(1);
+    }
+  } finally { providerReply = null; removeStateDir(); }
+});
+
+for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials", "successful refresh queued rotation", "successful refresh queued removal", "successful refresh queued unreadable"] as const) test(`a changed pin stays unreserved after ${outcome} admission`, async () => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const { readAccountSource, writeAccountSource } = await import("./accountsStore");
+  const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/spawn/route");
+  const { clearAccountTestState } = await import("./accountsStoreFixture");
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
+  const { resetLegacyDocumentStoresForTests } = await import("@/lib/state/legacyDocumentStore");
+  resetLegacyDocumentStoresForTests();
+  const pin = createManagedClaudeAccount("Rejected refresh pin");
+  const fallback = createManagedClaudeAccount("Rejected refresh fallback");
+  fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + (outcome === "current queued credentials" ? 60_000 : -1),
+  } }), { mode: 0o600 });
+  fs.writeFileSync(path.join(fallback.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+  } }), { mode: 0o600 });
+  const cwd = fs.mkdtempSync(path.join(STATE_SANDBOX, "rejected-refresh-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  let requests = 0;
+  providerReply = () => {
+    requests += 1;
+    if (outcome.startsWith("successful refresh")) {
+      if (requests > 1) return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+      const fresh = crypto.randomUUID();
+      const response = Response.json({ access_token: fresh, expires_in: 3600 });
+      const json = response.json.bind(response);
+      response.json = async () => {
+        const payload = await json();
+        let entered!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        holder = withAccountMutationLockAsync(async () => { entered(); await gate; });
+        await ready;
+        timer = setTimeout(() => {
+          const filename = path.join(pin.home, ".credentials.json");
+          if (outcome.endsWith("removal")) fs.unlinkSync(filename);
+          else if (outcome.endsWith("unreadable")) fs.writeFileSync(filename, "invalid-json");
+          else fs.writeFileSync(filename, JSON.stringify({ claudeAiOauth: {
+            ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+          } }), { mode: 0o600 });
+          release();
+        }, 40);
+        return payload;
+      };
+      return response;
+    }
+    if (outcome.includes("queued")) {
+      if (requests === 1 && outcome !== "current queued credentials") {
+        const fresh = crypto.randomUUID();
+        return Response.json({ access_token: fresh, expires_in: 3600 });
+      }
+      return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+    }
+    if (requests === 1) {
+      const read = readAccountSource("claude-accounts.json");
+      if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+      const catalog = read.body as { accounts: { id: string; label: string }[] };
+      catalog.accounts.find(row => row.id === pin.id)!.label = "Changed rejected pin";
+      writeAccountSource("claude-accounts.json", catalog);
+      return Response.json({ error: outcome === "invalid" ? "invalid_grant" : "temporarily_unavailable" }, { status: outcome === "invalid" ? 401 : 500 });
+    }
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  let release = () => {};
+  let holder: Promise<void> | undefined;
+  let resolverStarted!: () => void;
+  const started = new Promise<void>(resolve => { resolverStarted = resolve; });
+  const resolve: typeof resolveHealthySpawnAccount = (...args) => { resolverStarted(); return resolveHealthySpawnAccount(...args); };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (outcome.includes("queued") && !outcome.startsWith("successful refresh")) {
+    let holderEntered!: () => void;
+    const entered = new Promise<void>(resolve => { holderEntered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    holder = withAccountMutationLockAsync(async () => {
+      holderEntered(); await gate;
+      const read = readAccountSource("claude-accounts.json");
+      if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+      const catalog = read.body as { accounts: { id: string; label: string }[] };
+      if (outcome === "queued removal") {
+        catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
+        writeAccountSource("claude-accounts.json", catalog);
+      } else if (outcome === "queued catalog") {
+        catalog.accounts.find(row => row.id === pin.id)!.label = "Changed queued pin";
+        writeAccountSource("claude-accounts.json", catalog);
+      } else {
+        fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+          ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+        } }), { mode: 0o600 });
+      }
+    });
+    await entered;
+  }
+  try {
+    const pending = POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome.replaceAll(" ", "-")}` }),
+    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount: resolve, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    if (holder && !outcome.startsWith("successful refresh")) { await started; await Bun.sleep(8); release(); await holder; }
+    const response = await pending;
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    clearTimeout(timer); release(); await holder;
+    providerReply = null;
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  }
+});
+
+for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] as const) test(change === "probe unreadable"
+  ? "Keychain uncertainty at the live probe credential read stays unreserved"
+  : `Keychain ${change} while the final probe recheck queues stays unreserved`, async () => {
+  const { createManagedClaudeAccount } = await import("./claude");
+  const store = await import("./claudeCredentials");
+  const { accountProbeIdentity } = await import("./accountMutation");
+  const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("@/app/api/spawn/route");
+  const { clearAccountTestState } = await import("./accountsStoreFixture");
+  clearAccountTestState(process.env.LLV_STATE_DIR!);
+  const pin = createManagedClaudeAccount("Keychain probe fixture");
+  let credential: ReturnType<typeof store.readClaudeCredentials> = { state: "present", source: "keychain", document: {
+    claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 },
+  } };
+  let reachedProbe = false;
+  const reader = spyOn(store, "readClaudeCredentials").mockImplementation(home => {
+    if (change === "probe unreadable" && home === pin.home && new Error().stack?.includes("fetchClaudeLimits")) {
+      reachedProbe = true;
+      credential = { state: "unknown" };
+    }
+    return home === pin.home ? credential : { state: "absent" };
+  });
+  const cwd = fs.mkdtempSync(path.join(STATE_SANDBOX, "keychain-recheck-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(cwd, "closed.sock");
+  let release = () => {};
+  let holder: Promise<void> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let before: string | undefined;
+  let after: string | undefined;
+  providerReply = async () => {
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    holder = withAccountMutationLockAsync(async () => { entered(); await gate; });
+    await ready;
+    before = accountProbeIdentity(pin);
+    timer = setTimeout(() => {
+      credential = change === "removal" ? { state: "absent" } : change === "unreadable" ? { state: "unknown" } : {
+        state: "present", source: "keychain", document: { claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } },
+      };
+      after = accountProbeIdentity(pin);
+      release();
+    }, 40);
+    return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
+  };
+  try {
+    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Keychain recheck fixture", prompt: "Review", clientAttemptId: `keychain-recheck-${change.replaceAll(" ", "-")}` }),
+    }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    if (change === "probe unreadable") expect(reachedProbe).toBeTrue();
+    else expect(before).toBe(after);
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    clearTimeout(timer); release(); await holder;
+    reader.mockRestore(); providerReply = null;
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  }
 });

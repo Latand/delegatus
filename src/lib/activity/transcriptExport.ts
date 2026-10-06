@@ -355,6 +355,22 @@ export function classifyRecords(
 }
 
 /**
+ * The records of one transcript the operator wrote, oldest first, with their
+ * text. The same judgement `classifyRecords` makes, for a caller that has to
+ * read what was said (an approval, #2518) and stays on this host.
+ */
+export function operatorRecords(records: readonly UserRecord[], context: TranscriptContext): UserRecord[] {
+  const written: UserRecord[] = [];
+  let prompted = false;
+  for (const rec of [...records].sort((a, b) => a.at - b.at)) {
+    const verdict = classifyUserRecord(rec, context, !prompted);
+    if (verdict.human || !PRELUDE.has(verdict.reason)) prompted = true;
+    if (verdict.human) written.push(rec);
+  }
+  return written;
+}
+
+/**
  * Human inputs of one host inside [from, to], deduplicated, and a manifest
  * with the counts of every record excluded, by reason.
  */

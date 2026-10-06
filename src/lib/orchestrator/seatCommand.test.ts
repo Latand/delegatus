@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountAdmissionChangedError, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
@@ -24,6 +25,7 @@ import {
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
+  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SEAT_TICK_CONTRACT,
   ORCHESTRATOR_SYSTEM_PROMPT,
@@ -1660,12 +1662,10 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* docs/design/board-maintenance-report.md §5.5: the handoff's open-task list —
-   twelve rows of about 200 bytes on a busy board — went into the board
-   maintenance report, and the bytes it took are what a rotation of the default
-   mandate now keeps for its history. A 2 000-byte history beside a full task
-   list did not fit the envelope; beside the one pointer line it does. */
-test("a rotation of the default mandate keeps a history section the old task list pushed out", async () => {
+/* The task-list pointer leaves room for history. Required mandate rules
+   (#2518) consume the same bounded envelope: keep a fitting history and drop
+   an oversized one, while preserving both reporting and cross-project rules. */
+test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1673,13 +1673,16 @@ test("a rotation of the default mandate keeps a history section the old task lis
       prompts.push(String(body.prompt));
       return { status: 200, body: { ok: true, conversationId: successorId(2301), path: "/tmp/successor.jsonl" } };
     },
-    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(2_000) }),
+    summarizeHandoffs: async () => ({ kind: "digest", text: "d".repeat(historyBytes) }),
   });
   const rotated = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_00002302" }, deps);
 
   expect(rotated.status).toBe(200);
-  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(false);
-  expect(historySection(prompts[0]!)).toContain("d".repeat(2_000));
+  expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
+  if (dropped) expect(historySection(prompts[0]!)).toBe("");
+  else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
+  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
+  expect(prompts[0]).toContain(`"conversationId":"${NEW_ID}"`);
   expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
@@ -2373,6 +2376,100 @@ test("a spawn route that answers its own busy store is replayed under the same a
   expect(orchestratorSeatFor("proj-a").history).toEqual([]);
 });
 
+test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
+  seedLegacyActiveSeat("req_completed_holder");
+  const seatsFile = path.join(sandbox, "orchestrator-seats.json");
+  const file = JSON.parse(fs.readFileSync(seatsFile, "utf8"));
+  file.seats["proj-a"].path = null;
+  fs.writeFileSync(seatsFile, JSON.stringify(file));
+  const holder = await foreignAccountHolder();
+  let armed = false;
+  const { deps, recorded } = dependencies({
+    seatStoreWaitMs: 0,
+    resolvedConversation: () => null,
+    // Active-launch reconciliation calls this immediately before pending and
+    // completed replay reconciliation. Preparation cannot consume the hold.
+    launchSettlement: () => {
+      if (!armed) {
+        expect(fs.existsSync(path.join(sandbox, "account-selection.lock"))).toBe(true);
+        holder.releaseAfter(18);
+        armed = true;
+      }
+      return { kind: "unknown" };
+    },
+  });
+  try {
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_completed_holder"), deps);
+    expect(armed).toBe(true);
+    expect(result.status).toBe(200);
+    expect(recorded.spawns).toEqual([]);
+    expect(recorded.identityStamps).toHaveLength(1);
+  } finally { await holder.close(); }
+});
+
+test("rotation waits out a 120 ms foreign holder while confirming a provisional incumbent", async () => {
+  const { deps, recorded } = dependencies({ spawn: async () => ({ status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "incumbent-launch" } }) });
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_incumbent"), deps);
+  deps.spawn = async body => { recorded.spawns.push(body); return { status: 200, body: { ok: true, conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "successor-launch" } }; };
+  const holder = await foreignAccountHolder();
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 40);
+  try {
+    holder.releaseAfter(120);
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_holder" }, deps);
+    expect(result.status).toBe(200);
+    expect(timerRan).toBe(true);
+    expect(recorded.spawns).toHaveLength(1);
+    expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(NEW_ID);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  } finally { clearTimeout(timer); await holder.close(); }
+});
+
+test("rotation preserves an accepted successor when activation exhausts its store wait", async () => {
+  const { deps } = dependencies();
+  await executeOrchestratorSeatRequest(spawnRequest("req_rotation_predecessor"), deps);
+  let holder: Awaited<ReturnType<typeof foreignAccountHolder>> | undefined;
+  let launches = 0;
+  Object.assign(deps, {
+    seatStoreWaitMs: 80,
+    resolvedConversation: () => null,
+    spawn: async () => {
+      launches += 1;
+      holder = await foreignAccountHolder();
+      holder.releaseAfter(10);
+      return { status: 202, body: { ok: true, conversationId: OLD_ID, path: null, launchId: "accepted-successor" } };
+    },
+    launchSettlement: () => ({ kind: "settled", conversationId: OLD_ID, path: null, launchId: "accepted-successor" }),
+    stampRegistryIdentity: () => { throw new AccountMutationBusyError(); },
+  });
+  try {
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "req_rotation_accepted" }, deps);
+    expect(result.status).toBe(503);
+    expect(launches).toBe(1);
+    expect(orchestratorSeatFor("proj-a").active?.intent.clientRequestId).toBe("req_rotation_accepted");
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+    expect(String(result.body.error)).not.toMatch(/pid|Codex|held by|account mutation/i);
+  } finally { await holder?.close(); }
+});
+
+for (const answer of [
+  { code: "account_store_busy", error: "The account store is temporarily busy; try again shortly." },
+  { code: "account_admission_changed", error: "The account changed while preparing the launch; try again shortly." },
+  { error: "spawn account changed during admission" },
+]) {
+  test(`seat replays a pre-reservation refusal ${answer.code ?? "from an older admission"} under the same key`, async () => {
+    const { deps, recorded } = dependencies({ spawn: async body => {
+      recorded.spawns.push(body);
+      return recorded.spawns.length === 1 ? { status: 503, body: answer }
+        : { status: 202, body: { ok: true, conversationId: NEW_ID, path: null, launchId: "replayed-launch" } };
+    } });
+    const result = await executeOrchestratorSeatRequest(spawnRequest("req_admission_replay"), deps);
+    expect(result.status).toBe(202);
+    expect(recorded.spawns.map(body => body.clientAttemptId)).toEqual(["req_admission_replay", "req_admission_replay"]);
+    expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+  });
+}
+
 test("a store that stays busy answers once, in plain words, and records no holder or pid", async () => {
   const { deps, recorded } = dependencies({
     spawn: async (body) => {
@@ -2499,4 +2596,15 @@ test("a launch that has not settled is left exactly where it is by the read", as
   await reconcileOrchestratorSeatLaunch("proj-a", deps);
 
   expect(orchestratorSeatFor("proj-a").pending?.intent).toMatchObject({ clientRequestId: "req_lost_0003", error: null });
+});
+
+test("an exhausted admission revision replay keeps its own safe cause", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0, spawn: async body => {
+    recorded.spawns.push(body);
+    throw new AccountAdmissionChangedError();
+  } });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_changed_exhausted"), deps);
+  expect(result.status).toBe(503);
+  expect(result.body).toMatchObject({ code: "account_admission_changed", retryable: true, error: new AccountAdmissionChangedError().message });
+  expect(recorded.spawns).toHaveLength(1);
 });

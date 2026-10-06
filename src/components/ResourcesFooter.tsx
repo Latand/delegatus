@@ -7,6 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
+import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -24,7 +25,7 @@ function fmtBytes(n: number): string {
   return Math.max(0, Math.round(n / MIB)) + " MiB";
 }
 
-/** Bar color mirrors the LimitRow thresholds: amber under 30% headroom, red under 10%. */
+/** Bar color mirrors the limit window thresholds: amber under 30% headroom, red under 10%. */
 function ramColor(availablePercent: number): string {
   if (availablePercent < 10) return "var(--color-danger)";
   if (availablePercent < 30) return "var(--color-warning)";
@@ -116,7 +117,7 @@ export function stickySnap(prev: ResourcesSnap | null, next: ResourcesPayload, a
 
 /** Rail block above LimitsFooter: RAM/swap pressure bars; clicking it opens
     the per-session cleanup list. */
-export function ResourcesFooter() {
+export function ResourcesFooter({ density = "full" }: { density?: RailFooterDensity } = {}) {
   const { t } = useLocale();
   const [snap, setSnap] = useState<ResourcesSnap | null>(null);
   const [open, setOpen] = useState(false);
@@ -189,6 +190,64 @@ export function ResourcesFooter() {
   const ramUsedPct = system ? (100 * (system.ramTotal - system.ramAvailable)) / system.ramTotal : 0;
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
+
+  /* Why the amber dot is lit: the readings are old, or the session list is. */
+  const staleReason = snap.staleSince
+    ? t("resources.stale", { stale: fmtAge(snap.staleSince) })
+    : sessionsStale
+      ? sessionsCapturedAt
+        ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
+        : t("resources.sessionsUnavailable")
+      : null;
+  /* A compact line names what is left and draws that same share, so the number and the bar agree. */
+  const swapFree = system ? system.swapTotal - system.swapUsed : 0;
+  const reading = [
+    system ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}` : t("resources.title"),
+    system && system.swapTotal > 0 ? `${t("resources.swap")} ${t("resources.free", { amount: fmtBytes(swapFree) })}` : null,
+    system && viewer ? `${t("resources.viewer")} ${viewerAmount(viewer, t)}` : null,
+    system ? t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) }) : null,
+    staleReason,
+  ].filter(Boolean).join(" · ");
+  const cleanup = open ? (
+    <CleanupPanel
+      sessions={sessions}
+      now={snap.at}
+      sessionsStale={sessionsStale}
+      sessionsCapturedAt={sessionsCapturedAt}
+      viewer={viewer}
+      onRefresh={() => loadRef.current(true)}
+      onClose={() => setOpen(false)}
+    />
+  ) : null;
+  if (density !== "full") {
+    /* The dot follows the name it qualifies. */
+    const staleDot = staleReason ? <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-warning align-middle" data-testid="resources-stale-dot" title={staleReason} /> : null;
+    return (
+      <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={t("resources.openAria")}
+          title={reading}
+          onClick={() => setOpen((value) => !value)}
+          className={`block w-full ${LINE_EDGE} py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+        >
+          {system ? (
+            <>
+              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              {/* Behind "All windows": what Delegatus itself holds, and how old the reading is. */}
+              {density === "detail" && viewer ? <span className="block" data-testid="resources-viewer-line" title={t("resources.viewerHint")}><MeterLine label={t("resources.viewer")} value={viewerAmount(viewer, t)} percent={null} color="var(--color-muted)" bar={false} /></span> : null}
+              {density === "detail" ? <span data-meter-note="" className="block break-words pb-0.5 text-[10px] leading-[13px] text-muted">{t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}</span> : null}
+            </>
+          ) : (
+            <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
+          )}
+        </button>
+        {cleanup}
+      </div>
+    );
+  }
 
   return (
     <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>

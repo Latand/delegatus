@@ -62,3 +62,20 @@ test("malformed billed decisions settle reported cost while uncertain failures r
     }
   } finally { globalThis.fetch = original; }
 });
+
+test("each empty injection outcome has a numeric activity counter", async () => {
+  const events: string[] = [];
+  const p = { ...ports(), activity: (event: string) => { events.push(event); } };
+  const cases = [
+    { ports: { ...p, candidates: () => [] }, events: ["noCandidates"] },
+    { ports: { ...p, reserve: () => false }, events: ["skipped"] },
+    { ports: { ...p, decide: async () => ({ scores: { m_fixture: .1 }, cost: .001 }) }, events: ["decisions", "noMatches"] },
+    { ports: { ...p, decide: async () => { throw Error("fixture-offline"); } }, events: ["failed"] },
+    { ports: { ...p, enabled: () => false }, events: ["skipped"] },
+    { ports: { ...p, deadline: 0 }, events: ["skipped"] },
+  ];
+  for (const row of cases) { events.length = 0; expect(await injectMemory(input, row.ports)).toBe(""); expect(events).toEqual(row.events); }
+  events.length = 0;
+  expect(await injectMemory(input, p)).toContain("m_fixture");
+  expect(events).toEqual(["decisions", "prepared"]);
+});

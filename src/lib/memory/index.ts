@@ -47,6 +47,7 @@ function displayPath(filename: string): string {
 /** A rebuildable, private derivative. Every source is opened read-only. */
 export class MemoryIndex {
   private db?: BunDatabase;
+  private pendingActivity = new Map<string, { month: string; event: string; count: number }>();
 
   private normalizeProjects(db: BunDatabase) {
     // Project succession can change independently of the source file's timestamp.
@@ -100,7 +101,11 @@ export class MemoryIndex {
           conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
           PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
         );
+        CREATE TABLE IF NOT EXISTS memory_injection_activity (
+          month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
+        );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
+        CREATE TABLE IF NOT EXISTS memory_unmatched_turns (conversation TEXT, request TEXT, at TEXT NOT NULL, PRIMARY KEY(conversation, request));
       `);
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
@@ -497,14 +502,46 @@ export class MemoryIndex {
       .run(occurrence, conversation, request).changes > 0);
   }
 
+  /** Numeric installation-wide activity only; no prompt, key or memory text. */
+  recordInjectionActivity(event: "decisions" | "skipped" | "failed" | "noCandidates" | "noMatches" | "prepared", now = new Date()) {
+    const month = now.toISOString().slice(0, 7), key = `${month}:${event}`;
+    const pending = this.pendingActivity.get(key);
+    this.pendingActivity.set(key, { month, event, count: (pending?.count ?? 0) + 1 });
+    try {
+      this.hookDatabase(db => db.transaction(() => {
+        const write = db.query(`INSERT INTO memory_injection_activity (month, event, count) VALUES (?, ?, ?)
+          ON CONFLICT(month, event) DO UPDATE SET count = count + excluded.count`);
+        for (const row of this.pendingActivity.values()) write.run(row.month, row.event, row.count);
+      })());
+      this.pendingActivity.clear();
+    } catch { /* Retain process-local increments for the next successful write. */ }
+  }
+
+  injectionActivity(now = new Date()) {
+    if (!this.replayConfirmedInjections()) throw Error("memory ledger replay incomplete");
+    const month = now.toISOString().slice(0, 7), db = this.database();
+    const counts = { decisions: 0, skipped: 0, failed: 0, noCandidates: 0, noMatches: 0, prepared: 0 };
+    for (const row of db.query<{ event: keyof typeof counts; count: number }, [string]>(
+      "SELECT event, count FROM memory_injection_activity WHERE month = ?").all(month)) {
+      if (Object.hasOwn(counts, row.event)) counts[row.event] = row.count;
+    }
+    for (const row of this.pendingActivity.values()) {
+      if (row.month === month && Object.hasOwn(counts, row.event)) counts[row.event as keyof typeof counts] += row.count;
+    }
+    const delivered = db.query<{ count: number }, [string]>(`SELECT COUNT(*) AS count FROM (
+      SELECT DISTINCT conversation_id, request_id FROM memory_offers WHERE channel = 'inject' AND substr(at, 1, 7) = ?
+    )`).get(month)?.count ?? 0;
+    return { ...counts, delivered };
+  }
+
   claimHook(conversation: string, request: string) {
     return this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_hook_attempts VALUES (?, ?)").run(conversation, request).changes === 1);
   }
 
-  recordInjection(entries: Array<Pick<Candidate, "id" | "title"> & { score: number }>, requestId: string, conversation: string) {
+  recordInjection(entries: Array<Pick<Candidate, "id" | "title"> & { score: number }>, requestId: string, conversation: string, at = new Date().toISOString()) {
     this.hookDatabase(db => db.transaction(() => {
       for (const entry of entries) {
-        db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, new Date().toISOString(), entry.score);
+        db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'inject', ?, NULL, NULL)").run(entry.id, requestId, conversation, at, entry.score);
         // A historical offer keeps its name when the derivative is refreshed.
         db.query("INSERT OR IGNORE INTO memory_injection_names VALUES (?, ?, ?)").run(entry.id, requestId, entry.title);
       }
@@ -552,13 +589,13 @@ export class MemoryIndex {
         || !Number.isFinite(entry.score) || entry.score < .7 || entry.score > 1)) throw Error("invalid memory prepared evidence");
     if (Date.now() >= row.retainUntil) { fsSync.rmSync(filename); return; }
     if (!Number.isFinite(emittedAt) || emittedAt < row.preparedAt || emittedAt >= row.expires) return;
-    this.recordConfirmedInjection(row.entries, row.requestId, conversation);
+    this.recordConfirmedInjection(row.entries, row.requestId, conversation, new Date(emittedAt).toISOString());
     // Confirmation is now durable independently of the Viewer generation.
     fsSync.rmSync(filename, { force: true });
   }
 
-  recordConfirmedInjection(entries: InjectionName[], requestId: string, conversation: string) {
-    const evidence = JSON.stringify({ requestId, conversation, entries: entries.map(({ id, title, score }) => ({ id, title, score })) });
+  recordConfirmedInjection(entries: InjectionName[], requestId: string, conversation: string, at = new Date().toISOString()) {
+    const evidence = JSON.stringify({ requestId, conversation, at, entries: entries.map(({ id, title, score }) => ({ id, title, score })) });
     const directory = statePath("memory-injection-pending");
     const filename = path.join(directory, crypto.createHash("sha256").update(JSON.stringify([conversation, requestId])).digest("hex") + ".json");
     fsSync.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -593,7 +630,8 @@ export class MemoryIndex {
         || !Array.isArray(row.entries) || row.entries.length > 15
         || row.entries.some((entry: { id: unknown; title: unknown; score: unknown }) => !entry || typeof entry.id !== "string"
           || typeof entry.title !== "string" || typeof entry.score !== "number" || !Number.isFinite(entry.score) || entry.score < .7 || entry.score > 1)) throw Error("invalid memory confirmation evidence");
-      this.recordInjection(row.entries, row.requestId, row.conversation);
+      if (row.at !== undefined && (typeof row.at !== "string" || !Number.isFinite(Date.parse(row.at)))) throw Error("invalid memory confirmation time");
+      this.recordInjection(row.entries, row.requestId, row.conversation, row.at);
       // Removal follows the committed idempotent inserts. A retry after reload
       // or a duplicate confirmation keeps precisely one row and its first name.
       fsSync.rmSync(filename, { force: true });
@@ -608,6 +646,23 @@ export class MemoryIndex {
       FROM memory_offers o LEFT JOIN memory_injection_names n ON n.memory_id = o.memory_id AND n.request_id = o.request_id
       LEFT JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
       ORDER BY o.at DESC, o.request_id DESC, o.memory_id DESC LIMIT 1000`).all(conversation).reverse();
+  }
+
+  /** The file each memory a conversation received was read from, for the operator's own reader. */
+  offerSources(conversation: string) {
+    return new Map(this.database().query<{ id: string; sourcePath: string }, [string]>(`SELECT DISTINCT e.id, e.sourcePath
+      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'`)
+      .all(conversation).map(row => [row.id, row.sourcePath]));
+  }
+
+  /** A turn whose candidates were judged and none was chosen. Only the request id is kept. */
+  recordUnmatchedTurn(conversation: string, request: string, at = new Date().toISOString()) {
+    this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_unmatched_turns VALUES (?, ?, ?)").run(conversation, request, at));
+  }
+
+  unmatchedTurns(conversation: string) {
+    return this.database().query<{ request: string }, [string]>("SELECT request FROM memory_unmatched_turns WHERE conversation = ? ORDER BY at DESC, request DESC LIMIT 1000")
+      .all(conversation).map(row => row.request);
   }
 
   recordCitations(conversation: string, assistantText: string) {

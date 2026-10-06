@@ -22,10 +22,16 @@ import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { useComposer } from "@/hooks/useComposer";
 
+import { BranchPane } from "@/components/BranchPane";
 import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "@/components/ComposerBar";
+import { MobileBarTitle, MobileShell } from "@/components/mobile/MobileShell";
+import { OrchestratorConversation } from "@/components/orchestrator/OrchestratorConversation";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
+import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
 import { PrototypeReviewHost } from "@/components/prototypeReview/PrototypeReviewHost";
@@ -36,7 +42,10 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { relayMessageText } from "@/lib/orchestrator/relayText";
 
+import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
+import { readStepState } from "./OwnMessageSteps";
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
 import {
@@ -77,6 +86,7 @@ const ECHO = `You are the Orchestrator. Drive work through the production Viewer
 
 export type ConversationWindowCase =
   | "delivery-settlement"
+  | "delivery-check-card"
   | "lifecycle"
   | "long-history"
   | "queued"
@@ -91,7 +101,11 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
+  | "dead-host-telegram-refused"
+  | "telegram-refused-composer"
   | "agent-images"
+  | "image-viewers"
+  | "own-message-steps"
   | "prototype-notice";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -333,9 +347,20 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+  "dead-host-telegram-refused": { host: "unhosted", turn: "unknown" },
 };
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
+const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
+const TELEGRAM_CONFLICT = "structured host recovery failed: telegram MCP account definition conflicts with operator connector";
+
+/** `?cause=withdrawn` is the refusal that stays a refusal; `?cause=conflict`
+    is the account's own entry that blocks the tool. */
+function telegramRefusal(): string {
+  const cause = params.get("cause");
+  return cause === "withdrawn" ? TELEGRAM_WITHDRAWN : cause === "conflict" ? TELEGRAM_CONFLICT : TELEGRAM_REFUSAL;
+}
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -345,7 +370,41 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
      over, which is what separates this chip from the resuming one above. */
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  /* The sentence the queue recorded when a restart was refused for Telegram. */
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: telegramRefusal() } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
+}
+
+/**
+ * The composer's own notice for the same refusal: one message that failed
+ * twice, each attempt carrying the sentence behind a different wrapper, as the
+ * send route and the queue's drain record it.
+ */
+function TelegramComposerNoticeFixture() {
+  const refusal = telegramRefusal();
+  const attempt = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `telegram-refused-${n}`, idempotencyKey: `telegram-refused-key-${n}`,
+    conversationId: DEAD_CARD, kind: "send", status: "failed", text: DEAD_SENT,
+    at: new Date(ADMITTED_AT + n * 1_000).toISOString(), revision: 1, reason,
+  });
+  return (
+    <div data-evidence-case="telegram-refused-composer" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <RuntimeComposerReceipts
+        receipts={[
+          attempt(2, refusal),
+          attempt(1, `conversation host was reclaimed; automatic resume did not establish a deliverable host: ${refusal.split(": ")[1]}`),
+        ]}
+        nowMs={ADMITTED_AT + 60_000}
+        session={{ host: "unhosted", turn: "unknown" }}
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+        onDismiss={() => undefined}
+      />
+    </div>
+  );
 }
 
 function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
@@ -1012,6 +1071,15 @@ function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture 
       loadOlder: async () => 0, prependGen: 0,
     }),
   });
+  installFakeComposerHost();
+  fakeHost.lines = [LIFE_OPENING];
+  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
+  createRoot(root).render(scene);
+}
+
+/** The composer's side of the fake host: a hosted structured session, its
+    receipts and the transport behind Send. */
+function installFakeComposerHost(): void {
   setTmuxComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const view = LIFE_SESSION();
@@ -1037,9 +1105,6 @@ function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture 
      forgetting them — the language seeded into localStorage stays. */
   try { sessionStorage.clear(); } catch { /* opaque origin */ }
   resetOutboxForTests();
-  fakeHost.lines = [LIFE_OPENING];
-  (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(scene);
 }
 
 /* #2075: one conversation per engine, each viewing pictures the way that
@@ -1137,14 +1202,80 @@ function AgentImagesFixture() {
   );
 }
 
+/* The two image viewers under real input: `?viewer=pane` mounts the file
+   preview's pane over one invented capture, anything else the fullscreen
+   viewer over three. The page below the viewer is taller than the window, so
+   a gesture that leaks to the page shows as a scroll or a page zoom. The
+   pane's bytes are answered in the page from the same canvas drawing, a
+   lettered grid, so a frame shows which part of the picture is on screen. */
+function inventedGrid(width: number, height: number, hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d")!;
+  context.font = "28px sans-serif";
+  for (let row = 0; row * 100 < height; row += 1) {
+    for (let column = 0; column * 100 < width; column += 1) {
+      context.fillStyle = `hsl(${hue} 45% ${(row + column) % 2 ? 30 : 38}%)`;
+      context.fillRect(column * 100, row * 100, 100, 100);
+      context.fillStyle = "rgba(255,255,255,0.9)";
+      context.fillText(`${String.fromCharCode(65 + column)}${row + 1}`, column * 100 + 28, row * 100 + 60);
+    }
+  }
+  context.fillStyle = "rgba(255,255,255,0.92)";
+  context.fillRect(width * 0.3, height * 0.42, width * 0.4, height * 0.16);
+  context.font = `${Math.round(height * 0.09)}px sans-serif`;
+  context.fillStyle = "#111";
+  context.fillText(label, width * 0.33, height * 0.535);
+  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
+}
+
+const PANE_META = { name: "capture.png", kind: "image", mime: "image/png", size: 1, mtimeMs: 1, etag: '"capture"' } as const;
+
+function ImageViewersFixture() {
+  const pane = params.get("viewer") === "pane";
+  const phone = useIsMobile();
+  const [closed, setClosed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [images] = useState<GalleryImage[]>(() => [210, 140, 20].map((hue, at) => ({
+    src: `data:image/png;base64,${inventedGrid(1600, 1000, hue, `capture ${at + 1}`)}`, alt: `capture ${at + 1}`,
+  })));
+  const [gallery] = useState(() => () => images);
+  return (
+    <div data-evidence-case="image-viewers" data-viewer-closed={closed ? "" : undefined} data-pane-failure={failure ?? undefined} className="bg-canvas text-primary">
+      <div className="flex h-dvh flex-col">
+        {pane ? <ImagePane path="/w/capture.png" meta={PANE_META} mobile={phone} onFailure={setFailure} /> : null}
+      </div>
+      <div className="h-[60dvh]" />
+      {pane || closed ? null : (
+        <ImageGalleryProvider value={gallery}>
+          <Lightbox src={images[0]!.src} alt={images[0]!.alt} onClose={() => setClosed(true)} />
+        </ImageGalleryProvider>
+      )}
+    </div>
+  );
+}
+
+function installCaptureBytes(): void {
+  const transport = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (!url.startsWith("/api/artifact?")) return transport(input, init);
+    const bytes = Uint8Array.from(atob(inventedGrid(1600, 1000, 210, "capture")), (char) => char.charCodeAt(0));
+    return new Response(bytes, { headers: { "content-type": "image/png" } });
+  }) as typeof fetch;
+}
+
 function DeliverySettlementFixture() {
-  const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
+  /* `unconfirmed` is a send that ended without anyone learning whether it
+     arrived: the only unknown outcome the notice line speaks for. */
+  const [status, setStatus] = useState<"unconfirmed" | "delivered" | "failed">("unconfirmed");
   const [sends, setSends] = useState(0);
   const receipt: RuntimeReceipt = {
     operationId: "settlement-operation", idempotencyKey: "settlement-key",
-    conversationId: "conversation_settlement", kind: "send", status: status === "checking" ? "failed" : status,
+    conversationId: "conversation_settlement", kind: "send", status: status === "unconfirmed" ? "failed" : status,
     text: "Please check the release.", at: new Date().toISOString(), revision: 1,
-    reason: status === "checking" ? "delivery was started by an earlier executor" : null,
+    reason: status === "unconfirmed" ? "delivery was started by an earlier executor" : null,
     resend: status === "failed" ? "safe" : status === "delivered" ? "not-needed" : "verify-first",
   };
   return <div data-evidence-case="delivery-settlement" className="min-h-dvh bg-canvas p-4 text-primary">
@@ -1159,13 +1290,75 @@ function DeliverySettlementFixture() {
   </div>;
 }
 
+/* The operator's report: an English handoff relayed by another project's
+   orchestrator, its delivery left unconfirmed, drawn above the production
+   composer in the slot the pane gives its receipts. Discard removes it, as the
+   pane does once the discard is recorded. */
+const CHECK_CARD_HANDOFF = [
+  "The release notes for the next version are drafted and need a second reader before they go out.",
+  "Please check the three upgrade steps against the migration guide, confirm the storage note still holds for installs that skipped a version, and tell me which paragraphs to cut.",
+  "Nothing here is urgent. Reply in this conversation when you are done.",
+].join("\n\n");
+
+function DeliveryCheckCardFixture() {
+  const { t } = useLocale();
+  const requestedState = params.get("state");
+  const status = requestedState === "uncertain" || requestedState === "delivering" ? requestedState : "failed";
+  const [discarded, setDiscarded] = useState(false);
+  const [retries, setRetries] = useState(0);
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const receipt: RuntimeReceipt = {
+    operationId: "check-card-operation", idempotencyKey: "check-card-key",
+    conversationId: "conversation_check_card", kind: "send", status,
+    text: relayMessageText(CHECK_CARD_HANDOFF, "Atlas"), at: new Date().toISOString(), revision: 1,
+    reason: "delivery was started by an earlier executor", resend: "verify-first",
+  };
+  return (
+    <div data-evidence-case="delivery-check-card" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        receipts={discarded ? undefined : (
+          <RuntimeComposerReceipts
+            receipts={[receipt]}
+            onRetry={() => setRetries(count => count + 1)}
+            onEdit={() => {}}
+            onDiscard={() => setDiscarded(true)}
+          />
+        )}
+      />
+      <span data-fixture-retries hidden>{retries}</span>
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
+  if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
+  if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
+  if (id === "telegram-refused-composer") return <TelegramComposerNoticeFixture />;
   if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (
@@ -1264,6 +1457,205 @@ function mountLongHistory(root: HTMLElement): void {
   );
 }
 
+/* The own-message step row (docs/design/own-message-steps.md) in the
+   production pane, over an orchestrator's day. `row=0` is the same pane
+   without the row, the baseline every measurement compares against;
+   `surface=orchestrator` is the dock's conversation; `pane` is a board-node
+   width. The loaded window starts two own messages in, and the feed's own
+   older-history load brings the rest, after `older` ms. `days` repeats the
+   day into one long conversation, loaded whole. `window.ownSteps` lets a
+   driver raise the phone's keyboard, make rows arrive at the tail and time
+   the reading a scroll frame takes. */
+interface OwnStepsControls {
+  keyboard: (px: number) => void;
+  settleSenders: () => void;
+  arrive: (kind: OwnStepsArrival, count: number) => void;
+  /** Median and mean ms of one reading across `runs` places in the feed, and
+      how many selector passes over the feed those readings made. */
+  readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+}
+
+const noop = () => undefined;
+
+function OwnMessageStepsPane({ file, surface, paneWidth }: { file: FileEntry; surface: "pane" | "orchestrator"; paneWidth: number }) {
+  const phone = useIsMobile();
+  const [keyboard, setKeyboard] = useState(0);
+  useEffect(() => {
+    /* The on-screen keyboard's overlap, as the phone shell pads it away. */
+    (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.keyboard = setKeyboard;
+  }, []);
+  if (phone) {
+    return (
+      <div
+        data-testid="mobile-chat-shell"
+        className="relative flex h-dvh min-h-0 min-w-0 max-w-[100dvw] flex-col overflow-hidden overflow-x-clip bg-canvas text-primary"
+        style={keyboard > 0 ? { paddingBottom: keyboard } : undefined}
+      >
+        <MobileShell
+          screen="chat"
+          screenId={file.conversationId ?? file.path}
+          title={<MobileBarTitle meta={<span className="truncate text-label text-muted">idle</span>}>{file.title}</MobileBarTitle>}
+          back
+          renderSheet={() => null}
+        >
+          <BranchPane file={file} tasks={[]} isRoot chromeInMenu onClose={noop} />
+        </MobileShell>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 self-center p-3" style={{ width: paneWidth ? paneWidth + 24 : "100%" }}>
+        {surface === "orchestrator" ? (
+          <div data-link-path={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-card">
+            <OrchestratorConversation file={file} projectName="delegatus" />
+          </div>
+        ) : (
+          <BranchPane file={file} tasks={[]} isRoot onClose={noop} onToggleExpand={noop} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function mountOwnMessageSteps(root: HTMLElement): void {
+  const lang = params.get("lang") === "uk" ? "uk" : "en";
+  const days = Math.max(1, Number(params.get("days") ?? 1));
+  const claude = params.get("engine") === "claude";
+  const first = ownStepsTranscript(lang, Number(params.get("own") ?? OWN_STEPS_TOTAL));
+  const messages: Record<string, { origin: "operator" | "agent" }> = {};
+  if (claude) {
+    const converted: string[] = [];
+    let loadedFrom = 0;
+    for (const [index, line] of first.lines.entries()) {
+      if (index === first.loadedFrom) loadedFrom = converted.length;
+      const record = JSON.parse(line);
+      if (record.payload?.role === "user") {
+        const text = record.payload.content[0].text as string;
+        const uuid = ["8a4e7610", "1c2d", "4e3f", "9a5b", index.toString(16).padStart(12, "0")].join("-");
+        messages[uuid] = { origin: text.includes("origin=operator") ? "operator" : "agent" };
+        converted.push(JSON.stringify({ type: "user", uuid, timestamp: record.timestamp, promptSource: "sdk",
+          message: { role: "user", content: text.replace(/<!-- llv:structured-user[^>]*-->\n?/, "") } }));
+      } else if (record.payload?.type === "agent_message") {
+        converted.push(JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+          message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }));
+      }
+    }
+    first.lines = converted;
+    first.loadedFrom = loadedFrom;
+  }
+  const all = [...first.lines];
+  for (let day = 1; day < days; day += 1) all.push(...ownStepsTranscript(lang, OWN_STEPS_TOTAL, day).lines);
+  const trailing = Number(params.get("trailing") ?? 0);
+  for (const line of ownStepsArrival(lang, "replies", trailing, 0)) {
+    const record = JSON.parse(line);
+    all.push(claude ? JSON.stringify({ type: "assistant", timestamp: record.timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: record.payload.message }] } }) : line);
+  }
+  const olderLatency = Number(params.get("older") ?? 40);
+  let start = params.has("tailOnly") ? all.length - trailing : params.has("full") || days > 1 ? 0 : first.loadedFrom;
+  const trimLimit = Number(params.get("cap") ?? 0);
+  let capped = true;
+  let sendersSettled = false;
+  const heldSender = Object.keys(messages).find((id) => messages[id]!.origin === "operator"
+    && first.lines.slice(first.loadedFrom).some((line) => line.includes(id)));
+  let arrivals = 0;
+  let prependGen = 0;
+  let loadingOlder = false;
+  const listeners = new Set<() => void>();
+  let snapshot: LogTailState | null = null;
+  const announce = () => { snapshot = null; for (const listener of listeners) listener(); };
+  const loadOlder = async (): Promise<number> => {
+    if (loadingOlder || start <= 0) return 0;
+    loadingOlder = true;
+    announce();
+    await new Promise((resolve) => setTimeout(resolve, olderLatency));
+    const take = start;
+    start = 0;
+    prependGen += 1;
+    loadingOlder = false;
+    announce();
+    return take;
+  };
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps = {
+    settleSenders: () => { sendersSettled = true; },
+    arrive: (kind, count) => {
+      all.push(...ownStepsArrival(lang, kind, count, arrivals += 1));
+      /* Model useLogTail's append cap: prepends survive only after the feed
+         releases its magnet and passes cap=0 to the hook. */
+      if (trimLimit && capped) start = Math.max(start, all.length - trimLimit);
+      announce();
+    },
+    readCost: (runs) => {
+      const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+      const select = scroller.querySelectorAll;
+      let selectorPasses = 0;
+      scroller.querySelectorAll = ((selector: string) => { selectorPasses += 1; return select.call(scroller, selector); }) as typeof scroller.querySelectorAll;
+      const was = scroller.scrollTop;
+      const span = scroller.scrollHeight - scroller.clientHeight;
+      const times: number[] = [];
+      /* Warm: the first reading after a change of rows is the one that scans. */
+      readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+      selectorPasses = 0;
+      for (let run = 0; run < runs; run += 1) {
+        scroller.scrollTop = Math.round(span * (run / runs));
+        void scroller.getBoundingClientRect();
+        const from = performance.now();
+        readStepState(scroller, { phone: false, atTail: false, olderOwn: 0, olderUnloaded: false });
+        times.push(performance.now() - from);
+      }
+      delete (scroller as unknown as { querySelectorAll?: unknown }).querySelectorAll;
+      scroller.scrollTop = was;
+      times.sort((a, b) => a - b);
+      const mean = times.reduce((sum, ms) => sum + ms, 0) / Math.max(1, times.length);
+      return { medianMs: times[times.length >> 1] ?? 0, meanMs: Math.round(mean * 1000) / 1000, selectorPasses };
+    },
+  };
+  const read = (): LogTailState => snapshot ??= {
+    lines: all.slice(start), linesStart: start, size: all.length, loading: false, error: null, tickTime: null, paused: false,
+    setPaused() {}, clear() {}, hasMore: start > 0, loadingOlder, loadOlder, prependGen,
+  };
+  setRuntimeUiEnabledForTests(false);
+  setLogFeedDependenciesForTests({
+    useLogTail: (_file, _paused, cap) => {
+      capped = Boolean(cap);
+      return useSyncExternalStore(
+        (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        read,
+        read,
+      );
+    },
+    ownMessageSteps: params.get("row") !== "0",
+  });
+  installFakeComposerHost();
+  if (claude) {
+    const transport = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (!url.startsWith("/api/log/provenance")) return transport(input, init);
+      await new Promise((resolve) => setTimeout(resolve, Number(params.get("ledger") ?? 2500)));
+      const answered = { ...messages };
+      if (params.has("partial") && !sendersSettled && heldSender) delete answered[heldSender];
+      return Response.json({ messages: answered });
+    }) as typeof fetch;
+  }
+  const file = {
+    ...((claude ? LIFE_CLAUDE_FILE : LIFE_CODEX_FILE) as unknown as Record<string, unknown>),
+    title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
+    model: claude ? "claude" : "gpt-6.1-sol",
+    userAuthored: true,
+    activity: "idle",
+    mtime: Math.floor(Date.now() / 1000) - 120,
+  } as unknown as FileEntry;
+  createRoot(root).render(
+    <OwnMessageStepsPane
+      file={file}
+      surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
+      paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
+    />,
+  );
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
@@ -1273,4 +1665,8 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "prototype-notice") mountPrototypeNotice(root);
 else if (root && requested === "long-history") mountLongHistory(root);
-else if (root) createRoot(root).render(<Fixture id={requested} />);
+else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
+else if (root) {
+  if (requested === "image-viewers") installCaptureBytes();
+  createRoot(root).render(<Fixture id={requested} />);
+}

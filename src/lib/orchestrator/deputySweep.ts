@@ -1,3 +1,4 @@
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -154,12 +155,12 @@ export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOu
   const lines = ports.ownLines(deputy) ?? [];
   const work = deputyWorkFromLines(lines);
   const finalText = work.finalText.length > DEPUTY_FINAL_TEXT_LIMIT * 4 ? work.finalText.slice(0, DEPUTY_FINAL_TEXT_LIMIT * 4) : work.finalText;
-  const ended = end(deputy.askId, {
+  const ended = await withAccountMutationLockAsync(() => end(deputy.askId, {
     outcome,
     now: ports.now(),
     touched: work.touched,
     result: { line: deputyResultLine(finalText), finalText },
-  }) ?? deputy;
+  }), { caller: "deputy settlement" }) ?? deputy;
   /* A deputy that never started has nothing to report; its refusal already
      reached whoever asked. */
   if (ended.note || !ended.deputyConversationId) return ended;
@@ -173,7 +174,7 @@ export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOu
     console.error("[deputy] seat note failed", error instanceof Error ? error.name : "unknown");
     return ended;
   }
-  return recordNote(deputy.askId, { clientMessageId, sentAt: ports.now().toISOString(), outcome: answer }) ?? ended;
+  return await withAccountMutationLockAsync(() => recordNote(deputy.askId, { clientMessageId, sentAt: ports.now().toISOString(), outcome: answer }), { caller: "deputy note" }) ?? ended;
 }
 
 /** One pass over every record. Returns whether any deputy is still live. */

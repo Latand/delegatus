@@ -46,7 +46,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
-import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 
 export type SpawnedStructuredHost = EngineHost & {
@@ -1045,7 +1045,7 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   }
   if (receipt.launchProfile.mcpServers.includes("telegram") && receipt.telegramSeatGrant
     && !isCurrentOperatorSeat(receipt.parentConversationId ?? "", input.registry)) {
-    throw new Error("telegram MCP orchestrator seat is no longer active");
+    throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
 }
@@ -2149,6 +2149,19 @@ export async function spawnStructuredConversation(
     const content = input.prompt.trim() || imageRefs.length
       ? structuredContent(input.prompt, imageRefs)
       : null;
+    // The journal can accept spawn before its RPC acknowledgement returns.
+    // Publish setup ownership before that await so registering work stays live.
+    if (resumeKey && resumeIdentity) {
+      adoptionClaim = input.registry.claimStructuredHost(resumeKey, processIdentity(), {
+        allowUnhosted: true, setupHost: pendingColumns(input.engine),
+        setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
+          accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
+      });
+      if (!adoptionClaim?.claimOwner) {
+        adoptionClaimContended = true;
+        throw new Error("structured resume host claim is unavailable");
+      }
+    }
     await withRuntimeAdmissionRetry(() => input.client.command({
       kind: "spawn",
       operationId,
@@ -2168,14 +2181,6 @@ export async function spawnStructuredConversation(
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
       viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
-    const resumeEntry = resumeKey ? input.registry.readOnlySnapshot().entries[sessionKeyId(resumeKey)] : null;
-    if (resumeEntry?.structuredHost) {
-      adoptionClaim = input.registry.claimStructuredHost(resumeKey!, processIdentity(), { allowUnhosted: true });
-      if (!adoptionClaim?.claimOwner) {
-        adoptionClaimContended = true;
-        throw new Error("structured resume host claim is unavailable");
-      }
-    }
     const durableSetupTimeoutMs = dependencies.durableSetupTimeoutMs
       ?? STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
     durableSetupDeadline = now() + durableSetupTimeoutMs;
