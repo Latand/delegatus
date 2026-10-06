@@ -12,6 +12,7 @@ export interface InjectionPorts {
   decide(body: ReturnType<typeof groundedRequest>, signal: AbortSignal): Promise<{ scores: Record<string, number>; cost: number }>;
   settle(cost: number): void;
   record(entries: Array<Candidate & { score: number }>): void;
+  activity?(event: "decisions" | "skipped" | "failed" | "noCandidates" | "noMatches" | "prepared"): void;
   timeoutMs?: number;
   deadline?: number;
   signal?: AbortSignal;
@@ -19,6 +20,7 @@ export interface InjectionPorts {
 
 /** No error can turn an optional memory offer into a failed operator turn. */
 export async function injectMemory(input: InjectionInput, ports: InjectionPorts): Promise<string> {
+  let outcome: "skipped" | "failed" | "noCandidates" | "noMatches" | "prepared" = "skipped";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reserved: number | null = null;
   const abort = new AbortController();
@@ -28,7 +30,7 @@ export async function injectMemory(input: InjectionInput, ports: InjectionPorts)
   try {
     if (ports.signal?.aborted || !memoryGate({ ...input, enabled: ports.enabled() }) || !ports.ownsTraffic()) return "";
     const candidates = ports.candidates(deadline);
-    if (!candidates.length) return "";
+    if (!candidates.length) { outcome = "noCandidates"; return ""; }
     const body = groundedRequest({ ...input, candidates });
     if (performance.now() >= deadline) return "";
     const ceiling = Math.max(.01, (4096 + Buffer.byteLength(JSON.stringify(body))) * JEV_INPUT_PRICE_USD);
@@ -42,17 +44,22 @@ export async function injectMemory(input: InjectionInput, ports: InjectionPorts)
       new Promise<never>((_, reject) => { timer = setTimeout(() => { abort.abort(); reject(Error("timeout")); }, remaining); }),
     ]);
     if (!Number.isFinite(verdict.cost) || verdict.cost < 0) throw new JevError("shape", "missing usage");
+    try { ports.activity?.("decisions"); } catch { /* optional ledger */ }
     ports.settle(verdict.cost);
     reserved = null;
     if (abort.signal.aborted || performance.now() >= deadline || !ports.enabled() || !ports.ownsTraffic()) return "";
     const result = selectOffers(candidates, verdict.scores);
+    outcome = result.entries.length ? "prepared" : "noMatches";
     if (result.entries.length) ports.record(result.entries);
     return result.block;
   } catch (error) {
+    outcome = "failed";
     if (reserved !== null) { try { ports.settle(jevFailureCostUsd(error, reserved)); } catch { /* optional accounting */ } }
     return "";
   }
-  finally { clearTimeout(timer); ports.signal?.removeEventListener("abort", cancel); abort.abort(); }
+  finally { clearTimeout(timer); ports.signal?.removeEventListener("abort", cancel); abort.abort();
+    try { ports.activity?.(outcome); } catch { /* optional ledger */ }
+  }
 }
 
 export async function decideMemories(body: ReturnType<typeof groundedRequest>, key: string, signal: AbortSignal) {

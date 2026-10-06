@@ -4,9 +4,15 @@ import path from "node:path";
 import { afterAll } from "bun:test";
 
 import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
+import { beginCodexFeatureFixture } from "./src/lib/agent/codexSpawnPolicyTestFixtures";
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
+
+// Fake launchers share an explicit inventory, even when their binary only
+// implements MCP enumeration or Codex is absent from PATH. Native policy tests
+// opt into the real reader for each test and restore this default afterwards.
+beginCodexFeatureFixture();
 
 /*
  * One temp root for the whole test process, removed when the run ends (#1957).

@@ -175,6 +175,12 @@ host_command_text() {
       -e 's|/usr/local/bin/tmux|/usr/bin/tmux|g'
 }
 
+# File-backed launch delivery asks the same adapter to translate its contents.
+if [ "$1" = "delegatus-host-command-text" ]; then
+  host_command_text "$2"
+  exit $?
+fi
+
 if [ "$1" = "new-window" ]; then
   cwd=
   prev=
