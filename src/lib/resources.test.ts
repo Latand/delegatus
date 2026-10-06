@@ -1,6 +1,7 @@
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { describe, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -294,11 +295,50 @@ async function expectProcessAbsentAfterQuietInterval(pid: number, label: string)
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const leaked = processExists(pid);
-  if (leaked) process.kill(pid, "SIGKILL");
+  // A historical PID is observation only. The fixture-service recovery below
+  // admits current members by ownership and start/boot identity.
   expect(leaked, label).toBeFalse();
   await new Promise((resolve) => setTimeout(resolve, 30));
   expect(processExists(pid), label).toBeFalse();
 }
+
+test("a historical resource PID never authorizes teardown of a same-argv bystander", async () => {
+  const child = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+  const identity = captureProcessIdentity(child.pid);
+  try {
+    // The historical observation can be stale. A live process at that number
+    // makes the assertion fail, and must receive no recovery signal.
+    await expect(expectProcessAbsentAfterQuietInterval(child.pid, "historical PID")).rejects.toThrow();
+    expect(processIdentityStatus(identity)).toBe("alive");
+  } finally { child.kill("SIGKILL"); await child.exited; }
+}, 3_000);
+
+test.skipIf(process.platform !== "linux")("resource absence recovery preserves an actually recycled same-argv PID", () => {
+  const program = `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { ownFixtureTree, stopFixtureProcess } from ${JSON.stringify(path.resolve("src/lib/testing/fixtureProcess.ts"))};
+const expect = (value, label) => ({ toBeFalse() { if (value) throw new Error(label); } });
+${processExists.toString()}
+${expectProcessAbsentAfterQuietInterval.toString()}
+const old = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+await stopFixtureProcess(old);
+await Bun.sleep(30);
+fs.writeFileSync("/proc/sys/kernel/ns_last_pid", String(old.pid - 1));
+const bystander = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+try {
+  if (bystander.pid !== old.pid) throw new Error("PID was not recycled");
+  let refused = false;
+  try { await expectProcessAbsentAfterQuietInterval(old.pid, "historical PID"); } catch { refused = true; }
+  if (!refused || !processExists(bystander.pid)) throw new Error("resource recovery killed a recycled bystander");
+  console.log("resource recycled-PID bystander survived");
+} finally { await stopFixtureProcess(bystander); }
+if (processExists(bystander.pid)) throw new Error("resource reuse probe left a survivor");
+`;
+  const result = spawnSync("unshare", ["-Urpf", "--mount-proc", process.execPath, "-e", program], { encoding: "utf8", timeout: 5_000 });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("resource recycled-PID bystander survived");
+}, 7_000);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -1643,9 +1683,6 @@ describe("resource recurring reads", () => {
       const initial = await settleWithin(read, 250);
       const descendantPid = Number(readFileSync(path.join(directory, "escaped-descendant-pid"), "utf8"));
       if (initial === CLEANUP_DEADLINE) {
-        try {
-          process.kill(descendantPid, "SIGKILL");
-        } catch {}
         killConfirmedFixtureProcessGroups(
           path.join(directory, "fixture-worker"),
           confirmedFixtureProcessGroups(path.join(directory, "fixture-worker")),
@@ -1993,7 +2030,9 @@ describe("resource recurring reads", () => {
             namespaceId = readFileSync(escapedNamespaceFile, "utf8").trim();
             const descendantAliveAtSettlement = processExists(escapedPid);
             results.push({ owner, outcome: fixture.name, diagnostic, descendantAliveAtSettlement });
-            if (descendantAliveAtSettlement) process.kill(escapedPid, "SIGKILL");
+            if (descendantAliveAtSettlement) killConfirmedFixtureProcessGroups(
+              path.join(directory, "fixture-worker"), confirmedFixtureProcessGroups(path.join(directory, "fixture-worker")),
+            );
             await expectProcessAbsentAfterQuietInterval(escapedPid, `${owner} ${fixture.name} RED cleanup`);
 
             expect(namespaceId, `${owner} ${fixture.name} namespace identity`).toBe(rootNamespaceId);
@@ -2099,7 +2138,9 @@ describe("resource recurring reads", () => {
       const escapedAliveAtSettlement = escapedPid > 0 && processExists(escapedPid);
       const namespaceMembersAtSettlement = pidNamespaceMembers(namespaceId);
       const referencesAtSettlement = retainedPidNamespaceReferences(namespaceId);
-      if (escapedAliveAtSettlement) process.kill(escapedPid, "SIGKILL");
+      if (escapedAliveAtSettlement) killConfirmedFixtureProcessGroups(
+        path.join(directory, "fixture-worker"), confirmedFixtureProcessGroups(path.join(directory, "fixture-worker")),
+      );
       await new Promise((resolve) => setTimeout(resolve, 30));
       await new Promise<void>((resolve) => setImmediate(resolve));
 

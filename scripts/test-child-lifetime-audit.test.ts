@@ -78,6 +78,54 @@ function discoveredHelpers(): string[] {
   }).map(([file]) => file).sort();
 }
 
+/** Observe-only probes and deliberate self-death do not authorize teardown.
+ * The two injected product signal ports are exercised behind their product
+ * ownership checks. Every other direct destructive PID call needs a visible
+ * original-identity fence; teardown uses the shared helpers or child handles.
+ */
+function unfencedSignals(file: string, source: string): string[] {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  const unsafe: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(tree) === "process.kill") {
+      const [target, signal] = node.arguments;
+      const pid = target?.getText(tree);
+      const kind = signal?.getText(tree);
+      if (kind === "0" || pid === "process.pid" || node.arguments.length === 0) return;
+      if (kind === "signal" && ["src/lib/resources.test.ts", "src/lib/runtime/structuredHostControl.test.ts"].includes(file)) return;
+      let fenced = false;
+      for (let parent = node.parent; parent; parent = parent.parent) {
+        if (!ts.isIfStatement(parent) || node.pos < parent.thenStatement.pos || node.end > parent.thenStatement.end) continue;
+        const condition = parent.expression.getText(tree);
+        if (!condition.includes("||") && !condition.trim().startsWith("!") && pid?.endsWith(".pid") && (condition.includes(`processIdentityStatus(${pid.slice(0, -4)}) === "alive"`)
+          || condition.includes(`procBackend.processIdentity(${pid}) === ${pid.slice(0, -4)}.startIdentity`))) fenced = true;
+      }
+      if (!fenced) unsafe.push(`${file}:${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return unsafe;
+}
+
+test("teardown signal audit rejects historical PIDs independently of the launch census", () => {
+  expect(unfencedSignals("helper.test.ts", 'try { process.kill(oldPid, "SIGKILL"); } catch {}')).toHaveLength(1);
+  expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGTERM");')).toEqual([]);
+  expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") {} else process.kill(identity.pid, "SIGKILL");')).toHaveLength(1);
+  expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive" || stale) process.kill(identity.pid, "SIGKILL");')).toHaveLength(1);
+  const root = path.resolve(import.meta.dir, "..");
+  const unsafe: string[] = [];
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
+      const file = path.posix.join(directory, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (/\.test\.[cm]?[jt]sx?$/.test(file)) unsafe.push(...unfencedSignals(file, read(file)));
+    }
+  };
+  walk("src"); walk("scripts");
+  expect(unsafe).toEqual([]);
+}, 10_000);
+
 test("the launch audit discovers JavaScript helpers rather than relying on existing row totals", () => {
   const helpers = discoveredHelpers();
   expect(helpers).toContain("scripts/npm-package-smoke.mjs");

@@ -195,6 +195,66 @@ and genuinely incomplete reports retain the stricter baseline gate error.
 The actual helper comparison was red before the correction; the executable
 regression and all 43 comparison tests now pass with 225 assertions.
 
+## Teardown signal audit
+
+The follow-up review reproduced a wrong kill by recycling an owned child's PID
+in a private user/PID namespace, then starting an unrelated process with the
+same argv at that number. The old resource absence assertion sent KILL to the
+historical number. Service containment cannot authorize that signal.
+
+Historical resource PID files now support assertions only. Recovery selects
+current members of the verified owning test service and revalidates their
+captured start/boot identities through the shared signal helper. A process
+outside that service receives no signal even when its argv matches. Private
+tmux servers capture their start/boot identity before any readiness or exit
+wait. Ordinary Node/Bun children retain their original handles.
+
+| File | Teardown disposition |
+| --- | --- |
+| `src/lib/resources.test.ts` | The quiet absence assertion and three descendant recovery paths send no historical-PID signals; recovery uses verified service membership and the shared identity signal. |
+| `src/lib/agent/codexSpawnPolicy.test.ts` | Native app-server and resume seed retain child handles; tmux captures the server identity before waits and uses bounded TERM/KILL cleanup after C-d. |
+| `src/lib/tmux.test.ts` | Each private server identity is captured before readiness; both successful session shutdown and recovery await bounded identity cleanup. |
+| `src/lib/viewerWorkerLifecycle.test.ts` | Worker identity is captured while reported alive; parent cleanup uses its handle and waits for exit. |
+| `src/lib/accounts/migration/coordinatorTurnAuthority.test.ts` | Parent handles and original child identities are retained; the unreaped-child fault signal is fenced, and teardown waits for parent reaping. |
+| `src/lib/runtime/structuredHostRetirement.test.ts` | Root and descendant identities replace the PID-only teardown list. |
+| `src/lib/selfUpdate/actions.test.ts` | Bootstrap tree ownership precedes a named one-second report wait; launcher identity and parent handle replace historical-PID teardown. |
+| `src/lib/telegram/connector.test.ts` | Recovery uses the connector identity captured in the spawn callback and awaits bounded cleanup. |
+| `src/lib/flows/exec.test.ts` | Sleeper handles replace PID-only signals; final teardown waits for every retained handle. |
+| `src/lib/flows/engine.test.ts` | Reviewer cleanup retains and awaits the original child handle. |
+| `src/lib/pipelines/engine.test.ts` | Release fault injection uses the original child handle; every fixture teardown awaits its exit. |
+| `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; every shutdown waits for that identity to be reaped before returning. |
+| `scripts/owned-runner.integration.test.ts` | Hard-kill fault injection uses the shared identity signal; recovery already retains original identities. |
+| `src/lib/testing/fixtureProcess.ts` | Shared bounded cleanup checks the recorded start/boot identity before TERM and KILL; report failure stops a registered tree before its root. |
+
+The remaining direct destructive PID calls in test files have original-identity
+fences in the runner/verifier, generation-lifetime, startup and native host
+checks. Two injected product signal ports in resource and structured-host
+control tests are called behind their product ownership checks. Zero-signal
+probes and intentional self-termination grant no teardown authority. JavaScript
+native campaign and package helpers retain child handles or use the reviewed
+identity-bound stop helper. The executable source audit scans test files
+independently of the launch inventory, rejects an unfenced destructive PID
+call, and includes a synthetic historical-PID negative control.
+
+Bounded executable regressions recycle a real PID under `unshare -Urpf
+--mount-proc` without changing host PID allocation. Identical-argv bystanders
+survive the real resource absence helper, both identity signals, bounded identity
+cleanup, tree cleanup, process cleanup and a late original-handle KILL. Separate
+checks cover changed boot epochs, TERM-resistant escalation, and a stalled
+report with a real child tree and a same-argv bystander. The installed native
+Codex policy suite and both private tmux shell cases pass. The real runner's
+six termination cases and three nested-runner cases preserve their bystanders
+and leave their owning cgroups empty.
+
+The standing guard exposed three pre-existing signal-without-wait boundaries
+while checking the wider audit: migration parent, flow reviewer and response
+worker teardown. Each initially passed its assertions and failed the survivor
+guard; bounded exit/reap waits fix them, and their reruns pass. All checks use
+private state, a finite command deadline, two assigned CPUs and the standard
+8 GiB gate memory cap. Native macOS/Windows and the packed production/native
+campaign were not rerun in this correction; their earlier verification limits
+remain in force.
+
 ## Process-launch audit
 
 The audit searched test files and fixture/probe helpers throughout the repository
@@ -388,7 +448,7 @@ repeated for this inventory correction.
 | `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
 | `src/lib/telemetry/sender.test.ts` | 67, 96, 119, 158, 235, 239 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
-| `src/lib/testing/fixtureProcess.test.ts` | 8, 16, 26, 28 | owned; exited/reused root regressions and real descendant cleanup with a same-argv bystander, three/five-second test deadlines |
+| `src/lib/testing/fixtureProcess.test.ts` | Node spawn and private-namespace spawnSync | owned; original-handle, start/boot, real PID reuse, descendant and stalled-report regressions preserve same-argv bystanders within three/seven-second deadlines |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |

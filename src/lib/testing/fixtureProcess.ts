@@ -18,6 +18,20 @@ export function signalFixtureIdentity(identity: ProcessIdentity, signal: NodeJS.
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return false; }
 }
 
+/** Stop a process whose original handle is held by a fixture parent (for
+ * example a private tmux server). Capture its identity while it is alive.
+ */
+export async function stopFixtureIdentity(identity: ProcessIdentity, timeoutMs = 2_000): Promise<void> {
+  const pending = () => processIdentityStatus(identity) !== "dead" && !procBackend.processExited(identity.pid);
+  const deadline = Date.now() + timeoutMs;
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    signalFixtureIdentity(identity, signal);
+    const until = signal === "SIGTERM" ? Math.min(deadline, Date.now() + 500) : deadline;
+    while (pending() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  if (pending()) throw new Error("owned fixture identity survived bounded cleanup");
+}
+
 /** Snapshot descendants only while the recorded root is still alive. Recheck
  * every recorded member before each signal, including escalation after exit.
  * The runner's cgroup owns forks missed by this bounded local cleanup.
@@ -81,6 +95,7 @@ export async function fixtureReport<Report>(child: ChildProcess, name: string, r
       timer = setTimeout(() => reject(new Error(`${name} did not report within ${timeoutMs}ms:\n${errors.join("")}`)), timeoutMs);
     });
   } catch (error) {
+    await stopFixtureTree(child);
     await stopFixtureProcess(child);
     throw error;
   } finally { clearTimeout(timer); }

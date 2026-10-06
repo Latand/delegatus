@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { signalFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { procBackend } from "../src/lib/proc";
 
 function scopeMembers(): ProcessIdentity[] {
@@ -71,7 +71,7 @@ for (const mode of ["exit", "timeout", "TERM", "KILL", "test-KILL", "deadline"] 
     if (mode === "TERM" || mode === "KILL") runner.kill(mode === "TERM" ? "SIGTERM" : "SIGKILL");
     if (mode === "test-KILL") {
       expect(processIdentityStatus(owned[0]!)).toBe("alive");
-      process.kill(owned[0]!.pid, "SIGKILL");
+      signalFixtureIdentity(owned[0]!, "SIGKILL");
     }
     await until(() => runner.exitCode !== null || runner.signalCode !== null, 8_000);
     await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
