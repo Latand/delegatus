@@ -1,3 +1,4 @@
+import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
@@ -1946,6 +1947,23 @@ function transcriptOf(pathname: string): string {
       ...tool(3 * MIN, "toolu_seat_shell", "Bash", { command: SEAT_SHELL, description: "Check the worktree" }),
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
     ].join("\n")}\n`;
+  }
+  if (AGENT_REPORT && new URLSearchParams(location.search).has("report-preview") && file === orchestrator) {
+    const quote = '"connection refused during startup"';
+    const body = `## Symptom\nThe tool answered ${quote}.\n\n## Expected behaviour\nThe requested agent starts.`;
+    const start = body.indexOf(quote);
+    const preview = issueReportPreviewText({
+      digest: "a".repeat(64), title: "Delegatus refuses a requested launch", body,
+      privacyJudgment: {
+        assessment: "I reviewed the whole text and judge it suitable for publication.",
+        removed: "Removed machine and account details.",
+        harmlessHints: "The quotation is a technical error message; it identifies no person or account.",
+        uncertainties: "None after reviewing the whole text.",
+      },
+      hints: [{ class: "quote", label: "a quotation", where: "body", lines: [2], reading: "written", span: { start, end: start + quote.length, text: quote } }],
+      hintWarnings: [],
+    });
+    return `${[asked(120, "Prepare a report for me to review."), said(60, preview)].join("\n")}\n`;
   }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[

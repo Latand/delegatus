@@ -324,10 +324,10 @@ export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpT
 }
 
 /** #2518: reporter evidence reads may keep internal poll/cursor receipts,
-    but the only operator-facing write is a scrubbed report preview. This
+    but the only operator-facing write is a report preview. This
     boundary runs before receipt replay, recovery or downstream dispatch. */
 export function permitIssueReporterTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
-  if (tool === "issue_report" && (args.action === "preview" || args.action === "show")) return ALLOWED;
+  if (tool === "issue_report" && (args.action === "hints" || args.action === "preview" || args.action === "show")) return ALLOWED;
   if (tool === "pipeline_action" && args.action === "preview") return ALLOWED;
   if (tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;

@@ -1,0 +1,54 @@
+[
+  {
+    "lang": "en",
+    "width": 1280,
+    "geometry": {
+      "left": 313,
+      "right": 834.890625,
+      "textLeft": 313,
+      "textRight": 819.796875
+    },
+    "judgmentVisible": true,
+    "hintsVisible": true,
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "geometry": {
+      "left": 13,
+      "right": 377,
+      "textLeft": 13,
+      "textRight": 371.71875
+    },
+    "judgmentVisible": true,
+    "hintsVisible": true,
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "width": 1280,
+    "geometry": {
+      "left": 313,
+      "right": 834.890625,
+      "textLeft": 313,
+      "textRight": 819.796875
+    },
+    "judgmentVisible": true,
+    "hintsVisible": true,
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "geometry": {
+      "left": 13,
+      "right": 377,
+      "textLeft": 13,
+      "textRight": 371.71875
+    },
+    "judgmentVisible": true,
+    "hintsVisible": true,
+    "pageErrors": []
+  }
+]

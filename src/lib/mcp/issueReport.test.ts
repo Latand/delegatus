@@ -7,18 +7,13 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
-import { recordProjectRemote } from "@/lib/projects/aliases";
-import { projectIdentityFromRemote } from "@/lib/projects/identity";
-import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
-import { TelegramBotService, productionTelegramBotDependencies } from "@/lib/telegram/bot/service";
-import type { TgUpdate } from "@/lib/telegram/bot/store";
 
 import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
- * #2518 at the tool boundary: a Delegatus bug report is checked before it can
- * be previewed, and what is filed is the stored preview the operator approved,
+ * #2518 at the tool boundary: detector hints accompany the agent judgment.
+ * What is filed is the stored preview the operator approved,
  * named by its digest. Nothing here files an issue: the publisher is a fake
  * that records what it was handed.
  */
@@ -49,6 +44,13 @@ const DEPUTY: CallerAttribution = { kind: "manager", conversationId: SEAT, role:
 const DENY: PublicDenyList = { accounts: ["claude-main-b"], people: [], local: [], projects: [] };
 const REPOSITORY = "example/delegatus";
 const ISSUE_URL = `https://${["github", "com"].join(".")}/${REPOSITORY}/issues/4242`;
+
+const JUDGMENT = {
+  assessment: "I reviewed the whole report and judge it suitable for publication.",
+  removed: "Removed machine and account details from the evidence.",
+  harmlessHints: "The technical error quotation is harmless because it describes tool output.",
+  uncertainties: "None after reviewing the whole text.",
+};
 
 const REPORT = {
   title: "send_message answers delivered while the recipient never receives it",
@@ -105,7 +107,7 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
   };
   let next = 0;
   const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
-    as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...args }) as Promise<McpToolResult & Record<string, unknown>>;
+    as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...(args.action === "preview" ? { privacyJudgment: JUDGMENT } : {}), ...args }) as Promise<McpToolResult & Record<string, unknown>>;
   return { call, published, operatorSays };
 }
 
@@ -133,733 +135,6 @@ test("the tool is on the published surface, keyed like every other mutation", ()
   /* A digest is the whole 64 characters; a shortened one names nothing. */
   expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(false);
   expect(schema.safeParse({ clientRequestId: "a", action: "file" }).success).toBe(false);
-});
-
-test("a body with a host, a path, an email or an id is refused before any preview exists", async () => {
-  const h = harness();
-  const cases: [string, string][] = [
-    ["domain", `It failed on ${["build", "box"].join("-")}.${"lan"} only.`],
-    ["path", `The file is ${["", "home", "someone", "state", "tasks.json"].join("/")}.`],
-    ["email", `The account belongs to ${["someone", ["mail", "example", "org"].join(".")].join("@")}.`],
-    ["id", `The lane ${"0f01" + "39a6"} parked.`],
-    ["account", "The launch picked claude-main-b."],
-  ];
-  for (const [kind, line] of cases) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: `${REPORT.body}\n${line}` });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    const findings = (refused.details as { findings: { class: string; where: string; lines: number[] }[] }).findings;
-    expect(findings.map((finding) => finding.class)).toContain(kind);
-    expect(findings.find((finding) => finding.class === kind)).toMatchObject({ where: "body", lines: [REPORT.body.split("\n").length + 1] });
-    /* The answer names the class and the line, and never repeats the value. */
-    expect(JSON.stringify(refused)).not.toContain(line);
-  }
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-});
-
-test("Markdown markup, an uncommon top-level domain, a spaced folder and a quotation over lines are refused before any preview exists", async () => {
-  const h = harness({ deny: { ...DENY, people: ["Ada"] } });
-  const bodies: [string, string][] = [
-    ["person", "A**da** observed the failure."],
-    ["id", `The pipeline ${"dead"}**${"beef"}** stayed queued.`],
-    ["domain", `The failure happened on ${"buildbox"}.**${"fr"}**.`],
-    ["domain", `The failure happened on ${"buildbox"}.${"tools"}.`],
-    ["domain", `The failure happened on ${"buildbox"}.${"xn--p1ai"}.`],
-    ["domain", `The failure happened on ${"вузол"}.${"укр"}.`],
-    ["path", `The evidence file is ${["", "My data", "notes.txt"].join("/")}.`],
-    ["quote", "The operator said: \"restart\nevery agent\nnow\"."],
-  ];
-  for (const [kind, body] of bodies) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-  }
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-});
-
-/* The third review of #2518: each body below was stored. */
-test("reference links and images, a host before a remark in brackets, bare absolute paths and a spaced quotation are refused before any preview exists", async () => {
-  const h = harness({ deny: { accounts: ["claude-main-b"], people: ["Ada"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }] } });
-  const bodies: [string, string][] = [
-    ["person", "A[da][ref] observed the failure.\n\n[ref]: #details"],
-    ["account", "The launch picked claude-[main][ref]-b.\n\n[ref]: #details"],
-    ["project", "The project Arte[mis][ref] failed to launch.\n\n[ref]: #details"],
-    ["id", `The pipeline ${"dead"}[${"beef"}][ref] stayed queued.\n\n[ref]: #details`],
-    ["domain", `The failure happened on ${"buildbox"}.[${"tools"}][ref].\n\n[ref]: #details`],
-    ["path", `The evidence file is [${"/"}My][ref]/notes.txt.\n\n[ref]: #details`],
-    ["image", "![board][ref]\n\n[ref]: shot.png"],
-    ["domain", `The failing host was ${"buildbox"}.${"tools"} (offline).`],
-    ["domain", `The failing host was ${"buildbox"}.${"fr"} (offline).`],
-    ["path", `The evidence file is ${["", "notes.txt"].join("/")}.`],
-    ["path", `The evidence file is ${["", "My's data", "notes.txt"].join("/")}.`],
-    ["path", `The evidence file is ${["C:", "Evidence", "notes.txt"].join("/")}.`],
-    ["quote", "The operator said: \" restart every agent now \"."],
-    ["quote", "The operator said: ' restart every agent now '."],
-  ];
-  for (const [kind, body] of bodies) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-  }
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  /* A reference link to Delegatus's own code, a call and a marked term are stored. */
-  expect(await h.call(REPORTER, {
-    action: "preview", title: REPORT.title,
-    body: `${REPORT.body}\nSee [the bindings][ref]: Date.now() was read and the state "delivered" was kept.\n\n[ref]: src/lib/mcp/bindings.ts`,
-  })).toMatchObject({ ok: true, state: "preview" });
-});
-
-test("a clean report is stored under the digest of its exact text", async () => {
-  const h = harness();
-  const preview = await h.call(REPORTER, { action: "preview", ...REPORT });
-  expect(preview).toMatchObject({ ok: true, state: "preview", title: REPORT.title, body: REPORT.body, digest: issueReportDigest(REPORT) });
-  expect(readIssueReportPreview(preview.digest as string, sandbox)).toMatchObject({ createdBy: "conversation_reporter", shown: [], state: "preview" });
-  expect(h.published).toEqual([]);
-});
-
-test("domains disguised as calls or files, UNC paths, nested quotes and spaced names never create a preview", async () => {
-  const h = harness({ deny: {
-    accounts: ["Account Bee"], people: ["Person Bee"], local: [],
-    projects: [{ repository: null, names: ["Project Bee"] }],
-  } });
-  const cases: [string, string][] = [
-    ["domain", `The failing host was ${"buildbox"}.${"tools"}(offline).`],
-    ["domain", `The failing host was ${"buildbox"}.${"sh"}.`],
-    ["path", `The evidence is on ${["", "", "filesrv", "private", "notes.txt"].join("/")}.`],
-    ["path", `The evidence is on ${["", "", "filesrv", "private", "notes.txt"].join("\\")}.`],
-    ["quote", "- > restart every agent now"],
-    ["quote", "1. - > restart every agent now"],
-    ["quote", "<blockquote>restart every agent now</blockquote>"],
-  ];
-  for (const [kind, name] of [["person", "Person Bee"], ["account", "Account Bee"], ["project", "Project Bee"]]) {
-    for (const space of ["  ", "\n", "\t", "&nbsp;&nbsp;"]) cases.push([kind, `${name.replace(" ", space)} observed the refusal.`]);
-  }
-  const encodings = [
-    (text: string) => text,
-    (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join(""),
-    (text: string) => encodeURIComponent(text),
-    (text: string) => `**${text}**`,
-  ];
-  for (const [kind, body] of cases) for (const encode of encodings) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encode(body) });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  expect(h.published).toEqual([]);
-  expect(await h.call(REPORTER, {
-    action: "preview", title: REPORT.title,
-    body: `${REPORT.body}\nSee docs/design/agent-prompt-contract.md and scripts/gate-slot.sh; Date.now() and rows.map(render) returned.\nThe operator asked for every agent to be restarted at once.`,
-  })).toMatchObject({ ok: true, state: "preview" });
-});
-
-test("plan data, token usage and a one-digit port are refused before a preview", async () => {
-  const h = harness();
-  for (const [kind, body] of [
-    ["usage", "The account has a free plan."],
-    ["usage", "The account tier is free."],
-    ["usage", "The account has a free-tier subscription."],
-    ["usage", "The usage observation was 120 tokens."],
-    ["usage", "The quota remaining was 120."],
-    ["port", "The listener used port 9."],
-    ["port", "The listener used port: 9."],
-  ]) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  expect(h.published).toEqual([]);
-  expect(await h.call(REPORTER, {
-    action: "preview", title: REPORT.title,
-    body: "The usage meter never refreshed. The investigation plan is to check its update path. The listener refused a connection.",
-  })).toMatchObject({ ok: true, state: "preview" });
-});
-
-test("account observations, qualified token counts and bare endpoints never create a preview", async () => {
-  const h = harness();
-  const cases: [string, string][] = [
-    ["usage", "The account used 93%."],
-    ["usage", '{"usedPercent":93,"resetsAt":"2026-10-07T00:00:00Z"}'],
-    ["usage", "The account has ChatGPT Plus."],
-    ["usage", "The plan is Claude Max."],
-    ["usage", '{"planType":"pro"}'],
-    ["usage", "The session used 120000 input tokens."],
-    ["port", "The listener bound to :8898."],
-    ["port", "The launch ran on buildbox:8898."],
-    ["port", '{"port":8898}'],
-    ["port", "The listener port was 8898."],
-    ["path", "The transcript is stored at \\notes.txt."],
-    ["path", "The transcript is stored at \\private."],
-    ["path", "The transcript is stored at C:notes.txt."],
-  ];
-  for (const [kind, body] of cases) for (const encode of [
-    (text: string) => text,
-    (text: string) => encodeURIComponent(text),
-    (text: string) => [...text].map((char) => `&#${char.codePointAt(0)};`).join(""),
-    (text: string) => `**${text}**`,
-  ]) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encode(body) });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  /* A preview admitted by an older detector is checked again on publication. */
-  for (const [, body] of cases) {
-    const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
-    const replies = await shown(h, digest);
-    h.operatorSays(replies.en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
-  }
-  expect(h.published).toEqual([]);
-  expect(await h.call(REPORTER, {
-    action: "preview", title: REPORT.title,
-    body: "The check ran at 12:30 and took 20 seconds. The usedPercent field failed to refresh. The investigation plan is to read the event stream.",
-  })).toMatchObject({ ok: true, state: "preview" });
-});
-
-test("privacy bypasses are refused before storage and rechecked before publication", async () => {
-  const h = harness({ deny: {
-    accounts: ["Account Bee"], people: ["Person Bee"], local: [],
-    projects: [{ repository: null, names: ["Project Bee"] }],
-  } });
-  const cases: [string, string][] = [
-    ["person", "Person<br>Bee observed the refusal."],
-    ["account", "Account<br/>Bee observed the refusal."],
-    ["project", "Project<br />Bee observed the refusal."],
-    ["person", "<div>Person</div><div>Bee observed the refusal.</div>"],
-    ["person", "Per~son~ Bee observed the refusal."],
-    ...["test", "invalid", "example", "localhost", "alt"].map((ending): [string, string] => ["domain", `The failing hostname was ${"remote-worker"}.${ending}.`]),
-    ["host", "The failing hostname is remote-worker."],
-    ["host", "The hostname was `remote-worker`."],
-    ["host", "The remote host: buildbox failed."],
-    ["host", "HOST=buildbox"],
-    ["host", '{"hostname":"buildbox"}'],
-    ["account", "username: builduser"],
-    ["account", "account_name: user-alias"],
-    ["account", '{"user_name":"builduser"}'],
-    ["quote", "The operator wrote: `restart every agent now`."],
-    ["quote", "The operator wrote `restart every agent now`."],
-    ["quote", "Оператор написав `перезапусти всіх агентів зараз`."],
-    ["quote", "The operator said: ‹restart every agent now›."],
-    ["quote", "Оператор написав: `перезапусти всіх агентів зараз`."],
-    ["quote", "Користувач сказав: ‹перезапусти всіх агентів зараз›."],
-    ["path", `The evidence is ${["~other-user", "private", "notes.txt"].join("/")}.`],
-    ["path", `The evidence is [${["~दूसरा", "private", "notes.txt"].join("/")}](#evidence).`],
-    ["path", `The evidence is <code>${["~other+user", "private", "notes.txt"].join("/")}</code>.`],
-    ["path", `The evidence is [${["~other-user", "private", "notes.txt"].join("/")}](#evidence).`],
-    ["usage", "The account has 1M input tokens."],
-    ["usage", "The account has 1.5k output tokens."],
-    ["usage", "The account cost USD 20 per month."],
-    ["usage", "The subscription cost 20 dollars per month."],
-    ["usage", "The subscription costs 20 per month."],
-    ["usage", "The account cost USD20."],
-    ["usage", "The subscription cost £20."],
-    ["port", "The listener bound to : 8898."],
-    ["port", "The endpoint was remote-worker: 8898."],
-  ];
-  const forms = [(body: string) => body, encodeURIComponent, (body: string) => [...body].map((char) => `&#${char.codePointAt(0)};`).join("")];
-  for (const [kind, body] of cases) for (const encode of forms) {
-    const report = { title: REPORT.title, body: encode(body) };
-    const refused = await h.call(REPORTER, { action: "preview", ...report });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-    expect(JSON.stringify(refused)).not.toContain(body);
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  /* Stored by an older version: publication must refuse every form too. */
-  for (const [, body] of cases) for (const encode of forms) {
-    const report = { title: REPORT.title, body: encode(body) };
-    const { digest } = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox });
-    const replies = await shown(h, digest);
-    h.operatorSays(replies.en);
-    const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(JSON.stringify(refused)).not.toContain(body);
-    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-  const clean = {
-    title: REPORT.title,
-    body: "README.md describes Date.now() and src/lib/mcp/bindings.ts. The tool returned `connection refused during startup`. The check ran at 12:30 and took 20 seconds. Symptom: the listener refused a connection.",
-  };
-  const digest = await previewed(h, clean);
-  const replies = await shown(h, digest);
-  h.operatorSays(replies.en);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-  expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
-});
-
-test("attributed code quotes, complete home expressions, spaced absolute paths and remote machine names cannot cross either privacy boundary", async () => {
-  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const cases: [string, string][] = [
-    ["quote", "The operator replied with `restart every agent now`."],
-    ["quote", "The operator’s exact reply was `restart every agent now`."],
-    ["quote", "The user's reply was `restart every agent now`."],
-    ["quote", "The human said exactly: `restart every agent now`."],
-    ["quote", "The operator replied using `restart every agent now`."],
-    ["quote", "The operator said exactly the following: `restart every agent now`."],
-    ["quote", "The operator's exact words: `restart every agent now`."],
-    ["quote", "The operator replied with <code>restart every agent now</code>."],
-    ["quote", "Оператор відповів словами `перезапусти всіх агентів зараз`."],
-    ["quote", "Користувач відповіла так: `перезапусти всіх агентів зараз`."],
-    ["quote", "Точна відповідь оператора була `перезапусти всіх агентів зараз`."],
-    ...["~", "~+", "~-", "~reportuser", "~інший", "~दूसरा", "~other+user", "~other.user"].map((home): [string, string] => ["path", `The state directory is \`${home}\`.`]),
-    ["path", "The state directory is (~reportuser), and the read failed."],
-    ["path", "The state directory is '~'."],
-    ["path", "The state directory is **~reportuser**."],
-    ["path", `The log is in \`${["", " My notes", "log.txt"].join("/")}\`.`],
-    ["path", `The log is in '${["", " My notes", "log.txt"].join("/")}'.`],
-    ["path", `The log is in “${["", " Мої записи", "звіт.txt"].join("/")}”.`],
-    ["path", `The log is in \`${["", " leading.txt"].join("/")}\`.`],
-    ["path", `The log is in <code>${["", " My notes", "log.txt"].join("/")}</code>.`],
-    ["path", `The log is in \` ${["", " leading.txt"].join("/")} \`.`],
-    ["path", `The log is in \`${["", " "].join("/")}\`.`],
-    ["domain", `The failure occurred on ${["buildbox", "node", "consul"].join(".")}.`],
-    ["domain", `The failure occurred on ${["buildbox", "default", "svc"].join(".")}.`],
-    ["host", "The machine name is runner-q."],
-    ["host", "The node name was `runner-q`."],
-    ["host", '{"machine_name":"runner-q"}'],
-    ["host", '{"node_name":"runner-q"}'],
-    ["host", "Ім’я машини: runner-q"],
-    ["host", "Ім’я вузла: runner-q"],
-  ];
-  const forms = [(body: string) => body, encodeURIComponent, (body: string) => [...body].map((char) => `&#${char.codePointAt(0)};`).join("")];
-  for (const [kind, body] of cases) for (const encode of forms) {
-    const report = { title: REPORT.title, body: encode(body) };
-    const refused = await h.call(REPORTER, { action: "preview", ...report });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-    expect(JSON.stringify(refused)).not.toContain(body);
-  }
-  for (const [, body] of cases) for (const encode of forms) {
-    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encode(body) }, REPORTER.conversationId!, { directory: sandbox });
-    const replies = await shown(h, digest);
-    h.operatorSays(replies.uk);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-  const clean = { title: REPORT.title, body: "The error was `connection refused during startup`. Date.now() and rows.map(render) returned. See src/lib/mcp/bindings.ts. The **read/write** split and ~~removed~~ state differ; either / or was shown." };
-  const digest = await previewed(h, clean);
-  h.operatorSays((await shown(h, digest)).en);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-  expect(h.published).toEqual([{ ...clean, repository: REPOSITORY }]);
-});
-
-const additionalPrivateReports: [string, string][] = [
-  ["path", `The transcript is file://${["", "var", "log", "delegatus", "transcript.jsonl"].join("/")}.`],
-  ["path", `The transcript is FILE:${["", "var", "log", "delegatus", "transcript.jsonl"].join("/")}.`],
-  ["quote", "The operator wrote in their message `restart every agent now`."],
-  ["quote", "The operator told me `restart every agent now`."],
-  ["quote", "The operator wrote <q>restart every agent now</q>."],
-  ["quote", "Оператор написав у своєму повідомленні `перезапусти всіх агентів зараз`."],
-  ["quote", "Користувач сказала мені <q>перезапусти всіх агентів зараз</q>."],
-  ["quote", "The operator wrote in\nthe chat `restart every agent now`."],
-  ["quote", "The operator told me in\r\nthe chat <q>restart every agent now</q>."],
-  ["quote", "Оператор написав у\nсвоєму повідомленні `перезапусти всіх агентів зараз`."],
-  ["quote", "Користувач сказала мені у\r\nповідомленні <q>перезапусти всіх агентів зараз</q>."],
-  ["quote", "<q>restart every agent now</q>"],
-  ["quote", "<Q class=\"quotation\">restart every agent now</Q>"],
-  ["quote", "<q><b>перезапусти</b> всіх агентів зараз</q>"],
-  ["quote", "The operator wrote <pre>restart every agent now</pre>."],
-  ["quote", "Оператор написав у повідомленні <pre>перезапусти всіх агентів зараз</pre>."],
-  ["quote", "The operator requested `restart every agent now`."],
-  ["quote", "The user stated in their message <code>restart every agent now</code>."],
-  ["quote", "Оператор вимагав `перезапусти всіх агентів зараз`."],
-  ["quote", "Користувач зазначив у повідомленні <pre>перезапусти всіх агентів зараз</pre>."],
-  ["host", "Machine: remote-worker"],
-  ["host", "node = remote-worker"],
-  ["host", '{"machine":"remote-worker"}'],
-  ["host", '{"node":"remote-worker"}'],
-  ["host", "Машина: remote-worker"],
-  ["host", "Вузол = remote-worker"],
-];
-const additionalPrivateForms = additionalPrivateReports.flatMap(([kind, body], index) =>
-  [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]
-    .map((encoded, form) => ({ kind, body: encoded, index, form })));
-
-test.each(additionalPrivateForms)("private report $index form $form is refused before preview storage", async ({ kind, body }) => {
-  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body });
-  expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-  expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  expect(h.published).toEqual([]);
-});
-
-test.each(additionalPrivateForms)("legacy private report $index form $form is refused before publication claim", async ({ kind, body }) => {
-  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
-  h.operatorSays((await shown(h, digest)).en);
-  const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
-  expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-  expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(kind);
-  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  expect(h.published).toEqual([]);
-});
-
-test("unpopulated machine fields and technical spans after a speech sentence stay publishable", async () => {
-  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation.\nThe error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767. Technical output: <pre>connection refused during startup</pre>." };
-  const digest = await previewed(h, report);
-  h.operatorSays((await shown(h, digest)).uk);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-  expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
-});
-
-const unavailableNameSources = ["chats throws", "chats malformed", "messages throws", "messages malformed", "messages pagination malformed"];
-function unavailableNameReader(mode: string) {
-  return async (url: string): Promise<Record<string, unknown>> => {
-    if (new URLSearchParams(url.split("?")[1]).get("op") === "chats" && mode.startsWith("messages")) return { chats: [{ chat: "allowed-chat", postAllowed: true }] };
-    if (mode.endsWith("throws")) throw new Error("private-source-error-must-stay-private");
-    if (mode === "messages pagination malformed") return { messages: [] };
-    return {};
-  };
-}
-
-test.each(unavailableNameSources)("unavailable %s refuses preview without storage or private error text", async (mode) => {
-  const h = harness({ controlRead: unavailableNameReader(mode) });
-  const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: "Ada observed the failed launch." });
-  expect(refused).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(JSON.stringify(refused)).not.toContain("private-source-error-must-stay-private");
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  expect(h.published).toEqual([]);
-});
-
-test.each(unavailableNameSources)("unavailable %s refuses an approved legacy preview before its claim", async (mode) => {
-  const h = harness({ controlRead: unavailableNameReader(mode) });
-  const { digest } = recordIssueReportPreview({ title: REPORT.title, body: "Ada observed the failed launch." }, REPORTER.conversationId!, { directory: sandbox });
-  h.operatorSays((await shown(h, digest)).uk);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  expect(h.published).toEqual([]);
-});
-
-test("available empty sources allow reports, recovered people sources reject known names", async () => {
-  let available = false;
-  const h = harness({ controlRead: async (url) => {
-    if (!available) throw new Error("privacy read unavailable");
-    return new URLSearchParams(url.split("?")[1]).get("op") === "chats"
-      ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
-      : { messages: [{ fromName: "Ada" }], hasMore: false, nextCursor: null };
-  } });
-  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable" });
-  available = true;
-  expect(await h.call(REPORTER, { action: "preview", title: REPORT.title, body: "Ada observed the failed launch." })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  const empty = harness({ controlRead: async () => ({ bot: { connected: false }, chats: [] }) });
-  const digest = await previewed(empty);
-  empty.operatorSays((await shown(empty, digest)).en);
-  expect(await empty.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-  expect(empty.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
-});
-
-test.each(["fifth chat", "older page", "posting disabled", "remote without seat", "aliased display name"])("known private names from %s are refused at both boundaries", async (source) => {
-  if (source === "remote without seat") fs.writeFileSync(path.join(privacyState, "project-remotes.json"), JSON.stringify({
-    schemaVersion: 1, remotes: { [`repo-${"1".repeat(32)}`]: `https://${["github", "com"].join(".")}/acme/HiddenWorkshop.git` },
-  }));
-  if (source === "aliased display name") fs.writeFileSync(path.join(privacyState, "project-aliases.json"), JSON.stringify({
-    schemaVersion: 1, aliases: { "old-project": `repo-${"1".repeat(32)}` }, displayNames: { "old-project": "HiddenWorkshop" },
-  }));
-  const h = harness({ controlRead: async (url) => {
-    if (new URLSearchParams(url.split("?")[1]).get("op") === "chats") return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: source !== "posting disabled" })) };
-    const params = new URLSearchParams(url.split("?")[1]);
-    if (source === "older page" && !params.has("cursor")) return { messages: [], hasMore: true, nextCursor: "older" };
-    return { messages: source === "older page" || source === "posting disabled" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
-  } });
-  const projectSource = source === "remote without seat" || source === "aliased display name";
-  const bodies = projectSource ? ["HiddenWorkshop observed the failure.", ...(source === "remote without seat" ? ["acme/HiddenWorkshop observed the failure."] : [])] : ["Person Later observed the failure."];
-  for (const body of bodies) {
-    const report = { title: REPORT.title, body };
-    const refused = await h.call(REPORTER, { action: "preview", ...report });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(projectSource ? "project" : "person");
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  for (const body of bodies) {
-    const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
-    h.operatorSays((await shown(h, digest)).en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-});
-
-test.each(["claude", "codex"])("retired %s account names remain private at both boundaries", async (engine) => {
-  fs.writeFileSync(path.join(privacyState, `${engine}-accounts.json`), JSON.stringify({
-    version: 1, active: "default", accounts: [],
-    retired: [{ id: "archived-account", label: "HiddenAccount", retiredAt: 1, archived: true }], removals: [],
-  }));
-  const h = harness({ controlRead: async () => ({ chats: [] }) });
-  for (const name of ["HiddenAccount", "archived-account"]) {
-    const report = { title: REPORT.title, body: `${name} encountered the failure.` };
-    expect(await h.call(REPORTER, { action: "preview", ...report })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  for (const name of ["HiddenAccount", "archived-account"]) {
-    const report = { title: REPORT.title, body: `${name} encountered the failure.` };
-    const { digest } = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox });
-    h.operatorSays((await shown(h, digest)).en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-});
-
-test.each([
-  `https://${["gitlab", "com"].join(".")}/team/subgroup/HiddenWorkshop.git`,
-  `git@${["gitlab", "com"].join(".")}:team/HiddenWorkshop.git`,
-  `ssh://git@${["bitbucket", "org"].join(".")}/team/HiddenWorkshop.git`,
-  `https://${["forge", "example"].join(".")}/team/HiddenWorkshop.git`,
-  `https://${["forge", "example"].join(".")}/team/Hidden%57orkshop.git`,
-  `https://${["forge", "example"].join(".")}/team/Hidden%2557orkshop.git`,
-  `${["forge", "example"].join(".")}/team/HiddenWorkshop`,
-  `file://${["", "var", "repositories", "HiddenWorkshop.git"].join("/")}`,
-])("recorded repository names remain private for remote %s", async (remote) => {
-  const identity = projectIdentityFromRemote(remote, privacyState)!;
-  expect(identity.displayName).toMatch(/^Hidden(?:W|%57|%2557)orkshop$/);
-  recordProjectRemote(identity);
-  const h = harness({ controlRead: async () => ({ chats: [] }) });
-  const body = "HiddenWorkshop observed the failed launch.";
-  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
-    const report = { title: REPORT.title, body: encoded };
-    const refused = await h.call(REPORTER, { action: "preview", ...report });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("project");
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
-    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encoded }, REPORTER.conversationId!, { directory: sandbox });
-    h.operatorSays((await shown(h, digest)).en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-});
-
-test.each(["preview", "publish"])("retained names from an inactive Telegram chat refuse %s before storage or publication claim", async (boundary) => {
-  const transport = new FakeBotTransport();
-  const now = new Date("2026-09-24T12:00:00Z");
-  const date = Math.floor(now.getTime() / 1000) - 600;
-  const chat = { id: -1000000000303, type: "supergroup", title: "Old Chat" };
-  const service = new TelegramBotService({
-    ...productionTelegramBotDependencies(),
-    transportFor: () => transport,
-    now: () => now,
-    sleep: async () => {},
-    conversationTitle: () => null,
-    documentEnvironment: () => ({ home: process.env.HOME!, stateDir: privacyState }),
-  });
-  try {
-    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
-    await service.connect(fakeBotToken());
-    await service.stopPoller();
-    const updates: TgUpdate[] = [
-      { update_id: 1, my_chat_member: { chat: chat as never, date, new_chat_member: { status: "member" } } },
-      { update_id: 2, message: { message_id: 1, date: date + 1, chat: chat as never, from: { id: 700000505, first_name: "Person", last_name: "Retained" }, text: "A launch failed." } },
-      { update_id: 3, my_chat_member: { chat: chat as never, date: date + 2, new_chat_member: { status: "kicked" } } },
-    ];
-    transport.script("getUpdates", ok(updates));
-    expect(await service.pollOnce(new AbortController().signal)).toEqual({ next: "continue", delayMs: 0 });
-    expect(service.listChats().chats).toEqual([]);
-    expect(service.listChats({ includeInactive: true }).chats).toMatchObject([{ member: false, postAllowed: false }]);
-    const h = harness({ controlRead: async (url) => {
-      const params = new URLSearchParams(url.split("?")[1]);
-      return params.get("op") === "chats"
-        ? { ...service.listChats({ includeInactive: params.get("includeInactive") === "1" }) }
-        : { ...service.readMessages({ chat: params.get("chat")!, limit: 100, maxChars: 1, cursor: params.get("cursor") ?? undefined }) };
-    } });
-    const report = { title: REPORT.title, body: "Person Retained observed the failed launch." };
-    let digest: string | undefined;
-    if (boundary === "publish") {
-      digest = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox }).digest;
-      h.operatorSays((await shown(h, digest)).en);
-    }
-    const refused = await h.call(boundary === "preview" ? REPORTER : SEAT_CALLER,
-      boundary === "preview" ? { action: "preview", ...report } : { action: "publish", digest });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("person");
-    if (digest) {
-      expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-      expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-    } else expect(fs.readdirSync(sandbox)).toEqual([]);
-    expect(h.published).toEqual([]);
-  } finally {
-    await service.remove();
-  }
-});
-
-test.each([
-  { kind: "host", text: "server_name=remote-worker" },
-  { kind: "host", text: "The affected server was remote-worker." },
-  { kind: "host", text: '{"server":"remote-worker"}' },
-  { kind: "path", text: "The evidence is at file:private-notes.txt." },
-  { kind: "path", text: "[evidence](file:private-notes.txt)" },
-  { kind: "quote", text: "The operator said 「keep this private」." },
-  { kind: "quote", text: "The operator said 『keep this private』." },
-  { kind: "quote", text: "The operator said 「private」." },
-  { kind: "quote", text: "The operator said 『非公開にしてください』." },
-  { kind: "host", text: "The server named remote-worker failed to accept the request." },
-  { kind: "host", text: "The failure occurred on server `remote-worker`." },
-  { kind: "host", text: "The server named **remote-worker** failed." },
-  { kind: "host", text: "The failure occurred on server ``remote-worker``." },
-  { kind: "host", text: "The failure occurred on server <code>remote-worker</code>." },
-  ...["\t", "\r", "\n", "\t\r\n"].map((control) => ({ kind: "path", text: `The evidence is file:${control}notes.txt.` })),
-  { kind: "path", text: "[evidence](fi\tle:\nnotes.txt)" },
-  { kind: "email", text: ['"mailbox"', "README.md"].join("@") },
-  { kind: "email", text: ["пошта", "README.md"].join("@") },
-  { kind: "email", text: ['"mail**box**"', "README.md"].join("@") },
-])("private report forms refuse both boundaries: $text", async ({ kind, text }) => {
-  const h = harness();
-  for (const where of ["title", "body"] as const) {
-    for (const value of [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]) {
-      if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
-      const report = { ...REPORT, [where]: value };
-      const refused = await h.call(REPORTER, { action: "preview", ...report });
-      expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-      expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where })]));
-      expect(fs.readdirSync(sandbox)).toEqual([]);
-    }
-  }
-  for (const where of ["title", "body"] as const) {
-    for (const value of [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]) {
-      if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
-      const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
-      h.operatorSays((await shown(h, digest)).en);
-      const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
-      expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-      expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where })]));
-      expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-    }
-  }
-  expect(h.published).toEqual([]);
-});
-
-test.each([
-  { name: "李", texts: ["The reviewer 李 failed.", "李看到錯誤。", "李看到錯誤。"] },
-  { name: "李雷", texts: ["李雷看到錯誤。", "先請李雷查看。", "李雷看到錯誤。", "李**雷**看到錯誤。", "李<b>雷</b>看到錯誤。"] },
-  { name: "สมชาย", texts: ["สมชายพบข้อผิดพลาดในการเรียกใช้เครื่องมือ", "ก่อนสมชายพบข้อผิดพลาด", "สม**ชาย**พบข้อผิดพลาด", "สม<b>ชาย</b>พบข้อผิดพลาด"] },
-  { name: "テネー", texts: ["テネーが確認した。", "先にテネーが確認した。", "テ**ネ**ーが確認した。"] },
-])("production Telegram catalog protects $name at both report boundaries", async ({ name, texts }) => {
-  const transport = new FakeBotTransport();
-  const now = new Date("2026-09-24T12:00:00Z");
-  const date = Math.floor(now.getTime() / 1000) - 600;
-  const chat = { id: -1000000000303, type: "supergroup", title: "Evidence Chat" };
-  const service = new TelegramBotService({
-    ...productionTelegramBotDependencies(), transportFor: () => transport, now: () => now,
-    sleep: async () => {}, conversationTitle: () => null,
-    documentEnvironment: () => ({ home: process.env.HOME!, stateDir: privacyState }),
-  });
-  try {
-    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Report Bot" }));
-    await service.connect(fakeBotToken());
-    await service.stopPoller();
-    const updates: TgUpdate[] = [
-      { update_id: 1, my_chat_member: { chat: chat as never, date, new_chat_member: { status: "member" } } },
-      { update_id: 2, message: { message_id: 1, date: date + 1, chat: chat as never, from: { id: 700000505, first_name: name }, text: "A launch failed." } },
-      { update_id: 3, message: { message_id: 2, date: date + 2, chat: chat as never, from: { id: 700000506, first_name: "Ada" }, text: "A launch failed." } },
-    ];
-    transport.script("getUpdates", ok(updates));
-    expect(await service.pollOnce(new AbortController().signal)).toEqual({ next: "continue", delayMs: 0 });
-    const h = harness({ controlRead: async (url) => {
-      const params = new URLSearchParams(url.split("?")[1]);
-      return params.get("op") === "chats"
-        ? { ...service.listChats({ includeInactive: true }) }
-        : { ...service.readMessages({ chat: params.get("chat")!, limit: 100, maxChars: 1, cursor: params.get("cursor") ?? undefined }) };
-    } });
-    const values = texts.flatMap((text) => [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]);
-    for (const where of ["title", "body"] as const) {
-      for (const value of values) {
-        if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
-        const refused = await h.call(REPORTER, { action: "preview", ...REPORT, [where]: value });
-        expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-        expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: "person", where })]));
-        expect(fs.readdirSync(sandbox)).toEqual([]);
-      }
-    }
-    expect(await h.call(REPORTER, { action: "preview", ...REPORT, body: "Ada observed the failure." })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    for (const where of ["title", "body"] as const) {
-      for (const value of values) {
-        if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
-        const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
-        h.operatorSays((await shown(h, digest)).en);
-        const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
-        expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-        expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: "person", where })]));
-        expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-      }
-    }
-    expect(h.published).toEqual([]);
-    const safe = { ...REPORT, body: `${REPORT.body}\nAdaline reviewed the failure. The server_name field was missing. The error was \`connection refused during startup\`. README.md and README.md:12 describe the file: scheme.` };
-    const digest = await previewed(h, safe);
-    h.operatorSays((await shown(h, digest)).en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-    expect(h.published).toEqual([{ ...safe, repository: REPOSITORY }]);
-  } finally {
-    await service.remove();
-  }
-});
-
-const personName = "Person Café";
-const widePersonName = personName.replace(/[A-Za-z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 0xfee0));
-test.each([
-  [personName.normalize("NFD"), personName],
-  [personName, personName.normalize("NFD")],
-  [widePersonName, personName],
-  [personName, widePersonName],
-])("equivalent Unicode people names refuse both boundaries: %s / %s", async (source, reading) => {
-  const h = harness({ controlRead: async (url) => new URLSearchParams(url.split("?")[1]).get("op") === "chats"
-    ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
-    : { messages: [{ fromName: source }], hasMore: false, nextCursor: null },
-  });
-  const body = `${reading} observed the failed launch.`;
-  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: encoded });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("person");
-    expect(fs.readdirSync(sandbox)).toEqual([]);
-  }
-  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
-    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encoded }, REPORTER.conversationId!, { directory: sandbox });
-    h.operatorSays((await shown(h, digest)).en);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  }
-  expect(h.published).toEqual([]);
-});
-
-test.each(["truncated chats", "missing cursor", "repeated cursor"])("incomplete %s refuses both privacy boundaries", async (mode) => {
-  const h = harness({ controlRead: async (url) => new URLSearchParams(url.split("?")[1]).get("op") === "chats"
-    ? { chats: [{ chat: "allowed-chat", postAllowed: true }], ...(mode === "truncated chats" ? { truncated: 1 } : {}) }
-    : { messages: [], hasMore: true, nextCursor: mode === "missing cursor" ? null : "repeated" },
-  });
-  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  const { digest } = recordIssueReportPreview(REPORT, REPORTER.conversationId!, { directory: sandbox });
-  h.operatorSays((await shown(h, digest)).uk);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  expect(h.published).toEqual([]);
-});
-
-test.each(["claude-accounts.json", "codex-accounts.json", "copilot-accounts.json", "project-aliases.json", "project-remotes.json"])("unreadable %s refuses both privacy boundaries", async (filename) => {
-  fs.writeFileSync(path.join(privacyState, filename), "{");
-  const h = harness({ controlRead: async () => ({ chats: [] }) });
-  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  const { digest } = recordIssueReportPreview(REPORT, REPORTER.conversationId!, { directory: sandbox });
-  h.operatorSays((await shown(h, digest)).en);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-  expect(h.published).toEqual([]);
 });
 
 test.each([
@@ -891,35 +166,6 @@ test("technical numeric evidence and source line references remain publishable",
     h.operatorSays((await shown(h, digest)).en);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
     expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
-  }
-});
-
-test("a withdrawal or edit during async privacy reads prevents a claim and publication", async () => {
-  for (const [index, words] of ["Wait, do not publish", "Change the title first", "Ні, не публікуй", "Зміни текст спочатку"].entries()) {
-    let holdRead = false;
-    let release = () => {};
-    let entered = () => {};
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const started = new Promise<void>((resolve) => { entered = resolve; });
-    const h = harness({ privacyRead: async () => { if (holdRead) { entered(); await held; } } });
-    const report = { ...REPORT, body: `${REPORT.body}\nReproduction ${index + 1}.` };
-    const digest = await previewed(h, report);
-    const replies = await shown(h, digest);
-    h.operatorSays(replies.en);
-    holdRead = true;
-    const publishing = h.call(SEAT_CALLER, { action: "publish", digest });
-    try {
-      await started;
-      h.operatorSays(words);
-    } finally { release(); }
-    expect(await publishing).toMatchObject({ ok: false, code: "issue_report_approval_required" });
-    expect(h.published).toEqual([]);
-    expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
-    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
-    /* A fresh approval still files the same preview exactly once. */
-    h.operatorSays(replies.uk);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-    expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
   }
 });
 
@@ -1100,37 +346,6 @@ test("only the seat itself publishes", async () => {
 });
 
 /* Review findings 2 to 5, at the tool boundary: each body below was stored. */
-test("encoded values, real id and host forms, known names and quotations are refused before any preview exists", async () => {
-  const deny: PublicDenyList = { accounts: [], people: ["Ada", "Ostap Vyshnia"], local: [], projects: [{ repository: "example/Artemis", names: ["Artemis"] }] };
-  const h = harness({ deny });
-  const slash = "&#47;";
-  const cases: [string, string][] = [
-    ["home_path", `The transcript is under ${["", "home", "someone", "notes.md"].join(slash)}.`],
-    ["person", "Ostap&#32;Vyshnia observed the refusal."],
-    ["domain", `It failed on ${"buildbox"}.${"fr"}.`],
-    ["ip", `It failed at ${"fd00"}::${"1234"}.`],
-    ["path", `The state is stored at ${["", "дані", "особисте", "звіт.json"].join("/")}.`],
-    ["id", `The pipeline ${"1234" + "5678"} failed.`],
-    ["id", `The pipeline ${"dead" + "beef"} failed.`],
-    ["person", "Ada observed the refusal."],
-    ["project", "The project Artemis failed to launch."],
-    ["quote", "The operator said: \"restart every agent now\"."],
-    ["quote", "The operator said: “restart every agent now”."],
-  ];
-  for (const [kind, line] of cases) {
-    const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: `${REPORT.body}\n${line}` });
-    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    const findings = (refused.details as { findings: { class: string }[] }).findings;
-    expect(findings.map((finding) => finding.class)).toContain(kind);
-    expect(JSON.stringify(refused)).not.toContain(line);
-  }
-  expect(fs.readdirSync(sandbox)).toEqual([]);
-  /* The same report in the reporter's own words, naming Delegatus, is stored. */
-  expect(await h.call(REPORTER, { action: "preview", title: REPORT.title, body: `${REPORT.body}\nThe operator asked Delegatus to restart every agent.` }))
-    .toMatchObject({ ok: true, state: "preview" });
-});
-
-/* Review finding 7: two publications of one digest both reached the forge. */
 test("concurrent publications of one digest reach the forge once, whoever calls and under whatever request id", async () => {
   let release = () => {};
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -1220,4 +435,83 @@ test("a preview needs an identified session and a one-line title", async () => {
   expect(await h.call(REPORTER, { action: "preview", title: "two\nlines", body: REPORT.body }))
     .toMatchObject({ ok: false, code: "issue_report_invalid", details: { field: "title" } });
   expect(fs.readdirSync(sandbox)).toEqual([]);
+});
+
+
+test("the reporter's hint tool returns class and matched span without storage", async () => {
+  const h = harness();
+  const body = `The log is under ${["", "home", "someone", "work"].join("/")}.`;
+  const answer = await h.call(REPORTER, { action: "hints", title: REPORT.title, body });
+  expect(answer.ok).toBe(true);
+  const hints = answer.hints as { class: string; where: string; span: { start: number; end: number; text: string } }[];
+  const hint = hints.find((hint) => hint.class === "path")!;
+  expect(hint.where).toBe("body");
+  expect(body.slice(hint.span.start, hint.span.end)).toBe(hint.span.text);
+  expect(hint.span.text).toContain("someone");
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  expect(answer.next).toContain("clean result proves nothing");
+});
+
+test.each([
+  ["host", "It could not reach local" + "host."],
+  ["path", `The log is under ${["", "home", "someone", "work"].join("/")}.`],
+  ["email", `The contact is ${["mailbox", ["example", "org"].join(".")].join("@")} .`],
+  ["id", `The lane ${"3f2b" + "8c1e"} stopped.`],
+  ["quote", 'The tool answered "connection refused during startup".'],
+  ["person", "Person Bee observed the failure."],
+])("a %s hint never blocks preview, storage or approved publication", async (kind, body) => {
+  const h = harness({ deny: { ...DENY, people: ["Person Bee"] } });
+  for (const where of ["title", "body"] as const) {
+    const report = { ...REPORT, [where]: body };
+    const answer = await h.call(REPORTER, { action: "preview", ...report });
+    expect(answer).toMatchObject({ ok: true, privacyJudgment: JUDGMENT });
+    expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where, span: expect.objectContaining({ text: expect.any(String) }) })]));
+    const digest = answer.digest as string;
+    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
+    const shown = await h.call(SEAT_CALLER, { action: "show", digest });
+    expect(shown).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
+    expect(shown.next).toContain("operator may approve text with hints");
+    expect(shown.previewText).toContain(report.title);
+    expect(shown.previewText).toContain(report.body);
+    expect(shown.previewText).toContain(JUDGMENT.assessment);
+    expect(shown.previewText).toContain("Remaining detector hints");
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required" });
+    h.operatorSays((shown.approvalReplies as { en: string }).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
+  }
+});
+
+test("an approved legacy preview with hints reaches the publisher", async () => {
+  const h = harness();
+  const report = { title: REPORT.title, body: "It could not reach local" + "host." };
+  const legacy = recordIssueReportPreview(report, null, { directory: sandbox });
+  const shown = await h.call(SEAT_CALLER, { action: "show", digest: legacy.digest });
+  expect(shown.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: "host" })]));
+  expect(shown.privacyJudgment).toMatchObject({ assessment: expect.stringContaining("legacy preview") });
+  h.operatorSays((shown.approvalReplies as { en: string }).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: legacy.digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
+});
+
+test("missing hint sources are advisory and cannot block storage or publication", async () => {
+  const h = harness({ privacyRead: async () => { throw new Error("private source failure"); } });
+  const report = { ...REPORT, body: "It could not reach local" + "host." };
+  const answer = await h.call(REPORTER, { action: "preview", ...report });
+  expect(answer).toMatchObject({ ok: true, hintWarnings: [expect.stringContaining("unavailable")] });
+  expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: "host" })]));
+  const digest = answer.digest as string;
+  const shown = await h.call(SEAT_CALLER, { action: "show", digest });
+  expect(shown.hintWarnings).toEqual(answer.hintWarnings);
+  h.operatorSays((shown.approvalReplies as { en: string }).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(JSON.stringify(answer)).not.toContain("private source failure");
+});
+
+test("preview carries the agent's judgment even with no detector hints", async () => {
+  const h = harness();
+  const answer = await h.call(REPORTER, { action: "preview", ...REPORT });
+  expect(answer).toMatchObject({ ok: true, privacyJudgment: JUDGMENT, hints: [] });
+  expect(await h.call(SEAT_CALLER, { action: "show", digest: answer.digest })).toMatchObject({ privacyJudgment: JUDGMENT });
+  expect(await h.call(REPORTER, { action: "preview", ...REPORT, privacyJudgment: undefined })).toMatchObject({ ok: false, code: "issue_report_invalid", details: { field: "privacyJudgment" } });
 });

@@ -124,7 +124,7 @@ An attention line carries two or three options when it asks a question and none 
 
 // #2518 — a seat that meets a Delegatus failure holds the evidence and had no
 // sanctioned way to report it; filing by itself would put private data into a
-// public repository. The reporter writes, the tool checks, and nobody but the
+// public repository. The reporter judges, the tool offers hints, and nobody but the
 // operator approves. ISSUE_REPORT_SCRUB_RULE is what the test pins.
 export const ISSUE_REPORT_SCRUB_RULE =
   "The report is public, so it carries none of these: hostnames, domains, IP addresses, ports, local paths, usernames, account names, emails, project or repository names other than Delegatus, conversation, task or pipeline ids, people's names, secrets, usage or plan data, or quotes from the operator's conversations. Describe a thing by its kind (\"a second project\", \"account A\", \"a builder stage\") and say in your own words what a message said. Attach no image: say what the screen showed, and note that a screenshot may follow once the operator has redacted it.";
@@ -134,10 +134,11 @@ const ISSUE_REPORTER_BODY = `You are an Issue-reporter. The brief describes some
 2. Duplicates. Search the open issues of Delegatus's own repository for the symptom in a few phrasings. When one already covers it, write no report: name that issue by its number and say what your evidence would add.
 3. Write a title of one line and a body with these sections, in this order: Symptom, Observed evidence, Impact, Expected behaviour, Suggested investigation. Short and concrete: what was called, what it answered, what should have happened, and where in Delegatus to look (a repository-relative file or a tool name).
 4. ${ISSUE_REPORT_SCRUB_RULE}
-5. Preview. Call issue_report with action "preview", the title and the body. It refuses a report that carries private data and names the lines: reword those lines and call it again until it answers a digest. Never work around a refusal by respelling the value it found.
-6. Report. Your final message gives PREVIEW, the digest, then the exact title and body the tool answered. Publication belongs to the orchestrator after the operator approves that exact text; when you are sent an edit or a "no", change the report and preview again, which gives a new digest.
+5. Hints. Call issue_report with action "hints" over the title and body. Treat the hints as pointers and never as the verdict in either direction: a hint may be a false alarm; a clean result proves nothing. Re-read the whole text yourself and make your own privacy judgment. Remove or rewrite what identifies a person, a machine, an account, a local path, a secret, or quotes the operator, applying every rule above even when the tool found nothing.
+6. Preview. Call issue_report with action "preview", the final title and body, and privacyJudgment: assessment (your own privacy judgment), removed (what you removed, described by kind without repeating the private value), harmlessHints (which hints you judged harmless and why), uncertainties (what you are unsure about, or none). Hints never block this preview. If you change the text, run hints again and review the whole revised text before previewing.
+7. Report. Your final message gives PREVIEW, the digest, then the exact title and body the tool answered, with its privacyJudgment, hintWarnings and remaining hints as a compact list beside the text (class, matched span, location). The operator decides last and may approve text with hints. Publication belongs to the orchestrator after the operator approves that exact text; when you are sent an edit or a "no", change the report and preview again, which gives a new digest.
 
-Verdict: pass with the preview, or with the duplicate issue's number; needs_decision when the evidence cannot be read without access you lack; fail when the tool keeps refusing a report you cannot reword.`;
+Verdict: pass with the preview, or with the duplicate issue's number; needs_decision when the evidence cannot be read without access you lack.`;
 
 export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
@@ -279,7 +280,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "issue-reporter", name: "Issue-reporter",
-    description: "Writes a scrubbed Delegatus bug report and returns its preview; never publishes.",
+    description: "Reviews a Delegatus bug report and returns its preview; never publishes.",
     config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     parameters: [], promptScaffold: `${ISSUE_REPORTER_BODY} ${SHARED_RULES}`,
     safetyFences: ["Read-only: no edits, staging, commits, pushes, service restarts, forge comments or issues.", "Never publish: the only write is issue_report with action preview. Never start a child agent or pipeline."],

@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import type { IssueReportFinding } from "./scrub";
+
 import { statePath } from "@/lib/configDir";
 
 /*
@@ -41,7 +43,20 @@ export interface IssueReportPublication {
   issueUrl?: string;
 }
 
-export interface IssueReportPreview {
+export interface IssueReportPrivacyJudgment {
+  assessment: string;
+  removed: string;
+  harmlessHints: string;
+  uncertainties: string;
+}
+
+export interface IssueReportReview {
+  privacyJudgment: IssueReportPrivacyJudgment;
+  hints: IssueReportFinding[];
+  hintWarnings: string[];
+}
+
+export interface IssueReportPreview extends Partial<IssueReportReview> {
   schemaVersion: 1;
   digest: string;
   title: string;
@@ -128,17 +143,20 @@ export function readIssueReportPreview(digest: string, directory = issueReportsD
     schemaVersion: 1, digest, title: parsed.title, body: parsed.body,
     createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
     createdBy: typeof parsed.createdBy === "string" ? parsed.createdBy : null,
+    ...(parsed.privacyJudgment ? { privacyJudgment: parsed.privacyJudgment as IssueReportPrivacyJudgment } : {}),
+    ...(Array.isArray(parsed.hints) ? { hints: parsed.hints as IssueReportFinding[] } : {}),
+    ...(Array.isArray(parsed.hintWarnings) ? { hintWarnings: parsed.hintWarnings as string[] } : {}),
     shown,
     state: !publication ? "preview" : publication.issueUrl ? "published" : "publishing",
     ...(publication ? { publication } : {}),
   };
 }
 
-/** Records a scrubbed report. The same text previewed again is the same preview.
+/** Records a report with its advisory review. The same text previewed again is the same preview.
     Records are retained: an inline cleanup cannot distinguish another process's
     unfinished immutable write or protect a publication being claimed. */
 export function recordIssueReportPreview(
-  report: { title: string; body: string },
+  report: { title: string; body: string } & Partial<IssueReportReview>,
   createdBy: string | null,
   options: { directory?: string; now?: Date } = {},
 ): IssueReportPreview {
@@ -149,7 +167,7 @@ export function recordIssueReportPreview(
   if (existing) return existing;
   /* Text filed under this digest that is not this text is replaced whole. */
   fs.rmSync(textFile(digest, directory), { force: true });
-  createOnce(textFile(digest, directory), { schemaVersion: 1, digest, title: report.title, body: report.body, createdAt: now.toISOString(), createdBy });
+  createOnce(textFile(digest, directory), { schemaVersion: 1, digest, title: report.title, body: report.body, privacyJudgment: report.privacyJudgment, hints: report.hints, hintWarnings: report.hintWarnings, createdAt: now.toISOString(), createdBy });
   return readIssueReportPreview(digest, directory)!;
 }
 

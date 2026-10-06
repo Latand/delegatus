@@ -29,25 +29,36 @@ const credentialInputPattern = new RegExp([
 
 /** The classes found in text the caller already normalized (NFKC at least;
     the gate also decodes percent, entity and escape forms first). */
-export function staticSensitiveClasses(searchableText: string): Set<StaticFindingClass> {
+export function staticSensitiveClasses(
+  searchableText: string,
+  onMatch?: (kind: StaticFindingClass, start: number, end: number) => void,
+): Set<StaticFindingClass> {
   const findings = new Set<StaticFindingClass>();
+  const matched = (kind: StaticFindingClass, pattern: RegExp) => {
+    const match = pattern.exec(searchableText);
+    if (!match) return false;
+    onMatch?.(kind, match.index, match.index + match[0].length);
+    return true;
+  };
   const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
   for (let match = unixHomePattern.exec(searchableText); match; match = unixHomePattern.exec(searchableText)) {
     if (match[1].toLowerCase() === "user") continue;
+    onMatch?.("home_path", match.index, match.index + match[0].length);
     findings.add("home_path");
     break;
   }
   const windowsHomePattern = /(?:^|[\s"'(])[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|$)/gim;
   for (let match = windowsHomePattern.exec(searchableText); match; match = windowsHomePattern.exec(searchableText)) {
     if (match[1].toLowerCase() === "user") continue;
+    onMatch?.("home_path", match.index, match.index + match[0].length);
     findings.add("home_path");
     break;
   }
   const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
-  if (credentialAssignmentPattern.test(searchableText)) {
+  if (matched("credential", credentialAssignmentPattern)) {
     findings.add("credential");
   }
-  if (/\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/.test(searchableText)) {
+  if (matched("credential", /\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/)) {
     findings.add("credential");
   }
   const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
@@ -57,33 +68,36 @@ export function staticSensitiveClasses(searchableText: string): Set<StaticFindin
     `x${separator}o${separator}x${separator}[baprs]`,
     `s${separator}k`,
   ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
-  for (const line of searchableText.split(/\r?\n/)) {
+  let lineStart = 0;
+  for (const line of searchableText.split(/\n/)) {
     splitTokenPrefix.lastIndex = 0;
     for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
       const compactTail = compactSensitiveText(line.slice(match.index));
       if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
+        onMatch?.("credential", lineStart + match.index, lineStart + line.length);
         findings.add("credential");
         break;
       }
     }
     if (findings.has("credential")) break;
+    lineStart += line.length + 1;
   }
-  if (/\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(searchableText)) {
+  if (matched("credential", /\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i)) {
     findings.add("credential");
   }
-  if (/https?:\/\/[^\s/@:]+:[^\s/@]+@/i.test(searchableText)) {
+  if (matched("credential", /https?:\/\/[^\s/@:]+:[^\s/@]+@/i)) {
     findings.add("credential");
   }
-  if (credentialInputPattern.test(searchableText)) {
+  if (matched("credential", credentialInputPattern)) {
     findings.add("credential");
   }
-  if (/\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/.test(searchableText)) {
+  if (matched("private_network", /\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/)) {
     findings.add("private_network");
   }
-  if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(searchableText)) {
+  if (matched("resource_identifier", /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i)) {
     findings.add("resource_identifier");
   }
-  if (/(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im.test(searchableText)) {
+  if (matched("transcript_content", /(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im)) {
     findings.add("transcript_content");
   }
   return findings;

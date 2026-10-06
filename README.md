@@ -542,12 +542,12 @@ The tools, by area:
   each switch is listed in the dialog's history with who made it);
 - **bug reports:** `issue_report` takes a Delegatus bug report from preview to
   publication. An orchestrator that hits a Delegatus failure asks you first,
-  then an `issue-reporter` agent writes the report and previews it; a preview
-  that carries a host, a path, an address, an id, a name this machine knows,
-  somebody's quoted words or another private value is refused, in whatever
-  encoding it is written. The orchestrator shows you the exact title and body
-  in chat and offers one reply, naming the preview's whole digest, that
-  approves that text. Publication takes the
+  then an `issue-reporter` writes the report, runs the advisory hint tool and
+  re-reads the whole text to make its own privacy judgment. A hint may be a false
+  alarm; a clean result proves nothing. The orchestrator shows the exact title
+  and body in chat with the agent's judgment and remaining hints as a short list.
+  You decide last and may approve text with hints. The approving reply names the
+  whole digest of that text. Publication takes the
   preview's digest and reads your reply in the conversation itself: nothing
   the orchestrator says about your answer counts, a reply for an earlier
   wording does not carry over, and one preview is filed once;

@@ -123,7 +123,7 @@ test("the reporter policy refuses every other mutation before downstream dispatc
     expect(policy.permit(tool, {})).toMatchObject({ allowed: false, code: "issue_reporter_write_refused" });
   }
   for (const [tool, input] of [
-    ["issue_report", { action: "preview" }], ["issue_report", { action: "show" }],
+    ["issue_report", { action: "hints" }], ["issue_report", { action: "preview" }], ["issue_report", { action: "show" }],
     ["pipeline_action", { action: "preview" }], ["agent_activity", {}], ["lifecycle_events", {}],
     ["role_presets", {}], ["seat_tick_settings", {}], ["account_project_binding", { action: "list" }], ["auto_updates", {}],
   ] as const) expect(policy.permit(tool, input)).toEqual({ allowed: true });

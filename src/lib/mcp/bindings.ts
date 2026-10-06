@@ -83,9 +83,10 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
-import { type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApproval, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
+import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
 import { claimIssueReportPublication, markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, releaseIssueReportPublication, settleIssueReportPublication, type IssueReportPreview, type IssueReportPublication } from "@/lib/issueReports/store";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
@@ -1751,53 +1752,59 @@ async function issueReportDenyList(control: ViewerControlDependencies | null, de
     const delegatus = delegatusIssueRepository(viewerPackageManifest.repository.url)?.toLowerCase() ?? null;
     return { ...deny, projects: deny.projects.filter((project) => !delegatus || project.repository?.toLowerCase() !== delegatus) };
   } catch {
-    throw new McpToolRefusal("the private data check could not read its name sources; retry after they are available", {
-      code: "issue_report_privacy_unavailable", status: 503, retryable: true,
-    });
+    throw new Error("Known-name hints are unavailable; review names and identities yourself.");
   }
 }
 
-/**
- * issue_report (#2518): a Delegatus bug report from preview to publication.
- *
- * - `preview` refuses a report that carries private data and stores a clean
- *   one under the digest of its text;
- * - `show` answers the stored text and the reply that approves it, and notes
- *   when a seat read it;
- * - `publish` takes a digest and nothing else. It files what is stored under
- *   that digest, for a seat that read it back, when the operator's last
- *   message in that seat's conversation since is the approving reply of this
- *   digest, and only once.
- *
- * So the text an operator approved and the text that is filed are one stored
- * value, the approval is read where the operator wrote it and never taken
- * from the caller, and an edit cannot ride an old approval: it has another
- * digest and another approving reply.
- */
+/** Advisory hints and an agent judgment accompany the exact report text.
+    Approval remains bound to that text's digest and the operator's conversation. */
 async function issueReportTool(args: McpToolArgs, control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const action = text(args.action);
   const caller = attributionOf(dependencies);
   const directory = dependencies.issueReportsDir?.();
   const refuse = (message: string, code: string, extra: McpToolPayload = {}) => new McpToolRefusal(message, { code, status: 400, retryable: false, ...extra });
-  if (action === "preview") {
-    if (caller.kind === "unidentified" || !caller.conversationId) throw refuse("a preview needs an identified calling session", "issue_report_caller_unidentified", { status: 403 });
+  const collectHints = async (report: { title: string; body: string }) => {
+    let deny = EMPTY_DENY_LIST;
+    const hintWarnings: string[] = [];
+    try { deny = await issueReportDenyList(control, dependencies); }
+    catch { hintWarnings.push("Known-name hints are unavailable; review names and identities yourself."); }
+    return { hints: scrubIssueReport(report, deny), hintWarnings };
+  };
+  const view = (preview: IssueReportPreview): McpToolPayload => ({
+    state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
+    privacyJudgment: preview.privacyJudgment ?? {
+      assessment: "No agent judgment was recorded for this legacy preview.",
+      removed: "Unknown.", harmlessHints: "Unknown.", uncertainties: "Review the whole text before approving.",
+    },
+    hints: preview.hints ?? [], hintWarnings: preview.hintWarnings ?? [],
+    previewText: issueReportPreviewText(preview),
+    ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
+  });
+  if (action === "hints" || action === "preview") {
+    if (caller.kind === "unidentified" || !caller.conversationId) throw refuse("a report needs an identified calling session", "issue_report_caller_unidentified", { status: 403 });
     const title = typeof args.title === "string" ? args.title.trim() : "";
     const body = typeof args.body === "string" ? args.body.trim() : "";
-    if (!title || !body) throw refuse("preview needs a title and a body", "issue_report_invalid");
+    if (!title || !body) throw refuse("a report needs a title and a body", "issue_report_invalid");
     if (/[\r\n]/.test(title) || title.length > ISSUE_REPORT_MAX_TITLE_CHARS) throw refuse(`the title is one line of at most ${ISSUE_REPORT_MAX_TITLE_CHARS} characters`, "issue_report_invalid", { field: "title" });
     if (body.length > ISSUE_REPORT_MAX_BODY_CHARS) throw refuse(`the body is at most ${ISSUE_REPORT_MAX_BODY_CHARS} characters`, "issue_report_invalid", { field: "body" });
-    const findings = scrubIssueReport({ title, body }, await issueReportDenyList(control, dependencies));
-    if (findings.length) {
-      throw refuse(
-        `the report carries private data and was not stored: ${findings.map((finding) => `${finding.label} (${finding.where} line ${finding.lines.join(", ")})`).join("; ")}. Reword those lines and preview again.`,
-        "issue_report_private_data", { findings },
-      );
-    }
-    const preview = recordIssueReportPreview({ title, body }, caller.conversationId, { directory });
+    const review = await collectHints({ title, body });
+    if (action === "hints") return {
+      ...review,
+      next: "Re-read the whole title and body yourself. A hint may be a false alarm; a clean result proves nothing. Rewrite private content and provide your own privacyJudgment with the preview.",
+    };
+    const judgment = args.privacyJudgment as IssueReportPreview["privacyJudgment"];
+    if (!judgment || !["assessment", "removed", "harmlessHints", "uncertainties"].every((field) => {
+      const value = (judgment as unknown as Record<string, unknown>)[field];
+      return typeof value === "string" && value.trim().length > 0 && value.length <= 3000;
+    })) throw refuse("preview needs your privacyJudgment: assessment, removed, harmlessHints with reasons, and uncertainties", "issue_report_invalid", { field: "privacyJudgment" });
+    const privacyJudgment = {
+      assessment: judgment.assessment, removed: judgment.removed,
+      harmlessHints: judgment.harmlessHints, uncertainties: judgment.uncertainties,
+    };
+    const preview = recordIssueReportPreview({ title, body, privacyJudgment, ...review }, caller.conversationId, { directory });
     return {
-      state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
-      ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
-      next: "Return this digest with the title and body as your PREVIEW. Publication is the orchestrator seat's, after the operator approves this exact text.",
+      ...view(preview),
+      next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
     };
   }
   const digest = text(args.digest);
@@ -1810,20 +1817,17 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     );
   }
   const seat = caller.kind === "manager" && !caller.via ? caller.conversationId : null;
-  const view = (preview: IssueReportPreview): McpToolPayload => ({
-    state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
-    ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
-  });
   const approvalReplies = issueReportApprovalReplies(digest);
   if (action === "show") {
+    if (!stored.hints) Object.assign(stored, await collectHints(stored));
     if (!seat) return view(stored);
     return {
-      ...view(markIssueReportShown(digest, seat, { directory }) ?? stored),
+      ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalReplies,
-      next: "Put this exact title and body in chat, then suggest_replies with the approvalReplies line in the operator's language as the yes, beside a no and an edit. Publication is admitted only when that line is the operator's last message here.",
+      next: "Put previewText in chat, keeping its exact title and body with privacyJudgment and the remaining hints as a short list beside it; include hintWarnings. The operator may approve text with hints. Then suggest_replies with the approvalReplies line in the operator's language as the yes, beside a no and an edit. Publication is admitted only when that line is the operator's last message here.",
     };
   }
-  if (action !== "publish") throw refuse("action is preview, show or publish", "issue_report_invalid", { field: "action" });
+  if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
   if (!seat) {
     throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
   }
@@ -1850,12 +1854,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  const findings = scrubIssueReport(stored, await issueReportDenyList(control, dependencies));
-  if (findings.length) throw refuse("the stored preview no longer passes the private data check and was not published; preview a reworded report", "issue_report_private_data", { findings });
-  /* Finish asynchronous privacy reads before reading the operator's standing
-     answer. A withdrawal or edit during those reads must prevent the claim.
-     Keep approval validation and the synchronous claim together, with no
-     asynchronous work between them. */
+  /* Keep approval validation and the synchronous claim together, with no
+     asynchronous work between them. Hints never govern publication. */
   const messages = await (dependencies.operatorMessages
     ? dependencies.operatorMessages(seat)
     : operatorMessagesOf(seat, dependencies.registrySnapshot()));

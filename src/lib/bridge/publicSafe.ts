@@ -1,7 +1,3 @@
-import { domainToASCII } from "node:url";
-
-import { IANA_TOP_LEVEL_DOMAINS } from "@/lib/bridge/topLevelDomains";
-import { mailboxPattern } from "@/lib/privacy/mailbox";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 /*
@@ -125,169 +121,12 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["usage", /\b(?:max|pro|plus|team|enterprise)\s+(?:plan|tier|20x|5x)\b/i],
 ];
 
-/*
- * The strict reading, for a text that goes to a public repository and can be
- * reworded by its author before anyone sees it (a Delegatus bug report,
- * #2518). A manager report drops an item it doubts and the operator loses a
- * line; a bug report refused in doubt costs its author one more wording. So
- * the strict reading keeps none of the allowances above:
- *
- *  - a domain is any dotted name, in any script, ending in a top-level domain
- *    of the root zone (`buildbox.fr`, `buildbox.tools`, `buildbox.xn--p1ai`,
- *    `вузол.укр`) or a private one (`.lan`, `.internal`), and any ending in
- *    `xn--`. A source extension that is also a TLD is allowed only in a
- *    repository-relative path (`scripts/gate-slot.sh`) or an exact known
- *    root file (`README.md`). A bracket after a dotted name grants no
- *    exemption: only a verified code call whose
- *    name ends in a TLD (`Date.now()`, `rows.map(render)`) is allowed;
- *  - a path is every token a slash opens, whatever follows: one component
- *    (`/notes.txt`), a folder with punctuation in its name (`/My's data/x`).
- *    A repository-relative path has a name before its first slash and passes;
- *  - an id is also eight or more bare hex characters, whatever they are: a
- *    pipeline id is the first eight of a UUID, which can be all digits or all
- *    letters;
- *  - every known name counts, however short or ordinary, and a project's name
- *    in any form. `Delegatus` is the one name a report may carry.
- */
-export interface PrivateClassOptions {
-  strict?: boolean;
-}
-
-/* Private and special-use endings need no delegation in the root zone. */
-const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt", "consul", "svc"]);
-/* A single-label hostname is private when the text explicitly names it.
-   Merely discussing a hostname field or detector names no machine. */
-const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node|server)(?:[\s_-]*(?:name|host(?:[\s_-]*name)?))?|хост|машина|вузол|сервер|ім['’]я\s+(?:хоста|машини|вузла|сервера))["'`]?\s*(?:(?:is|was|named|called|є|було)\s+|[:=]\s*|(?=[`"'“«‹「『]|<code\b))(?:["'`“«‹「『]+|<code\b[^<>]*>)?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
-/* Explicitly labeled remote identities are private even if this machine
-   has never seen that user or account in its local deny list. */
-const NAMED_USER = /(?<![\p{L}\p{N}_])(?:user[\s_-]*name|ім['’]я\s+користувача)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?\S/iu;
-const NAMED_ACCOUNT = /(?<![\p{L}\p{N}_])account[\s_-]+(?:name|label|id)["'`]?\s*(?:(?:is|was)\s+|[:=]\s*)["'`“«‹]?\S/iu;
-const SOURCE_EXTENSIONS = new Set(["ts", "js", "md", "sh", "py", "rs", "go", "rb", "cs", "cc"]);
-/* Labels of any script, joined by any of the dots IDNA reads as one. */
-const DOTTED_NAME = /(?<![\p{L}\p{M}\p{N}_-])(?:[\p{L}\p{M}\p{N}_-]+[.\u3002\uFF0E\uFF61])+(xn--[a-z0-9-]+|[\p{L}\p{M}]{2,63})(?![\p{L}\p{M}\p{N}_-])(\()?/giu;
-/* Exact code references accepted by the report contract. A caller cannot
-   turn an arbitrary domain into a code reference by appending a bracket. */
-const VERIFIED_TLD_CALLS = new Set(["Date.now(", "rows.map("]);
-const VERIFIED_ROOT_SOURCE_FILES = new Set(["README.md"]);
-/* The prefix before a source file must open a relative token and contain a
-   folder. Absolute and network-root prefixes cannot match this reading. */
-const RELATIVE_SOURCE_PREFIX = /(?:^|[\s`[(])(?:\.{1,2}\/)?[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*\/$/u;
-/* A slash that opens a token. Before it: no name (`src/lib`), no dot
-   (`./x`), no slash (`//`, a URL) and no star (a comment's end). After it:
-   something other than a second slash, a star, a space or the `>` of a
-   self-closing tag. A closing tag (`</b>`) is markup. */
-const SLASH_OPENED_PATH = /(?<![\p{L}\p{M}\p{N}_.*\/])(?<!<(?=\/[A-Za-z][A-Za-z0-9-]*\s*>))\/(?![\/*>\s])/u;
-/* A quoted absolute path may begin with spaces in its first component.
-   Requiring the opening mark keeps prose separators such as `either / or`
-   readable. The ASCII closing mark must be the one that opened it. */
-const QUOTED_SPACED_PATH = /([`"'])[ \t]*\/[ \t]+[^\r\n]*?\1|[“«‹][ \t]*\/[ \t]+[^\r\n]*?[”»›]|<code\b[^<>]*>[ \t]*\/[ \t]+[^\r\n]*?<\/code\s*>/iu;
-/* Both UNC spellings, and Windows root-relative paths. Decoding Markdown's
-   escaped backslash can reduce a UNC prefix to one backslash, which remains
-   a local path, even when it holds only one component. */
-const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[^\s\/\\>*]/u;
-/* Every populated file URI names a local path, including slashless forms
-   such as `file:notes.txt`. URL readers remove ASCII tabs and newlines before
-   resolving a URI, so this detector receives that same reading. */
-const LOCAL_FILE_URI = /(?<![\p{L}\p{N}_])file:[^\s"'`<>]/iu;
-const STRICT_MAILBOX = mailboxPattern(true);
-const DRIVE_RELATIVE_PATH = /(?<![\p{L}\p{N}_])[a-z]:(?!\/\/)[^\s"'`\/\\]/iu;
-const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
-const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
-/* Counts and plan facts also disclose usage without a percentage or price.
-   Plain technical timing and a prose investigation plan remain readable. */
-const PLAN_TIER = "(?:free|paid|basic|starter|business|premium|max|pro|plus|team|enterprise)";
-const SUBSCRIPTION_PRODUCT = "(?:ChatGPT|Claude)";
-const USAGE_ACCOUNT = "(?:account|session|weekly|monthly|daily|subscription|billing)";
-const TOKEN_COUNT = "\\d+(?:[.,]\\d+)?\\s*(?:[kmb]|thousand|million|billion)?";
-const CURRENCY = "(?:USD|EUR|GBP|UAH|CAD|AUD|JPY|CNY|CHF|[$€£₴¥₹]|dollars?|euros?|pounds?|грив(?:ень|ні|ня)|долар(?:ів|и)?)";
-const STRICT_USAGE = [
-  new RegExp(`\\b${PLAN_TIER}[\\s-]+(?:plan|tier|subscription)\\b`, "i"),
-  new RegExp(`\\b(?:plan|tier|subscription)\\s*(?:is|was|:|=)\\s*(?:${SUBSCRIPTION_PRODUCT}\\s+)?${PLAN_TIER}\\b`, "i"),
-  new RegExp(`\\b${SUBSCRIPTION_PRODUCT}\\s+${PLAN_TIER}\\b`, "i"),
-  new RegExp(`\\b${TOKEN_COUNT}\\s*(?:(?:input|output|cached|cache|total|prompt|completion)[\\s-]+)?(?:tokens?|credits?)\\b`, "i"),
-  new RegExp(`(?<!\\p{L})${CURRENCY}\\s*\\d+(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?\\s*${CURRENCY}(?!\\p{L})`, "iu"),
-  /* A stated subscription price needs no currency symbol or code. Do not
-     mistake a technical billing retry's duration for its cost. */
-  /\b(?:subscription|billing|plan|tier|account)\s+(?:(?:costs?|price|paid|payment|fee)\s*(?:(?:is|was|of|:|=)\s*)?)\d+(?:[.,]\d+)?\b/i,
-  /\b(?:tokens?|credits?)\s*(?::|=|(?:used|remaining)\s*)?\s*\d+\b/i,
-  new RegExp(`${LIMIT_WORD}[^.;\\n]{0,40}?\\d+(?:[.,]\\d+)?`, "iu"),
-  new RegExp(`\\b${USAGE_ACCOUNT}\\b[^;\\n]{0,80}?\\d+(?:[.,]\\d+)?\\s*%`, "i"),
-  new RegExp(`\\d+(?:[.,]\\d+)?\\s*%[^;\\n]{0,80}?\\b${USAGE_ACCOUNT}\\b`, "i"),
-  /* Numeric observations copied from account_limits or provider usage JSON.
-     Naming a field while describing a bug still carries no observation. */
-  /\b(?:used_?percent|remaining_?percent|resets_?at|window_?duration_?mins|(?:input|output|total|cached)_?tokens)["'`]?\s*[:=]\s*["'`]?\d/i,
-  /\b(?:plan(?:_?type)?|subscription(?:_?type)?|tier)["'`]?\s*[:=]\s*["'`]?\w/i,
-];
-/* Host endpoints need no dot. A bare bind port also names private state.
-   Match each occurrence so a technical reference cannot exempt a later port. */
-const STRICT_PORT = /(?:\b[\p{L}_][\p{L}\p{N}_.-]*|(?<![\p{L}\p{N}_:])):\s*\d{1,5}\b/gu;
-const DOTTED_PORT = /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/gi;
-/* These explicit observations describe tool behaviour. Unknown labels retain
-   the strict endpoint reading, including single-label remote hosts. */
-const TECHNICAL_NUMBER_LABEL = /(?:\bHTTP\s+status|\bretryAfterMs|\b(?:observed|expected)\s+attempts)$/iu;
-const STRICT_PORT_FIELD = /\b(?:port|listen_?port|server_?port)["'`]?\s*(?:(?:is|was|number|:|=)\s*)?\d{1,5}\b/i;
-
-/* A root file exemption belongs only to a separate reference token. An
-   email domain, hostname suffix or network path cannot borrow it. */
-function rootSourceReference(text: string, start: number, name: string): boolean {
-  return VERIFIED_ROOT_SOURCE_FILES.has(name)
-    && /(?:^|[\s`"'[(])$/u.test(text.slice(0, start))
-    && /^(?=$|[\s`"')\],;.!?]|:\d+(?:$|[\s`"')\],;.!?]))/u.test(text.slice(start + name.length));
-}
-
-function portMatches(text: string, pattern: RegExp): boolean {
-  for (const match of text.matchAll(pattern)) {
-    const colon = match[0].indexOf(":");
-    if (TECHNICAL_NUMBER_LABEL.test(text.slice(0, match.index + colon))) continue;
-    const name = match[0].slice(0, colon);
-    if (rootSourceReference(text, match.index, name)) continue;
-    const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-    if (SOURCE_EXTENSIONS.has(extension) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
-    return true;
-  }
-  return false;
-}
-
-function topLevelDomain(ending: string): boolean {
-  const lower = ending.toLowerCase();
-  if (lower.startsWith("xn--")) return true;
-  if (PRIVATE_TLD.has(lower) || IANA_TOP_LEVEL_DOMAINS.has(lower)) return true;
-  if (/^[a-z]+$/.test(lower)) return false;
-  const ascii = domainToASCII(lower);
-  return !!ascii && IANA_TOP_LEVEL_DOMAINS.has(ascii);
-}
-
-function strictDomain(text: string): boolean {
-  for (const match of text.matchAll(DOTTED_NAME)) {
-    if (match[2] && VERIFIED_TLD_CALLS.has(match[0])) continue;
-    if (!match[2] && rootSourceReference(text, match.index, match[0])) continue;
-    if (SOURCE_EXTENSIONS.has(match[1].toLowerCase()) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
-    if (topLevelDomain(match[1])) return true;
-  }
-  return false;
-}
-
-function strictName(name: string): boolean {
-  const trimmed = name.trim();
-  return trimmed.length > 0 && !STRICT_ALLOWED_NAMES.has(trimmed.toLowerCase());
-}
-
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/* CJK and Southeast Asian names can touch sentence letters on either side
-   without separators.
-   Script extensions include shared marks such as the Japanese long vowel.
-   Relax only their edges in strict reports; Latin name edges stay bounded. */
-const UNSEPARATED_NAME_CHARACTER = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Thai}\p{Script_Extensions=Lao}\p{Script_Extensions=Khmer}\p{Script_Extensions=Myanmar}]/u;
-
-function wholeWord(name: string, strict = false): RegExp {
-  const words = name.split(/\s+/u).map(escape).join("\\s+");
-  const characters = [...name];
-  const before = strict && UNSEPARATED_NAME_CHARACTER.test(characters[0]) ? "" : "(?<![\\p{L}\\p{M}\\p{N}_])";
-  const after = strict && UNSEPARATED_NAME_CHARACTER.test(characters[characters.length - 1]) ? "" : "(?![\\p{L}\\p{M}\\p{N}_])";
-  return new RegExp(`${before}${words}${after}`, "iu");
+function wholeWord(name: string): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${name.split(/\s+/u).map(escape).join("\\s+")}(?![\\p{L}\\p{M}\\p{N}_])`, "iu");
 }
 
 function usableName(name: string): boolean {
@@ -302,51 +141,46 @@ function repositoryShaped(name: string): boolean {
   return /[-_.\d]/.test(name);
 }
 
-function namesHit(text: string, names: readonly string[], strict = false): boolean {
-  const usable = strict ? strictName : usableName;
-  /* Strict reports and their known names share the same Unicode reading,
-     including composed accents and compatibility characters. */
-  const reading = strict ? text.normalize("NFKC") : text;
-  return names.some((name) => {
-    const value = strict ? name.normalize("NFKC") : name;
-    return usable(value) && wholeWord(value.trim(), strict).test(reading);
-  });
+export interface PrivateMatch {
+  class: PrivateClass;
+  start: number;
+  end: number;
+}
+
+/** Shared pattern occurrences. Issue reports use these as advisory pointers.
+    Manager reports retain their existing class-based filtering policy. */
+export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateMatch[] {
+  const found: PrivateMatch[] = [];
+  const scan = (kind: PrivateClass, pattern: RegExp) => {
+    for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.replace("g", "") + "g"))) {
+      found.push({ class: kind, start: match.index, end: match.index + match[0].length });
+    }
+  };
+  const redacted = hardenedRedact(text);
+  if (redacted !== text) {
+    let start = 0;
+    while (text[start] === redacted[start] && start < text.length) start += 1;
+    let tail = 0;
+    while (tail < text.length - start && tail < redacted.length - start
+      && text[text.length - 1 - tail] === redacted[redacted.length - 1 - tail]) tail += 1;
+    found.push({ class: "secret", start, end: text.length - tail });
+  }
+  for (const [kind, pattern] of PATTERNS) scan(kind, pattern);
+  scan("port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/i);
+  const names = (kind: PrivateClass, values: readonly string[]) => {
+    for (const name of values) if (usableName(name)) scan(kind, wholeWord(name.trim()));
+  };
+  names("account", deny.accounts);
+  names("person", deny.people);
+  names("host", deny.local);
+  for (const project of deny.projects) {
+    if (project.repository?.includes("/")) scan("project", new RegExp(escape(project.repository), "i"));
+    names("project", project.names.filter(repositoryShaped));
+  }
+  return found;
 }
 
 /** Every private class found in `text`, each once, in a stable order. */
-export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST, options: PrivateClassOptions = {}): PrivateClass[] {
-  if (!text) return [];
-  const found = new Set<PrivateClass>();
-  if (hardenedRedact(text) !== text) found.add("secret");
-  for (const [kind, pattern] of PATTERNS) {
-    if (!found.has(kind) && pattern.test(text)) found.add(kind);
-  }
-  if (portMatches(text, DOTTED_PORT)) found.add("port");
-  if (options.strict) {
-    if (strictDomain(text)) found.add("domain");
-    if (NAMED_HOST.test(text)) found.add("host");
-    STRICT_MAILBOX.lastIndex = 0;
-    if (STRICT_MAILBOX.test(text)) found.add("email");
-    if (NAMED_USER.test(text) || NAMED_ACCOUNT.test(text)) found.add("account");
-    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || LOCAL_FILE_URI.test(text.replace(/[\t\r\n]/g, "")) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
-    if (BARE_HEX_ID.test(text)) found.add("id");
-    if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
-    if (portMatches(text, STRICT_PORT) || STRICT_PORT_FIELD.test(text)) found.add("port");
-  }
-  if (namesHit(text, deny.accounts, options.strict)) found.add("account");
-  if (namesHit(text, deny.people, options.strict)) found.add("person");
-  if (namesHit(text, deny.local, options.strict)) found.add("host");
-  const lower = (options.strict ? text.normalize("NFKC") : text).toLowerCase();
-  for (const project of deny.projects) {
-    const repository = options.strict ? project.repository?.normalize("NFKC") : project.repository;
-    if (repository && repository.includes("/") && lower.includes(repository.toLowerCase())) {
-      found.add("project");
-      break;
-    }
-    if (namesHit(text, options.strict ? project.names : project.names.filter(repositoryShaped), options.strict)) {
-      found.add("project");
-      break;
-    }
-  }
-  return [...found];
+export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateClass[] {
+  return [...new Set(privateMatches(text, deny).map((match) => match.class))];
 }

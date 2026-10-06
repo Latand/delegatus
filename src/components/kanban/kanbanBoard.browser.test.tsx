@@ -17968,3 +17968,50 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+
+describe("issue report advisory preview", () => {
+  browserTest("agent judgment and a remaining hint render together in the existing chat", async () => {
+    const out = path.resolve(".artifacts/issue-report-hints/rendered");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1280, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=1`, { width, height: 1000 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-mobile2-seat-card]').click();
+          const preview = page.locator('[data-tts-message]').filter({ hasText: "PREVIEW" }).first();
+          await preview.waitFor();
+          for (const text of ["Delegatus refuses a requested launch", "Agent privacy judgment", "Removed machine and account details", "technical error message", "Remaining detector hints", "quote", "body line 2", "Hints do not prevent approval"]) expect(await preview.innerText()).toContain(text);
+          await preview.scrollIntoViewIfNeeded();
+          const geometry = await preview.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            const boxes: DOMRect[] = [];
+            while (walker.nextNode()) {
+              const range = document.createRange();
+              range.selectNodeContents(walker.currentNode);
+              boxes.push(...[...range.getClientRects()].filter((box) => box.width > 0));
+            }
+            return { left: rect.left, right: rect.right,
+              textLeft: Math.min(...boxes.map((box) => box.left)),
+              textRight: Math.max(...boxes.map((box) => box.right)) };
+
+          });
+          await page.screenshot({ path: path.join(out, `${lang}-${width}.png`), fullPage: true });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.textLeft).toBeGreaterThanOrEqual(0);
+          expect(geometry.textRight).toBeLessThanOrEqual(width);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, width, geometry, judgmentVisible: true, hintsVisible: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/issue-report-hints/rendered.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

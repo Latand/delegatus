@@ -1,198 +1,69 @@
-import { EMPTY_DENY_LIST, privateClasses, privateClassLabel, type PrivateClass, type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { EMPTY_DENY_LIST, privateMatches, privateClassLabel, type PrivateClass, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/staticDetectors";
 
-/*
- * What a Delegatus bug report may not carry into a public repository (#2518).
- *
- * A report is refused, never rewritten: the preview the operator approves has
- * to be the text its author wrote, so a finding goes back to the reporter with
- * the class and the lines it sits on, and the reporter rewords those lines.
- * The matched text is never repeated in the answer.
- *
- * Two existing detector sets do the finding, and this file adds no third:
- * `privateClasses` in its strict reading, which every public manager report
- * already passes through in its lenient one (hosts, domains, addresses, ports,
- * local paths, emails, ids, usage, and the names this machine knows: accounts,
- * people, other projects, the local user), and the publication gate's pattern
- * detectors (home paths, credentials, private networks, resource identifiers,
- * transcript lines).
- *
- * Both read every view of a line the gate itself reads: the text as written,
- * and the text with its entities, percent escapes, backslash escapes and
- * zero-width characters decoded to a fixed point (`canonicalSensitiveText`).
- * Markdown renders `&#47;home` as a path, so a report is judged by what a
- * reader will see: one more view drops the inline markup Markdown draws and
- * never shows (emphasis, strike-through, code-span ticks, link brackets, HTML
- * tags and comments), since `A**da**` and `dead<b>beef</b>` read as one
- * word. A reference link (`A[da][ref]`, `A[da][]`, `A[da]`) is read as its
- * text wherever its definition sits, and the definition line is read as
- * written. The digest and the line numbers stay those of the text as written.
- *
- * The rules below are the ones a report needs and neither set states: somebody
- * else's words (a quoted block, a quotation, a speaker's line) and an embedded
- * image.
- */
-
+/* Advisory pointers for the reporter and the operator. Detector completeness
+   carries no guarantee: the reporter must judge the whole text independently.
+   Keep the shared detectors and a few general quote/image hints readable. */
 export const ISSUE_REPORT_MAX_TITLE_CHARS = 160;
 export const ISSUE_REPORT_MAX_BODY_CHARS = 20_000;
-
-export type IssueReportFindingClass = PrivateClass | StaticFindingClass | "quote" | "image" | "encoding";
+export type IssueReportFindingClass = PrivateClass | StaticFindingClass | "quote" | "image";
 
 export interface IssueReportFinding {
   class: IssueReportFindingClass;
-  /** What the class means, in words the reporter can act on. */
   label: string;
   where: "title" | "body";
-  /** 1-based lines of the title or body that carry it. */
+  /** Lines and UTF-16 offsets refer to the named reading of the field. */
   lines: number[];
+  reading: "written" | "decoded";
+  span: { start: number; end: number; text: string };
 }
 
 const STATIC_LABELS: Record<StaticFindingClass, string> = {
-  credential: "a credential",
-  home_path: "a home directory path",
-  private_network: "a private network address",
-  resource_identifier: "a resource identifier",
+  credential: "a credential", home_path: "a home directory path",
+  private_network: "a private network address", resource_identifier: "a resource identifier",
   transcript_content: "a line copied from a conversation",
 };
-
-/* Blockquotes can sit inside nested bullet/ordered lists or use HTML. Read
-   this in every decoded view before markdownVisible removes the tags. */
-const QUOTED_BLOCK = /(?:^|\n)\s*(?:(?:[-+*]|\d{1,9}[.)])\s+)*>|<blockquote\b/i;
-/* HTML q carries quotation semantics before the visible reading drops tags. */
-const HTML_QUOTATION = /<q\b/i;
-/* A quotation is two or more words between quotation marks. One marked word
-   (a state called "delivered") is a term, and an apostrophe inside a word
-   opens nothing and closes nothing ('don't stop now' is one quotation). Code spans stay readable: an error text belongs in one. A
-   quotation may run over any number of lines, so the patterns cross line
-   breaks; a mark cannot pair across another mark of its kind. Spaces just
-   inside the marks change nothing: the words are counted between them. A
-   straight mark that opens stands after no letter and one that closes before
-   none, which is what keeps two marked terms from pairing across the prose
-   between them. */
-const QUOTED_WORD_CHAR = "(?:[^\\s'‘’]|(?<=\\p{L})['’](?=\\p{L}))";
-const QUOTATION = [
-  /"[^"\s][^"]*\s[^"]*[^"\s]"/,
-  /(?<![\p{L}\p{N}])"\s*[^"\s]+\s+[^"\s][^"]*"(?![\p{L}\p{N}])/u,
-  /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/,
-  /‹[^‹›]*\S\s+\S[^‹›]*›/,
-  /「[^「」]*\S\s+\S[^「」]*」/,
-  /『[^『』]*\S\s+\S[^『』]*』/,
-  new RegExp(`(?<![\\p{L}\\p{N}])['‘]\\s*${QUOTED_WORD_CHAR}+\\s+${QUOTED_WORD_CHAR}(?:\\s|${QUOTED_WORD_CHAR})*['’](?![\\p{L}\\p{N}])`, "u"),
+const REPORT_PATTERNS: readonly [IssueReportFindingClass, string, RegExp][] = [
+  ["id", "a conversation, deployment, card or pipeline id", /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,64}\b/i],
+  ["quote", "a quoted block", /^\s*>[^\n]*/m],
+  ["quote", "a quotation", /"[^"\s][^"]*\s[^"]*[^"\s]"/],
+  ["quote", "a quotation", /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/],
+  ["image", "an embedded image; review screenshot redaction", /!\[[^\]]*\]\(|<img\b/i],
 ];
-/* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
-const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
-/* Explicit attribution remains a conversation quote inside a code span.
-   Technical code spans without that attribution stay readable. */
-const OPERATOR = "(?:operator|user|human|оператор|користувач|людина)";
-/* Attribution can contain arbitrary intervening words and Markdown soft
-   wraps in the same clause. A sentence boundary ends it, so a later
-   technical span stays readable. Attribution needs no finite verb list. */
-const SPEECH_CONNECTOR = "[^\x60‹›“”«»「」『』\"'‘’<>.!?;:]*";
-const QUOTE_OPEN = "(?:[\x60‹“«「『\"‘]|(?<![\\p{L}\\p{N}])'|<(?:code|pre|q)\\b[^<>]*>)";
-const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
-  `(?<!\\p{L})(?:${OPERATOR}(?![\\p{L}\\p{N}_])\\s*(?:`,
-  `[:—]\\s*\\S`,
-  `|${SPEECH_CONNECTOR}[:—]?\\s*${QUOTE_OPEN}`,
-  `|['’]s\\s+(?:exact\\s+)?(?:reply|response|words|message)\\s*(?:(?:was|were|is|are)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
-  `|(?:точна\\s+)?(?:відповідь|слова|повідомлення)\\s+(?:оператора|користувача|людини)\\s*(?:(?:була|були|було|є)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
-].join(""), "iu");
-/* An image in any form: inline, or by reference (`![board][ref]`, `![board]`). */
-const EMBEDDED_IMAGE = /!\[|<img\b/i;
-
-const OWN_WORDS = "say what happened in your own words";
-
-/*
- * What a reader sees of a line once Markdown drew it: the inline markup is
- * gone and the characters on either side of it meet. `*` and `~` mark up
- * inside a word too; `_` only at a word's edge, which is why `issue_report`
- * keeps its underscore. A link shows its text; its address stays in the
- * written view, where the URL rule reads it. That holds for a reference link
- * too: its label goes, and so do the brackets of whatever is left, since a
- * definition anywhere in the document turns `[da]` into a link. An image is
- * the image rule's.
- */
-/* An address may hold one level of brackets of its own: `[x](a(b)c)`. */
-const INLINE_LINK = /\[([^\[\]]*)\]\((?:\([^()]*\)|[^()])*\)/g;
-/* HTML break and block boundaries separate visible words. Inline tags still
-   join their contents, as in `Per<b>son</b>`. */
-const HTML_BOUNDARY = /<\/?(?:br|hr|address|article|aside|blockquote|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)(?:\s[^<>]*)?\/?>/gi;
-
-function markdownVisible(text: string): string {
-  return text
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    .replace(HTML_BOUNDARY, " ")
-    .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi, "")
-    .replace(INLINE_LINK, "$1")
-    .replace(/\[([^\[\]]*)\]\[[^\[\]]*\]/g, "$1")
-    .replace(/[[\]]/g, "")
-    .replace(/[*~`]+/g, "")
-    .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
-}
-
-/** Every reading of a text a detector has to see: as written, decoded, and as
-    Markdown shows each of those. */
-function viewsOf(text: string): { views: string[]; unresolved: boolean } {
-  const canonical = canonicalSensitiveText(text);
-  const json = canonicalSensitiveText(text, true);
-  const views = new Set<string>();
-  for (const view of [text, canonical.text, json.text]) {
-    for (const reading of [view, markdownVisible(view)]) {
-      views.add(reading);
-      views.add(reading.normalize("NFKC"));
-    }
-  }
-  return { views: [...views], unresolved: canonical.error || json.error };
-}
-
-const QUOTATION_LABEL = `a quotation; ${OWN_WORDS}`;
-
-function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingClass, string> {
-  const found = new Map<IssueReportFindingClass, string>();
-  const { views, unresolved } = viewsOf(line);
-  if (unresolved) found.set("encoding", "encoded text nested too deep to read; write the plain characters");
-  for (const view of views) {
-    for (const kind of privateClasses(view, deny, { strict: true })) found.set(kind, privateClassLabel(kind));
-    for (const kind of staticSensitiveClasses(view)) found.set(kind, STATIC_LABELS[kind]);
-    if (HTML_QUOTATION.test(view) || QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", QUOTATION_LABEL);
-    if (SPEAKER_LINE.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
-    if (ATTRIBUTED_OPERATOR_WORDS.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
-    if (QUOTED_BLOCK.test(view)) found.set("quote", `a quoted block; ${OWN_WORDS}`);
-    if (EMBEDDED_IMAGE.test(view)) found.set("image", "an embedded image; a screenshot is added by the operator after redaction");
-  }
-  return found;
-}
 
 function findingsIn(where: "title" | "body", text: string, deny: PublicDenyList): IssueReportFinding[] {
-  const byClass = new Map<IssueReportFindingClass, IssueReportFinding>();
-  const note = (kind: IssueReportFindingClass, label: string, line: number) => {
-    const finding = byClass.get(kind) ?? { class: kind, label, where, lines: [] };
-    if (!finding.lines.includes(line)) finding.lines.push(line);
-    byClass.set(kind, finding);
-  };
-  const lines = text.split(/\r?\n/);
-  lines.forEach((line, index) => {
-    for (const [kind, label] of classesOf(line, deny)) note(kind, label, index + 1);
-  });
-  /* A quotation over several lines is reported against the line it opens on. */
-  for (const view of viewsOf(text).views) {
-    for (const pattern of QUOTATION) {
-      const match = new RegExp(pattern.source, `${pattern.flags}g`).exec(view);
-      if (match) note("quote", QUOTATION_LABEL, Math.min(lines.length, view.slice(0, match.index).split("\n").length));
+  const canonical = canonicalSensitiveText(text).text.normalize("NFKC");
+  const readings: [IssueReportFinding["reading"], string][] = [["written", text]];
+  if (canonical !== text) readings.push(["decoded", canonical]);
+  const hints: IssueReportFinding[] = [];
+  for (const [reading, value] of readings) {
+    const note = (kind: IssueReportFindingClass, label: string, start: number, end: number) => {
+      const span = { start, end, text: value.slice(start, end) };
+      // Avoid repeating a written occurrence in the decoded reading.
+      if (hints.some((hint) => hint.class === kind && hint.span.text === span.text && hint.span.start === start)) return;
+      const first = value.slice(0, start).split("\n").length;
+      const last = first + span.text.split("\n").length - 1;
+      const lines = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+      const overlap = hints.find((hint) => hint.class === kind && hint.reading === reading
+        && hint.span.start < end && start < hint.span.end);
+      if (overlap) {
+        overlap.span.start = Math.min(overlap.span.start, start);
+        overlap.span.end = Math.max(overlap.span.end, end);
+        overlap.span.text = value.slice(overlap.span.start, overlap.span.end);
+        overlap.lines = [...new Set([...overlap.lines, ...lines])].sort((a, b) => a - b);
+      } else hints.push({ class: kind, label, where, reading, span, lines });
+    };
+    for (const match of privateMatches(value, deny)) note(match.class, privateClassLabel(match.class), match.start, match.end);
+    staticSensitiveClasses(value, (kind, start, end) => note(kind, STATIC_LABELS[kind], start, end));
+    for (const [kind, label, pattern] of REPORT_PATTERNS) {
+      for (const match of value.matchAll(new RegExp(pattern.source, pattern.flags + "g"))) note(kind, label, match.index, match.index + match[0].length);
     }
   }
-  /* Any other value split across lines is found in the whole text and
-     reported against the first line, so no class slips through a line break. */
-  for (const [kind, label] of classesOf(text, deny)) {
-    if (!byClass.has(kind)) note(kind, label, 1);
-  }
-  return [...byClass.values()];
+  return hints;
 }
 
-/** Every private class in a report's title and body. Empty means it may be previewed. */
-export function scrubIssueReport(
-  report: { title: string; body: string },
-  deny: PublicDenyList = EMPTY_DENY_LIST,
-): IssueReportFinding[] {
+/** A hint can be a false alarm; an empty result proves nothing about privacy. */
+export function scrubIssueReport(report: { title: string; body: string }, deny: PublicDenyList = EMPTY_DENY_LIST): IssueReportFinding[] {
   return [...findingsIn("title", report.title, deny), ...findingsIn("body", report.body, deny)];
 }

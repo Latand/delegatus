@@ -412,7 +412,10 @@ test("the issue-reporter preset is read-only, previews and never publishes, and 
   expect(ISSUE_REPORT_SCRUB_RULE).toContain("a screenshot may follow once the operator has redacted it");
   for (const section of ["Symptom", "Observed evidence", "Impact", "Expected behaviour", "Suggested investigation"]) expect(text).toContain(section);
   expect(text).toContain("Search the open issues of Delegatus's own repository");
+  expect(text).toContain('Call issue_report with action "hints"');
   expect(text).toContain('Call issue_report with action "preview"');
+  for (const rule of ["Re-read the whole text yourself", "make your own privacy judgment", "a hint may be a false alarm", "a clean result proves nothing", "removed", "harmlessHints", "uncertainties", "compact list beside the text", "operator decides last"]) expect(text).toContain(rule);
+  expect(text).not.toContain("until it answers a digest");
   expect(text).toContain("You never publish.");
   expect(text).toContain("no edits, staging, commits, pushes, service restarts, forge comments or issues");
   expect(text).toContain("the only write is issue_report with action preview");

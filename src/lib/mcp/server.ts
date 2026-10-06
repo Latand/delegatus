@@ -3196,8 +3196,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
   issue_report: [
     "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
-    "action preview takes `title` and `body` and checks both against what a public report never carries: hosts, domains, addresses, ports, local paths, emails, ids, usage or plan data, credentials, lines copied from a conversation, quoted blocks, embedded images, and the names this machine knows (accounts, people, other projects, the local user). A report with any of them is refused with `issue_report_private_data` and `findings` (class, meaning, title or body, lines) and nothing is stored; reword those lines and preview again. A clean report is stored and answered with its `digest`. Any identified session may preview.",
-    "action show takes `digest` and answers the stored `title` and `body` exactly. To an orchestrator seat it also answers `approvalReplies`: the one reply, in English and in Ukrainian, that approves this exact text. The seat shows the text to the operator in chat, unchanged, and offers that reply with suggest_replies beside a no and an edit.",
+    "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
+    "action preview takes title, body and your privacyJudgment (assessment, removed, harmlessHints with reasons, uncertainties), stores the exact text with that judgment and remaining hints, and answers its digest. Known-name source failures appear as hintWarnings and leave the agent to review the text. Any identified session may preview.",
+    "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText containing them. To an orchestrator seat it also answers approvalReplies: the reply in English and Ukrainian that approves this exact text. Show all of this in the existing chat, with a compact hint list beside the text, then offer that reply with suggest_replies beside a no and an edit. The operator decides last and may approve a text that has hints.",
     "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the seat's own conversation, and publishes only when the operator's last message since the seat read the preview back is the approving reply of this digest (`issue_report_approval_required` otherwise, and nothing is sent). Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approving reply. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
@@ -4059,9 +4060,15 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   issue_report: z.object({
     clientRequestId: clientRequestIdSchema,
-    action: z.enum(["preview", "show", "publish"]).describe("preview: check and store a title and body. show: read a stored preview back. publish: file an approved preview."),
+    action: z.enum(["hints", "preview", "show", "publish"]).describe("hints: advisory pointers without storage. preview: store text and agent judgment. show: read a preview back. publish: file an approved preview."),
     title: z.string().optional().describe("preview only: the issue title, one line."),
     body: z.string().optional().describe("preview only: the issue body in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
+    privacyJudgment: z.object({
+      assessment: z.string().trim().min(1).max(3000),
+      removed: z.string().trim().min(1).max(3000),
+      harmlessHints: z.string().trim().min(1).max(3000),
+      uncertainties: z.string().trim().min(1).max(3000),
+    }).optional().describe("preview: your own judgment after reading the whole text, what you removed, hints judged harmless and why, and uncertainties."),
     digest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("show and publish: the digest a preview answered."),
   }).passthrough(),
   telegram_bot_chats: z.object({
