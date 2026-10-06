@@ -284,13 +284,18 @@ const DELTA_TEXT_LIMIT_BYTES = 8 * 1024;
  *
  * Deltas the host has already produced are folded into one delta under the
  * last folded sequence, which is the producer cursor the journal keeps. Only
- * consecutive deltas of the same turn fold, up to the projection's text bound,
- * and only while the next event is ready, so a live stream is never held back.
+ * deltas of the same turn under consecutive sequences fold, up to the
+ * projection's text bound, and only while the next event is ready, so a live
+ * stream is never held back. A folded delta names the text length of each
+ * delta it joined, so the journal can drop the ones another writer already
+ * recorded under the same cursor.
  */
+export type CoalescedEngineEvent = RuntimeEvent | (Extract<RuntimeEvent, { kind: "delta" }> & { foldedTextLengths: number[] });
+
 export function coalesceReadyEngineDeltas(
   events: AsyncIterator<RuntimeEvent>,
   maxTextBytes = DELTA_TEXT_LIMIT_BYTES,
-): AsyncIterator<RuntimeEvent> {
+): AsyncIterator<CoalescedEngineEvent> {
   type Read = { result: IteratorResult<RuntimeEvent> } | { error: unknown };
   let pending: Promise<Read> | null = null;
   let carried: Read | null = null;
@@ -308,20 +313,24 @@ export function coalesceReadyEngineDeltas(
       if (head.done || head.value.kind !== "delta") return head;
       let merged = head.value;
       let bytes = Buffer.byteLength(merged.text);
+      const lengths = [merged.text.length];
       while (true) {
         const ready = await Promise.race([pull(), new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
         if (!ready) break;
         pending = null;
         const value = "result" in ready && !ready.result.done ? ready.result.value : null;
-        const added = value?.kind === "delta" && value.turnId === merged.turnId ? Buffer.byteLength(value.text) : null;
+        const added = value?.kind === "delta" && value.turnId === merged.turnId && value.seq === merged.seq + 1
+          ? Buffer.byteLength(value.text)
+          : null;
         if (value?.kind !== "delta" || added === null || bytes + added > maxTextBytes) {
           carried = ready;
           break;
         }
         merged = { ...value, text: merged.text + value.text };
         bytes += added;
+        lengths.push(value.text.length);
       }
-      return { done: false, value: merged };
+      return { done: false, value: lengths.length > 1 ? { ...merged, foldedTextLengths: lengths } : merged };
     },
     async return(value?: unknown) {
       carried = null;
@@ -334,7 +343,7 @@ export function coalesceReadyEngineDeltas(
 export function projectEngineHostEvent(
   conversationId: string,
   hostKey: string,
-  event: RuntimeEvent,
+  event: CoalescedEngineEvent,
 ): RuntimeEventInput | null {
   const base = {
     scope: { type: "session" as const, id: conversationId },
@@ -345,7 +354,9 @@ export function projectEngineHostEvent(
     return { ...base, kind: "turn-started", payload: { conversationId, turnId: event.turnId } };
   }
   if (event.kind === "delta") {
-    return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text: clipped(event.text, 8 * 1024) } };
+    const text = clipped(event.text, 8 * 1024);
+    const folded = "foldedTextLengths" in event && text === event.text ? { foldedTextLengths: event.foldedTextLengths } : {};
+    return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text }, ...folded };
   }
   if (event.kind === "voice-transcript") {
     return {

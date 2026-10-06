@@ -153,6 +153,24 @@ function engineProducerCursor(producerKind: string, producerKey: string): Engine
   return { prefix: producerKey.slice(0, separator + 1), sequence };
 }
 
+/** A folded delta stands under its last sequence, so the cursor check alone
+    would admit a group whose earlier deltas another writer already recorded:
+    a predecessor's append can commit after its successor read the cursor. Only
+    the text of the deltas after the recorded sequence is kept. */
+function unrecordedFoldedText(
+  input: NormalizedRuntimeEventInput,
+  sequence: number,
+  recorded: number,
+): NormalizedRuntimeEventInput {
+  const lengths = input.foldedTextLengths;
+  const text = input.payload.text;
+  if (input.kind !== "delta" || !lengths || typeof text !== "string") return input;
+  const recordedParts = lengths.length - (sequence - recorded);
+  if (recordedParts <= 0) return input;
+  const offset = lengths.slice(0, recordedParts).reduce((total, length) => total + length, 0);
+  return { ...input, payload: { ...input.payload, text: text.slice(offset) } };
+}
+
 function loadSecretKey(filename: string): Buffer {
   if (filename === ":memory:") return randomBytes(32);
   const keyFile = `${filename}.key`;
@@ -1829,7 +1847,8 @@ export class RuntimeJournal {
 
   close(): void { this.sessionHostMetadata.close(); this.db.close(); }
 
-  private appendInTransaction(input: NormalizedRuntimeEventInput): RuntimeEvent {
+  private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
+    let input = admitted;
     const producerKey = input.producer.eventKey ?? null;
     const engineCursor = producerKey ? engineProducerCursor(input.producer.kind, producerKey) : null;
     if (producerKey) {
@@ -1845,6 +1864,7 @@ export class RuntimeJournal {
             ).run(input.producer.kind, engineCursor.prefix, `${engineCursor.prefix}\uffff`, latest.producer_key);
             return JSON.parse(latest.event_json) as RuntimeEvent;
           }
+          if (latestCursor) input = unrecordedFoldedText(input, engineCursor.sequence, latestCursor.sequence);
         }
       } else {
         const duplicate = this.db.query<{ event_json: string }, [string, string]>("SELECT event_json FROM producer_receipts WHERE producer_kind = ? AND producer_key = ?").get(input.producer.kind, producerKey);

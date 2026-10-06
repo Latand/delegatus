@@ -547,7 +547,10 @@ describe("coalesceReadyEngineDeltas", () => {
     const deltas = appended.filter((event) => event.kind === "delta");
     expect(deltas.length).toBeLessThanOrEqual(5);
     expect(deltas.map((event) => event.payload.text).join("")).toBe(words.join(""));
-    for (const event of deltas) expect(Buffer.byteLength(String(event.payload.text))).toBeLessThanOrEqual(8 * 1024);
+    for (const event of deltas) {
+      expect(Buffer.byteLength(String(event.payload.text))).toBeLessThanOrEqual(8 * 1024);
+      expect(event.foldedTextLengths!.reduce((total, length) => total + length, 0)).toBe(String(event.payload.text).length);
+    }
     // Each append names the last sequence it folded, so the journal's producer
     // cursor still resumes after exactly the events it holds.
     expect(deltas.at(-1)!.producer?.eventKey).toBe("engine-host:codex:thread-final:6000");
@@ -562,7 +565,7 @@ describe("coalesceReadyEngineDeltas", () => {
     expect(await events.next()).toEqual({ done: false, value: delta(1, "first ") });
     const pending = events.next();
     setTimeout(() => stream.push(delta(2, "second "), delta(3, "third")), 5);
-    expect(await pending).toEqual({ done: false, value: delta(3, "second third") });
+    expect(await pending).toEqual({ done: false, value: { ...delta(3, "second third"), foldedTextLengths: [7, 5] } });
     stream.end();
     expect(await events.next()).toEqual({ done: true, value: undefined });
   });
@@ -576,11 +579,26 @@ describe("coalesceReadyEngineDeltas", () => {
     const events = coalesceReadyEngineDeltas(stream.iterator);
     for (let next = await events.next(); !next.done; next = await events.next()) seen.push(next.value);
     expect(seen).toEqual([
-      { kind: "delta", turnId: "turn-final", text: "ab", seq: 2 },
+      { kind: "delta", turnId: "turn-final", text: "ab", seq: 2, foldedTextLengths: [1, 1] },
       item,
       { kind: "delta", turnId: "turn-a", text: "c", seq: 4 },
-      { kind: "delta", turnId: "turn-b", text: "de", seq: 6 },
+      { kind: "delta", turnId: "turn-b", text: "de", seq: 6, foldedTextLengths: [1, 1] },
     ]);
+  });
+
+  test("a gap in the host's sequence ends the fold, so every folded length has its own sequence", async () => {
+    const stream = hostStream();
+    stream.push(delta(1, "a"), delta(2, "bb"), delta(4, "ccc"), delta(5, "d"));
+    stream.end();
+    const seen: RuntimeEvent[] = [];
+    const events = coalesceReadyEngineDeltas(stream.iterator);
+    for (let next = await events.next(); !next.done; next = await events.next()) seen.push(next.value);
+    expect(seen).toEqual([
+      { ...delta(2, "abb"), foldedTextLengths: [1, 2] },
+      { ...delta(5, "cccd"), foldedTextLengths: [3, 1] },
+    ]);
+    const projected = projectEngineHostEvent("conversation_gap", "codex:thread-gap", seen[1]);
+    expect(projected).toMatchObject({ payload: { text: "cccd" }, foldedTextLengths: [3, 1], producer: { eventKey: "engine-host:codex:thread-gap:5" } });
   });
 
   test("a failure read ahead is raised after the text folded before it", async () => {
@@ -594,7 +612,7 @@ describe("coalesceReadyEngineDeltas", () => {
       },
     };
     const events = coalesceReadyEngineDeltas(source);
-    expect(await events.next()).toEqual({ done: false, value: delta(2, "part1 part2 ") });
+    expect(await events.next()).toEqual({ done: false, value: { ...delta(2, "part1 part2 "), foldedTextLengths: [6, 6] } });
     await expect(events.next()).rejects.toBe(failure);
   });
 });

@@ -3898,6 +3898,39 @@ test("idle health with delayed text replay defers stale retirement fences and a 
   }
 });
 
+test("a folded engine delta records only the text after the producer cursor it overlaps", () => {
+  const dir = sandbox("folded-delta-overlap");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_folded_overlap";
+  const scope = { type: "session" as const, id: conversationId };
+  const delta = (sequence: number, text: string, foldedTextLengths?: number[]) => journal.append({
+    scope, kind: "delta", payload: { conversationId, turnId: "turn-folded", text },
+    producer: { kind: "codex-app-server", eventKey: `engine-host:codex:thread-folded:${sequence}` },
+    ...(foldedTextLengths ? { foldedTextLengths } : {}),
+  });
+  const recorded = () => journal.replay(0).events.filter((event) => event.kind === "delta").map((event) => event.payload.text);
+  try {
+    // A predecessor's late append of deltas 1..3 commits first.
+    delta(3, "[1][2][3]", [3, 3, 3]);
+    // The successor folded 1..5 from a cursor read before that commit.
+    delta(5, "[1][2][3][4][5]", [3, 3, 3, 3, 3]);
+    // A group wholly behind the cursor stays a duplicate.
+    const duplicate = delta(4, "[2][3][4]", [3, 3, 3]);
+    expect(duplicate.producer.eventKey).toBe("engine-host:codex:thread-folded:5");
+    // A group with no overlap is recorded whole.
+    delta(7, "[6][7]", [3, 3]);
+    expect(recorded()).toEqual(["[1][2][3]", "[4][5]", "[6][7]"]);
+    expect(journal.producerCursor("codex-app-server", "engine-host:codex:thread-folded:")).toBe(7);
+    expect(() => delta(9, "[8][9]", [3, 2])).toThrow("runtime folded delta lengths are invalid");
+    expect(() => journal.append({ scope, kind: "item", payload: { conversationId }, foldedTextLengths: [1] }))
+      .toThrow("runtime folded delta lengths are invalid");
+    expect(journal.producerCursor("codex-app-server", "engine-host:codex:thread-folded:")).toBe(7);
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("legacy retirement origin is recovered from commands on readback, snapshot and replay", () => {
   const dir = sandbox("retirement-origin");
   const filename = path.join(dir, "events.sqlite");

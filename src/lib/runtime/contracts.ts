@@ -150,6 +150,12 @@ export interface RuntimeEventInput {
       event, names the reading here so a row a new owner has published since
       is left as that owner wrote it. */
   expectedSessionRevision?: number;
+  /** A delta folded from consecutive engine deltas names the text length of
+      each one, oldest first; the last belongs to the sequence in its producer
+      key and each earlier one to the sequence before. The journal keeps only
+      the text after the sequence it already recorded, so a group that overlaps
+      an earlier writer's append is recorded exactly once. */
+  foldedTextLengths?: number[];
 }
 
 /** A fenced event met a session row that moved on after its writer read it. */
@@ -1109,6 +1115,13 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
     throw new Error(carriesCanonicalVoiceResponse
       ? "runtime terminal response payload exceeds 16 MiB"
       : "runtime event payload exceeds 16 KiB");
+  }
+  const folded = input.foldedTextLengths;
+  if (folded !== undefined && (normalized.kind !== "delta" || typeof normalized.payload.text !== "string"
+    || !Array.isArray(folded) || folded.length === 0 || folded.length > payloadLimit
+    || folded.some((length) => !Number.isSafeInteger(length) || length < 0)
+    || folded.reduce((total, length) => total + length, 0) !== normalized.payload.text.length)) {
+    throw new Error("runtime folded delta lengths are invalid");
   }
 }
 
