@@ -19,9 +19,21 @@ import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_M
  */
 
 let sandbox = "";
+let privacyState = "";
+let previousState: string | undefined;
 
-beforeEach(() => { sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-issue-report-")); });
-afterEach(() => { fs.rmSync(sandbox, { recursive: true, force: true }); });
+beforeEach(() => {
+  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-issue-report-"));
+  privacyState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-privacy-sources-"));
+  previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = privacyState;
+});
+afterEach(() => {
+  if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousState;
+  fs.rmSync(sandbox, { recursive: true, force: true });
+  fs.rmSync(privacyState, { recursive: true, force: true });
+});
 
 const SEAT = "conversation_seat";
 const SEAT_CALLER: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator" };
@@ -489,11 +501,12 @@ test("unpopulated machine fields and technical spans after a speech sentence sta
   expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
 });
 
-const unavailableNameSources = ["chats throws", "chats malformed", "messages throws", "messages malformed"];
+const unavailableNameSources = ["chats throws", "chats malformed", "messages throws", "messages malformed", "messages pagination malformed"];
 function unavailableNameReader(mode: string) {
   return async (url: string): Promise<Record<string, unknown>> => {
     if (url.endsWith("op=chats") && mode.startsWith("messages")) return { chats: [{ chat: "allowed-chat", postAllowed: true }] };
     if (mode.endsWith("throws")) throw new Error("private-source-error-must-stay-private");
+    if (mode === "messages pagination malformed") return { messages: [] };
     return {};
   };
 }
@@ -523,7 +536,7 @@ test("available empty sources allow reports, recovered people sources reject kno
     if (!available) throw new Error("privacy read unavailable");
     return url.endsWith("op=chats")
       ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
-      : { messages: [{ fromName: "Ada" }] };
+      : { messages: [{ fromName: "Ada" }], hasMore: false, nextCursor: null };
   } });
   expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable" });
   available = true;
@@ -534,6 +547,59 @@ test("available empty sources allow reports, recovered people sources reject kno
   empty.operatorSays((await shown(empty, digest)).en);
   expect(await empty.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(empty.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
+});
+
+test.each(["fifth chat", "older page", "remote without seat"])("known private names from %s are refused at both boundaries", async (source) => {
+  if (source === "remote without seat") fs.writeFileSync(path.join(privacyState, "project-remotes.json"), JSON.stringify({
+    schemaVersion: 1, remotes: { [`repo-${"1".repeat(32)}`]: `https://${["github", "com"].join(".")}/acme/HiddenWorkshop.git` },
+  }));
+  const h = harness({ controlRead: async (url) => {
+    if (url.endsWith("op=chats")) return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: true })) };
+    const params = new URLSearchParams(url.split("?")[1]);
+    if (source === "older page" && !params.has("cursor")) return { messages: [], hasMore: true, nextCursor: "older" };
+    return { messages: source === "older page" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
+  } });
+  const bodies = source === "remote without seat" ? ["HiddenWorkshop observed the failure.", "acme/HiddenWorkshop observed the failure."] : ["Person Later observed the failure."];
+  for (const body of bodies) {
+    const report = { title: REPORT.title, body };
+    const refused = await h.call(REPORTER, { action: "preview", ...report });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(source === "remote without seat" ? "project" : "person");
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  for (const body of bodies) {
+    const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+});
+
+test.each(["truncated chats", "missing cursor", "repeated cursor"])("incomplete %s refuses both privacy boundaries", async (mode) => {
+  const h = harness({ controlRead: async (url) => url.endsWith("op=chats")
+    ? { chats: [{ chat: "allowed-chat", postAllowed: true }], ...(mode === "truncated chats" ? { truncated: 1 } : {}) }
+    : { messages: [], hasMore: true, nextCursor: mode === "missing cursor" ? null : "repeated" },
+  });
+  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  const { digest } = recordIssueReportPreview(REPORT, REPORTER.conversationId!, { directory: sandbox });
+  h.operatorSays((await shown(h, digest)).uk);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  expect(h.published).toEqual([]);
+});
+
+test.each(["claude-accounts.json", "codex-accounts.json", "copilot-accounts.json", "project-aliases.json", "project-remotes.json"])("unreadable %s refuses both privacy boundaries", async (filename) => {
+  fs.writeFileSync(path.join(privacyState, filename), "{");
+  const h = harness({ controlRead: async () => ({ chats: [] }) });
+  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  const { digest } = recordIssueReportPreview(REPORT, REPORTER.conversationId!, { directory: sandbox });
+  h.operatorSays((await shown(h, digest)).en);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  expect(h.published).toEqual([]);
 });
 
 test("technical numeric evidence and source line references remain publishable", async () => {

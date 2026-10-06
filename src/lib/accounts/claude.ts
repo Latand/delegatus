@@ -313,7 +313,12 @@ function credentialPresence(home: string): Pick<ClaudeAccount, "authPresent" | "
 }
 function account(stored: StoredAccount): ClaudeAccount { const home = managedHome(stored.id); return { ...stored, home, projectsDir: projectsDirFor(home), ...(stored.provider ? { authPresent: readClaudeProviderToken(home) !== null } : credentialPresence(home)) }; }
 function main(): ClaudeAccount { const home = legacyClaudeHome(); return { id: DEFAULT_ID, label: "Main", kind: "legacy", home, projectsDir: projectsDirFor(home), ...credentialPresence(home), createdAt: 0 }; }
-export function listClaudeAccounts(): ClaudeAccount[] { recoverRemovalsAtStartup(); return [main(), ...readRegistry().registry.accounts.map(account)]; }
+export function listClaudeAccounts(options: { strict?: boolean } = {}): ClaudeAccount[] {
+  recoverRemovalsAtStartup();
+  const loaded = readRegistry();
+  if (options.strict && loaded.corrupt) throw new CorruptClaudeAccountsError();
+  return [main(), ...loaded.registry.accounts.map(account)];
+}
 /** Routing needs persisted membership only; credential discovery may spawn Keychain. */
 export function activeClaudeAccountId(): string {
   const { active, accounts, removals } = readRegistry().registry;

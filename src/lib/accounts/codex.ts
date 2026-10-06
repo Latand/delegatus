@@ -377,9 +377,11 @@ function defaultAccount(): CodexAccount {
   };
 }
 
-export function listCodexAccounts(): CodexAccount[] {
+export function listCodexAccounts(options: { strict?: boolean } = {}): CodexAccount[] {
   recoverRemovalsAtStartup();
-  return [defaultAccount(), ...readRegistry().registry.accounts.map(asAccount)];
+  const loaded = readRegistry();
+  if (options.strict && loaded.corrupt) throw new CorruptCodexAccountsError();
+  return [defaultAccount(), ...loaded.registry.accounts.map(asAccount)];
 }
 
 export class CodexLoginBusyError extends Error {

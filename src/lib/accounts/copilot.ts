@@ -110,7 +110,7 @@ export function legacyCopilotHome(env: NodeJS.ProcessEnv = process.env): string 
   return path.resolve(env.COPILOT_HOME?.trim() || path.join(os.homedir(), ".copilot"));
 }
 
-function readRegistry(): Registry {
+function readRegistry(requireComplete = false): Registry {
   try {
     const parsed = JSON.parse(fs.readFileSync(registryPath(), "utf8")) as Partial<Registry>;
     const accounts = Array.isArray(parsed.accounts)
@@ -118,8 +118,10 @@ function readRegistry(): Registry {
         && typeof item.id === "string" && ACCOUNT_ID.test(item.id) && item.id !== COPILOT_LEGACY_ACCOUNT_ID
         && typeof item.label === "string" && typeof item.createdAt === "number")
       : [];
+    if (requireComplete && (!Array.isArray(parsed.accounts) || accounts.length !== parsed.accounts.length)) throw new Error("Copilot account names are unreadable");
     return { version: 1, active: typeof parsed.active === "string" ? parsed.active : null, accounts };
-  } catch {
+  } catch (error) {
+    if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return { version: 1, active: null, accounts: [] };
   }
 }
@@ -146,8 +148,8 @@ function legacyAccount(): CopilotAccount | null {
   };
 }
 
-export function listCopilotAccounts(): CopilotAccount[] {
-  const managed = readRegistry().accounts.map((stored): CopilotAccount => ({
+export function listCopilotAccounts(options: { strict?: boolean } = {}): CopilotAccount[] {
+  const managed = readRegistry(options.strict).accounts.map((stored): CopilotAccount => ({
     id: stored.id,
     label: stored.label,
     kind: "managed",

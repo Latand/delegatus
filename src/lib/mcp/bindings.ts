@@ -101,7 +101,7 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
+import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 import {
   applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
@@ -3518,9 +3518,9 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
       // An unreadable registry contributes nothing.
     }
   };
-  collect(listClaudeAccounts);
-  collect(listCodexAccounts);
-  collect(listCopilotAccounts);
+  collect(() => listClaudeAccounts({ strict: requireComplete }));
+  collect(() => listCodexAccounts({ strict: requireComplete }));
+  collect(() => listCopilotAccounts({ strict: requireComplete }));
   const local: string[] = [];
   try {
     local.push(os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0] ?? "");
@@ -3537,11 +3537,13 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     const own = project ? canonicalOrchestratorProject(project) : null;
     const keys = new Set<string>();
     for (const seat of activeOrchestratorSeats()) keys.add(canonicalOrchestratorProject(seat.project));
-    const aliases = projectAliasSnapshot();
+    const aliases = projectAliasSnapshot({ strict: requireComplete });
+    const remotes = requireComplete ? recordedProjectRemotes({ strict: true }) : {};
     for (const key of Object.keys(aliases.displayNames)) keys.add(canonicalOrchestratorProject(key));
+    for (const key of Object.keys(remotes)) keys.add(key);
     for (const key of keys) {
-      if (key === own) continue;
-      const repository = githubRepositoryOfRemote(recordedProjectRemote(key));
+      if (!requireComplete && key === own) continue;
+      const repository = githubRepositoryOfRemote(requireComplete ? remotes[key] ?? null : recordedProjectRemote(key));
       projects.push({
         repository,
         names: [repository?.split("/")[1] ?? "", projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
@@ -3557,16 +3559,29 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
 async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
   const people = new Set<string>();
   try {
-    const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[] };
+    const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[]; truncated?: number };
     if (requireComplete && !Array.isArray(chats.chats)) throw new Error("Privacy chats read is malformed");
-    for (const chat of (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string").slice(0, 4)) {
-      const page = await readViewerControl(control, `/api/telegram/bot/agent?${new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" })}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[] };
-      if (requireComplete && !Array.isArray(page.messages)) throw new Error("Privacy people read is malformed");
-      for (const message of page.messages ?? []) {
-        for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
-          if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
+    if (requireComplete && chats.truncated) throw new Error("Privacy chats read is incomplete");
+    const allowed = (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string");
+    for (const chat of requireComplete ? allowed : allowed.slice(0, 4)) {
+      let cursor: string | null = null;
+      const seen = new Set<string>();
+      do {
+        const params = new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" });
+        if (cursor) params.set("cursor", cursor);
+        const page = await readViewerControl(control, `/api/telegram/bot/agent?${params}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[]; hasMore?: boolean; nextCursor?: string | null };
+        if (requireComplete && (!Array.isArray(page.messages) || typeof page.hasMore !== "boolean"
+          || !(page.nextCursor === null || typeof page.nextCursor === "string")
+          || (!page.hasMore && page.nextCursor !== null))) throw new Error("Privacy people read is malformed");
+        for (const message of page.messages ?? []) {
+          for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
+            if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
+          }
         }
-      }
+        cursor = requireComplete && page.hasMore ? page.nextCursor ?? null : null;
+        if (requireComplete && page.hasMore && (!cursor?.trim() || seen.has(cursor))) throw new Error("Privacy people read is incomplete");
+        if (cursor) seen.add(cursor);
+      } while (cursor);
     }
   } catch (error) {
     if (requireComplete) throw error;
