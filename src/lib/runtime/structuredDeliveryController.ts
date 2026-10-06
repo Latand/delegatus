@@ -12,7 +12,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
@@ -103,6 +103,9 @@ interface ControllerState {
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
+  /* Optional: a controller published by a bundle realm built before #2515
+     shares this object and has no such hook. */
+  settleHostlessSessions?: (() => Promise<number>) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -177,6 +180,7 @@ function retireStructuredDeliveryPublication(): void {
   state.republishActiveHost = null;
   state.releaseActiveHost = null;
   state.terminateActiveHost = null;
+  state.settleHostlessSessions = null;
   state.completeActive = null;
   setStructuredDeliveryKick(null);
   markStructuredDeliveryControllerUnavailable();
@@ -536,6 +540,56 @@ function registrySessionProjection(
   };
 }
 
+/** A session row that says a host is working on a turn, or is about to. */
+function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "turn" | "activeTurnId">): boolean {
+  return session.turn === "running" || session.turn === "interrupt_requested" || !!session.activeTurnId
+    || session.host === "registering" || session.host === "recovering";
+}
+
+/** How often the controller looks for session rows left behind by ended hosts. */
+export const HOSTLESS_SETTLE_INTERVAL_MS = 60_000;
+/** Keyed session reads one sweep may make. A row ended since the last sweep is
+    one read; the rows that were already stale when a Viewer starts are worked
+    through newest first, this many a minute. What a sweep has left over goes
+    to rows already read, longest ago first. */
+const HOSTLESS_SETTLE_BATCH = 64;
+
+/**
+ * The conversations whose registry row proves no process hosts them (#2515),
+ * each with the instant its row was ended.
+ *
+ * Ending a host clears its row to `dead` with no host columns, no process and
+ * no claim. That row is the proof: every host, live or being adopted, holds a
+ * claim or a recorded process on it, and a launch on its way holds a receipt
+ * that has not settled. A row that keeps any of those is left to its owner.
+ */
+function hostlessConversations(snapshot: RegistryFile): Map<string, { key: string; endedAt: string }> {
+  const launching = new Set<string>();
+  for (const receipt of Object.values(snapshot.receipts)) {
+    if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
+    launching.add(resolveConversationAlias(snapshot, receipt.conversationId));
+  }
+  const hostless = new Map<string, { key: string; endedAt: string }>();
+  for (const conversation of Object.values(snapshot.conversations)) {
+    const generation = conversation.generations.at(-1);
+    if (!generation || launching.has(conversation.id)) continue;
+    const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+    const entry = snapshot.entries[key];
+    if (!entry || (entry.status !== "dead" && entry.status !== "unhosted")) continue;
+    if (entry.host || entry.structuredHost?.process || entry.claimOwner || entry.pendingAction
+      || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) continue;
+    hostless.set(conversation.id, { key, endedAt: entry.updatedAt });
+  }
+  /* Journal rows keep the id their writer knew, including aliases made by a
+     later conversation migration. Read each historical id under the same
+     canonical owner's proof, even when the row has no artifact path. */
+  for (const alias of Object.keys(snapshot.conversationAliases)) {
+    const owner = hostless.get(resolveConversationAlias(snapshot, alias as `conversation_${string}`));
+    if (owner) hostless.set(alias, owner);
+  }
+  return hostless;
+}
+
 async function publishHostState(
   client: RuntimeHostClient,
   registry: AgentRegistry,
@@ -665,6 +719,9 @@ export async function bindStructuredDeliveryQueue(
     liveness?: TurnLivenessDependencies;
     /** Answers the Claude tool requests nobody can (#2215); tests pass their own. */
     permissionGuard?: PermissionRequestGuard;
+    /** How often session rows of ended hosts are settled; 0 leaves it to a
+        direct call. Tests pass their own. */
+    hostlessSettleIntervalMs?: number;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -1059,6 +1116,7 @@ export async function bindStructuredDeliveryQueue(
       : null,
   );
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  let settleTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
@@ -1184,6 +1242,7 @@ export async function bindStructuredDeliveryQueue(
   const publishCurrentFallback = async (
     conversationId: string,
     current?: RuntimeSession,
+    expectedSessionRevision?: number,
   ): Promise<void> => {
     const projection = registrySessionProjection(registry, conversationId);
     if (!projection) return;
@@ -1201,7 +1260,7 @@ export async function bindStructuredDeliveryQueue(
       && current.artifactPath === payload.artifactPath
       && current.activeTurnId === null) return;
     projectionRevision += 1;
-    await client.append({
+    const event: RuntimeEventInput = {
       scope: { type: "session", id: conversationId },
       kind: "session-status",
       producer: {
@@ -1209,11 +1268,102 @@ export async function bindStructuredDeliveryQueue(
         eventKey: `projection:${projectionEpoch}:${projectionRevision}`,
       },
       payload,
-    });
+    };
+    if (expectedSessionRevision === undefined) await client.append(event);
+    else {
+      if (!client.appendSessionFenced) throw new Error("runtime host session fence is unavailable");
+      await client.appendSessionFenced({ ...event, expectedSessionRevision });
+    }
   };
   const refreshCurrentProjection = async (conversationId: string | null): Promise<void> => {
     const republished = await republishCurrentHosts();
     if (conversationId && !republished.has(conversationId)) await publishCurrentFallback(conversationId);
+  };
+  /* Closes the turns nothing else can close (#2515). A session row is written
+     by the host that runs the turn, so a row whose host died with this Viewer
+     keeps `running` until something republishes it, and nothing did: every
+     path that ends a host clears the registry row's host columns, the startup
+     pass below publishes only rows that still have them, and the reaper ends
+     dead hosts from a sidecar process that publishes no projections at all.
+     Such a row then read as an open turn for as long as it existed, and the
+     update drain counted it.
+
+     The registry row alone decides, whatever the session row's age: a
+     conversation the registry proves hostless has no process that could finish
+     the turn, so the registry's verdict is published over the stale one. A row
+     served by a host registered here is left alone.
+
+     It runs on this controller's own timer, in the one process that publishes
+     projections, and stays out of startup: each ended row costs one keyed
+     session read, and startup's budget has no room for a thousand of them.
+
+     One reading never settles a row for good. The journal takes a session row
+     from its own writers, on no schedule the registry knows of, so a row that
+     was absent or closed when it was read can be published open afterwards
+     with the registry row untouched. Rows not read yet go first, newest
+     first; the rest of each sweep's batch reads again the rows read longest
+     ago, so every ended row is asked about in turn and a sweep never makes
+     more than its batch of reads.
+
+     The verdict is old by the time it is written: reading the session row is
+     awaited, and so is the write. A launch can take the conversation in
+     either gap, and its host then publishes its own turn. So the registry row
+     is read again after the session row, and the write names the revision of
+     the session row it read, which the journal compares in the transaction
+     that records it. A row that gained an owner, or a session row that moved,
+     is left to the next sweep. The write uses a dedicated fenced RPC: a host
+     from before this fence rejects it, so a new web generation never settles
+     through an incumbent's ordinary append. After host succession the next
+     sweep retries through the same socket, with no cached capability verdict. */
+  const settledRows = new Map<string, { endedAt: string; sweep: number }>();
+  let settleSweep = 0;
+  const settleHostlessSessions = async (): Promise<number> => {
+    if (superseded() || !client.appendSessionFenced) return 0;
+    const registrySnapshot = registry.readOnlySnapshot();
+    const hostless = hostlessConversations(registrySnapshot);
+    for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
+    const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
+    const unread = candidates
+      .filter(([id, row]) => settledRows.get(id)?.endedAt !== row.endedAt)
+      .sort((left, right) => right[1].endedAt.localeCompare(left[1].endedAt))
+      .slice(0, HOSTLESS_SETTLE_BATCH);
+    const again = candidates
+      .filter(([id, row]) => settledRows.get(id)?.endedAt === row.endedAt)
+      .sort((left, right) => settledRows.get(left[0])!.sweep - settledRows.get(right[0])!.sweep)
+      .slice(0, HOSTLESS_SETTLE_BATCH - unread.length);
+    const pending = [...unread, ...again];
+    if (pending.length === 0) return 0;
+    settleSweep += 1;
+    /* A client with no keyed read answers from one snapshot. Only the axes
+       are read, so the voice bodies stay in the journal. */
+    let listed: Map<string, RuntimeSession> | null = null;
+    if (!client.readSession) {
+      if (typeof client.snapshot !== "function") return 0;
+      try {
+        const runtime = await client.snapshot(undefined, { voiceBodiesFor: [], timeoutMs: 10_000 });
+        listed = new Map((runtime.sessions ?? []).map((session) => [session.conversationId, session]));
+      } catch { return 0; }
+    }
+    let settled = 0;
+    for (const [conversationId, row] of pending) {
+      if (superseded()) break;
+      let session: RuntimeSession | null;
+      /* A read that failed says nothing: the row is asked about again on the
+         next sweep, and the rest of this one is left for then too. */
+      try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
+      catch { break; }
+      const current = hostlessConversations(registry.readOnlySnapshot()).get(conversationId);
+      if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
+      if (session && sessionClaimsOpenTurn(session)) {
+        /* A write the journal refused or never received settles nothing, as
+           a failed read does. */
+        try { await publishCurrentFallback(conversationId, session, session.revision); }
+        catch { break; }
+        settled += 1;
+      }
+      settledRows.set(conversationId, { endedAt: row.endedAt, sweep: settleSweep });
+    }
+    return settled;
   };
   /* Taking a seat and giving one up are the only two writers of a host's
      lifecycle, and each writes both of its indexes — what a delivery resolves
@@ -1547,6 +1697,8 @@ export async function bindStructuredDeliveryQueue(
     queue.retire();
     if (drainTimer) clearTimeout(drainTimer);
     drainTimer = null;
+    if (settleTimer) clearInterval(settleTimer);
+    settleTimer = null;
     for (const timer of inheritedRetries.values()) clearTimeout(timer);
     inheritedRetries.clear();
     for (const registration of registrations.values()) {
@@ -1565,6 +1717,7 @@ export async function bindStructuredDeliveryQueue(
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
       state.detachRetiredActiveHost = null;
+      state.settleHostlessSessions = null;
       state.completeActive = null;
       setStructuredDeliveryKick(null);
     }
@@ -1647,6 +1800,19 @@ export async function bindStructuredDeliveryQueue(
     return completion;
   };
   state.completeActive = complete;
+  state.settleHostlessSessions = settleHostlessSessions;
+  const settleIntervalMs = dependencies.hostlessSettleIntervalMs ?? HOSTLESS_SETTLE_INTERVAL_MS;
+  if (settleIntervalMs > 0) {
+    let sweeping = false;
+    settleTimer = setInterval(() => {
+      if (sweeping) return;
+      sweeping = true;
+      void settleHostlessSessions()
+        .catch(() => { console.error("[structured delivery] dead-host session settlement failed"); })
+        .finally(() => { sweeping = false; });
+    }, settleIntervalMs);
+    settleTimer.unref?.();
+  }
   state.everPublished = true;
   /* The successor now owns every hook, so the predecessor's teardown finds
      `state.activeQueue !== queue` and unwinds only its own timers, host
@@ -1675,6 +1841,16 @@ export function hasStructuredDeliveryController(registry: AgentRegistry): boolea
 
 export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
+}
+
+/**
+ * Publishes the registry's verdict over session rows that still claim an open
+ * turn for a conversation the registry proves hostless (#2515): one sweep of
+ * what the controller does on its own timer. Zero when this process publishes
+ * no delivery controller, since only its owner writes projections.
+ */
+export async function settleHostlessSessionProjections(): Promise<number> {
+  return await state.settleHostlessSessions?.() ?? 0;
 }
 
 export function structuredDeliveryHostForConversation(conversationId: string): EngineHost | null {

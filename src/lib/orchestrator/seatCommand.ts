@@ -32,6 +32,7 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { derivedSpawnTitle } from "@/lib/title";
 import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 
 function operatorTelegramConnected(): boolean {
   try {
@@ -440,10 +441,7 @@ export interface SeatCommandResult {
 
 function agentSeatLaunchHold(triggeredBy: OrchestratorSeatTrigger | null): SeatCommandResult | null {
   const hold = triggeredBy?.kind === "agent" ? activeDrain() : null;
-  return hold ? { status: 409, body: {
-    error: "new launches are held while the automatic update drains running work",
-    code: "launch_held_for_update", target: hold.target, since: hold.since,
-  } } : null;
+  return hold ? { status: 409, body: { ...launchHoldRefusal(hold) } } : null;
 }
 
 function text(value: unknown): string {
