@@ -314,6 +314,30 @@ function virtualenvRoot(worktree: string, ignored: string): string | null {
   return null;
 }
 
+/** A collapsed cache inventory must still preserve nested environments and
+    evidence containers. The outer cache name cannot prove their inputs. */
+function rebuildableCacheContents(directory: string): boolean {
+  if (containsGitCheckout(directory)) return false;
+  const pending = [directory];
+  let visited = 0;
+  try {
+    const root = fs.lstatSync(directory);
+    if (!root.isDirectory()) return root.isFile();
+    while (pending.length) {
+      const current = pending.pop()!;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (++visited > MEASURE_ENTRY_LIMIT) return false;
+        // Inspect the entries even when Git returned just the outer directory.
+        if (entry.name === "pyvenv.cfg") return false;
+        const child = path.join(current, entry.name);
+        if (entry.name === ".artifacts" && !emptyDirectory(child)) return false;
+        if (entry.isDirectory()) pending.push(child);
+      }
+    }
+    return true;
+  } catch { return false; }
+}
+
 /** An ignored path a removal may take after all: empty, a known generated
     output, or a container holding only bytecode. A virtual environment can
     also carry unique logs or source; its marker proves no file disposable. */
@@ -331,7 +355,7 @@ function disposableIgnored(worktree: string, ignored: string, checked: Map<strin
   }
   if (generated) {
     let safe = checked.get(generated);
-    if (safe === undefined) { safe = containsGitCheckout(generated) === null; checked.set(generated, safe); }
+    if (safe === undefined) { safe = rebuildableCacheContents(generated); checked.set(generated, safe); }
     return safe;
   }
   return onlyRebuildableContents(target);
@@ -569,11 +593,14 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
   for (const file of files) {
     const knownLayout = file === (runDirectory ? path.join(runDirectory, "merge-batch.json") : null);
     const locked = fs.existsSync(accessible(file + ".lock"));
+    const physicalRun = resolvePhysicalPath(accessible(path.dirname(file)));
     const holder = processes.find(process => process.paths.some(target =>
-      samePath(target, file) || samePath(target, path.dirname(file)) || inside(target, file + ".lock")));
+      inside(target, path.dirname(file))
+      || inside(resolvePhysicalPath(accessible(target)), physicalRun)));
+    const holderDetail = holder ? `pid ${holder.pid} holds merge batch ${holder.paths.some(target => samePath(target, file)) ? "state" : "run"}` : null;
     // An open descriptor survives unlink/atomic replacement. The process
     // still owns this run even when the path no longer has a readable file.
-    if (knownLayout && holder) return { owned, hold: `pid ${holder.pid} holds merge batch state` };
+    if (knownLayout && holder) return { owned, hold: holderDetail };
     let state: { version?: unknown; work?: unknown; branch?: unknown; landed?: unknown;
       resolving?: { work?: unknown }; rows?: { status?: unknown; detail?: unknown }[] };
     try {
@@ -594,8 +621,7 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
     const settled = state.landed === true && !state.resolving && state.rows!.every(row => row
       && (row.status === "needs-review" || row.status === "head-moved" || row.status === "culprit"
         || row.status === "merged" && (row.detail === "closed" || row.detail === "head moved after landing; original kept open")));
-    if (!settled || locked || holder) return { owned, hold: holder
-      ? `pid ${holder.pid} holds merge batch state` : "merge batch still owns checkout" };
+    if (!settled || locked || holder) return { owned, hold: holder ? holderDetail : "merge batch still owns checkout" };
   }
   return { owned, hold: null };
 }
@@ -1114,7 +1140,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         // A unique log or source added during any async check changes a
         // fixture bundle's classification. Keep the whole directory then.
         if (path.basename(next) === "bundle" && !fixtureBundle(accessible(next))) continue;
-        if (containsGitCheckout(accessible(next))) continue;
+        if (!rebuildableCacheContents(accessible(next))) continue;
         if (registrationHold(root, worktree, next, accessible) || heldBy(readGuards(), worktree)) continue;
         // The last Git read also yields. Refuse a replaced checkout, cache or
         // artifact parent before recursive removal can follow its new target.

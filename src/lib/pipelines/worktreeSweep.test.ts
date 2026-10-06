@@ -1130,7 +1130,7 @@ test("landed merger state protects deferred resolve work without a process in it
   expect(removed.removed).toHaveLength(1);
 });
 
-test.each(["state-file", "deleted-state-file", "unlinked-state-file", "run-directory"])("a process holding a merger's %s keeps a settled batch while running elsewhere", async held => {
+test.each(["state-file", "deleted-state-file", "unlinked-state-file", "run-directory", "run-log", "deleted-run-log"])("a process holding a merger's %s keeps a settled batch while running elsewhere", async held => {
   const batch = mergerBatch();
   batch.state.rows[1]!.status = "needs-review";
   batch.save();
@@ -1138,8 +1138,8 @@ test.each(["state-file", "deleted-state-file", "unlinked-state-file", "run-direc
   if (held === "unlinked-state-file") fs.unlinkSync(batch.file);
   const report = await sweepMergedWorktrees({ ...batch.options, previous: old,
     scan: () => ({ ownNamespace: null, processes: [{ pid: 7654321, namespace: null, stamped: true,
-      paths: [batch.root, held === "run-directory" ? batch.run : batch.file + (held.endsWith("state-file") && held !== "state-file" ? " (deleted)" : "")] }] }) });
-  expect(report.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "in-use", detail: "pid 7654321 holds merge batch state" })]);
+      paths: [batch.root, held === "run-directory" ? batch.run : held.endsWith("run-log") ? path.join(batch.run, "logs/resolve.log") + (held === "deleted-run-log" ? " (deleted)" : "") : batch.file + (held.endsWith("state-file") && held !== "state-file" ? " (deleted)" : "")] }] }) });
+  expect(report.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "in-use", detail: `pid 7654321 holds merge batch ${held === "run-directory" || held.endsWith("run-log") ? "run" : "state"}` })]);
   expect(fs.existsSync(batch.dir)).toBe(true);
   expect(branchExists(batch.root, batch.branch)).toBe(true);
 });
@@ -1159,6 +1159,62 @@ test.skipIf(process.platform !== "linux")("a real open descriptor to an unlinked
     expect(fs.existsSync(batch.dir)).toBe(true);
     expect(branchExists(batch.root, batch.branch)).toBe(true);
   } finally { fs.closeSync(fd); }
+});
+
+for (const unlinked of [false, true]) test.skipIf(process.platform !== "linux")(`a real merger log descriptor retains its batch when unlinked=${unlinked}`, async () => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  const log = path.join(batch.run, "logs/resolve.log");
+  fs.mkdirSync(path.dirname(log));
+  fs.writeFileSync(log, "active resolution");
+  const fd = fs.openSync(log, "r");
+  let held = old;
+  try {
+    if (unlinked) fs.unlinkSync(log);
+    const report = await sweepMergedWorktrees({ ...batch.options, previous: old, scan: () => scanProcesses() });
+    held = report;
+    expect(report.removed).toEqual([]);
+    expect(report.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "in-use", detail: `pid ${process.pid} holds merge batch run` })]);
+    expect(fs.existsSync(batch.dir)).toBe(true);
+    expect(branchExists(batch.root, batch.branch)).toBe(true);
+  } finally { fs.closeSync(fd); }
+  const resumed = await sweepMergedWorktrees({ ...batch.options, previous: held, scan: () => scanProcesses() });
+  expect(resumed.kept[0]?.reason).toBe("retention");
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+  const finished = await sweepMergedWorktrees({ ...batch.options, previous: resumed,
+    now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS, scan: () => scanProcesses() });
+  expect(finished.removed).toHaveLength(1);
+  expect(branchExists(batch.root, batch.branch)).toBe(false);
+}, 15_000);
+
+test.skipIf(process.platform === "win32")("an aliased merger log path holds the physical run", async () => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  const alias = path.join(caseDir, "run-alias");
+  fs.symlinkSync(batch.run, alias);
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: old,
+    scan: () => ({ ownNamespace: null, processes: [{ pid: 7654321, namespace: null, stamped: true, paths: [path.join(alias, "logs/resolve.log")] }] }) });
+  expect(report.kept[0]?.reason).toBe("in-use");
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
+test("a merger log holder acquired during measurement prevents removal", async () => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  let active = false;
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: old,
+    measure: async () => { active = true; return 123; },
+    scan: () => ({ ownNamespace: null, processes: active ? [{ pid: 7654321, namespace: null, stamped: true, paths: [path.join(batch.run, "logs/resolve.log")] }] : [] }) });
+  expect(report.kept[0]?.reason).toBe("in-use");
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
 });
 
 test.each(["measurement", "final-status"])("merger ownership acquired during %s is rechecked before removal", async phase => {
@@ -1495,10 +1551,10 @@ test("self-update's release checkouts are left to self-update", async () => {
   expect(fs.existsSync(release)).toBe(true);
 });
 
-for (const name of [".venv-lane", ".venv"]) test(`a virtual environment ${name} preserves unique logs and source`, async () => {
+for (const name of [".venv-lane", ".venv", ".cache/.venv", ".next/.venv", "node_modules/.venv"]) test(`a virtual environment ${name} preserves unique logs and source`, async () => {
   const root = repository();
-  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n`);
-  const { dir, tip } = lane(root, path.join(caseDir, "venv-lane"), "topic/venv");
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name.split("/")[0]}/\n`);
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-venv"), "topic/venv");
   const venv = path.join(dir, name);
   fs.mkdirSync(path.join(venv, "lib"), { recursive: true });
   fs.writeFileSync(path.join(venv, "pyvenv.cfg"), "home = /usr/bin\n");
@@ -1508,12 +1564,47 @@ for (const name of [".venv-lane", ".venv"]) test(`a virtual environment ${name} 
   fs.writeFileSync(path.join(venv, "unique-run.log"), "unique log");
   fs.mkdirSync(path.join(venv, "out"));
   fs.writeFileSync(path.join(venv, "out/desktop.png"), "unique capture");
-  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(131, "topic/venv", tip)] }));
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], pipelines: [pipeline({ id: "venv", repoDir: root, worktreeDir: dir, branch: "topic/venv" })], prs: [merged(131, "topic/venv", tip)] }));
   expect(report.removed).toEqual([]);
   expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
   expect(fs.readFileSync(path.join(venv, "unique-run.log"), "utf8")).toBe("unique log");
   expect(fs.readFileSync(path.join(venv, "lib/site.py"), "utf8")).toBe("installed");
   expect(fs.readFileSync(path.join(venv, "out/desktop.png"), "utf8")).toBe("unique capture");
+});
+
+test.each([".cache", ".next", "node_modules"])("%s preserves a collapsed nested evidence container", async name => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n`);
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-evidence"), "topic/evidence");
+  const evidence = path.join(dir, name, ".artifacts");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, "capture.png"), "unique capture");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], pipelines: [pipeline({ id: "evidence", repoDir: root, worktreeDir: dir, branch: "topic/evidence" })], prs: [merged(132, "topic/evidence", tip)] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]?.reason).toBe("ignored-files");
+  expect(fs.readFileSync(path.join(evidence, "capture.png"), "utf8")).toBe("unique capture");
+});
+
+test.each([".next", "node_modules"])("%s preserves an environment added during trim measurement", async name => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".next/\n.artifacts/\n");
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-late-env"), "topic/late-env");
+  fs.mkdirSync(path.join(dir, ".artifacts"));
+  fs.writeFileSync(path.join(dir, ".artifacts/capture.png"), "unique capture");
+  const cache = path.join(dir, name);
+  fs.mkdirSync(cache, { recursive: true });
+  const log = path.join(cache, ".venv/unique.log");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], pipelines: [pipeline({ id: "late-env", repoDir: root, worktreeDir: dir, branch: "topic/late-env" })], prs: [merged(133, "topic/late-env", tip)],
+    measure: async directory => {
+      if (directory === cache) {
+        fs.mkdirSync(path.dirname(log), { recursive: true });
+        fs.writeFileSync(path.join(path.dirname(log), "pyvenv.cfg"), "home = /usr/bin\n");
+        fs.writeFileSync(log, "unique log");
+      }
+      return 123;
+    } }));
+  expect(report.trimmed.some(row => row.path === cache)).toBe(false);
+  expect(fs.readFileSync(log, "utf8")).toBe("unique log");
 });
 
 test("a fixture bundle is trimmed only when it holds nothing but bundled fixtures", async () => {
