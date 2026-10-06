@@ -173,6 +173,20 @@ and teardown pass all six tests with 27 assertions. The actual native
 response-injection file then passes all six cases and its enclosing guard,
 with zero owned survivors among the 55 recorded sample identities.
 
+The next native gate found a direct CLI helper whose stop method sent KILL
+and returned before process exit. The ownership hook reaped it and failed
+teardown despite two passing assertions cases. That helper now awaits the
+shared bounded stop in every finally block. Its real installed-CLI regression
+passes both cases with 31 assertions and a clean enclosing guard. Searches
+found the earlier installed-CLI test precedent, with no earlier cleanup fix.
+
+A later native campaign timed out in the unchanged oversized replay test.
+Its exact focused case also times out on the merge base in fresh isolation,
+with the same four assertions reached. Opened prior investigations document
+that timeout on clean main. The production source and test match the merge
+base. This is a confirmed inherited native-check failure; publication evidence
+distinguishes it from the cleanup defects above.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -295,7 +309,7 @@ Linux path.
 | `src/lib/runtime/agentMemory.scope.test.ts` | 9, 19 | owned |
 | `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
 | `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 782, 858, 2276, 2351 | owned |
-| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 42, 61 | owned |
+| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 43, 62 | owned |
 | `src/lib/runtime/codexAppServerHost.injectResponses.test.ts` | 90 | owned |
 | `src/lib/runtime/codexAppServerHost.test.ts` | 5043 | owned |
 | `src/lib/runtime/codexHistoryReader.test.ts` | 402, 502, 505 | owned |
@@ -437,6 +451,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
 | `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
 | `scripts/verify-native-codex-runtime.ts` | Preserves the existing manager connection for nested containment, with one named file per process and a five-minute bound. |
+| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | The direct CLI helper now awaits bounded handle termination in every finally block. |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/codexAppServerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/copilotAcpHost.integration.test.ts` | Calls a product launch port; the preload owns real process creation. |
