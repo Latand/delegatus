@@ -15,7 +15,8 @@ import type { RuntimeEventInput, RuntimeHostAxis, RuntimeSession, RuntimeTurnAxi
 import type { Pipeline, PipelineCursorState } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { RuntimeJournal } from "../../runtime-host/journal";
-import { productionDeps } from "./instance";
+import type { SessionHostMetadata } from "../../runtime-host/journalSessionMetadata";
+import { productionDeps, registeredTurnOwnerReader } from "./instance";
 import { probeQuiet, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
@@ -26,6 +27,7 @@ let child: ReturnType<typeof Bun.spawn>;
 
 function ports(journal: RuntimeJournal): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => journal.snapshot(),
+    turnOwners: registeredTurnOwnerReader(() => f.client),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
 }
@@ -107,6 +109,156 @@ function stage(owner: object, state: Pipeline["state"] = "running", cursor: Pipe
     runs: [{ stageId: "build", attempts: [{ n: 1, ...owner }] }] } as unknown as Pipeline;
 }
 
+function inactiveHistory() {
+  for (let n = 0; n < 129; n++) {
+    const file = join(f.dir, `finished-${n}.jsonl`);
+    const owner = f.registry.ensureConversation("codex", file, "fixture");
+    const key = { engine: "codex" as const, sessionId: owner.generations[0]!.id };
+    f.registry.upsert({ key, artifactPath: file, cwd: f.dir, accountId: "fixture", status: "dead", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    f.journal.append({ scope: { type: "session", id: owner.id }, kind: "session-status",
+      producer: { kind: "fixture", eventKey: `finished-${n}` }, payload: {
+        sessionKey: key, hostKind: "unhosted", host: "dead", turn: "idle", activeTurnId: null,
+        artifactPath: file, provenance: "derived" } });
+  }
+}
+
+function snapshotSelection(indexed: boolean, target = f.conversation.id) {
+  const metadata = (f.journal as unknown as { sessionHostMetadata: SessionHostMetadata }).sessionHostMetadata;
+  metadata.close();
+  if (indexed) {
+    for (let step = 0; !metadata.ready && step < 100; step++) metadata.step();
+    expect(metadata.ready).toBe(true);
+  } else metadata.ready = false;
+  const rows = f.journal.snapshot().sessions;
+  expect(rows).toHaveLength(128);
+  expect(rows.some(row => row.conversationId === target)).toBe(false);
+  expect(f.journal.readSession({ conversationId: target })).not.toBeNull();
+}
+
+for (const status of ["dead", "unhosted", "idle"] as const) {
+  for (const indexed of [false, true]) {
+    test(`snapshot cap preserves live ${status} fallback owner with ${indexed ? "indexed" : "legacy"} selection`, async () => {
+      journalRow();
+      await fallback(status);
+      inactiveHistory();
+      snapshotSelection(indexed);
+      const p = ports(f.journal), reader = p.turnLiveness!;
+      const asked: string[] = [];
+      p.turnLiveness = async (row, probe) => { asked.push(row.conversationId); return reader(row, probe); };
+      expect((await activity())[0]).toMatchObject({ host: { state: "alive" }, turnState: "busy" });
+      expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0 } });
+      expect(asked.filter(id => id === f.conversation.id)).toHaveLength(1);
+    });
+  }
+  test(`snapshot cap keeps live ${status} owner after unresolved history expires`, async () => {
+    journalRow();
+    await fallback(status);
+    // These newer rows have no registry binding or readable transcript.
+    for (let n = 0; n < 129; n++) {
+      f.journal.append({ scope: { type: "session", id: `conversation_${randomUUID()}` }, kind: "session-status",
+        producer: { kind: "fixture", eventKey: `unknown-${n}` }, payload: {
+          sessionKey: { engine: "codex", sessionId: `unknown-${n}` }, hostKind: "unhosted", host: "unhosted",
+          turn: "unknown", activeTurnId: null, provenance: "derived" } });
+    }
+    snapshotSelection(true);
+    const p = ports(f.journal), now = Date.now();
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: 129, unresolved: 128 } });
+    expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: false,
+      blockers: { turns: 1, unresolved: 128, unresolvedBlocking: 0 } });
+  });
+  for (const control of ["dead", "reused", "idle"] as const) {
+    test(`snapshot cap releases ${control} owner after ${status} fallback`, async () => {
+      if (control === "dead") { child.kill(); await child.exited; }
+      if (control === "idle") settleTranscript();
+      if (control === "reused") {
+        const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+        f.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!,
+          process: { ...entry.structuredHost!.process!, startIdentity: "different-start" } } });
+      }
+      journalRow();
+      await fallback(status);
+      inactiveHistory();
+      snapshotSelection(true);
+      const p = ports(f.journal), reader = p.turnLiveness!;
+      let asked = false;
+      p.turnLiveness = async (row, probe) => { if (row.conversationId === f.conversation.id) asked = true; return reader(row, probe); };
+      expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+      expect(asked).toBe(true);
+    });
+  }
+}
+
+test("a registered live owner without a journal projection still holds the drain", async () => {
+  expect(f.journal.snapshot().sessions).toHaveLength(0);
+  const p = ports(f.journal);
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  child.kill();
+  await child.exited;
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+});
+
+test.each(["live", "unowned", "dead", "reused"] as const)("a hidden %s setup receipt is judged before its conversation binding materializes", async (kind) => {
+  settleTranscript();
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture" });
+  if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
+  const disk = f.registry.snapshot(), receipt = disk.receipts[begun.receipt.launchId]!;
+  const identity = captureProcessIdentity(child.pid)!;
+  receipt.admissionOwner = kind === "unowned" ? null : kind === "reused"
+    ? { ...identity, startIdentity: "different-start" } : identity;
+  if (kind === "dead") { child.kill(); await child.exited; }
+  delete disk.conversations[receipt.conversationId];
+  writeFileSync(f.registry.filename, JSON.stringify(disk));
+  expect(f.registry.readOnlySnapshot().conversations[receipt.conversationId]).toBeUndefined();
+  f.journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "session-status",
+    producer: { kind: "fixture", eventKey: "receipt-setup" }, payload: {
+      sessionKey: { engine: "codex", sessionId: "receipt-setup" }, hostKind: "unhosted", host: "unhosted",
+      turn: "unknown", activeTurnId: null, provenance: "derived" } });
+  inactiveHistory();
+  snapshotSelection(true, receipt.conversationId);
+  const p = ports(f.journal), now = Date.now();
+  const held = kind === "live" || kind === "unowned";
+  expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: !held, blockers: { turns: held ? 1 : 0 } });
+  expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: kind !== "live",
+    blockers: { turns: kind === "live" ? 1 : 0, unresolved: kind === "unowned" ? 1 : 0, unresolvedBlocking: 0 } });
+  if (kind === "live") {
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  }
+});
+
+test("an unbound registry entry still exposes its hidden live journal owner by path", async () => {
+  journalRow();
+  await fallback("idle");
+  const disk = f.registry.snapshot();
+  delete disk.conversations[f.conversation.id];
+  writeFileSync(f.registry.filename, JSON.stringify(disk));
+  inactiveHistory();
+  snapshotSelection(true);
+  expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+});
+
+test("keyed reads retain a hidden journal turn hint over a settled transcript", async () => {
+  settleTranscript();
+  journalRow({ host: "unhosted", turn: "idle", activeTurnId: "new-turn" });
+  inactiveHistory();
+  snapshotSelection(true);
+  expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+});
+
+test("unreadable hidden journal evidence holds admission and can recover on the next probe", async () => {
+  journalRow();
+  await fallback("idle");
+  inactiveHistory();
+  snapshotSelection(true);
+  const p = ports(f.journal), read = f.client.readSession!;
+  f.client.readSession = async () => { throw new Error("fixture keyed read unavailable"); };
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { unreadable: expect.any(String) } });
+  f.client.readSession = read;
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, unreadable: null } });
+});
+
 for (const status of ["dead", "unhosted", "idle"] as const) {
   test(`production fallback retains a live standalone turn with lagging ${status} registry status`, async () => {
     journalRow();
@@ -139,6 +291,7 @@ for (const host of ["hosted", "unhosted", "dead", "conflict"] satisfies RuntimeH
 }
 
 test.each(["running", "unknown", "idle"] as const)("missing conversation with %s labels expires exactly at five minutes and stays diagnosed", async (turn) => {
+  settleTranscript();
   const orphan = `conversation_${randomUUID()}`;
   f.journal.append({ scope: { type: "session", id: orphan }, kind: "session-status",
     producer: { kind: "fixture", eventKey: "orphan" }, payload: { sessionKey: { engine: "codex", sessionId: "orphan" },
@@ -262,7 +415,9 @@ test("a held reservation with a readable owner path retains stage custody", asyn
   p.turnLiveness = async (row, probe) => { reads++; return reader(row, probe); };
   p.pipelines = () => [stage({ conversationId: null, launchId: null, agentPath: f.file, activation: { phase: "reserved" } }, "running", "spawning")];
   expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
-  expect(reads).toBe(1);
+  // The path-only stage and the independently inventoried conversation each
+  // ask the shared reader; neither identity substitutes for the other.
+  expect(reads).toBe(2);
   child.kill();
   await child.exited;
   expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });

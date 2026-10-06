@@ -14,7 +14,7 @@ import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { flowPipelineController } from "@/lib/pipelines/controller";
 import { seatTickIdle } from "@/lib/monitor/seatTickController";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { runtimeHostClient } from "@/lib/runtime/client";
+import { readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
@@ -31,7 +31,7 @@ import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
 import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
-import { currentHostTurnIdle, type QuietPorts } from "./quiet";
+import { currentHostTurnIdle, type QuietPorts, type QuietTurn } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
 import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
@@ -141,6 +141,56 @@ function probeSources(base: AgentLivenessSources): AgentLivenessSources {
   };
 }
 
+/** The snapshot's inactive history is bounded for display. Registry identities
+    remain admission input even when a lagging fallback put their journal row
+    outside that bound. Keyed reads preserve any journal turn/setup hints; a
+    registered owner without a journal row still asks the common verdict. */
+export function registeredTurnOwnerReader(
+  client: () => RuntimeHostClient | null = runtimeHostClient,
+): NonNullable<QuietPorts["turnOwners"]> {
+  return async (sessions) => {
+    const registry = agentRegistry().readOnlySnapshot();
+    const owners = new Map<string, QuietTurn>();
+    const paths = new Map<string, string>();
+    for (const conversation of Object.values(registry.conversations)) {
+      const id = canonicalConversationId(registry, conversation.id);
+      for (const generation of conversation.generations) paths.set(generation.path, id);
+      for (const path of conversation.continuityPaths) paths.set(path, id);
+      const generation = registry.conversations[id]?.generations.at(-1) ?? conversation.generations.at(-1);
+      owners.set(id, { conversationId: id, artifactPath: generation?.path ?? null,
+        cwd: generation?.launchProfile.cwd ?? null,
+        sessionKey: { engine: conversation.engine, sessionId: generation?.id ?? id },
+        host: "unhosted", turn: "unknown", activeTurnId: null });
+    }
+    // Entries may precede their conversation binding. Keep their path readable
+    // rather than treating that missing binding as proof that no owner exists.
+    for (const entry of Object.values(registry.entries)) {
+      const id = paths.get(entry.artifactPath) ?? `${entry.key.engine}:${entry.key.sessionId}`;
+      owners.set(id, { conversationId: id, artifactPath: entry.artifactPath, cwd: entry.cwd,
+        sessionKey: entry.key, host: "unhosted", turn: "unknown", activeTurnId: null });
+    }
+    // A launch receipt owns setup before its conversation/entry materializes.
+    // Ended receipts are also read; their status is the shared verdict's concern.
+    for (const receipt of Object.values(registry.receipts)) {
+      const id = canonicalConversationId(registry, receipt.conversationId);
+      if (owners.has(id)) continue;
+      owners.set(id, { conversationId: id, artifactPath: receipt.artifactPath, cwd: receipt.cwd,
+        sessionKey: receipt.key ?? { engine: receipt.engine, sessionId: id },
+        host: "unhosted", turn: "unknown", activeTurnId: null });
+    }
+    const turns: QuietTurn[] = [...sessions];
+    const included = new Set(sessions.map(session => canonicalConversationId(registry, session.conversationId)));
+    let connection: RuntimeHostClient | null = null;
+    for (const [id, owner] of owners) {
+      if (included.has(id)) continue;
+      connection ??= client();
+      if (!connection) throw new Error("runtime host is unavailable for registered turn evidence");
+      turns.push(await readRuntimeSession(connection, { conversationId: id, artifactPath: owner.artifactPath ?? undefined }) ?? owner);
+    }
+    return turns;
+  };
+}
+
 export function productionDeps(env: Readonly<Record<string, string | undefined>> = process.env): ServiceDeps {
   const dir = statePath("self-update");
   const remote = env.LLV_SELF_UPDATE_REMOTE?.trim() || env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || CANONICAL_REMOTE;
@@ -205,6 +255,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
         if (!client) throw new Error("runtime host is unavailable");
         return client.snapshot(undefined, { timeoutMs: 10_000 });
       },
+      turnOwners: registeredTurnOwnerReader(),
       pipelines: loadPipelinesForList,
       flows: () => loadFlows(),
       turnLiveness: turnEvidenceReader(),

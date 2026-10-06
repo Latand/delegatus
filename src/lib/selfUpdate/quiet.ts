@@ -76,10 +76,14 @@ export interface TurnEvidence {
   headlessReviewerProcess?: "alive" | "gone" | "unproven" | null;
   currentTurnIdle?: boolean;
 }
+export type QuietTurn = Pick<RuntimeSession, "conversationId" | "artifactPath" | "cwd" | "sessionKey" | "host" | "turn" | "activeTurnId">;
 export interface QuietPorts {
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
   dispatchVersion?(): string;
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
+  /** Complete registered ownership, including identities outside the snapshot's
+      presentation retention. No liveness or status exclusion belongs here. */
+  turnOwners?(sessions: readonly RuntimeSession[]): Promise<readonly QuietTurn[]>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
   presence(now: number): readonly StoredViewSession[];
@@ -261,7 +265,8 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     // judging owners so its path protects both the stage and its turn in this
     // probe; an earlier pathless reading must not hide that evidence.
     const runtime = await ports.runtimeSnapshot();
-    for (const session of runtime.sessions) {
+    const sessions = ports.turnOwners ? await ports.turnOwners(runtime.sessions) : runtime.sessions;
+    for (const session of sessions) {
       if (session.artifactPath) journalPaths.set(session.conversationId, session.artifactPath);
     }
     const stages: BlockingStage[] = [];
@@ -353,7 +358,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const seats = ports.seats?.() ?? [];
     const turns: BlockingTurn[] = [];
     const seen = new Set<string>();
-    for (const session of runtime.sessions) {
+    for (const session of sessions) {
       // The journal's own words cannot settle this either way: a fallback can
       // publish unknown/idle over a live turn, and a row can keep hosted/running
       // for days after its host died. Every row reaches the shared verdict.

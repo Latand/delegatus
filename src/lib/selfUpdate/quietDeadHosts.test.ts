@@ -97,6 +97,9 @@ function ended(turn: "open" | "settled") {
 function ports(sessions: unknown[], pipelines: unknown[] = []): QuietPorts {
   return { ...productionDeps({ ...process.env }).quiet!,
     runtimeSnapshot: async () => ({ sessions }) as never,
+    // This fixture supplies the complete owner set alongside its fake snapshot.
+    // Real capped journal + registry inventory is covered in quietFallback.
+    turnOwners: async sessions => sessions,
     pipelines: () => pipelines as never,
     flows: () => [], seats: () => [], presence: () => [], registryHealth: () => [],
     controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
