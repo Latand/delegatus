@@ -123,6 +123,8 @@ export const VOICE_COMPANION_CSS = `
 }
 @keyframes vc-flag { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
 .vc-flag[data-tone="failure"] { background: var(--color-danger); }
+/* The collapsed shape's hang-up: inside the shape's own box, so it takes no place on the page the shape does not. */
+.vc-shape-end { position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; pointer-events: auto; color: var(--color-danger); animation: vc-pop 200ms var(--vc-ease); }
 
 /* The lane: bubbles and calls, each its own element */
 .vc-lane { position: absolute; pointer-events: none; clip-path: inset(-4000px -48px 0 -48px); }

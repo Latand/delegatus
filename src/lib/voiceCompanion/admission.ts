@@ -98,7 +98,7 @@ export class CompanionAdmission {
       session.inputs = session.inputs.slice(-64);
       const removed: StoredProposal[] = [];
       for (const row of Object.values(session.proposals)) {
-        if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs) !== null
+        if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) !== null
           : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit)) {
           row.state = "cancelled"; removed.push(row);
         }
@@ -111,7 +111,8 @@ export class CompanionAdmission {
     for (const row of cancelled) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
       result: { status: "cancelled", code: "source_changed" } });
   }
-  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string): Proposal | null {
+  /** `sourceTurn`: the operator's Live turn when Live delegated, read whole by the gate. */
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, sourceTurn?: number): Proposal | null {
     const [callId, sourceItemId, instruction] = [rawCallId, rawSourceItemId, rawInstruction].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
     if (existing) return existing.state === "pending" ? existing.proposal : null;
@@ -120,7 +121,7 @@ export class CompanionAdmission {
     const proposal = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) { refusal = "session_closed"; return null; }
-      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs)
+      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn)
         : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
       if (reason) { refusal = reason; return null; }
       const recipient = this.paths.recipient(session.project);
@@ -128,7 +129,8 @@ export class CompanionAdmission {
       if (Object.values(session.proposals).some(row => row.state === "pending" && row.proposal.sourceItemId === sourceItemId)) { refusal = "duplicate_proposal"; return null; }
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
         ...(session.authority ? { authority: session.authority } : {}) };
-      session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000, state: "pending", reports: [] };
+      session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000, state: "pending", reports: [],
+        ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
       return proposal;
     });
     this.emit(id, proposal ? { type: "delegation.confirmation.required", proposal }
@@ -146,12 +148,15 @@ export class CompanionAdmission {
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
       if (command.decision === "cancel") { row.state = "cancelled"; refusal = "operator_cancelled"; return null; }
-      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs) === null
+      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit;
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
         row.state = "cancelled"; refusal = "proposal_changed"; return null;
       }
       row.state = "admitted";
+      // The outcome is unknown until the send path answers. Recorded with the
+      // key in one commit, so a restart in between recovers this very send.
+      row.status = "unknown";
       row.delivery = { proposalId: row.proposal.proposalId, callId: row.proposal.callId,
         clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: row.proposal.recipient };
       row.text = `${row.proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;

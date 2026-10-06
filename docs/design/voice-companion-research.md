@@ -73,11 +73,16 @@ Verbatim relayed amendment:
 The [Live transcript contract](https://github.com/openai/openai-python/blob/main/src/openai/types/live/input_transcript_delta_event.py)
 provides fragments and timeline intervals, with no item or completed-turn event.
 The [delegation event](https://github.com/openai/openai-python/blob/main/src/openai/types/live/delegation_created_event.py)
-contains metadata; with Responses delegation the composed request arrives in the
-finished function item's `arguments`. Only `response.output_item.done` executes
-a registry entry. Streamed arguments and arguments-done events execute nothing.
-Streams are joined by outer `delegation_id` and their own response identity;
-usage is recorded even when delegation correlation is absent.
+contains metadata only. The session runs with
+[client delegation](https://developers.openai.com/api/docs/guides/live-delegation)
+(`delegation: { type: "client" }`): Live names a delegation, and this server
+builds the backend request from its own masked transcript record, runs it on
+`gpt-6-luna` through the Responses API with the registry tools, executes each
+finished `function_call` item, and returns one spoken answer with
+`session.commentary.append` under that `delegation_id` (500 tokens at most).
+Each delegation runs once and takes at most four backend responses. Responses
+delegation was used before 2026-10-07; it starts backend responses by itself,
+which no client event can refuse, so the cap could not hold (see Accounting).
 
 The prototype's `splitSpeech` already cuts long display text at sentence or
 clause boundaries. The old transcript reducer handles native item identities and
@@ -119,9 +124,21 @@ Transcript fragments, tool names and results, proposal text, report bodies and
 identifiers are supplied by the provider, the model or an agent. Every event,
 stored input and proposal passes one cleaner before it is written or answered to
 the browser: the vendor credential families, and the credential in use by exact
-value, including a value that arrives across two fragments or lies across a
-segment boundary. The six board reads share one projection, which also replaces
-machine paths (home-relative, absolute, `file:` and drive paths) with `[path]`
+value. A transcript is masked before any snapshot of it exists: each speaker's
+segments are read as one stream, so a credential cut into fragments of any
+length across any number of display segments is found whole, a segment whose
+masked text changes is published again, and a beginning still arriving is
+withheld once it is three characters long. At most a credential's first two
+characters can stand in a snapshot, which names a format at most. The backend's
+context is built from the same masked record. The frontend data channel
+receives `session.closed` alone (`allowed_server_events` selects what Live sends
+to the page), so no raw transcript, error or tool event reaches the browser
+around this cleaner. A mint whose session id or SDP answer carries the
+credential in use, or a 16-character piece of it, is refused and hung up: an
+SDP cannot be cleaned without breaking negotiation, and it is never read for
+credential families because its own ICE password is one by their reading.
+The six board reads share one projection, which also replaces
+machine paths (home-relative, absolute, root and drive files, `file:` URLs) with `[path]`
 before length is cut, so no title, note, hold, step, agent title or message
 carries one to the model, a card or speech. An orchestrator report is cleaned
 the same way before it is shown and spoken. Repository-relative paths and URLs
@@ -131,6 +148,15 @@ A live conversation belongs to the project it was started in. When another
 project comes into view, or none, the shell replaces the adapter: the old
 session closes, its unconfirmed proposal is cancelled on the server, and the new
 project's companion is idle until its own tap on Talk.
+
+A completed Live turn is read whole by the prototype's gate before a proposal
+stands. A turn is the operator's speech between two of the companion's answers
+or delegations. An ordinary question ("What is on the board?"), a condition, a
+retraction, a negation or a quote refuses, and so does a completed turn that
+asks nothing of the orchestrator, unless up to two turns before it complete the
+request (a backchannel can split one sentence). The model's tool call cannot
+override it. Missing input and a turn still arriving leave the proposal to the
+tap, and later speech withdraws it only on an explicit refusal.
 
 A Send whose request or reply is lost leaves the proposal card as it was, with a
 line saying delivery is not confirmed and both buttons live. The server keeps one
@@ -168,33 +194,28 @@ Voice duration is cumulative, with the documented 15-second WebRTC initializatio
 minimum credited against the running total. Duplicate or reordered totals never
 reduce recorded use or count it twice. No extra transcription is requested.
 
-Live starts a backend response by itself. The published
-[session update](https://github.com/openai/openai-python/blob/main/src/openai/types/live/session_update_config.py)
-changes backend settings only, and no client event refuses or cancels a
-delegation, so the cap is held by paying first. A session reserves $0.27 for its
-first five minutes of voice and close drain, plus four backend responses at the
-dearest one can be: Luna's whole 1,050,000-token context at the large-input
-cache-write rate and all 512 output tokens, $0.262884 each, $1.321536 in all.
-Every response takes one of the four paid places the first time anything names
-it (`session.delegation.created` with its `response_id`, or its own first event,
-in either order) and the place is paid for again at once. A continuation this
-server asks for is paid for before `response.create` is sent, and is never sent
-when it cannot be. When the next place cannot be paid for, the session closes
-while the places still held cover what may start before the close lands: up to
-four responses in parallel. A fifth one started in that window would be outside
-the reservation; it runs no tool, and its receipt is still recorded.
-Observed cost is visible during the call; unused reservations release only after
-confirmed finalization. A response named by its delegation is owed a final from
-that moment: after `session.closed` the sideband stays attached until every owed
-final has come, each counted once in any order.
-A bounded drain retains the reservation if a final receipt never arrives.
+With client delegation this server starts every backend response itself, so
+each is paid for before it is asked. A session reserves $0.27 for its first five
+minutes of voice and close drain and needs room beside it for one backend
+response at the dearest one can be: Luna's whole 1,050,000-token context at the
+large-input cache-write rate and all 512 output tokens, $0.262884, so a cap below
+$0.532884 refuses a real session before any provider call. Every backend
+response reserves $0.262884 under the cap in one state transaction before its
+request is sent, and parallel delegations reserve one by one; one that cannot be
+paid for is never sent, Live is told the budget is used up, and the call closes.
+A finished response records its own usage and gives back what its reservation
+did not need. A request with no answer (a timeout, a lost connection, a
+shutdown) keeps its whole reservation as incomplete usage. So no response is
+ever outside the cap, whatever the order of finals, retries or the shutdown.
+Observed cost is visible during the call; the voice reservation releases only
+after confirmed finalization. After `session.closed` the session settles once the backend work it started
+has ended; a bounded drain keeps the reservations of whatever has not.
 Voice renews in five-minute reservation windows while
 there is room under the cap. Cap reductions, UTC month rollover and a missing
 browser heartbeat close the session. Provider billing
 can continue during finalization; final accounting retains actual usage even if
 it exceeds the estimate. A transport loss retains the full reservation and marks
-usage incomplete instead of claiming a zero charge. Cap values below the initial
-$1.33 reservation refuse a real session before any provider call. The demo remains free.
+usage incomplete instead of claiming a zero charge. The demo remains free.
 
 Mint request IDs bind the project, locale and SDP digest. Retry recovers the same
 mint while it is owned; a restart never silently mints another paid session.
@@ -202,8 +223,15 @@ Each stored session names the process and service instance that minted it. A
 service closes every open session whose owner is gone when it is created and
 again before each mint, so a restart followed by a reload or a new tab leaves no
 paid session open: the provider session is hung up, its reservation is kept as
-incomplete usage, and its admitted deliveries keep their keys. A session owned
-by another living process is left to it. Closing twice changes nothing.
+incomplete usage, and its admitted deliveries keep their keys. A stored
+`remoteOpen` marks a provider session that may still bill: it is set at mint and
+cleared only by a confirmed hangup or the provider's own `session.closed`. A
+hangup the provider refused, for an orphan or for a live session's forced close,
+leaves it set, and every later recovery asks again until one is confirmed. A
+session owned by another living process is left to it. Closing twice changes
+nothing. A Send records its delivery key and an unknown outcome in one commit,
+so a restart between the tap and the recorded result sends that very request
+again with its own key, and the relay's idempotency keeps it one message.
 Confirmed deliveries keep their original send key and recipient across media
 closure, restart and receipt recovery. The existing relay supplies the voice
 channel provenance for Claude and Codex. Terminal receipt observation settles a
@@ -298,6 +326,13 @@ inside a bubble, the block of variant 1 (132 by 148 px with a 76 px figure),
 10 px between the character's block and its lane, and a call card as tall as
 its two lines (58 px with a two-line result, against 180 px for the proposal).
 The fixture shows this look with `?scenario=voice-companion`.
+
+**Hanging up from the collapsed tile.** While a conversation is open the
+collapsed tile carries a 24 px hang-up button in its own bottom-right corner,
+inside the tile's 56 px box, so it covers nothing the tile does not. It is the
+same control as the open block's, reachable by mouse and keyboard, and it is
+the only way to end the call when the companion was collapsed for want of room
+and the microphone is muted. It leaves with the conversation.
 
 **Send reads in both themes.** The Send button was white on the delegation's
 teal, which in the dark theme is a bright colour. Its fill is now that teal a

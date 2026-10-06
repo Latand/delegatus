@@ -7,6 +7,8 @@ export interface CompanionToolContext {
   sessionId: string;
   callId: string;
   delegationId: string;
+  /** The operator's Live turn when Live delegated. */
+  sourceTurn?: number;
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
   endConversation(): void;
@@ -35,7 +37,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     description: "Propose the complete request text only when the operator explicitly asks to send work to the orchestrator. Sends nothing. The operator must tap Send on the full-text card. Input transcripts are optional context.",
     parameters: schema({ instruction: { type: "string", minLength: 1, maxLength: 2_000 } }),
     handler: (context, args) => {
-      const proposal = context.admission.propose(context.sessionId, context.callId, context.delegationId, args.instruction as string);
+      const proposal = context.admission.propose(context.sessionId, context.callId, context.delegationId, args.instruction as string, context.sourceTurn);
       const last = context.admission.events(context.sessionId, 0).at(-1);
       const code = last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted";
       return proposal ? { status: "awaiting_tap", speech: "A proposal is shown. Nothing has been sent." }

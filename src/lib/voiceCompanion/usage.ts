@@ -7,11 +7,13 @@ export const BACKEND_MAX_OUTPUT_TOKENS = 512;
 /** The dearest one backend response can be: the model's whole context window
  * at the large-input rate for a cache write, plus every allowed output token. */
 export const BACKEND_RESPONSE_RESERVE_USD = 1_050_000 * 0.25 / 1_000_000 + BACKEND_MAX_OUTPUT_TOKENS * 0.75 / 1_000_000;
-/** Live starts a backend response by itself and offers no way to refuse or
- * cancel one, so this many are paid for before any of them can start. */
-export const BACKEND_PARALLEL_RESPONSES = 4;
+/** Backend responses one delegation may take: reads, then the spoken answer. */
+export const BACKEND_ROUNDS = 4;
 export const VOICE_SESSION_RESERVE_USD = 0.27; // five minutes plus close drain
-export const SESSION_RESERVE_USD = VOICE_SESSION_RESERVE_USD + BACKEND_PARALLEL_RESPONSES * BACKEND_RESPONSE_RESERVE_USD;
+/** Client delegation: this server starts every backend response itself and
+ * pays for each before it asks. A start holds the voice reservation and needs
+ * room beside it for one backend response, so a board question can be answered. */
+export const SESSION_START_ROOM_USD = VOICE_SESSION_RESERVE_USD + BACKEND_RESPONSE_RESERVE_USD;
 export const LIVE_SESSION_LIMIT_MS = 300_000;
 
 export function backendUsageUsd(value: unknown): number | null {

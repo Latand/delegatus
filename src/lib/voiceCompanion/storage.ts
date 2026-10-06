@@ -25,12 +25,19 @@ export interface StoredProposal {
   state: "pending" | "cancelled" | "admitted";
   delivery?: Delivery;
   text?: string;
+  /** Admission writes "unknown" with the key, so a send whose outcome was
+   * never recorded (a restart in between) is recovered with that key. */
   status?: "delivered" | "queued" | "unknown" | "failed";
+  /** The operator's Live turn when the proposal was raised. */
+  sourceTurn?: number;
   reports: string[];
 }
 export interface StoredSession {
   authority?: "live-model";
   providerId?: string;
+  /** The provider session may still be open (and billing): set at mint, cleared
+   * only by a confirmed hangup or the provider's own close. Recovery retries it. */
+  remoteOpen?: boolean;
   /** The process and service instance that minted the provider session. */
   owner?: { pid: number; instance: string };
   mintRequestId?: string;
@@ -68,6 +75,7 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
   if (session.authority !== undefined && session.authority !== "live-model") return false;
   if (session.providerId !== undefined && !identifier(session.providerId)) return false;
+  if (session.remoteOpen !== undefined && typeof session.remoteOpen !== "boolean") return false;
   if (session.owner !== undefined && (!record(session.owner) || !Number.isSafeInteger(session.owner.pid) || !identifier(session.owner.instance))) return false;
   if (session.mintRequestId !== undefined && !identifier(session.mintRequestId)) return false;
   if (session.mintDigest !== undefined && (typeof session.mintDigest !== "string" || !/^[a-f0-9]{64}$/.test(session.mintDigest))) return false;
@@ -75,7 +83,8 @@ function sessionValid(key: string, session: unknown): boolean {
   if (session.usage !== undefined && (!record(session.usage) || typeof session.usage.seconds !== "number" || !Number.isFinite(session.usage.seconds)
     || session.usage.seconds < 0 || !record(session.usage.responses) || Object.values(session.usage.responses).some(row => !record(row)
       || typeof row.complete !== "boolean" || (row.usd !== null && (typeof row.usd !== "number" || !Number.isFinite(row.usd) || row.usd < 0))))) return false;
-  if (session.inputs.some(input => !record(input) || !identifier(input.itemId) || typeof input.text !== "string" || typeof input.final !== "boolean")) return false;
+  if (session.inputs.some(input => !record(input) || !identifier(input.itemId) || typeof input.text !== "string" || typeof input.final !== "boolean"
+    || (input.turn !== undefined && (!Number.isSafeInteger(input.turn) || (input.turn as number) < 0)))) return false;
   if (session.events.some(event => !record(event) || event.sessionId !== key || event.version !== 1 || !identifier(event.eventId)
     || !identifier(event.type) || !Number.isSafeInteger(event.seq) || !Number.isSafeInteger(event.generation) || !Number.isFinite(event.atMs))) return false;
   return Object.entries(session.proposals).every(([id, held]) => {
@@ -83,7 +92,8 @@ function sessionValid(key: string, session: unknown): boolean {
       || !identifier(held.proposal.callId) || !identifier(held.proposal.sourceItemId) || typeof held.proposal.instruction !== "string"
       || !recipientValid(held.proposal.recipient) || canonicalProject((held.proposal.recipient as { project: string }).project) !== canonicalProject(session.project as string)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
-      || !Array.isArray(held.reports) || !held.reports.every(identifier)) return false;
+      || !Array.isArray(held.reports) || !held.reports.every(identifier)
+      || (held.sourceTurn !== undefined && (!Number.isSafeInteger(held.sourceTurn) || (held.sourceTurn as number) < 0))) return false;
     if (held.state !== "admitted") return held.delivery === undefined && held.text === undefined && held.status === undefined;
     return record(held.delivery) && held.delivery.proposalId === id && held.delivery.callId === held.proposal.callId
       && identifier(held.delivery.clientMessageId) && (held.delivery.operationId === null || identifier(held.delivery.operationId))
@@ -181,13 +191,14 @@ export class CompanionStorage {
     catch { /* No key file: nothing of it can be echoed. */ }
     return found;
   }
-  reserve(key: string, usd: number): void {
-    if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
+  /** Holds `usd` when `room` (at least `usd`) is free under the cap. */
+  reserve(key: string, usd: number, room = usd): void {
+    if (!Number.isFinite(usd) || usd < 0 || !Number.isFinite(room) || room < usd) throw new Error("INVALID_USAGE");
     this.change(document => {
       if (document.charges[key]) return;
       const month = new Date(this.now()).toISOString().slice(0, 7);
       const spent = Object.values(document.charges).filter(charge => charge.month === month).reduce((sum, charge) => sum + charge.usd, 0);
-      if (spent + usd > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
+      if (spent + room > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
       document.charges[key] = { month, usd, reserved: true, incomplete: false };
     });
   }
@@ -202,6 +213,16 @@ export class CompanionStorage {
       const spent = Object.values(document.charges).filter(row => row.month === month).reduce((sum, row) => sum + row.usd, 0);
       if (spent + usd > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
       charge.usd += usd;
+    });
+  }
+  /** Gives back the part of a live reservation a finished response did not
+   * use. What has been observed stays held. */
+  release(key: string, usd: number): void {
+    if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
+    this.change(document => {
+      const charge = document.charges[key];
+      if (!charge?.reserved) return;
+      charge.usd = Math.max(charge.observedUsd ?? 0, charge.usd - usd);
     });
   }
   settle(key: string, usd: number | null): void {

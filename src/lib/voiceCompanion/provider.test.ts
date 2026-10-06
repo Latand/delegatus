@@ -10,13 +10,31 @@ test("official minting sends the synthetic credential solely in the provider hea
     expect((init!.headers as Record<string, string>).authorization).toBe("Bearer synthetic-credential");
     const body = JSON.parse(String(init!.body));
     expect(body.session.model).toBe("gpt-live-1");
-    expect(body.session.delegation.responses.tools).toHaveLength(8);
+    expect(body.session.delegation).toEqual({ type: "client" });
     expect(body.transport).toEqual({ type: "webrtc", sdp: "v=0" });
     expect(String(init!.body)).not.toContain("synthetic-credential");
     expect(init!.redirect).toBe("error");
     return Response.json({ session: { id: "live_fake", private: syntheticCredential }, transport: { type: "webrtc", sdp: "answer" } });
   }) as typeof fetch);
   expect(await provider.create("synthetic-credential", "uk", "v=0")).toEqual({ id: "live_fake", sdp: "answer" });
+  expect(called).toBe(1);
+});
+
+test("a backend response is asked once at the fixed Responses endpoint with the credential only in its header", async () => {
+  const { backendRequest } = await import("./sessionConfig");
+  let called = 0;
+  const provider = new OpenAILiveProvider((async (url, init) => {
+    called++;
+    expect(url).toBe("https://api.openai.com/v1/responses");
+    expect((init!.headers as Record<string, string>).authorization).toBe("Bearer synthetic-credential");
+    expect(String(init!.body)).not.toContain("synthetic-credential");
+    expect(JSON.parse(String(init!.body))).toMatchObject({ model: "gpt-6-luna", store: false });
+    expect(init!.redirect).toBe("error");
+    return Response.json({ id: "resp_fake", output: [], usage: { input_tokens: 1, output_tokens: 1 } });
+  }) as typeof fetch);
+  expect(await provider.respond("synthetic-credential", backendRequest([]), new AbortController().signal)).toMatchObject({ id: "resp_fake" });
+  const failing = new OpenAILiveProvider((async () => Response.json({ error: "synthetic-credential" }, { status: 500 })) as unknown as typeof fetch);
+  await expect(failing.respond("synthetic-credential", backendRequest([]), new AbortController().signal)).rejects.toThrow("PROVIDER_ERROR");
   expect(called).toBe(1);
 });
 

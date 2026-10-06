@@ -45,7 +45,8 @@ export type GateRefusal =
 
 export type GateVerdict = { admit: true } | { admit: false; reason: GateRefusal };
 
-export interface OperatorInput { itemId: Id; text: string; final: boolean }
+/** `turn`: Live's operator speech between two of the companion's answers. */
+export interface OperatorInput { itemId: Id; text: string; final: boolean; turn?: number }
 
 const INSTRUCTION_LIMIT = 2_000;
 

@@ -147,5 +147,51 @@
       "height": 56
     },
     "askedToOpen": "collapsed"
+  },
+  "collapsedHangup": {
+    "1440-en-light": {
+      "muted": true,
+      "layout": "collapsed",
+      "yielded": true,
+      "tile": {
+        "x": 1376,
+        "y": 736,
+        "width": 56,
+        "height": 56
+      },
+      "end": {
+        "x": 1408,
+        "y": 768,
+        "width": 24,
+        "height": 24
+      },
+      "onTop": true,
+      "insideTile": true,
+      "focusable": true,
+      "endedBy": "keyboard",
+      "phaseAfter": "offline"
+    },
+    "1000-uk-dark": {
+      "muted": true,
+      "layout": "collapsed",
+      "yielded": true,
+      "tile": {
+        "x": 776,
+        "y": 496,
+        "width": 56,
+        "height": 56
+      },
+      "end": {
+        "x": 808,
+        "y": 528,
+        "width": 24,
+        "height": 24
+      },
+      "onTop": true,
+      "insideTile": true,
+      "focusable": true,
+      "endedBy": "mouse",
+      "phaseAfter": "offline"
+    }
   }
 }

@@ -18713,6 +18713,63 @@ describe("floating voice companion", () => {
           readings.noRoom = { surface: "buttons 20x20 every 100 px", layout: reading.layout, yielded: reading.yielded, block: reading.block, askedToOpen: again.layout };
         } finally { await context.close(); }
       }
+      /* A conversation is open and muted when the page fills with small controls (the same field of buttons every
+         100 px, laid over the board): the companion collapses for want of room and cannot open again, so the tile's
+         own hang-up is the one way to end the call. It is read for position, hit-testing and focus, then used by
+         keyboard at 1440 and by mouse at 1000. */
+      {
+        const hangups: Record<string, unknown> = {};
+        for (const [viewport, scheme, lang, via] of [[VIEWPORT, "light", "en", "keyboard"], [NARROW, "dark", "uk", "mouse"]] as const) {
+          const name = `${viewport.width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openVoice(browser, server.base, "", { viewport, scheme, lang, motion: "reduce" });
+          try {
+            await page.locator("[data-companion-talk]").click();
+            await page.waitForSelector('[data-voice-companion]:not([data-phase="offline"])', { timeout: 20_000 });
+            await page.locator('[data-voice-companion] .vc-controls [aria-pressed]').click();
+            await page.evaluate(() => {
+              const field = document.createElement("div");
+              field.dataset.voiceButtons = "";
+              field.style.cssText = "position:fixed;inset:0;background:var(--color-canvas)";
+              const across = Math.ceil(innerWidth / 100);
+              for (let index = 0; index < across * Math.ceil(innerHeight / 100); index += 1) {
+                const button = document.createElement("button");
+                button.type = "button"; button.setAttribute("aria-label", `cell ${index}`);
+                button.style.cssText = `position:absolute;left:${(index % across) * 100 + 40}px;top:${Math.floor(index / across) * 100 + 40}px;width:20px;height:20px;border-radius:4px;border:1px solid var(--color-border);background:var(--color-raised)`;
+                field.append(button);
+              }
+              document.querySelector("[data-voice-companion]")!.before(field);
+            });
+            await page.waitForSelector("[data-voice-companion][data-collapsed][data-yielded]", { timeout: 10_000 });
+            await page.waitForTimeout(500);
+            await page.locator("[data-companion-expand]").click();
+            await page.waitForTimeout(500);
+            const reading = await readCompanion(page);
+            expect([reading.layout, reading.yielded], `${name}: collapsed for want of room, still after asking to open`).toEqual(["collapsed", true]);
+            expectFree(reading, `${name}: collapsed with the conversation open`);
+            const end = page.locator("[data-voice-companion] [data-companion-end]");
+            expect(await end.count(), `${name}: the tile keeps its hang-up`).toBe(1);
+            const box = (await end.boundingBox())!;
+            const tile = (await page.locator("[data-voice-companion] .vc-shape").boundingBox())!;
+            const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest("[data-companion-end]") !== null, [box.x + box.width / 2, box.y + box.height / 2]);
+            const inside = box.x >= tile.x - 0.5 && box.y >= tile.y - 0.5 && box.x + box.width <= tile.x + tile.width + 0.5 && box.y + box.height <= tile.y + tile.height + 0.5;
+            const phase = await page.locator("[data-voice-companion]").getAttribute("data-phase");
+            expect({ hit, inside, phase: phase === "offline" ? "offline" : "open" }, `${name}: the hang-up is on top, inside the tile, while the call is open`).toEqual({ hit: true, inside: true, phase: "open" });
+            await page.screenshot({ path: path.join(HANDOFF, `states-collapsed-hangup-${name}.png`) });
+            await end.focus();
+            const focused = await page.evaluate(() => document.activeElement?.hasAttribute("data-companion-end") ?? false);
+            expect(focused, `${name}: the hang-up takes keyboard focus`).toBe(true);
+            if (via === "keyboard") await page.keyboard.press("Enter"); else await end.click();
+            await page.waitForSelector('[data-voice-companion][data-phase="offline"]', { timeout: 10_000 });
+            expect(await end.count(), `${name}: ended, the tile is only the tile again`).toBe(0);
+            expect(await page.locator("[data-voice-companion]").count(), `${name}: the tile stays`).toBe(1);
+            await page.screenshot({ path: path.join(HANDOFF, `states-collapsed-hangup-${name}-ended.png`) });
+            expect(pageErrors).toEqual([]);
+            hangups[name] = { muted: true, layout: reading.layout, yielded: reading.yielded, tile: reading.block, end: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+              onTop: hit, insideTile: inside, focusable: focused, endedBy: via, phaseAfter: "offline" };
+          } finally { await context.close(); }
+        }
+        readings.collapsedHangup = hangups;
+      }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("yield.json", { driver: DRIVER, fixture: "?scenario=voice-companion", behaviour: "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses", ...readings });

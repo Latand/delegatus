@@ -27,7 +27,9 @@ test("no read field carries a machine path to the model, the card or speech, and
   // Built from parts: a path of this shape never stands in the source.
   const home = ["", "home", "fixture-operator"].join("/");
   const paths = [`${home}/.config/delegatus/state/tasks.json`, `${home}/.claude/projects/-fixture/session.jsonl`, "~/Projects/fixture-wt/handoff",
-    ["", "tmp", "fixture-worktree", "src"].join("/"), `file://${home}/notes.md`, ["C:", "Users", "fixture", "notes"].join("\\")];
+    ["", "tmp", "fixture-worktree", "src"].join("/"), `file://${home}/notes.md`, ["C:", "Users", "fixture", "notes"].join("\\"),
+    // A root file and a drive file are machine paths too.
+    ["", "secret.txt"].join("/"), ["C:", "private.txt"].join("\\")];
   const text = (label: string) => `${label} see ${paths.join(" and ")} then src/lib/x.ts and https://example.test/a/b`;
   const reads = new CompanionBoardReads({
     tasks: () => [{ id: "task-a", project: "project-a", text: text("Title"), status: "blocked", note: { text: text("Note") }, hold: { note: text("Hold") }, steps: [{ text: text("Step"), state: "open" }] }],
@@ -39,7 +41,7 @@ test("no read field carries a machine path to the model, the card or speech, and
   for (const name of READ_TOOL_NAMES) {
     const result = JSON.stringify(await reads.call("project-a", name, { ...(name === "get_task" ? { taskId: "task-a" } : {}),
       ...(name === "get_pipeline" ? { pipelineId: "pipeline-a" } : {}), ...(name === "conversation_messages" ? { conversationId: "conversation_a" } : {}) }));
-    for (const leak of ["fixture-operator", "fixture-wt", "fixture-worktree", ".config", ".claude", "Users", "/home", "file:"]) expect([name, leak, result.includes(leak)]).toEqual([name, leak, false]);
+    for (const leak of ["fixture-operator", "fixture-wt", "fixture-worktree", ".config", ".claude", "Users", "/home", "file:", "secret.txt", "private.txt"]) expect([name, leak, result.includes(leak)]).toEqual([name, leak, false]);
     expect(result).toContain(`${labels[name]} see [path]`);
   }
   const task = await reads.call("project-a", "get_task", { taskId: "task-a" });

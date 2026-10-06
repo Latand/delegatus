@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { COMPANION_TOOLS, LIVE_API_VERSION, LIVE_MODEL, liveSessionConfiguration } from "./sessionConfig";
+import { backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration } from "./sessionConfig";
 import { z } from "zod";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
@@ -9,6 +9,20 @@ const selectorSchema = z.object({ type: z.string(), response_event: z.string().o
 
 test("the frontend event permissions conform to the official Live server selector schema", () => {
   expect(z.array(selectorSchema).safeParse(liveSessionConfiguration("en").client.data_channel.allowed_server_events).success).toBe(true);
+});
+
+test("the frontend data channel receives no transcript, error or tool event: the server's cleaned projection is the page's only text", () => {
+  // allowed_server_events selects what Live sends to the frontend (official create schema, 2026-10-06).
+  const allowed = liveSessionConfiguration("en").client.data_channel.allowed_server_events.map(row => row.type);
+  for (const type of allowed) expect(type, type).not.toMatch(/transcript|error|response|delegation|commentary|thinking|instructions/);
+  expect(allowed).toEqual(["session.closed"]);
+});
+
+test("Live delegates to this server, which runs the backend itself with the registry tools", () => {
+  expect(liveSessionConfiguration("uk").delegation).toEqual({ type: "client" });
+  const request = backendRequest([{ role: "user", content: "context" }]);
+  expect(request).toMatchObject({ model: LIVE_BACKEND_MODEL, store: false, parallel_tool_calls: false, max_output_tokens: 512, service_tier: "default", reasoning: { effort: "none" } });
+  expect(request.tools.map(tool => tool.name)).toEqual(COMPANION_TOOLS.map(tool => tool.name));
 });
 
 test("the Live configuration exposes the explicit read allowlist and proposal with calm speech instructions", () => {
@@ -24,6 +38,6 @@ test("the Live configuration exposes the explicit read allowlist and proposal wi
     expect(config.instructions).toContain("short pauses");
     expect(config.instructions).toContain("Spoken confirmation is disabled");
     expect(config.client.data_channel.allowed_client_events).toEqual([]);
-    expect(config.delegation.responses.tools.every(tool => tool.parameters.additionalProperties === false)).toBe(true);
+    expect(backendRequest([]).tools.every(tool => tool.parameters.additionalProperties === false)).toBe(true);
   }
 });

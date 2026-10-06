@@ -24,3 +24,25 @@ test("an answer after input and a tool boundary seal only preceding input; late 
   expect(transcript.boundary(800)).toEqual([]); // overlapping speech is still open
   expect(transcript.boundary(1_000)[0]).toMatchObject({ itemId: newInput.itemId, final: true });
 });
+
+test("a credential is masked across the whole stream of segments, and an earlier segment is published again once it is recognised", () => {
+  const key = ["sk", "proj", "AbCdEfGhIjKlMnOpQrStUvWx"].join("-"); // synthetic, built from parts
+  const transcript = new LiveTranscript([key]);
+  const shown: Array<{ itemId: string; text: string }> = [];
+  for (const [at, piece] of key.match(/.{1,5}/g)!.entries()) shown.push(...transcript.fragment("companion", piece, at * 2_000, at * 2_000 + 100));
+  const latest = new Map(shown.map(row => [row.itemId, row.text]));
+  expect([...latest.values()].join("")).not.toContain("AbCdE");
+  expect([...latest.values()].every(text => text === "[redacted]")).toBe(true);
+  expect(transcript.record().map(row => row.text.replaceAll("[redacted]", "")).join("")).toBe("");
+});
+
+test("operator speech between two companion answers or delegations is one turn", () => {
+  const transcript = new LiveTranscript();
+  const first = transcript.fragment("operator", "Ask the orchestrator", 0, 400).at(-1)!.itemId;
+  transcript.fragment("companion", "Mm-hm.", 2_000, 2_300);
+  const second = transcript.fragment("operator", "to review the plan.", 2_600, 3_000).at(-1)!.itemId;
+  const third = transcript.fragment("operator", "Also the tests.", 5_000, 5_400).at(-1)!.itemId;
+  expect([transcript.turnOf(first), transcript.turnOf(second), transcript.turnOf(third)]).toEqual([1, 2, 2]);
+  transcript.boundary(6_000);
+  expect(transcript.turnOf(transcript.fragment("operator", "Thanks.", 7_000, 7_200).at(-1)!.itemId)).toBe(3);
+});

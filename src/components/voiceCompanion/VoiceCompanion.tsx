@@ -955,6 +955,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           </div>
         </div>
       ) : (
+        <>
         <button
           type="button"
           className="vc-shape"
@@ -971,6 +972,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           <CompanionCharacter ref={character} size={SHAPE_CHARACTER} />
           {attention ? <span className="vc-flag" data-companion-flag data-tone={failing ? "failure" : undefined} aria-hidden /> : null}
         </button>
+        {/* Hanging up stays in reach while a conversation is open, however small the companion has to be,
+            and with the microphone muted no spoken goodbye can end it either. */}
+        {connected || starting ? <button type="button" className="vc-btn vc-shape-end" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={13} aria-hidden /></button> : null}
+        </>
       )}
       {/* The whole conversation, for a screen reader and for anyone who missed a bubble. */}
       <ol className="vc-sr" aria-live="polite" aria-label={t("voiceCompanion.transcript")} data-companion-transcript>

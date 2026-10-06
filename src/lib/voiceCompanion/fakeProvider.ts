@@ -1,8 +1,22 @@
 import type { LiveCommand, LiveConnection, LiveProvider } from "./provider";
 import type { Locale } from "./contract";
+import type { BackendRequest } from "./sessionConfig";
+
+type Item = Record<string, unknown>;
+/** A Responses result in the documented shape: output items and usage. */
+export function backendResponse(id: string, output: Item[], usage: Item = { input_tokens: 100, input_tokens_details: { cached_tokens: 50 }, output_tokens: 20 }) {
+  return { id, object: "response", status: "completed", output, usage };
+}
+export const functionCall = (callId: string, name: string, args: Item = {}): Item =>
+  ({ type: "function_call", id: `fc_${callId}`, call_id: callId, name, arguments: JSON.stringify(args), status: "completed" });
+export const message = (text: string): Item =>
+  ({ type: "message", id: `msg_${text.length}`, role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+/** Documented `session.delegation.created` for client delegation: metadata only, no task text. */
+export const delegationCreated = (id: string, offsetMs: number) =>
+  ({ type: "session.delegation.created", event_id: `event-${id}`, offset_ms: offsetMs, delegation: { id, type: "delegation", target: "client" } });
 
 /** Local documented-event provider; owns no network or credential reader.
- * Events use the official Live and nested Responses schemas linked in the
+ * Events use the official Live schemas and Responses results linked in the
  * research note. A test decides their ordering, including transport loss. */
 export class FakeLiveProvider implements LiveProvider {
   readonly commands: LiveCommand[] = [];
@@ -10,12 +24,32 @@ export class FakeLiveProvider implements LiveProvider {
   private readonly receivers = new Map<string, { event(value: unknown): void; lost(): void }>();
   private readonly disconnected = new Set<string>();
   autoClose = true;
+  /** Every hangup asked, including the ones that failed. */
   readonly hangups: string[] = [];
-  async hangup(id: string) { this.hangups.push(id); }
+  /** Hangups that answer with a provider failure before one succeeds. */
+  hangupFailures = 0;
+  /** The answer a mint returns; a test may make it echo something. */
+  answer: (fallbackId: string) => { id?: string; sdp: string } = () => ({ sdp: "v=0\r\ns=fake-answer\r\n" });
+  /** Every backend request this server paid for and sent, in order. */
+  readonly requests: BackendRequest[] = [];
+  /** How a backend request is answered. Defaults to one spoken sentence. */
+  responder: (request: BackendRequest, index: number) => unknown | Promise<unknown> = (_request, index) => backendResponse(`resp_fake_${index + 1}`, [message("Done.")]);
+  async hangup(id: string) {
+    this.hangups.push(id);
+    if (this.hangupFailures > 0) { this.hangupFailures -= 1; throw new Error("PROVIDER_ERROR"); }
+  }
   async create(_key: string, locale: Locale, sdp: string) {
-    const id = `live_fake_${this.sessions.length + 1}`;
+    const fallback = `live_fake_${this.sessions.length + 1}`;
+    const answer = this.answer(fallback);
+    const id = answer.id ?? fallback;
     this.sessions.push({ id, locale, sdp });
-    return { id, sdp: "v=0\r\ns=fake-answer\r\n" };
+    return { id, sdp: answer.sdp };
+  }
+  async respond(_key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {
+    const index = this.requests.push(JSON.parse(JSON.stringify(request)) as BackendRequest) - 1;
+    const result = await Promise.race([this.responder(request, index),
+      new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("PROVIDER_ERROR")), { once: true }))]);
+    return result;
   }
   async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection> {
     this.receivers.set(id, { event, lost });

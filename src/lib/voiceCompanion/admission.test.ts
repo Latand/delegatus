@@ -171,3 +171,41 @@ test("a late transport failure cannot overwrite a receipt recovered by another a
   const results = admission.events(session.id, 0).filter(event => event.type === "delegation.tool.result" && "delivery" in event.result);
   expect(results.at(-1)).toMatchObject({ result: { status: "delivered", delivery: { operationId: "operation-overlap" } } });
 });
+
+test("a Send's delivery key and its unknown outcome are recorded together; a second admission instance recovers that send", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const storage = new CompanionStorage();
+  const recipient = { project: "restart-project", conversationId: "conversation_restart", seatEpoch: 1, engine: "claude" as const };
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(storage, { recipient: () => recipient, reports: () => [], send: () => new Promise(() => undefined) });
+  const session = admission.create({ project: recipient.project, locale: "en", authority: "live-model" });
+  const proposal = admission.propose(session.id, "call", "delegation", "Review the plan")!;
+  void admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, via: "tap", decision: "send" });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const held = new CompanionStorage().read().sessions[session.id].proposals[proposal.proposalId];
+  expect(held).toMatchObject({ state: "admitted", status: "unknown" });
+  const restarted = new CompanionAdmission(new CompanionStorage(), { recipient: () => recipient, reports: () => [],
+    send: async ({ delivery }) => { sent.push(delivery.clientMessageId); return { status: "delivered", operationId: "operation-restart" }; } });
+  await restarted.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, via: "tap", decision: "send" });
+  expect(sent).toEqual([held.delivery!.clientMessageId]);
+  expect(restarted.session(session.id).proposals[proposal.proposalId]).toMatchObject({ status: "delivered", delivery: { operationId: "operation-restart" } });
+});
+
+test("a completed Live turn is read whole: a question, a condition or a turn that asks nothing refuses; later speech only withdraws on a refusal", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "turns", conversationId: "conversation_turns", seatEpoch: 1, engine: "codex" }),
+    send: async () => ({ status: "queued", operationId: "turn-operation" }), reports: () => [],
+  });
+  const session = admission.create({ project: "turns", locale: "en", authority: "live-model" });
+  admission.input(session.id, { itemId: "q", text: "What is on the board?", final: true, turn: 1 });
+  expect(admission.propose(session.id, "c1", "d1", "Report the board", 1)).toBeNull();
+  admission.input(session.id, { itemId: "half", text: "Ask the orchestrator", final: false, turn: 2 });
+  const partial = admission.propose(session.id, "c2", "d2", "Review the plan", 2)!;
+  expect(partial).not.toBeNull();
+  admission.input(session.id, { itemId: "half", text: "Ask the orchestrator to review the plan.", final: true, turn: 2 });
+  admission.input(session.id, { itemId: "thanks", text: "Thanks.", final: true, turn: 3 });
+  expect(admission.session(session.id).proposals[partial.proposalId].state).toBe("pending");
+  admission.input(session.id, { itemId: "no", text: "Actually, don't send it.", final: true, turn: 4 });
+  expect(admission.session(session.id).proposals[partial.proposalId].state).toBe("cancelled");
+});

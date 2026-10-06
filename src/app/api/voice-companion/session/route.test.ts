@@ -100,3 +100,33 @@ test("after a restart a new Talk with a new request closes the orphan first; its
   await POST(request({ action: "close", sessionId: fresh.sessionId }));
   f.provider.disconnect(old.providerId);
 });
+
+test("a mint whose SDP answer or session id echoes the credential is refused, hung up, and stored and answered nowhere", async () => {
+  for (const echo of ["sdp", "id", "piece"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    const key = "synthetic-credential";
+    f.provider.answer = () => echo === "id" ? { id: `live_${key}`, sdp: "v=0\r\ns=-\r\n" }
+      : { sdp: `v=0\r\ns=${echo === "sdp" ? key : key.slice(2, 19)}\r\na=ice-pwd:Xc8fT2vQm9pLr4sWd7yZa1bN\r\n` };
+    const answer = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: `echo-${echo}` }));
+    const body = await answer.text();
+    expect(answer.status, echo).toBeGreaterThanOrEqual(400);
+    for (const surface of [body, fs.readFileSync(path.join(root, "state", "voice-companion.json"), "utf8")]) {
+      expect(surface, echo).not.toContain(key);
+      expect(surface, echo).not.toContain(key.slice(2, 19));
+    }
+    expect(f.provider.hangups, echo).toHaveLength(1);
+    expect(f.provider.attached, echo).toBe(0);
+    expect((await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: `echo-${echo}` }))).status, `${echo} retry`).toBeGreaterThanOrEqual(400);
+    expect(f.provider.sessions, `${echo}: a retry mints nothing more`).toHaveLength(1);
+  }
+  // A real negotiation answer, its own ICE password included, passes unchanged.
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const f = fixture();
+  const sdp = "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\na=ice-ufrag:Kq3L\r\na=ice-pwd:Xc8fT2vQm9pLr4sWd7yZa1bN\r\na=fingerprint:sha-256 7B:8B:F0:65:5F:78:E2:51\r\n";
+  f.provider.answer = () => ({ sdp });
+  const answer = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "plain" }));
+  expect(answer.status).toBe(201);
+  expect((await answer.json()).sdp).toBe(sdp);
+  await f.service.close(Object.values(f.service.storage.read().sessions)[0].id);
+});

@@ -1,5 +1,5 @@
 import type { Locale } from "./contract";
-import { liveSessionConfiguration } from "./sessionConfig";
+import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
 export interface LiveConnection { send(event: LiveCommand): void; dispose(): void }
@@ -7,6 +7,8 @@ export interface LiveProvider {
   create(key: string, locale: Locale, sdp: string): Promise<{ id: string; sdp: string }>;
   attach(id: string, key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
+  /** One backend response, paid for by the caller before it is asked. */
+  respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown>;
 }
 export const jsonObject = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -24,6 +26,15 @@ export class OpenAILiveProvider implements LiveProvider {
       const response = await this.http(`https://api.openai.com/v1/live/sessions/${encodeURIComponent(id)}/hangup`, { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) throw new Error("PROVIDER_ERROR");
+    } catch { throw new Error("PROVIDER_ERROR"); }
+  }
+  async respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {
+    try {
+      const response = await this.http("https://api.openai.com/v1/responses", { method: "POST", redirect: "error",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(request),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
+      if (!response.ok) throw new Error("PROVIDER_ERROR");
+      return await response.json();
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
   async create(key: string, locale: Locale, sdp: string) {

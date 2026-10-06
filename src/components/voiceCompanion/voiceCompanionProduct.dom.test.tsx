@@ -244,7 +244,7 @@ async function liveHarness() {
   const before = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME, key: process.env.OPENAI_API_KEY };
   Object.assign(process.env, { LLV_STATE_DIR: path.join(stateRoot, "state"), XDG_CONFIG_HOME: path.join(stateRoot, "config"), OPENAI_API_KEY: "" });
   const { NextRequest } = await import("next/server");
-  const { FakeLiveProvider } = await import("@/lib/voiceCompanion/fakeProvider");
+  const { FakeLiveProvider, backendResponse, delegationCreated, functionCall, message } = await import("@/lib/voiceCompanion/fakeProvider");
   const { CompanionBoardReads } = await import("@/lib/voiceCompanion/boardReads");
   const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
   const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
@@ -262,7 +262,7 @@ async function liveHarness() {
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => FAKE_KEY, timers: false, closeTimeoutMs: 20 });
   setCompanionSessionsForTests(service);
-  const track = { enabled: true, stop() {} };
+  const track = { enabled: true, stops: 0, stop() { this.stops += 1; } };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const stand: Record<string, unknown> = {
     RTCPeerConnection: class extends EventTarget {
@@ -299,13 +299,15 @@ async function liveHarness() {
     return answer;
   });
   const propose = async (providerId: string, instruction: string) => {
-    provider.replay(providerId, { type: "response.event", event_id: `created-${instruction}`, delegation_id: "delegation", event: { type: "response.created", response: { id: `response-${instruction}` } } },
-      { type: "response.event", event_id: `done-${instruction}`, delegation_id: "delegation", event: { type: "response.output_item.done", item: { id: "item", type: "function_call", call_id: `call-${instruction}`, name: "request_orchestrator_delegation", arguments: JSON.stringify({ instruction }) } } });
+    /* Live delegates to the server; its backend proposes, then speaks. */
+    provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("The proposal is on the card.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${instruction}`, "request_orchestrator_delegation", { instruction })]);
+    provider.replay(providerId, delegationCreated(`delegation-${instruction}`, 100));
     /* The adapter reads the Viewer every half second. */
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
   };
   return {
-    storage, provider, sent, failing, propose, service,
+    storage, provider, sent, failing, propose, service, trackStops: () => track.stops,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -350,9 +352,10 @@ test("another project in view, or none, ends the live conversation: no read, no 
     expect(live.starts()).toBe(1);
     /* The provider still speaking for the old session reads nothing of project A. */
     const answers = live.provider.commands.length;
-    live.provider.replay(live.provider.sessions[0].id, { type: "response.event", event_id: "late-read", delegation_id: "delegation", event: { type: "response.output_item.done", item: { id: "item", type: "function_call", call_id: "late-read", name: "list_tasks", arguments: "{}" } } });
+    const asked = live.provider.requests.length;
+    live.provider.replay(live.provider.sessions[0].id, { type: "session.delegation.created", event_id: "late-read", offset_ms: 9_000, delegation: { id: "late", type: "delegation", target: "client" } });
     await pause();
-    expect(live.provider.commands.length).toBe(answers);
+    expect([live.provider.commands.length, live.provider.requests.length]).toEqual([answers, asked]);
     /* The proposal made in A cannot be sent any more. */
     await live.service.command(first.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" }).catch(() => undefined);
     expect(live.sent).toEqual([]);
@@ -404,6 +407,32 @@ test("a Send whose request or reply is lost says delivery is not confirmed, keep
       expect(live.sent).toEqual([held.delivery!.clientMessageId]);
     } finally { await unmountNow(); await live.release(); }
   }
+});
+
+test("collapsed during a muted conversation, the shape keeps a hang-up that ends the media and the session", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    await click(document.querySelector('[data-voice-companion] [aria-pressed]'));
+    expect(live.provider.commands.some((row) => row.type === "session.input_audio.mute")).toBe(true);
+    await click(document.querySelector("[data-companion-collapse]"));
+    const companion = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+    expect(companion.hasAttribute("data-collapsed")).toBe(true);
+    expect(companion.dataset.phase).not.toBe("offline");
+    const end = companion.querySelector<HTMLButtonElement>(".vc-shape-end[data-companion-end]");
+    expect(end?.getAttribute("aria-label")).toBe("End conversation");
+    expect(end?.tabIndex).toBe(0);
+    await click(end);
+    await pause(200);
+    expect(companion.dataset.phase).toBe("offline");
+    expect(Object.values(live.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(live.provider.attached).toBe(0);
+    expect(live.trackStops()).toBeGreaterThan(0);
+    /* Ended, the shape is only the shape again. */
+    expect(companion.querySelector("[data-companion-end]")).toBeNull();
+  } finally { await unmountNow(); await live.release(); }
 });
 
 test("the lost-send line is said in both languages", () => {
