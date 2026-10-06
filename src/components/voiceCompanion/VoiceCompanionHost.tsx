@@ -47,7 +47,10 @@ function MountedCompanion({ project, demo, keyMissing, capReached, onSessionEnd 
   const conversationId = seat?.conversationId ?? null;
   const seatEpoch = seat?.seatEpoch ?? 0;
   const engine = seat?.engine === "codex" ? "codex" as const : "claude" as const;
-  const live = useMemo(() => new OfficialVoiceCompanionAdapter(), []);
+  /* A live conversation belongs to the project it was started in: its reads, its proposals and its
+     orchestrator. Another project in view, or none, is another adapter, and leaving closes the session. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the project is the adapter's identity
+  const live = useMemo(() => new OfficialVoiceCompanionAdapter(), [project]);
   /* The demo plays for the project in view; with no orchestrator it shows the board answers and proposes nothing. */
   const simulated = useMemo(() => (demo && project !== null ? createSimulatedCompanion({
     script: scenarioScript(conversationId ? "demo" : "demoNoSeat", speech),
@@ -59,8 +62,9 @@ function MountedCompanion({ project, demo, keyMissing, capReached, onSessionEnd 
   const preflight = useCallback(() => (demo ? null : keyMissing ? "NO_KEY" : capReached ? "CAP_REACHED" : null), [demo, keyMissing, capReached]);
   return (
     <VoiceCompanion
-      /* A demo for another project, language or seat is another script, so another companion. */
-      key={demo ? `${project}:${speech}:${conversationId}` : "live"}
+      /* A demo for another project, language or seat is another script, so another companion.
+         A live one for another project starts idle: only its own tap on Talk opens a paid session. */
+      key={demo ? `${project}:${speech}:${conversationId}` : `live:${project ?? ""}`}
       adapter={adapter}
       project={project}
       locale={speech}

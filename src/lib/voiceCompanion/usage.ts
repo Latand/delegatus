@@ -3,8 +3,15 @@ import { jsonObject } from "./provider";
 /** Standard global rates verified 2026-10-06. Configuration pins default
  * service tier and exposes no hosted paid tools. See the linked pricing note. */
 export const LIVE_USD_PER_SECOND = 0.05 / 60;
-export const BACKEND_RESPONSE_RESERVE_USD = 0.20;
+export const BACKEND_MAX_OUTPUT_TOKENS = 512;
+/** The dearest one backend response can be: the model's whole context window
+ * at the large-input rate for a cache write, plus every allowed output token. */
+export const BACKEND_RESPONSE_RESERVE_USD = 1_050_000 * 0.25 / 1_000_000 + BACKEND_MAX_OUTPUT_TOKENS * 0.75 / 1_000_000;
+/** Live starts a backend response by itself and offers no way to refuse or
+ * cancel one, so this many are paid for before any of them can start. */
+export const BACKEND_PARALLEL_RESPONSES = 4;
 export const VOICE_SESSION_RESERVE_USD = 0.27; // five minutes plus close drain
+export const SESSION_RESERVE_USD = VOICE_SESSION_RESERVE_USD + BACKEND_PARALLEL_RESPONSES * BACKEND_RESPONSE_RESERVE_USD;
 export const LIVE_SESSION_LIMIT_MS = 300_000;
 
 export function backendUsageUsd(value: unknown): number | null {

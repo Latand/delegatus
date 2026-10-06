@@ -80,3 +80,15 @@ test("the six voice reads use task/pipeline persistence, liveness projection, an
   await expect(reads.call("project-a", "send_message", {})).rejects.toThrow("TOOL_NOT_ALLOWED");
   expect(opened).toBe(1);
 });
+
+test("a path in a stored note or hold reaches neither the structured read nor its speech", async () => {
+  const at = "2026-10-06T12:00:00.000Z";
+  const home = ["", "home", "fixture-operator", ".config", "delegatus"].join("/");
+  saveTasks([{ id: "task-path", project: "project-a", text: "Review export", status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    note: { text: `State is in ${home}/state now`, updatedAt: at, author: { kind: "operator" } },
+    hold: { kind: "worker", note: `Waiting on ${home}/accounts`, since: at, by: "operator" }, steps: [] }]);
+  const result = await new CompanionBoardReads(createCompanionBoardReadPaths()).call("project-a", "get_task", { taskId: "task-path" });
+  expect(JSON.stringify(result)).not.toContain("fixture-operator");
+  expect(result.item).toMatchObject({ note: "State is in [path] now", hold: "Waiting on [path]" });
+  expect(result.speech).toContain("State is in [path] now");
+});

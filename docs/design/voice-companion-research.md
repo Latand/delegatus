@@ -113,6 +113,29 @@ word alignment; their association is best effort and never proves which words
 were heard. Explicit interrupt also asks Live to yield without canceling
 already confirmed work.
 
+### What leaves the server
+
+Transcript fragments, tool names and results, proposal text, report bodies and
+identifiers are supplied by the provider, the model or an agent. Every event,
+stored input and proposal passes one cleaner before it is written or answered to
+the browser: the vendor credential families, and the credential in use by exact
+value, including a value that arrives across two fragments or lies across a
+segment boundary. The six board reads share one projection, which also replaces
+machine paths (home-relative, absolute, `file:` and drive paths) with `[path]`
+before length is cut, so no title, note, hold, step, agent title or message
+carries one to the model, a card or speech. An orchestrator report is cleaned
+the same way before it is shown and spoken. Repository-relative paths and URLs
+stay.
+
+A live conversation belongs to the project it was started in. When another
+project comes into view, or none, the shell replaces the adapter: the old
+session closes, its unconfirmed proposal is cancelled on the server, and the new
+project's companion is idle until its own tap on Talk.
+
+A Send whose request or reply is lost leaves the proposal card as it was, with a
+line saying delivery is not confirmed and both buttons live. The server keeps one
+delivery key per proposal, so a second tap recovers the first send.
+
 ### Registry extension
 
 `src/lib/voiceCompanion/tools.ts` declares the six board reads, the delegation
@@ -145,12 +168,25 @@ Voice duration is cumulative, with the documented 15-second WebRTC initializatio
 minimum credited against the running total. Duplicate or reordered totals never
 reduce recorded use or count it twice. No extra transcription is requested.
 
-A session reserves $0.27 for its first five minutes of voice and close drain, plus
-$0.20 per backend response, initially two responses. One prepaid response remains
-as headroom while each subsequent response is observed. Failure to reserve the
-next allowance starts closure and prevents further tool execution or continuation.
+Live starts a backend response by itself. The published
+[session update](https://github.com/openai/openai-python/blob/main/src/openai/types/live/session_update_config.py)
+changes backend settings only, and no client event refuses or cancels a
+delegation, so the cap is held by paying first. A session reserves $0.27 for its
+first five minutes of voice and close drain, plus four backend responses at the
+dearest one can be: Luna's whole 1,050,000-token context at the large-input
+cache-write rate and all 512 output tokens, $0.262884 each, $1.321536 in all.
+Every response takes one of the four paid places the first time anything names
+it (`session.delegation.created` with its `response_id`, or its own first event,
+in either order) and the place is paid for again at once. A continuation this
+server asks for is paid for before `response.create` is sent, and is never sent
+when it cannot be. When the next place cannot be paid for, the session closes
+while the places still held cover what may start before the close lands: up to
+four responses in parallel. A fifth one started in that window would be outside
+the reservation; it runs no tool, and its receipt is still recorded.
 Observed cost is visible during the call; unused reservations release only after
-confirmed finalization, including backend finals received after `session.closed`.
+confirmed finalization. A response named by its delegation is owed a final from
+that moment: after `session.closed` the sideband stays attached until every owed
+final has come, each counted once in any order.
 A bounded drain retains the reservation if a final receipt never arrives.
 Voice renews in five-minute reservation windows while
 there is room under the cap. Cap reductions, UTC month rollover and a missing
@@ -158,11 +194,16 @@ browser heartbeat close the session. Provider billing
 can continue during finalization; final accounting retains actual usage even if
 it exceeds the estimate. A transport loss retains the full reservation and marks
 usage incomplete instead of claiming a zero charge. Cap values below the initial
-$0.67 reservation refuse a real session. The demo remains free.
+$1.33 reservation refuse a real session before any provider call. The demo remains free.
 
 Mint request IDs bind the project, locale and SDP digest. Retry recovers the same
 mint while it is owned; a restart never silently mints another paid session.
-The explicit server hangup path closes an orphan and retains incomplete usage.
+Each stored session names the process and service instance that minted it. A
+service closes every open session whose owner is gone when it is created and
+again before each mint, so a restart followed by a reload or a new tab leaves no
+paid session open: the provider session is hung up, its reservation is kept as
+incomplete usage, and its admitted deliveries keep their keys. A session owned
+by another living process is left to it. Closing twice changes nothing.
 Confirmed deliveries keep their original send key and recipient across media
 closure, restart and receipt recovery. The existing relay supplies the voice
 channel provenance for Claude and Codex. Terminal receipt observation settles a
@@ -298,6 +339,7 @@ flagged in red while one is shown:
 | Microphone refused, provider error | The adapter's error event of the failed start or the lost session. |
 | No orchestrator | A note as the conversation starts, when the project in view has no seat; a proposal the model still raises is refused by the server and its card says the same sentence. |
 | Delivery not confirmed | A line in the delegation card under the frozen text; no answer is shown for such a request. |
+| Send lost on its way, or its reply lost | A line in the proposal card, which keeps its text and both buttons; another tap on Send checks the first one and sends once. |
 | No project in view | The Overview has no project to talk about: Talk says to open one. |
 
 An error the state still holds from the previous conversation is not said again
@@ -366,13 +408,14 @@ The records are `evidence/voice-companion/placement.json`, `edges.json`,
 `scenarios.json`, written by the "floating voice companion" block of
 `src/components/kanban/kanbanBoard.browser.test.tsx` in Chromium 151.0.7922.34
 (headless), with a private state directory, home and temp directory under the
-OS temp root and the control URL on a closed port. The recordings (22 `.webm`
-files, every scenario at both widths) and 203 screenshots are in
+OS temp root and the control URL on a closed port. The recordings (88 `.webm`
+files: each of the eleven scenarios at both widths, in both languages and both
+themes) and 453 screenshots are in
 `$HOME/Projects/delegatus-wt/handoff/voice-companion/` and are not committed;
-the prototype's captures moved to its `archive-head-9c79d4244/` folder and this
-stage's captures from before `main` was merged to `archive-head-20ba6ff64/`.
-Every case was run again on the head that carries that merge, and the figures
-here are that run's.
+the captures of each earlier head are in that folder's `archive-head-<sha>/`
+folders, the last of them `archive-head-0143f9698/`.
+Every case was run again on the head that carries the review fixes, and the
+figures here are that run's.
 Every browser was closed and each recorded process id confirmed gone.
 
 **Placement is stable and covers nothing.** 16 cases, each loaded three times:
@@ -387,48 +430,46 @@ cursor of its own, no lane point traps a click, the nearest control is 9 to
 it. The shell's own mount, read in `settings.json`, stands in the same places.
 
 **No frame carries a jump.** In the recorded runs every animation frame was
-read against the lane's end at the character: 22 228 frames, 137 elements
-entering, 355 rises of 8 px or more. The largest share of its path that one
-frame carried was **5.7 %** (3.6 of 64 px; the limit is 12 %), the largest step
-of any frame was 22 px, and the longest unbroken rise 272 px. In all 22 runs:
+read against the lane's end at the character: 91 293 frames, 548 elements
+entering, 1 419 rises of 8 px or more. The largest share of its path that one
+frame carried was **5.9 %** (4.7 of 80 px; the limit is 12 %). In all 88 runs:
 0 frames toward the character, 0 frames with two legible elements over each
 other, every arrival at the character's end, no one-word last line, 0 px
-between a bubble's height and its text. 16 rises were cut short by their
-element leaving and have no whole path to read; 1 120 frames inside rises came
-late in the recorded runs and are read per interval they stood for.
+between a bubble's height and its text. 64 rises were cut short by their
+element leaving and have no whole path to read.
 
-**Frame-time windows are on target in 58 of 58.** T is the idle median, 16.7 ms
-in every run; the target is p95 ≤ 1.5 T, max ≤ 4 T, at most 1 % missed. In 55
-windows p95 and the longest frame are one frame with 0 missed; the three
-windows of `many` at 1000 each hold one frame of 33 ms (1 missed of 226, 143
-and 125). The driver now requires the target, and the lane reading, after it
-has written the record. **Three scenarios were measured twice.** The frame
-clock is read on a shared build machine, where another process can take a
-frame from a page that is doing nothing, so a measured run with a window off
-target is measured again, up to three attempts, and the record keeps every
-discarded attempt (`remeasured` in `scenarios.json`): `short` at 1440 (5
-missed of 28 while its idle reference itself held a 33 ms frame), `many` at
-1000 (3 missed of 226 and of 143) and `readLong` at 1000 (one 117 ms frame
-while bubbles left). Each was on target on its second attempt. Before that
-rule existed, two whole runs of this case on the merged head showed windows
-off target, the first with the load average near 40 and frames lost in the
-idle reference of every scenario at 1440; a probe of three of the affected
-scenarios alone, on the same code, was clean. **Outside the windows four of
-the 22 conversations had one long frame** of 117 to 150 ms while nothing in
-the lane moved (`paragraph`, `burst`, `delegation` and `read`, all at 1000),
-6 to 8 missed frames each, with the load average between 21 and 30. The same
-single frames appeared in the prototype's record, where the
-long-animation-frame observer implicated no script of the companion; their
-cause is still not identified.
+**Frame-time windows are on target in 232 of 232.** T is the idle median, 16.7 ms
+in every run; the target is p95 ≤ 1.5 T, max ≤ 4 T, at most 1 % missed. In 206
+windows p95 and the longest frame are one frame with 0 missed; 26 windows hold
+one or two late frames (33 ms, twice 50 ms) inside the target. The driver
+requires the target, and the lane reading, after it has written the record.
+**Most runs were measured more than once.** The frame clock is read on a shared
+build machine, where another process can take a frame from a page that is doing
+nothing, so a measured run with a window off target is measured again, up to
+three attempts, and the record keeps every discarded attempt (`remeasured` in
+`scenarios.json`). The full matrix ran for two hours with the load average
+between 22 and 35 from other work on the machine: 21 runs were on target at the
+first attempt, 41 at the second, 21 at the third, and five were still off after
+three (`many` and `delegation` at 1440 uk dark, `delegation` at 1000 uk light,
+`reads` and `readLong` at 1440 en dark), each by single 33 ms frames, 1 to 7
+missed. Those five were measured and recorded again by the same driver on the
+same head once the load had fallen to about 11
+(`LLV_VOICE_COMPANION_REMEASURE`), and were on target at once; their three
+earlier attempts stay in the record, 98 discarded attempts in all. **Outside the
+windows 15 of the 88 conversations had long frames** of 50 to 550 ms while
+nothing in the lane moved, 7 to 39 missed frames each, 13 of them at 1000. The
+same frames appeared in the prototype's record, where the long-animation-frame
+observer implicated no script of the companion; their cause is still not
+identified.
 
 **The character holds its place.** It stood in one place from Talk to the end
-of the script in all 44 kept runs. No sample showed an element outside the viewport,
+of the script in all 176 kept runs. No sample showed an element outside the viewport,
 outside its lane or over a control; bubbles never exceeded 4 lines or 280 px;
-at most 4 bubbles and 4 calls showed at once (6 elements at the peak of
-`burst`). At the end of the delegation at 1000 the feed had filled under the
-character (3 217 px² of text under it), the accepted cost §9 states; it was 0
-in the other 21. The delegated row, in the frame it appeared, lay 45 % under
-the companion at 1440 and 51 % at 1000, the same accepted cost.
+at most 4 bubbles and 4 calls showed at once. At the end of the delegation at
+1000 the feed had filled under the character (2 119 px² of text under it in
+English, 3 217 in Ukrainian), the accepted cost §9 states; it was 0 in the other
+84. The delegated row, in the frame it appeared, lay 45 to 46 % under the
+companion at 1440 and 51 to 58 % at 1000, the same accepted cost.
 
 **The contract held.** No delegation event outside the delegation scenario;
 there, none before the explicit request, nothing sent before Send and exactly

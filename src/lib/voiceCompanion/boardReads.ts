@@ -1,5 +1,6 @@
 import { hardenedRedact } from "@/lib/view/compactText";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { withoutLocalPaths } from "./redaction";
 
 export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages"] as const;
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
@@ -13,7 +14,9 @@ export interface BoardReadPaths {
   messages(conversationId: string): Promise<Array<{ role: string; text: string }>>;
 }
 export interface SpeechReadResult { speech: string; total?: number; rows?: unknown[]; item?: unknown; truncated: boolean }
-const short = (value: string | null | undefined, limit = 160) => hardenedRedact(value ?? "").replace(/<!--[^]*?-->/g, "")
+/** The one projection of every read field. Length is cut last, so a path or
+ * a credential is never left half inside the limit. */
+const short = (value: string | null | undefined, limit = 160) => withoutLocalPaths(hardenedRedact(value ?? "").replace(/<!--[^]*?-->/g, ""))
   .replace(/\b(?:conversation_|task_|pipeline_)[A-Za-z0-9_-]+\b/g, "[reference]")
   .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, "[reference]").slice(0, limit);
 const handle = (id: string) => id.length <= 128 ? id : undefined;

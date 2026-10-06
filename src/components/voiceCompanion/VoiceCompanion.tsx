@@ -301,6 +301,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [dragging, setDragging] = useState(false);
   /* The proposal the operator already answered: its buttons take no second tap. */
   const [decidedFor, setDecidedFor] = useState<string | null>(null);
+  /* The proposal whose answer never reached the Viewer, or whose reply was lost on the way back. */
+  const [unconfirmedFor, setUnconfirmedFor] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   /* How many bubbles of the playing line are out, moved by the level samples outside React. */
   const [paced, setPaced] = useState<{ key: string; out: number } | null>(null);
@@ -768,7 +770,14 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const proposal = state.delegation?.proposal;
     if (!proposal || decidedFor === proposal.proposalId) return;
     setDecidedFor(proposal.proposalId);
-    void store.command({ type: "confirmation", proposalId: proposal.proposalId, decision, via: "tap" }).catch(() => undefined);
+    setUnconfirmedFor(null);
+    /* A lost request leaves the card as it was, says so, and takes another tap. The server keeps one
+       delivery key per proposal, so a repeated Send recovers the first send and never adds a second. */
+    void store.command({ type: "confirmation", proposalId: proposal.proposalId, decision, via: "tap" }).catch(() => {
+      setDecidedFor((current) => (current === proposal.proposalId ? null : current));
+      setUnconfirmedFor(proposal.proposalId);
+      void store.refresh().catch(() => undefined);
+    });
   };
 
   const connected = state.phase !== "offline";
@@ -864,6 +873,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           </div>
         ) : null}
         {/* What is still owed after the send: the reply tied to this request, or the proof that it arrived. */}
+        {delegation.stage === "awaiting-confirmation" && delegation.proposal && unconfirmedFor === delegation.proposal.proposalId ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
         {delegation.notice && delegation.stage !== "answered" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-delegation-notice={delegation.notice}>{companionErrorMessage(delegation.notice, speechLocaleOf(locale))}</p> : null}
       </div>
     );

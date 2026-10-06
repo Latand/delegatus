@@ -65,3 +65,38 @@ test("a new server instance closes an orphaned minted session and preserves inco
   // Release the original test-owned connection after simulating process loss.
   f.provider.disconnect(minted.providerId);
 });
+
+const get = (sessionId: string) => GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${sessionId}&after=0`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
+
+test("a transcript that repeats the provider key is answered and stored without it", async () => {
+  const f = fixture();
+  const minted = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "echo" }))).json();
+  f.provider.replay(minted.providerId, { type: "session.output_transcript.delta", event_id: "echo", delta: "synthetic-credential", start_ms: 0, end_ms: 100 });
+  await f.service.drain(minted.sessionId);
+  const answer = await get(minted.sessionId);
+  const body = await answer.text();
+  expect(answer.status).toBe(200);
+  expect(body).toContain("transcript.snapshot");
+  expect(body).not.toContain("synthetic-credential");
+  expect(fs.readFileSync(path.join(root, "state", "voice-companion.json"), "utf8")).not.toContain("synthetic-credential");
+  await POST(request({ action: "close", sessionId: minted.sessionId }));
+});
+
+test("after a restart a new Talk with a new request closes the orphan first; its old id is never polled", async () => {
+  const f = fixture();
+  const old = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "old-tab" });
+  const storage = new CompanionStorage();
+  const restarted = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }),
+    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  setCompanionSessionsForTests(restarted);
+  const started = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "new-tab" }));
+  expect(started.status).toBe(201);
+  const fresh = await started.json();
+  expect(f.provider.hangups).toEqual([old.providerId]);
+  const sessions = storage.read().sessions;
+  expect(sessions[old.sessionId].closed).toBe(true);
+  expect(Object.values(sessions).filter(row => !row.closed).map(row => row.id)).toEqual([fresh.sessionId]);
+  expect(storage.read().charges[old.sessionId]).toMatchObject({ reserved: false, incomplete: true });
+  await POST(request({ action: "close", sessionId: fresh.sessionId }));
+  f.provider.disconnect(old.providerId);
+});

@@ -26,7 +26,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 23,
+        "samples": 31,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -60,12 +60,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 34,
-        "maxBubbles": 3,
+        "samples": 32,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -98,7 +98,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 42,
+        "samples": 44,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -134,7 +134,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 40,
+        "samples": 46,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -168,12 +168,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 4,
+      "peakFloaters": 5,
       "samples": {
-        "samples": 24,
-        "maxBubbles": 2,
+        "samples": 28,
+        "maxBubbles": 3,
         "maxCalls": 2,
-        "maxFloaters": 4,
+        "maxFloaters": 5,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -204,12 +204,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 38,
-        "maxBubbles": 3,
+        "samples": 43,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -240,12 +240,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 29,
-        "maxBubbles": 3,
+        "samples": 46,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -278,7 +278,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 24,
+        "samples": 30,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -314,7 +314,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 34,
+        "samples": 46,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -350,7 +350,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 22,
+        "samples": 32,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -384,12 +384,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 22,
-        "maxBubbles": 3,
+        "samples": 35,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -420,12 +420,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 29,
-        "maxBubbles": 3,
+        "samples": 36,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -458,7 +458,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 40,
+        "samples": 48,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -494,7 +494,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 38,
+        "samples": 52,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -530,7 +530,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 25,
+        "samples": 32,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -566,7 +566,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 40,
+        "samples": 53,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -602,7 +602,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 39,
+        "samples": 45,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -636,12 +636,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 30,
-        "maxBubbles": 3,
+        "samples": 34,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 246,
         "maxBubbleSlackPx": 0,
@@ -674,7 +674,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 36,
+        "samples": 54,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -708,12 +708,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 31,
-        "maxBubbles": 3,
+        "samples": 40,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 246,
         "maxBubbleSlackPx": 0,

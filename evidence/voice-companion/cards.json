@@ -1,6 +1,6 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
-  "fixture": "?scenario=voice-companion&script=readThenAsk | &failure=<code> | &script=demoNoSeat&seat=none | &script=unconfirmed",
+  "fixture": "?scenario=voice-companion&script=readThenAsk | &failure=<code> | &script=demoNoSeat&seat=none | &script=unconfirmed | &script=proposal&sendlost=1",
   "rule": "a read call is a neutral card with an icon tile, the tool's real name and one line, and asks nothing; the delegation is a teal card with the whole frozen text and Cancel and Send; a failure is said in plain words in the lane (or in the delegation card when it is about a send), in the interface language",
   "sideBySide": [
     {
@@ -146,6 +146,23 @@
       "insideViewport": true
     },
     {
+      "failure": "SEND_UNCONFIRMED",
+      "lang": "en",
+      "scheme": "light",
+      "viewport": "1440x900",
+      "where": "a line in the proposal card, which keeps both buttons",
+      "text": "Delivery is not confirmed. Tap Send again to check it: the request goes out once.",
+      "stage": "awaiting-confirmation",
+      "instruction": 95,
+      "buttonsEnabled": [
+        true,
+        true
+      ],
+      "noteInsideCard": true,
+      "insideViewport": true,
+      "sendsAfterSecondTap": 1
+    },
+    {
       "failure": "NO_KEY",
       "lang": "uk",
       "scheme": "dark",
@@ -232,6 +249,23 @@
       "title": "Доставку не підтверджено",
       "replies": 0,
       "insideViewport": true
+    },
+    {
+      "failure": "SEND_UNCONFIRMED",
+      "lang": "uk",
+      "scheme": "dark",
+      "viewport": "1000x800",
+      "where": "a line in the proposal card, which keeps both buttons",
+      "text": "Доставку не підтверджено. Натисніть «Надіслати» ще раз для перевірки: запит піде один раз.",
+      "stage": "awaiting-confirmation",
+      "instruction": 95,
+      "buttonsEnabled": [
+        true,
+        true
+      ],
+      "noteInsideCard": true,
+      "insideViewport": true,
+      "sendsAfterSecondTap": 1
     }
   ]
 }

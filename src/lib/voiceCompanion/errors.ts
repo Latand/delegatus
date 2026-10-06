@@ -10,6 +10,7 @@ const messages = {
   PROVIDER_ERROR: ["The voice provider could not continue. Try starting a new session.", "Голосовий сервіс не зміг продовжити. Спробуйте почати нову розмову."],
   no_orchestrator: ["This project has no designated orchestrator.", "У цьому проєкті немає призначеного оркестратора."],
   DELIVERY_UNCONFIRMED: ["Delivery is unconfirmed. Recover the original send before retrying.", "Доставку не підтверджено. Перевірте початкове надсилання перед повтором."],
+  SEND_UNCONFIRMED: ["Delivery is not confirmed. Tap Send again to check it: the request goes out once.", "Доставку не підтверджено. Натисніть «Надіслати» ще раз для перевірки: запит піде один раз."],
   REPLY_PENDING: ["Waiting for an orchestrator reply tied to this request.", "Чекаємо на відповідь оркестратора, пов’язану з цим запитом."],
   INPUT_UNPROVEN: ["Finish the request before confirming a delegation.", "Завершіть запит, перш ніж підтверджувати делегацію."],
   INVALID_KEY: ["That does not look like an API key. Paste it again.", "Це не схоже на ключ API. Вставте його ще раз."],

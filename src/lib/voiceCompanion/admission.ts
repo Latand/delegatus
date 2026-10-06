@@ -4,6 +4,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
 import { liveProposalRefusal } from "./liveGate";
+import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
 export interface CompanionDeliveryPaths {
@@ -25,8 +26,8 @@ const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question
   }
 };
 
-function appendEvent(session: StoredSession, payload: Payload, now: number): CompanionEvent {
-  const event = { ...payload, version: 1 as const, sessionId: session.id, generation: session.generation,
+function appendEvent(session: StoredSession, payload: Payload, now: number, clean: (text: string) => string): CompanionEvent {
+  const event = { ...cleanStrings(payload, clean), version: 1 as const, sessionId: session.id, generation: session.generation,
     seq: ++session.seq, eventId: randomUUID(), atMs: now - session.createdAt } as CompanionEvent;
   session.events.push(event);
   session.events = session.events.slice(-512);
@@ -53,6 +54,7 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
  * retain their completed-input policy for deterministic demo fixtures. */
 export class CompanionAdmission {
   private readonly sending = new Map<string, Promise<void>>();
+  private readonly secrets = new Set<string>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
   create(options: { project: string; locale: Locale; authority?: "live-model" }): StoredSession {
     const session: StoredSession = { id: randomUUID(), project: canonicalProject(options.project), locale: options.locale, generation: 1,
@@ -64,18 +66,29 @@ export class CompanionAdmission {
     });
     return session;
   }
+  /** A credential in use that the key file and the environment do not hold. */
+  protect(secret: string): void { if (secret.trim()) this.secrets.add(secret.trim()); }
+  /** Transcripts, tool names and results, proposals and reports are supplied
+   * by a provider, a model or an agent. All of them pass here before they are
+   * stored or answered to the browser. */
+  private cleaner(): (text: string) => string {
+    const secrets = [...this.secrets, ...this.storage.credentials()];
+    return text => withoutCredentials(text, secrets);
+  }
   session(id: string) { return sessionIn(this.storage, id); }
   emit(id: string, payload: Payload): CompanionEvent {
+    const clean = this.cleaner();
     return this.storage.change(document => {
       const session = document.sessions[id];
       if (!session) throw new Error("SESSION_UNAVAILABLE");
-      return appendEvent(session, payload, this.now());
+      return appendEvent(session, payload, this.now(), clean);
     });
   }
   events(id: string, after: number): CompanionEvent[] { return this.session(id).events.filter(event => event.seq > after); }
   /** Trusted transcript normalization only; the browser command API cannot
    * submit text. Live's finals mark display boundaries and grant no authority. */
-  input(id: string, input: OperatorInput, timing: { startMs?: number; endMs?: number } = {}): void {
+  input(id: string, raw: OperatorInput, timing: { startMs?: number; endMs?: number } = {}): void {
+    const input = cleanStrings(raw, this.cleaner());
     const cancelled = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) throw new Error("SESSION_CLOSED");
@@ -98,7 +111,8 @@ export class CompanionAdmission {
     for (const row of cancelled) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
       result: { status: "cancelled", code: "source_changed" } });
   }
-  propose(id: string, callId: string, sourceItemId: string, instruction: string): Proposal | null {
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string): Proposal | null {
+    const [callId, sourceItemId, instruction] = [rawCallId, rawSourceItemId, rawInstruction].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
     if (existing) return existing.state === "pending" ? existing.proposal : null;
     this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
@@ -188,18 +202,20 @@ export class CompanionAdmission {
       if (!row.delivery?.operationId || row.status === "delivered" || row.status === "failed") continue;
       const status = await this.paths.receipt(row.delivery);
       if (status === "pending") continue;
+      const clean = this.cleaner();
       this.storage.change(document => {
         const session = document.sessions[id];
         const held = session.proposals[row.proposal.proposalId];
         if (held.status === "delivered" || held.status === "failed") return;
         held.status = status;
-        appendEvent(session, { type: "delegation.delivery.settled", delivery: held.delivery!, status }, this.now());
+        appendEvent(session, { type: "delegation.delivery.settled", delivery: held.delivery!, status }, this.now(), clean);
       });
     }
   }
   pollReplies(id: string): CompanionEvent[] {
     const session = this.session(id);
     const events: CompanionEvent[] = [];
+    const clean = this.cleaner();
     for (const row of Object.values(session.proposals)) {
       if (!row.delivery?.operationId || (row.status !== "queued" && row.status !== "delivered")) continue;
       for (const report of this.paths.reports(session.project)) {
@@ -214,7 +230,7 @@ export class CompanionAdmission {
           held.reports.push(report.id);
           // Persist correlation and its replay event in one atomic commit.
           return appendEvent(session, { type: "orchestrator.answer", delivery: held.delivery!, reportId: report.id,
-            status, text: report.body.slice(0, 1_200) }, this.now());
+            status, text: withoutLocalPaths(clean(report.body)).slice(0, 1_200) }, this.now(), clean);
         });
         if (fresh) events.push(fresh);
       }

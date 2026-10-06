@@ -1,5 +1,6 @@
 import type { Locale } from "./contract";
 import { COMPANION_TOOLS } from "./tools";
+import { BACKEND_MAX_OUTPUT_TOKENS } from "./usage";
 export { COMPANION_TOOLS } from "./tools";
 
 /** Verified 2026-10-06 against /api/docs/guides/live and the create schema. */
@@ -21,6 +22,6 @@ export function liveSessionConfiguration(locale: Locale) {
     audio: { output: { voice: "marin" } },
     client: { data_channel: { allowed_client_events: [], allowed_server_events: ["session.started", "session.input_transcript.delta", "session.output_transcript.delta", "session.closed", "error"].map(type => ({ type })) } },
     delegation: { type: "responses", responses: { model: LIVE_BACKEND_MODEL, tools: COMPANION_TOOLS,
-      tool_choice: "auto", parallel_tool_calls: false, max_output_tokens: 512, service_tier: "default", reasoning: { effort: "none" },
+      tool_choice: "auto", parallel_tool_calls: false, max_output_tokens: BACKEND_MAX_OUTPUT_TOKENS, service_tier: "default", reasoning: { effort: "none" },
       instructions: "Use only the supplied registry tools. Answer board questions through read tools. Propose only an explicit operator request to send work to the orchestrator; reject negations, retractions, conditions, quotes and ordinary questions. Compose the full request text. A proposal sends nothing; the operator's tap alone admits delivery. Missing or partial transcripts never block a proposal. Return a brief calm summary. End the call only on an explicit request to finish the entire conversation. Handles must never be spoken." } } };
 }

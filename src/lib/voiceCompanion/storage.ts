@@ -31,6 +31,8 @@ export interface StoredProposal {
 export interface StoredSession {
   authority?: "live-model";
   providerId?: string;
+  /** The process and service instance that minted the provider session. */
+  owner?: { pid: number; instance: string };
   mintRequestId?: string;
   mintDigest?: string;
   answerSdp?: string;
@@ -66,6 +68,7 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
   if (session.authority !== undefined && session.authority !== "live-model") return false;
   if (session.providerId !== undefined && !identifier(session.providerId)) return false;
+  if (session.owner !== undefined && (!record(session.owner) || !Number.isSafeInteger(session.owner.pid) || !identifier(session.owner.instance))) return false;
   if (session.mintRequestId !== undefined && !identifier(session.mintRequestId)) return false;
   if (session.mintDigest !== undefined && (typeof session.mintDigest !== "string" || !/^[a-f0-9]{64}$/.test(session.mintDigest))) return false;
   if (session.answerSdp !== undefined && (typeof session.answerSdp !== "string" || session.answerSdp.length > 96_000)) return false;
@@ -168,6 +171,15 @@ export class CompanionStorage {
       if (key) return key;
     } catch { /* No credential is exposed in the failure. */ }
     throw new Error("NO_KEY");
+  }
+  /** Every credential this installation could present, for redaction only. */
+  credentials(): string[] {
+    const found: string[] = [];
+    const environment = process.env.OPENAI_API_KEY?.trim();
+    if (environment) found.push(environment);
+    try { const key = fs.readFileSync(configFilePath("openai-api-key"), "utf8").trim(); if (key) found.push(key); }
+    catch { /* No key file: nothing of it can be echoed. */ }
+    return found;
   }
   reserve(key: string, usd: number): void {
     if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");

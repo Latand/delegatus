@@ -16,6 +16,7 @@ import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
+import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
@@ -115,6 +116,7 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
    with small real buttons every 100 px, where no lane fits. `&failure=<code>` makes Talk refuse with that failure,
    as the product does for a missing key or a reached cap, and `&seat=none` says the project has no orchestrator.
+   `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
    `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
    memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
    driver turns the companion on through the settings dialog. Desktop only. */
@@ -3187,6 +3189,14 @@ function voiceCompanionScene() {
   });
   void adapter.finished.then(() => { voice.finished = true; });
   Object.assign(window, { voiceCompanion: voice });
+  let sendLost = params.get("sendlost") === "1";
+  const shown: VoiceCompanionAdapter = !sendLost ? adapter : {
+    mode: adapter.mode, start: (options) => adapter.start(options), subscribe: (emit) => adapter.subscribe(emit), close: () => adapter.close(),
+    command: async (command) => {
+      if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
+      return adapter.command(command);
+    },
+  };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through
      the lane from one a bubble took. They are not controls, so the character stays wherever it is put. */
   const underlay = params.get("surface") === "underlay";
@@ -3208,7 +3218,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={adapter} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} />}
     </>
   );
 }

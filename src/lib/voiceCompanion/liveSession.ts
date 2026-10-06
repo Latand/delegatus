@@ -6,9 +6,13 @@ import { CompanionBoardReads } from "./boardReads";
 import { LiveTranscript } from "./liveTranscript";
 import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { runCompanionTool } from "./tools";
-import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, VOICE_SESSION_RESERVE_USD } from "./usage";
+import { backendUsageUsd, BACKEND_PARALLEL_RESPONSES, BACKEND_RESPONSE_RESERVE_USD, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_RESERVE_USD } from "./usage";
 
-interface ResponseState { id: string; delegationId: string; finished: boolean; continued: boolean; calls: Set<string> }
+interface ResponseState { id: string; delegationId: string; finished: boolean; continued: boolean; calls: Set<string>; covered: boolean }
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
 interface ActiveSession {
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
   queue: unknown[]; processing?: Promise<void>; seen: Set<string>; calls: Map<string, string>;
@@ -18,6 +22,11 @@ interface ActiveSession {
   providerClosed?: boolean; finalDuration?: boolean;
   lastSeen: number;
   createdAt: number; voiceAllowanceSeconds: number;
+  /** Backend responses already paid for that no response has taken yet. */
+  prepaid: number;
+  /** Continuations this server asked and paid for, by delegation. */
+  tickets: Map<string, number>;
+  capRefused?: boolean;
   hangup?(): Promise<void>;
   hangingUp?: Promise<void>;
 }
@@ -29,6 +38,8 @@ export interface MintedCompanionSession { sessionId: string; providerId: string;
 export class CompanionLiveSessions {
   private readonly active = new Map<string, ActiveSession>();
   private readonly minting = new Map<string, Promise<MintedCompanionSession>>();
+  private readonly reaping = new Map<string, Promise<void>>();
+  private readonly instance = randomUUID();
   private readonly now: () => number;
   constructor(readonly storage: CompanionStorage, readonly admission: CompanionAdmission, private readonly reads: CompanionBoardReads,
     private readonly provider: LiveProvider, private readonly options: Options = {}) { this.now = options.now ?? Date.now; }
@@ -36,6 +47,8 @@ export class CompanionLiveSessions {
   async start(input: { project: string; locale: Locale; sdp: string; requestId?: string }): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) throw new Error("INVALID_REQUEST");
+    // No new paid session while one that lost its owner is still open.
+    await this.recover();
     const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp])).digest("hex");
     const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
     if (previous) {
@@ -60,17 +73,18 @@ export class CompanionLiveSessions {
     try {
       this.storage.change(document => {
         if (Object.values(document.sessions).some(row => row.id !== id && row.mintRequestId === requestId)) throw new Error("SESSION_CLOSED");
-        Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest });
+        Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest, owner: { pid: process.pid, instance: this.instance } });
       });
     } catch (error) { this.admission.retire(id); throw error; }
-    try { this.storage.reserve(id, VOICE_SESSION_RESERVE_USD + 2 * BACKEND_RESPONSE_RESERVE_USD); }
+    try { this.storage.reserve(id, SESSION_RESERVE_USD); }
     catch (error) { this.admission.retire(id); throw error; }
     let key: string;
     try { key = this.options.key?.() ?? this.storage.providerKey(); }
     catch (error) { this.storage.settle(id, 0); this.admission.retire(id); throw error; }
+    this.admission.protect(key);
     const active: ActiveSession = { id, providerId: "", transcript: new LiveTranscript(), queue: [], seen: new Set(), calls: new Map(),
       responses: new Map(), currentResponses: new Map(), delegations: new Map(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
-      createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000 };
+      createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, prepaid: BACKEND_PARALLEL_RESPONSES, tickets: new Map() };
     this.active.set(id, active);
     this.storage.change(document => { document.sessions[id].usage = { seconds: 0, responses: {} }; });
     try {
@@ -117,6 +131,9 @@ export class CompanionLiveSessions {
         for (const response of active.responses.values()) {
           if (!active.ended && !active.closePromise && response.finished && response.calls.size && !response.continued) {
             response.continued = true;
+            // A continuation is a paid backend response this server starts: paid for first, or never asked.
+            if (!this.takeSlot(active) || active.closePromise) break;
+            active.tickets.set(response.delegationId, (active.tickets.get(response.delegationId) ?? 0) + 1);
             active.connection?.send({ type: "response.create", event_id: randomUUID() });
           }
         }
@@ -153,6 +170,12 @@ export class CompanionLiveSessions {
         active.delegations.set(delegation.id, event.offset_ms);
         this.transcript(active, active.transcript.boundary(event.offset_ms));
       }
+      // The earliest word of a backend response. Its final receipt is owed from
+      // here on, whether or not any of its own events arrive before the voice closes.
+      if (typeof delegation?.id === "string" && typeof delegation.response_id === "string" && delegation.response_id.length <= 200) {
+        this.admitResponse(active, delegation.response_id, delegation.id);
+        if (!active.currentResponses.has(delegation.id)) active.currentResponses.set(delegation.id, delegation.response_id);
+      }
     } else if (event.type === "session.usage.updated" || event.type === "session.closed") {
       const seconds = jsonObject(event.usage)?.seconds;
       if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) this.storage.change(document => {
@@ -178,21 +201,8 @@ export class CompanionLiveSessions {
     const snapshot = jsonObject(event.response);
     if (typeof snapshot?.id === "string") {
       const id = snapshot.id;
-      if (!active.responses.has(id)) {
-        // Initialization reserves the first backend response, including the
-        // large-context input premium. Each additional response reserves first.
-        let budgetRefused = false;
-        if (active.responses.size) {
-          try { this.storage.extend(active.id, BACKEND_RESPONSE_RESERVE_USD); }
-          catch {
-            this.admission.emit(active.id, { type: "error", code: "CAP_REACHED", recoverable: false });
-            budgetRefused = true;
-          }
-        }
-        active.responses.set(id, { id, delegationId, finished: false, continued: false, calls: new Set() });
-        this.storage.change(document => { document.sessions[active.id].usage!.responses[id] = { usd: null, complete: false }; });
-        if (budgetRefused) { void this.close(active.id, "cap"); return; }
-      }
+      if (id.length > 200) throw new Error("PROVIDER_ERROR");
+      this.admitResponse(active, id, delegationId);
       if (delegationId && (event.type === "response.created" || !active.currentResponses.has(delegationId))) active.currentResponses.set(delegationId, id);
       if (["response.completed", "response.failed", "response.incomplete"].includes(event.type as string)) {
         const usd = backendUsageUsd(snapshot.usage);
@@ -211,12 +221,13 @@ export class CompanionLiveSessions {
       || item.arguments.length > 8_000 || item.call_id.length > 200) return;
     const response = active.responses.get(active.currentResponses.get(delegationId) ?? "");
     if (!response) throw new Error("PROVIDER_ERROR");
+    if (!response.covered) return;
     const signature = JSON.stringify([item.name, item.arguments, delegationId]);
     const previous = active.calls.get(item.call_id);
     if (previous !== undefined) { if (previous !== signature) throw new Error("PROVIDER_ERROR"); return; }
     active.calls.set(item.call_id, signature);
     response.calls.add(item.call_id);
-    this.admission.emit(active.id, { type: "tool.called", callId: item.call_id, name: item.name, summary: item.name.replaceAll("_", " ") });
+    this.admission.emit(active.id, { type: "tool.called", callId: item.call_id, name: item.name.slice(0, 80), summary: item.name.slice(0, 80).replaceAll("_", " ") });
     let result: unknown;
     try {
       result = await runCompanionTool({ project: this.admission.session(active.id).project, sessionId: active.id,
@@ -230,6 +241,63 @@ export class CompanionLiveSessions {
       this.admission.emit(active.id, { type: "tool.result", callId: item.call_id, status: "failed", summary: code });
     }
     active.connection?.send({ type: "response.item.create", event_id: randomUUID(), item: { type: "function_call_output", call_id: item.call_id, output: JSON.stringify(result) } });
+  }
+  /** Takes one paid-for response and pays for the next. When the next cannot
+   * be paid for, the session closes while what may still start is covered. */
+  private takeSlot(active: ActiveSession): boolean {
+    if (active.prepaid <= 0) { this.capReached(active); return false; }
+    active.prepaid -= 1;
+    try { this.storage.extend(active.id, BACKEND_RESPONSE_RESERVE_USD); active.prepaid += 1; }
+    catch { this.capReached(active); }
+    return true;
+  }
+  private capReached(active: ActiveSession): void {
+    if (!active.capRefused) {
+      active.capRefused = true;
+      this.admission.emit(active.id, { type: "error", code: "CAP_REACHED", recoverable: false });
+    }
+    void this.close(active.id, "cap");
+  }
+  /** Records a backend response the first time anything names it. False when
+   * nothing was reserved for it: it is accounted and none of its tools run. */
+  private admitResponse(active: ActiveSession, id: string, delegationId: string): boolean {
+    const known = active.responses.get(id);
+    if (known) return known.covered;
+    const ticket = delegationId ? active.tickets.get(delegationId) ?? 0 : 0;
+    if (ticket > 0) active.tickets.set(delegationId, ticket - 1);
+    const covered = ticket > 0 || this.takeSlot(active);
+    active.responses.set(id, { id, delegationId, finished: false, continued: false, calls: new Set(), covered });
+    this.storage.change(document => { document.sessions[active.id].usage!.responses[id] ??= { usd: null, complete: false }; });
+    return covered;
+  }
+  /** A stored voice session that no living service owns: the Viewer restarted,
+   * or the browser forgot its id. Closes the provider session and keeps its
+   * reservation as incomplete usage. Admitted deliveries keep their keys. */
+  async recover(): Promise<void> {
+    for (const row of Object.values(this.storage.read().sessions)) {
+      if (row.closed || row.authority !== "live-model" || this.active.has(row.id)) continue;
+      const owner = row.owner;
+      if (owner && owner.instance !== this.instance && owner.pid !== process.pid && processAlive(owner.pid)) continue;
+      await this.reap(row.id);
+    }
+  }
+  private reap(id: string): Promise<void> {
+    const running = this.reaping.get(id);
+    if (running) return running;
+    const promise = (async () => {
+      const session = this.admission.session(id);
+      if (session.closed || this.active.has(id)) return;
+      if (session.providerId) {
+        try { await this.provider.hangup(session.providerId, this.options.key?.() ?? this.storage.providerKey()); }
+        catch { /* A lost control channel remains incomplete. */ }
+      }
+      if (this.admission.session(id).closed) return;
+      this.storage.settle(id, null);
+      this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
+      this.admission.retire(id);
+    })();
+    this.reaping.set(id, promise);
+    return promise.finally(() => { this.reaping.delete(id); });
   }
   async command(id: string, command: CompanionCommand): Promise<void> {
     if (command.type === "confirmation") {
@@ -247,15 +315,7 @@ export class CompanionLiveSessions {
     if (active) active.lastSeen = this.now();
     await this.drain(id);
     const session = this.admission.session(id);
-    if (!active && !session.closed) {
-      if (session.providerId) {
-        try { await this.provider.hangup(session.providerId, this.options.key?.() ?? this.storage.providerKey()); }
-        catch { /* A lost control channel remains incomplete. */ }
-      }
-      this.storage.settle(id, null);
-      this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
-      this.admission.retire(id);
-    }
+    if (!active && !session.closed) await this.reap(id);
     for (const row of Object.values(session.proposals)) if (row.state === "admitted" && row.status === "unknown")
       await this.admission.confirm(id, { type: "confirmation", proposalId: row.proposal.proposalId, decision: "send", via: "tap" });
     await this.admission.pollReceipts(id);

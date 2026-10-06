@@ -230,3 +230,183 @@ test("the store renders nothing for a level sample, resets on a new session and 
   expect(closes).toBe(1);
   expect(listeners.size).toBe(0);
 });
+
+/*
+ * The live path whole (#2519 C, G, H): the shell's mount, the real adapter, the
+ * production session route and the session service over the local fake provider.
+ * Only the browser's media objects are stand-ins; nothing leaves the process.
+ */
+async function liveHarness() {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voice-live-dom-"));
+  const before = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME, key: process.env.OPENAI_API_KEY };
+  Object.assign(process.env, { LLV_STATE_DIR: path.join(stateRoot, "state"), XDG_CONFIG_HOME: path.join(stateRoot, "config"), OPENAI_API_KEY: "" });
+  const { NextRequest } = await import("next/server");
+  const { FakeLiveProvider } = await import("@/lib/voiceCompanion/fakeProvider");
+  const { CompanionBoardReads } = await import("@/lib/voiceCompanion/boardReads");
+  const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+  const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
+  const { CompanionLiveSessions } = await import("@/lib/voiceCompanion/liveSession");
+  const { setCompanionSessionsForTests } = await import("@/lib/voiceCompanion/server");
+  const route = await import("@/app/api/voice-companion/session/route");
+  const storage = new CompanionStorage();
+  storage.updateSettings({ enabled: true });
+  const provider = new FakeLiveProvider();
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(storage, {
+    recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }),
+    send: async binding => { sent.push(binding.delivery.clientMessageId); return { status: "queued", operationId: `operation-${sent.length}` }; }, reports: () => [] });
+  const reads = new CompanionBoardReads({ tasks: () => ["project-a", "project-b"].map(project => ({ id: `task-${project}`, project, text: `Task of ${project}`, status: "open" })),
+    pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => FAKE_KEY, timers: false, closeTimeoutMs: 20 });
+  setCompanionSessionsForTests(service);
+  const track = { enabled: true, stop() {} };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  const stand: Record<string, unknown> = {
+    RTCPeerConnection: class extends EventTarget {
+      iceGatheringState = "complete"; connectionState = "connected"; localDescription = { sdp: "v=0\r\n" };
+      addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
+      async createOffer() { return {}; } async setLocalDescription() {} async setRemoteDescription() {} close() {}
+    },
+    AudioContext: class { state = "running"; async resume() {} async close() {} createAnalyser() { return { fftSize: 512, getFloatTimeDomainData() {} }; } createMediaStreamSource() { return { connect() {} }; } },
+    Audio: class { autoplay = false; paused = true; muted = false; srcObject: unknown = null; pause() {} async play() {} },
+    MediaStream: class {},
+    /* The media samples its levels once and is not called back: no audio plays here. */
+    requestAnimationFrame: () => 0, cancelAnimationFrame: () => undefined,
+  };
+  const restore = new Map<string, PropertyDescriptor | undefined>();
+  for (const [name, value] of Object.entries(stand)) { restore.set(name, Object.getOwnPropertyDescriptor(globalThis, name)); Object.defineProperty(globalThis, name, { value, configurable: true, writable: true }); }
+  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => stream }, configurable: true });
+  /** fail: "before" loses the request on its way in; "after" loses the reply to a request the Viewer handled. */
+  const failing: { command: "before" | "after" | null } = { command: null };
+  const document = settingsOf({ enabled: true, keySource: "file" });
+  harness.setRoute(async (url, init) => {
+    const target = new URL(url, "http://127.0.0.1:8898");
+    if (target.pathname === "/api/voice-companion/settings") return jsonResponse(document);
+    if (target.pathname === "/api/orchestrator/seat") {
+      const project = target.searchParams.get("project");
+      return jsonResponse({ seat: { project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null, all: null });
+    }
+    if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
+    const lost = body?.action === "command" ? failing.command : null;
+    if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
+    const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+    const answer = await (body ? route.POST(request) : route.GET(request));
+    if (lost === "after") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
+    return answer;
+  });
+  const propose = async (providerId: string, instruction: string) => {
+    provider.replay(providerId, { type: "response.event", event_id: `created-${instruction}`, delegation_id: "delegation", event: { type: "response.created", response: { id: `response-${instruction}` } } },
+      { type: "response.event", event_id: `done-${instruction}`, delegation_id: "delegation", event: { type: "response.output_item.done", item: { id: "item", type: "function_call", call_id: `call-${instruction}`, name: "request_orchestrator_delegation", arguments: JSON.stringify({ instruction }) } } });
+    /* The adapter reads the Viewer every half second. */
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+  };
+  return {
+    storage, provider, sent, failing, propose, service,
+    starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
+    async release() {
+      for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
+      setCompanionSessionsForTests(undefined);
+      for (const [name, descriptor] of restore) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); }
+      Reflect.deleteProperty(navigator, "mediaDevices");
+      for (const [name, value] of [["LLV_STATE_DIR", before.state], ["XDG_CONFIG_HOME", before.config], ["OPENAI_API_KEY", before.key]] as const) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    },
+  };
+}
+const unmountNow = async () => {
+  if (!mounted) return;
+  const { root, host } = mounted;
+  mounted = null;
+  await act(async () => root.unmount());
+  await act(async () => settle());
+  host.remove();
+};
+const pause = (ms = 60) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+test("another project in view, or none, ends the live conversation: no read, no proposal and no paid start follows it there", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    expect(live.starts()).toBe(0);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    const [first] = Object.values(live.storage.read().sessions);
+    expect([live.starts(), first.project, first.closed]).toEqual([1, "project-a", false]);
+    await live.propose(live.provider.sessions[0].id, "Review the plan");
+    expect(document.querySelector<HTMLElement>("[data-companion-delegation]")?.dataset.stage).toBe("awaiting-confirmation");
+    const proposal = Object.values(live.storage.read().sessions[first.id].proposals)[0].proposal;
+
+    await act(async () => mounted!.root.render(<VoiceCompanionHost project="project-b" mobile={false} />));
+    await pause(200);
+    expect(live.storage.read().sessions[first.id].closed).toBe(true);
+    expect(live.provider.attached).toBe(0);
+    /* The companion of project B is idle: no session was started for it. */
+    expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).toBe("offline");
+    expect(document.querySelector("[data-companion-delegation]")).toBeNull();
+    expect(live.starts()).toBe(1);
+    /* The provider still speaking for the old session reads nothing of project A. */
+    const answers = live.provider.commands.length;
+    live.provider.replay(live.provider.sessions[0].id, { type: "response.event", event_id: "late-read", delegation_id: "delegation", event: { type: "response.output_item.done", item: { id: "item", type: "function_call", call_id: "late-read", name: "list_tasks", arguments: "{}" } } });
+    await pause();
+    expect(live.provider.commands.length).toBe(answers);
+    /* The proposal made in A cannot be sent any more. */
+    await live.service.command(first.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" }).catch(() => undefined);
+    expect(live.sent).toEqual([]);
+    expect(live.storage.read().sessions[first.id].proposals[proposal.proposalId].state).toBe("cancelled");
+
+    /* B talks only after its own tap, and to its own project. */
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    const second = Object.values(live.storage.read().sessions).find((row) => !row.closed)!;
+    expect([live.starts(), second.project]).toEqual([2, "project-b"]);
+    await act(async () => mounted!.root.render(<VoiceCompanionHost project={null} mobile={false} />));
+    await pause(200);
+    expect(Object.values(live.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(live.starts()).toBe(2);
+  } finally { await unmountNow(); await live.release(); }
+});
+
+test("a Send whose request or reply is lost says delivery is not confirmed, keeps the card, and another tap delivers once", async () => {
+  for (const lost of ["before", "after"] as const) {
+    const live = await liveHarness();
+    try {
+      await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+      await click(document.querySelector("[data-companion-talk]"));
+      await pause();
+      await live.propose(live.provider.sessions[0].id, "Review the plan");
+      const card = () => document.querySelector<HTMLElement>("[data-companion-delegation]");
+      expect(card()?.dataset.stage).toBe("awaiting-confirmation");
+      live.failing.command = lost;
+      await click(card()!.querySelector("[data-companion-send]"));
+      await pause(700);
+      if (lost === "before") {
+        /* Nothing was admitted: the card stands, says so in words, and both buttons take a tap again. */
+        expect(live.sent).toEqual([]);
+        expect(card()?.dataset.stage).toBe("awaiting-confirmation");
+        expect(card()!.querySelector('[data-companion-delegation-notice="DELIVERY_UNCONFIRMED"]')?.textContent).toBe(companionErrorMessage("SEND_UNCONFIRMED", "en"));
+        expect(card()!.querySelector<HTMLButtonElement>("[data-companion-send]")!.disabled).toBe(false);
+        expect(card()!.querySelector<HTMLButtonElement>("[data-companion-cancel]")!.disabled).toBe(false);
+        expect(card()!.querySelector("[data-companion-instruction]")?.textContent).toBe("Review the plan");
+        await click(card()!.querySelector("[data-companion-send]"));
+        await pause(700);
+      }
+      /* Admitted once, whichever way the first answer was lost; the card moved on by itself. */
+      expect(live.sent).toHaveLength(1);
+      expect(card()?.dataset.stage).toBe("queued");
+      expect(card()!.querySelector("[data-companion-send]")).toBeNull();
+      const [session] = Object.values(live.storage.read().sessions);
+      const held = Object.values(session.proposals)[0];
+      await live.service.command(session.id, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+      expect(live.sent).toEqual([held.delivery!.clientMessageId]);
+    } finally { await unmountNow(); await live.release(); }
+  }
+});
+
+test("the lost-send line is said in both languages", () => {
+  expect(companionErrorMessage("SEND_UNCONFIRMED", "en")).toContain("not confirmed");
+  expect(companionErrorMessage("SEND_UNCONFIRMED", "uk")).toContain("не підтверджено");
+});

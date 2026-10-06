@@ -10,7 +10,10 @@ const globals = globalThis as typeof globalThis & { __delegatusVoiceSessions?: C
 export function companionSessions(): CompanionLiveSessions {
   return globals.__delegatusVoiceSessions ??= (() => {
     const storage = new CompanionStorage();
-    return new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths), new CompanionBoardReads(companionBoardReadPaths), new OpenAILiveProvider());
+    const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, companionDeliveryPaths), new CompanionBoardReads(companionBoardReadPaths), new OpenAILiveProvider());
+    // A session a previous Viewer minted has no owner here. Close it at once; no browser has to ask for it.
+    void service.recover().catch(() => undefined);
+    return service;
   })();
 }
 export function setCompanionSessionsForTests(value: CompanionLiveSessions | undefined): void { globals.__delegatusVoiceSessions = value; }
