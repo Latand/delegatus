@@ -936,6 +936,8 @@ export const en = {
   "receipt.human.staleKey": "the delivery key was stale",
   "receipt.human.duplicate": "already delivered",
   "receipt.human.turnActive": "the agent is mid-turn",
+  "receipt.human.switchingAccounts": "Switching accounts — your message goes out right after",
+  "receipt.human.switchAfterTurn": "Switching accounts when the current turn ends — your message goes out right after",
   "receipt.human.noTurn": "there is no active turn",
   "receipt.human.discarded": "Discarded",
   "receipt.human.unsupportedCapability": "Delegatus has no channel for this control here",

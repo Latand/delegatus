@@ -7,7 +7,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { describeReceiptFailure } from "./deliveryNotice";
 import { deliveryWaitText, type DeliveryWait } from "./deliveryWait";
-import { humanReceiptReasonKey, receiptIsTerminal, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
+import { humanReceiptReasonKey, receiptIsTerminal, SWITCH_WAIT_REASONS, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
 
 /** Human sentence for a rejected/failed reason: a mapped sentence for a known
     code, else the sanitized reason's terse cause behind a "not delivered:"
@@ -40,6 +40,7 @@ function tone(status: ReceiptStatus): BadgeTone {
 export function runtimeReceiptStatusText(t: TFunction, receipt: RuntimeReceipt): string {
   switch (receipt.status) {
     case "queued":
+      if (receipt.reason && SWITCH_WAIT_REASONS.has(receipt.reason)) return humanReason(t, receipt.reason);
       return typeof receipt.queuePosition === "number"
         ? t("runtime.receipt.queuedPos", { position: receipt.queuePosition })
         : t("runtime.receipt.queued");

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { MigrationTargetUnavailableError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
@@ -342,80 +342,72 @@ test("a stuck pre-receipt phase is advanced by the same evidence", async () => {
   expect(advanced.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
 });
 
-test("a send forces the pending switch and becomes the successor's first delivery", async () => {
+test("a send to an idle host is answered at once and the switch's owner carries it to the successor once", async () => {
   const { registry, conversation, sourceKey, sourcePath, successorPath, releasedKeys, reconfigure, hostTurn } = await switchRequestedMidTurn();
   hostTurn(null);
-  const commands: { conversationId: string; text: string }[] = [];
+  const commands: string[] = [];
   let migrationTicks = 0;
+  let drain: Promise<unknown> | null = null;
   const client = {
     snapshot: async () => structuredSnapshot(registry.conversation(conversation.id)!, "idle"),
     readSession: async (identity: { conversationId?: string }) => structuredSnapshot(registry.conversation(conversation.id)!, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
-    command: async (command: { operationId: string; idempotencyKey: string; conversationId: string; text: string }) => {
-      commands.push({ conversationId: command.conversationId, text: command.text });
-      return {
-        operationId: command.operationId,
-        replayed: false,
-        receipt: {
-          operationId: command.operationId,
-          idempotencyKey: command.idempotencyKey,
-          conversationId: command.conversationId,
-          kind: "send" as const,
-          status: "delivered" as const,
-          at: "2026-07-21T10:01:00.000Z",
-          revision: 1,
-        },
-      };
-    },
+    command: async (command: { text: string }) => { commands.push(command.text); throw new Error("the send must not reach a host from its request"); },
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage({
     path: sourcePath,
     conversationId: conversation.id,
-    clientMessageId: "forced-switch-send",
+    clientMessageId: "send-during-switch",
     text: "continue on the other account",
   }, {
     enabled: () => true,
     client: () => client,
     registry: () => registry,
     requestMigrationTick: () => { migrationTicks += 1; },
-    /* What the structured queue's drain does when the send kicks it. */
-    kick: async () => { await reconfigure(); },
+    /* What the structured queue's drain does when the send kicks it; the
+       request answers without waiting for it (2026-10-06). */
+    kick: () => { drain = reconfigure(); return drain; },
   });
 
-  expect(result).toMatchObject({ ok: true, outcome: "delivered", target: conversation.id });
+  expect(result).toMatchObject({ ok: true, outcome: "held", target: conversation.id });
+  expect(migrationTicks).toBeGreaterThan(0);
+  expect(drain).not.toBeNull();
+  await drain;
   const switched = registry.conversation(conversation.id)!;
   expect(switched.migration?.phase).toBe("committed");
   expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
   /* One executor still owned the transition, so the predecessor is gone. */
   expect(releasedKeys).toEqual([sourceKey]);
   expect(terminatedSource(registry, sourceKey)).toMatchObject({ status: "dead", structuredHost: null });
-  expect(commands).toEqual([{ conversationId: conversation.id, text: "continue on the other account" }]);
-  /* Deliveries held earlier in the same pending window are drained without
-     waiting for the controller's poll. */
-  expect(migrationTicks).toBeGreaterThan(0);
+  expect(commands).toEqual([]);
+
+  const delivered: string[] = [];
+  const port = { async deliver(input: { path: string; clientMessageId: string }) { delivered.push(`${input.path}:${input.clientMessageId}`); return "delivered" as const; } };
+  await drainHeldDeliveries(conversation.id, port, registry);
+  await drainHeldDeliveries(conversation.id, port, registry);
+  expect(delivered).toEqual([`${successorPath}:send-during-switch`]);
   expect(Object.values(registry.snapshot().heldDeliveries)).toMatchObject([{
-    clientMessageId: "forced-switch-send",
+    clientMessageId: "send-during-switch",
     state: "delivered",
     generationId: "successor-native",
+    attempts: 1,
   }]);
 });
 
-test("an image send whose successor has no host yet is held durably, never rejected", async () => {
+test("an image send during a switch is held durably, never rejected", async () => {
   const { registry, conversation, sourcePath, successorPath, reconfigure, hostTurn } = await switchRequestedMidTurn();
   hostTurn(null);
-  let snapshots = 0;
+  let drain: Promise<unknown> | null = null;
   const client = {
-    /* The source is hosted and idle; once the switch commits, the successor's
-       host has not published a session yet. */
-    snapshot: async () => structuredSnapshot(conversation, "idle", snapshots++ === 0 ? 1 : 0),
-    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(conversation, "idle", snapshots++ === 0 ? 1 : 0).sessions.find(session => session.conversationId === identity.conversationId) ?? null,
-    command: async () => { throw new Error("no successor host is published yet"); },
+    snapshot: async () => structuredSnapshot(conversation, "idle"),
+    readSession: async (identity: { conversationId?: string }) => structuredSnapshot(conversation, "idle").sessions.find(session => session.conversationId === identity.conversationId) ?? null,
+    command: async () => { throw new Error("no host receives the image from its request"); },
   } as unknown as RuntimeHostClient;
 
   const result = await enqueueStructuredMessage({
     path: sourcePath,
     conversationId: conversation.id,
-    clientMessageId: "forced-switch-image-send",
+    clientMessageId: "switch-image-send",
     text: "look at this",
     images: [{ base64: PNG_BASE64, mime: "image/png" }],
   }, {
@@ -423,14 +415,18 @@ test("an image send whose successor has no host yet is held durably, never rejec
     client: () => client,
     registry: () => registry,
     requestMigrationTick: () => {},
-    kick: async () => { await reconfigure(); },
+    kick: () => { drain = reconfigure(); return drain; },
     storeImages: () => [],
   });
 
   expect(result).toMatchObject({ ok: true, structured: true, outcome: "held" });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "switch-image-send", payloadKind: "runtime-images", state: "held", waitReason: "switching-accounts",
+  }]);
+  await drain;
   expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
-    clientMessageId: "forced-switch-image-send",
+    clientMessageId: "switch-image-send",
     payloadKind: "runtime-images",
     generationId: "successor-native",
   }]);

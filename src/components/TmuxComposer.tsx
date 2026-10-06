@@ -2300,6 +2300,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     };
   }, [cardId, operationReadsActive]);
   const receiptReconciliations = useRef<Map<string, AbortController>>(new Map());
+  /* Keys whose confirmation window closed with nothing admitted, so the
+     composer said it could not confirm them. A later admission for one of
+     them takes that back. */
+  const unconfirmedKeys = useRef<Set<string>>(new Set());
   const legacyResponseEpoch = useRef<{ cardId: string; active: boolean }>({ cardId, active: true });
   useLayoutEffect(() => {
     const epoch = { cardId, active: true };
@@ -2406,6 +2410,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      A late authoritative receipt still settles the submission. */
   const releaseReconciliationToRetry = (clientMessageId: string) => {
     receiptReconciliations.current.delete(clientMessageId);
+    unconfirmedKeys.current.add(clientMessageId);
     /* Drop the polling marker while retaining the unresolved generation for
        late receipt reconciliation across remount. */
     persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
@@ -2453,6 +2458,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (controller.signal.aborted) return;
       if (receipt === null) {
         releaseReconciliationToRetry(clientMessageId);
+        /* The request that missed both windows can still answer. When it does
+           with an admission, that answer joins the receipts here and retires
+           the "could not confirm" it outlived. */
+        void lateReceipt?.then((late) => {
+          if (!late || late.conversationId !== cardId || late.idempotencyKey !== clientMessageId) return;
+          setImmediateRuntimeReceipts((current) => [
+            late,
+            ...current.filter((candidate) => candidate.operationId !== late.operationId),
+          ].slice(0, 8));
+        }, () => {});
         return;
       }
       if (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId) return;
@@ -2642,6 +2657,22 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         candidate.idempotencyKey === key
         && (receiptIsAdmitted(candidate.status) || receiptIsTerminal(candidate.status)));
       if (receipt) finishReceiptReconciliation(key, receipt);
+    }
+    /* A send whose confirmation window closed before the server admitted it
+       (a held send used to wait out a whole account switch inside its request)
+       is answered later, by the same conversation's receipts whichever host
+       delivered it. The server's own receipt then replaces the local "could
+       not confirm" placeholder and its status line, so an arrived message never
+       keeps reading as a delivery failure. */
+    const confirmed = displayedRuntimeReceipts.filter((candidate) => unconfirmedKeys.current.has(candidate.idempotencyKey)
+      && !candidate.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && receiptIsAdmitted(candidate.status));
+    if (confirmed.length) {
+      const retired = new Set(confirmed.map((candidate) => unconfirmedReceiptOperationId(candidate.idempotencyKey)));
+      for (const candidate of confirmed) unconfirmedKeys.current.delete(candidate.idempotencyKey);
+      setImmediateRuntimeReceipts((current) => current.filter((candidate) => !retired.has(candidate.operationId)));
+      if (!unconfirmedKeys.current.size) {
+        setStatus((current) => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
+      }
     }
     /* A terminal non-admitted receipt (failed/rejected) for a preserved
        generation the local window already released: mint a fresh key so the

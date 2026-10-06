@@ -973,6 +973,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "receipt.human.staleKey": "ключ доставки застарів",
   "receipt.human.duplicate": "вже доставлено",
   "receipt.human.turnActive": "агент посеред ходу",
+  "receipt.human.switchingAccounts": "Перемикається акаунт — повідомлення піде одразу після цього",
+  "receipt.human.switchAfterTurn": "Акаунт перемкнеться, щойно закінчиться поточний хід — повідомлення піде одразу після цього",
   "receipt.human.noTurn": "немає активного ходу",
   "receipt.human.discarded": "Відкинуто",
   "receipt.human.unsupportedCapability": "Delegatus не має каналу для цієї команди тут",

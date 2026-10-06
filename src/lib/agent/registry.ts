@@ -1469,6 +1469,7 @@ function settleDeliveriesAtCommit(
     if (decision === "carry") {
       delivery.state = "assigned";
       delivery.fencedBy = null;
+      delivery.waitReason = null;
       delivery.generationId = successor.id;
       delivery.assignedAt = committedAt;
       delivery.deliveredAt = null;
@@ -1656,6 +1657,7 @@ function rearmFencedDeliveries(
     if (!held) continue;
     delivery.state = "assigned";
     delivery.fencedBy = null;
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;
@@ -1680,7 +1682,9 @@ function refenceHeldDeliveries(
     const held = (from.migration && migrationHeldDelivery(file, conversation, delivery, from.migration))
       || (Boolean(from.keptFrom) && delivery.state === "held" && delivery.fencedBy === from.keptFrom
         && resolveConversationAlias(file, delivery.conversationId) === conversation.id);
-    if (held) delivery.fencedBy = operationId;
+    if (!held) continue;
+    delivery.fencedBy = operationId;
+    if (delivery.state === "held") delivery.waitReason = "switching-accounts";
   }
 }
 
@@ -2455,6 +2459,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
+    waitReason: state === "held" && value.waitReason === "switching-accounts" ? value.waitReason : null,
     admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
     generationId: imagesCorrupt ? null : value.generationId ?? null,
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
@@ -2532,6 +2537,7 @@ function placeDeliveryForRetryInFile(
   if (migrationBlocksDelivery) {
     delivery.state = "held";
     delivery.fencedBy = conversation.migration!.operationId;
+    delivery.waitReason = "switching-accounts";
     delivery.generationId = null;
     delivery.assignedAt = null;
     delivery.deliveredAt = null;
@@ -2550,6 +2556,7 @@ function placeDeliveryForRetryInFile(
     return delivery;
   }
   delivery.state = "assigned";
+  delivery.waitReason = null;
   delivery.generationId = current.id;
   delivery.assignedAt = now();
   delivery.deliveredAt = null;
@@ -5234,6 +5241,12 @@ export class AgentRegistry {
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
+      /* A held send's receipt names what it waits for, which the owning
+         conversation's switch phase decides. */
+      for (const delivery of Object.values(result.heldDeliveries)) {
+        const conversation = delivery.state === "held" ? file.conversations[delivery.conversationId] : undefined;
+        if (conversation) result.conversations[conversation.id] = clone(conversation);
+      }
       return result;
     });
   }
@@ -8900,11 +8913,13 @@ export class AgentRegistry {
         if (migrationBlocksDelivery) {
           delivery.state = "held";
           delivery.fencedBy = conversation!.migration!.operationId;
+          delivery.waitReason = "switching-accounts";
           delivery.generationId = null;
           delivery.assignedAt = null;
         } else if (current) {
           delivery.state = "assigned";
           delivery.fencedBy = null;
+          delivery.waitReason = null;
           delivery.generationId = current.id;
           delivery.assignedAt = now();
         } else {

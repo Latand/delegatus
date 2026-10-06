@@ -363,7 +363,12 @@ async function dispatchRuntimeCommand(
            could never ask `message_receipt` about afterwards, which put
            `queued` back at the end of the story on the composer's own path. */
         if (admitted.outcome === "held") {
-          return NextResponse.json({ held: true, operationId: admitted.operationId }, { status: 202 });
+          /* The receipt says what the hold waits for, so the composer can
+             show it at once. */
+          const send = sendReceiptFor((dependencies.registry ?? agentRegistry)().deliverySnapshotForOperation(admitted.operationId), admitted.operationId);
+          return NextResponse.json({ held: true, operationId: admitted.operationId,
+            ...(send ? { receipt: runtimeReceiptForSend(send) } : {}),
+          }, { status: 202 });
         }
         const status = admitted.receipt.status === "pending" || admitted.receipt.status === "queued" ? 202 : 200;
         return NextResponse.json({ operationId: admitted.operationId, receipt: admitted.receipt }, { status });

@@ -1584,3 +1584,92 @@ test.each([
     host.remove();
   }
 });
+
+/* 2026-10-06: a send to a seat whose account was switching answered only once
+   the successor was up, after both local windows had closed, and the message
+   arrived. The answer and the successor host's receipt reach the same
+   conversation, and nothing about an arrived message may read as a failure. */
+test("a send answered after the windows closed, across a host change, ends delivered with no failure left", async () => {
+  setLocale("en");
+  mobileViewport = false;
+  const conversationId = "conv-switch-late-answer";
+  const prompt = "switch to the other account";
+  const sends: string[] = [];
+  let answer!: (result: { ok: boolean; held?: true; operationId: string; receipt: RuntimeReceipt }) => void;
+  const view = {
+    session: { conversationId, hostKind: "claude-broker", host: "hosted", turn: "idle",
+      capabilities: { imageInput: { supported: true } }, recentReceipts: [] },
+    uiState: {}, attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
+  } as unknown as RuntimeSessionView;
+  setTmuxComposerRuntimeDependenciesForTests({
+    refreshRuntime: () => refreshRuntimeImpl(),
+    useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
+      (listener) => {
+        receiptListeners.add(listener);
+        return () => receiptListeners.delete(listener);
+      },
+      () => busReceipts,
+      () => busReceipts,
+    ),
+    useAgentCapabilities: (candidate) => {
+      const options = { runtimeEnabled: true };
+      return { caps: capabilitiesFor(candidate, view, options), runtime: view,
+        structuredSession: view, runtimeEnabled: true, attachMode: attachModeFor(candidate, view, options) };
+    },
+    sendRuntimeMessage: (options) => {
+      sends.push(options.idempotencyKey);
+      return new Promise((resolve) => { answer = resolve; });
+    },
+  });
+  globalThis.fetch = (async (input) => {
+    if (String(input) === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: {} }) } as Response;
+    throw new Error(`unexpected request: ${String(input)}`);
+  }) as typeof fetch;
+  refreshRuntimeImpl = async () => false;
+  resetOutboxForTests();
+  sessionStorage.setItem(`llvDraft:${conversationId}`, prompt);
+  const unconfirmed = translate("en", "composer.deliveryUnconfirmed");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
+    const form = host.querySelector("textarea")!.closest("form")!;
+    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await until(() => host.textContent?.includes(unconfirmed) === true);
+    /* What the operator saw: both windows closed with nothing admitted yet. */
+    expect(host.textContent).toContain(unconfirmed);
+    const key = sends[0]!;
+
+    /* The request finally answers: held, its reservation waiting on the switch. */
+    const operationId = "op-switch-late";
+    answer({ ok: true, held: true, operationId, receipt: {
+      operationId, idempotencyKey: key, conversationId, kind: "send", status: "queued",
+      reason: "switching-accounts", at: new Date().toISOString(), revision: 1,
+    } as RuntimeReceipt });
+    await until(() => host.textContent?.includes(unconfirmed) !== true);
+    expect(host.textContent).not.toContain(unconfirmed);
+
+    /* The successor host publishes the delivery for the same conversation,
+       and the composer now reads the successor's transcript. */
+    flushSync(() => root.render(<ComposerWithOutbox file={{ ...fileFor(conversationId), path: `/${conversationId}-successor.jsonl` }} />));
+    flushSync(() => publishReceipts([{
+      operationId, idempotencyKey: key, conversationId, kind: "send", status: "delivered",
+      text: prompt, at: new Date().toISOString(), revision: 2,
+    } as RuntimeReceipt]));
+    await until(() => readOutbox(conversationId)[0]?.state === "delivered");
+
+    expect(readOutbox(conversationId)).toMatchObject([{ id: key, state: "delivered" }]);
+    expect(readOutbox(conversationId)[0]?.deliveryUncertain).toBeUndefined();
+    expect(host.textContent).not.toContain(unconfirmed);
+    expect(host.querySelector('[data-operation^="composer-unconfirmed:"]')).toBeNull();
+    expect(sends).toEqual([key]);
+  } finally {
+    flushSync(() => root.unmount());
+    publishReceipts([]);
+    refreshRuntimeImpl = async () => false;
+    sessionStorage.clear();
+    resetOutboxForTests();
+    host.remove();
+  }
+});
