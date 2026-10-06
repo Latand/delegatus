@@ -20,6 +20,7 @@ import {
   classifyStatus,
   forgeCacheMergedPullRequests,
   ghMergedPullRequests,
+  hostTempWorktreeAccess,
   liveOrWaitingConversationCwds,
   parseWorktreeList,
   productionMergedPullRequests,
@@ -110,7 +111,15 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
   const { prs = [], ...rest } = overrides;
   return {
     mode: "on",
-    git: realGit,
+    git: async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      // Remote I/O stays in sandbox bare repositories. The URL seam models
+      // a network transport, whose freshly advertised refs are read by Git.
+      if (args[0] === "remote" && args[1] === "get-url" && result.code === 0
+        && result.stdout.trim().endsWith("remote.git"))
+        return { ...result, stdout: `https://github.com/${REPOSITORY}.git\n` };
+      return result;
+    },
     mergedPullRequests: () => prs,
     pipelines: [],
     conversationCwds: () => [],
@@ -923,7 +932,7 @@ test("retention, local-only commits and stale remote-tracking refs preserve fini
 test.each(["merge-batch", "review-export", "attribution"])("an unowned %s checkout under a temp root follows the same retention and remote proof", async role => {
   const root = repository(); remoteRepository(root);
   const temp = path.join(caseDir, "tmp");
-  const dir = path.join(temp, `delegatus-${role}-fixture/checkout`);
+  const dir = path.join(temp, `llv-${role}-fixture/checkout`);
   git(["worktree", "add", "--detach", dir, "main"], root);
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   expect(first.removed).toHaveLength(0);
@@ -1014,7 +1023,7 @@ test("a checkout made by hand outside a temp root is never retained, however old
 test("activity restarts the retention clock of a role's temp checkout", async () => {
   const root = repository(); remoteRepository(root);
   const temp = path.join(caseDir, "tmp");
-  const dir = path.join(temp, "delegatus-merge-batch/checkout");
+  const dir = path.join(temp, "llv-merge-batch/checkout");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   const busy = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
@@ -1068,4 +1077,119 @@ test("a fixture bundle is trimmed only when it holds nothing but bundled fixture
   expect(fs.existsSync(generated)).toBe(false);
   expect(fs.readFileSync(path.join(handwritten, "plan.md"), "utf8")).toBe("keep");
   expect(fs.existsSync(path.join(dir, ".artifacts/board/desktop.png"))).toBe(true);
+});
+
+
+test.each(["test-results", "out", "build", "coverage", "playwright-report"])("an artifact container containing only %s evidence keeps its files", async name => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
+  const { dir, tip } = lane(root, path.join(caseDir, "evidence"), "topic/evidence");
+  const capture = path.join(dir, ".artifacts/run", name, "capture.png");
+  fs.mkdirSync(path.dirname(capture), { recursive: true });
+  fs.writeFileSync(capture, "retained capture");
+  const trace = path.join(path.dirname(capture), "trace.zip");
+  fs.writeFileSync(trace, "retained trace");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(141, "topic/evidence", tip)] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
+  expect(fs.readFileSync(capture, "utf8")).toBe("retained capture");
+  expect(fs.readFileSync(trace, "utf8")).toBe("retained trace");
+});
+
+test("a local-path remote does not prove preservation elsewhere", async () => {
+  const root = repository(); remoteRepository(root);
+  const { dir } = lane(root, path.join(caseDir, "local-remote"), "topic/local-remote");
+  git(["push", "-q", "origin", "topic/local-remote"], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/local-remote", closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ git: realGit, pipelines: [owner], now: () => RETAIN_NOW }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a remote branch deleted during measurement is no longer a preservation proof", async () => {
+  const root = repository(); remoteRepository(root);
+  const { dir } = lane(root, path.join(caseDir, "remote-deleted"), "topic/remote-deleted");
+  git(["push", "-q", "origin", "topic/remote-deleted"], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/remote-deleted", closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW,
+    measure: async () => { git(["push", "-q", "origin", "--delete", "topic/remote-deleted"], root); return 10; },
+  }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a handmade checkout inside a temp root never gains role ownership", async () => {
+  const root = repository(); remoteRepository(root);
+  const temp = path.join(caseDir, "tmp");
+  const dir = path.join(temp, "personal-checkout");
+  git(["worktree", "add", "-q", "--detach", dir, "main"], root);
+  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  const later = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
+  expect(later.kept[0]!.reason).toBe("no-merged-pr");
+  expect(later.kept[0]!.firstSettledAt).toBeUndefined();
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("host temp role checkouts use namespace Git, persist their canonical grouping and keep local work", async () => {
+  const root = repository(); remoteRepository(root);
+  const proc = path.join(caseDir, "proc/42");
+  const namespace = "mnt:[fixture-host]";
+  fs.mkdirSync(path.join(proc, "ns"), { recursive: true });
+  fs.symlinkSync(namespace, path.join(proc, "ns/mnt"));
+  const canonicalRoot = "/tmp";
+  const canonical = path.join(canonicalRoot, "llv-host-role/checkout");
+  const actual = path.join(proc, "root", canonical);
+  git(["worktree", "add", "-q", "--detach", actual, "main"], root);
+  const calls: string[][] = [];
+  const access = hostTempWorktreeAccess([{ path: canonicalRoot, via: path.join(proc, "root"), anchor: { pid: 42, namespace } }], async (command, args) => {
+    expect(command).toBe("nsenter");
+    expect(args.slice(0, 5)).toEqual(["-t", "42", "-m", "-p", "--"]);
+    const sh = args.indexOf("sh");
+    const cwd = args[sh + 1]!;
+    const gitArgs = args.slice(sh + 2);
+    calls.push(gitArgs);
+    // Stand in for entering the fixture namespace; use real sandbox Git.
+    return realGit(gitArgs.map(value => value === canonical ? actual : value), cwd === canonical ? actual : cwd);
+  });
+  const ordinary = ports({ repositories: [root], tempRoots: [canonicalRoot], now: () => RETAIN_NOW });
+  const hostPorts: WorktreeSweepPorts = { ...ordinary, ...access,
+    git: async (args, cwd) => {
+      if (cwd === canonical || args[0] === "worktree" && args[1] === "remove") return access.git(args, cwd);
+      const answer = args[0] === "worktree" && args[1] === "list" ? await access.git(args, cwd) : await ordinary.git(args, cwd);
+      if (args[0] === "worktree" && args[1] === "list") return { ...answer, stdout: answer.stdout.replaceAll(actual, canonical) };
+      return answer;
+    },
+    recordResolution: cwd => recordWorktreeResolution(cwd, access.accessiblePath(cwd)) !== null,
+  };
+  const first = await sweepMergedWorktrees(hostPorts);
+  expect(first.kept[0]!.reason).toBe("retention");
+  const settled = { ...hostPorts, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS };
+  git(["commit", "--allow-empty", "-q", "-m", "private role work"], actual);
+  const local = await sweepMergedWorktrees(settled);
+  expect(local.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(actual)).toBe(true);
+  git(["push", "-q", "origin", "HEAD:refs/heads/role-work"], actual);
+  const removed = await sweepMergedWorktrees(settled);
+  expect(removed.removed).toEqual([expect.objectContaining({ path: canonical, preservation: "remote-ref" })]);
+  expect(calls.some(args => args[0] === "worktree" && args[1] === "remove" && !args.includes("--force"))).toBe(true);
+  expect(calls.some(args => args[0] === "worktree" && args[1] === "list")).toBe(true);
+  expect(fs.existsSync(actual)).toBe(false);
+  const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8"));
+  expect(map[canonical].repo).toBe(root);
+  expect(map[canonical].worktree).toBe("checkout");
+});
+
+test("a recycled host namespace anchor cannot redirect Git or filesystem access", async () => {
+  const proc = path.join(caseDir, "proc/42");
+  fs.mkdirSync(path.join(proc, "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[replacement]", path.join(proc, "ns/mnt"));
+  let called = false;
+  const access = hostTempWorktreeAccess([{ path: "/tmp", via: path.join(proc, "root"), anchor: { pid: 42, namespace: "mnt:[original]" } }], async () => {
+    called = true; return { code: 0, stdout: "", stderr: "" };
+  });
+  expect(access.accessiblePath("/tmp/llv-role/checkout")).toBe("/proc/0/root/tmp/llv-role/checkout");
+  expect((await access.git(["worktree", "remove", "/tmp/llv-role/checkout"], caseDir)).code).toBe(1);
+  expect(called).toBe(false);
 });

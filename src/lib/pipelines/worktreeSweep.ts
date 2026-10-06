@@ -8,7 +8,7 @@ import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { ownTempRoots, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
@@ -96,6 +96,9 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  * the same path here as on the host, the image's own git removes it, and the
  * `/proc` scan sees every host process. A worktree outside `$HOME` is not
  * reachable from the container and is reported `missing`; it is never pruned.
+ * Role checkouts under an agent namespace's temp roots are an exception: the
+ * same guards and proofs run through that namespace's filesystem view and Git.
+ * Their canonical paths are recorded before removal as on a native install.
  */
 
 export type WorktreeSweepMode = "on" | "dry-run";
@@ -202,6 +205,9 @@ export type WorktreeSweepPorts = {
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
   measure?: (directory: string) => Promise<number>;
+  /** Filesystem view of a host temp checkout from a container. Git and the
+      worktree map still receive the canonical path in that namespace. */
+  accessiblePath?: (directory: string) => string;
   now?: () => number;
   maxRemovals?: number;
   /** The previous report, whose `firstSettledAt` carries a retention clock
@@ -254,7 +260,8 @@ function onlyRebuildableContents(directory: string): boolean {
         const child = path.join(current, entry.name);
         if (entry.name === ".git") return false;
         if (entry.isDirectory()) pending.push(child);
-        else if (!rebuildable(path.relative(directory, child))) return false;
+        else if (!entry.isFile() || (!entry.name.endsWith(".pyc")
+          && !path.relative(directory, child).split(path.sep).includes("__pycache__"))) return false;
       }
     }
     return true;
@@ -467,10 +474,19 @@ async function mainRoot(git: GitRun, directory: string): Promise<string | null> 
   return path.basename(dir) === ".git" ? path.dirname(dir) : null;
 }
 
+/** Git's network transports, including scp-style SSH. Local paths and file
+    transports can share the very disk this sweep is trying to free. */
+function networkRemote(url: string): boolean {
+  if (/^(?:https?|ssh|git):\/\/[^/]+\//i.test(url)) return true;
+  // Refuse drive letters, file URLs and Git's local remote-helper syntax.
+  return /^(?:[^/@:]+@)?[^/\\:]+:[^:].+/.test(url) && !/^(?:file|[a-z]):/i.test(url);
+}
+
 /** One sweep. Never throws for one worktree; its failure is kept with a reason. */
 export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<WorktreeSweepReport> {
   const now = ports.now ?? Date.now;
-  const measure = ports.measure ?? exclusiveBytes;
+  const accessible = ports.accessiblePath ?? ((directory: string) => directory);
+  const measure = ports.measure ?? ((directory: string) => exclusiveBytes(accessible(directory)));
   const maxRemovals = ports.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
   const dryRun = ports.mode === "dry-run";
   const report: WorktreeSweepReport = {
@@ -553,15 +569,17 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       byHead.set(pr.headRefName, list);
     }
     /** The commits this repository's remotes advertise as branch and tag tips,
-        asked once per sweep and only when a retained checkout needs them; null
+        read afresh for each preservation proof; null
         when no remote answered. */
-    let advertised: Promise<string[] | null> | null = null;
-    const remoteTips = () => advertised ??= (async () => {
+    const remoteTips = async () => {
       const remotes = await ports.git(["remote"], root);
       if (remotes.code !== 0) return null;
       const tips = new Set<string>();
       let answered = false;
       for (const name of remotes.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
+        const url = await ports.git(["remote", "get-url", name], root);
+        // Another path on this machine is no proof against losing local work.
+        if (url.code !== 0 || !networkRemote(url.stdout.trim())) continue;
         const refs = await ports.git(["ls-remote", "--heads", "--tags", "--", name], root);
         if (refs.code !== 0) continue;
         answered = true;
@@ -571,7 +589,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         }
       }
       return answered ? [...tips] : null;
-    })();
+    };
     /** Every commit reachable from `commit` is reachable from an advertised
         tip held locally. A tip this clone never fetched proves nothing. */
     const onRemote = async (commit: string): Promise<boolean | null> => {
@@ -595,7 +613,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /* A finished lane, or a role's temp checkout nobody owns, follows the
          retention rule; a checkout the operator made by hand never does. */
-      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : tempRoots.some((temp) => inside(worktree, temp) && worktree !== temp);
+      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : tempRoots.some((temp) =>
+        inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
       const firstSettledAt = finished ? previouslySettled.get(worktree) ?? report.at : undefined;
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
@@ -612,7 +631,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "locked" });
         continue;
       }
-      if (entry.prunable || !fs.existsSync(worktree)) {
+      if (entry.prunable || !fs.existsSync(accessible(worktree))) {
         keep({ ...base, reason: "missing" });
         continue;
       }
@@ -654,7 +673,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const changed = classified.changed;
       /* An ignored container a nested worktree removed earlier in this sweep
          left empty holds nothing. */
-      const ignored = classified.ignored.filter((entry) => !disposableIgnored(worktree, entry));
+      const ignored = classified.ignored.filter((entry) => !disposableIgnored(accessible(worktree), entry));
       if (changed.length > 0) {
         keep({ ...base, reason: "uncommitted", detail: `${changed.length} path(s)` });
         continue;
@@ -727,7 +746,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
       const finalClass = classifyStatus(finalStatus.stdout);
       if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
-      if (finalClass.ignored.some((file) => !disposableIgnored(worktree, file))) {
+      if (finalClass.ignored.some((file) => !disposableIgnored(accessible(worktree), file))) {
         keep({ ...base, reason: "ignored-files" }); continue;
       }
       const finalBusy = heldBy(readGuards(), worktree);
@@ -785,12 +804,12 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
           const current = pending.pop()!;
           try {
-            if (!fs.lstatSync(current).isDirectory()) continue;
-            for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+            if (!fs.lstatSync(accessible(current)).isDirectory()) continue;
+            for (const child of fs.readdirSync(accessible(current), { withFileTypes: true })) {
               visited += 1;
               if (!child.isDirectory() || child.name === ".git") continue;
               const directory = path.join(current, child.name);
-              if (child.name === "node_modules" || child.name === ".next" || (child.name === "bundle" && fixtureBundle(directory))) candidates.push(directory);
+              if (child.name === "node_modules" || child.name === ".next" || (child.name === "bundle" && fixtureBundle(accessible(directory)))) candidates.push(directory);
               else pending.push(directory);
             }
           } catch { /* Missing or unreadable artifacts stay. */ }
@@ -799,9 +818,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       for (const next of candidates) {
         const safeDirectory = (worktrees = listed) => {
           try {
-            if (!fs.lstatSync(worktree).isDirectory() || !fs.lstatSync(next).isDirectory()) return false;
-            const realWorktree = fs.realpathSync(worktree);
-            const realNext = fs.realpathSync(next);
+            if (!fs.lstatSync(accessible(worktree)).isDirectory() || !fs.lstatSync(accessible(next)).isDirectory()) return false;
+            const realWorktree = fs.realpathSync(accessible(worktree));
+            const realNext = fs.realpathSync(accessible(next));
             return realNext === path.join(realWorktree, path.relative(worktree, next))
               && !worktrees.some((other) => inside(resolve(other.path), next));
           } catch { return false; }
@@ -826,7 +845,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         const trackedNow = await ports.git(["ls-files", "-z", "--", path.relative(worktree, next)], worktree);
         if (trackedNow.code !== 0 || trackedNow.stdout.length) continue;
         try {
-          if (!dryRun) await fs.promises.rm(next, { recursive: true });
+          if (!dryRun) await fs.promises.rm(accessible(next), { recursive: true });
           report.trimmed.push({ path: next, bytes, pipelineId: owner.id });
           report.trimmedBytes += bytes;
         } catch (error) { report.errors.push(`${next}: build cache trim failed: ${String(error)}`); }
@@ -834,7 +853,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     }
   }
   for (const kept of report.kept) {
-    kept.bytes = await exclusiveBytes(kept.path);
+    kept.bytes = await exclusiveBytes(accessible(kept.path));
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;
@@ -881,20 +900,55 @@ const GIT_TIMEOUT_MS = 120_000;
 
 /** Git without prompts and without optional locks, so a status read never
     rewrites a checkout's index. */
-export const realGit: GitRun = (args, cwd) => new Promise((resolveRun) => {
-  execFile("git", args, {
-    cwd,
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: 32 * 1024 * 1024,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-  }, (error, stdout, stderr) => {
-    /* A non-zero exit carries its status in `code`; a spawn failure or a
-       timeout carries a string or nothing, which reads as no status at all. */
-    const status = (error as { code?: unknown } | null)?.code;
-    const code = !error ? 0 : typeof status === "number" ? status : null;
-    resolveRun({ code, stdout: String(stdout ?? ""), stderr: String(stderr || error?.message || "") });
+function runGitCommand(command: string, args: string[], cwd: string): Promise<ExecResult> {
+  return new Promise((resolveRun) => {
+    execFile(command, args, {
+      cwd,
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+    }, (error, stdout, stderr) => {
+      /* A non-zero exit carries its status in `code`; a spawn failure or a
+         timeout carries a string or nothing, which reads as no status at all. */
+      const status = (error as { code?: unknown } | null)?.code;
+      const code = !error ? 0 : typeof status === "number" ? status : null;
+      resolveRun({ code, stdout: String(stdout ?? ""), stderr: String(stderr || error?.message || "") });
+    });
   });
-});
+}
+
+export const realGit: GitRun = (args, cwd) => runGitCommand("git", args, cwd);
+
+/** Host role checkouts use the same sweep and guards. Files are read through
+    the namespace root; Git removes its registered canonical path inside that
+    namespace, with the caller's uid and groups. A gone or recycled anchor
+    cannot authorize an operation in a different namespace. */
+export function hostTempWorktreeAccess(roots: readonly TempSweepRoot[], run = runGitCommand) {
+  const foreign = roots.filter(root => root.via && root.anchor);
+  const rootFor = (directory: string) => foreign.find(root => inside(directory, root.path));
+  const valid = (root: TempSweepRoot) => {
+    try { return fs.readlinkSync(path.join(path.dirname(root.via), "ns/mnt")) === root.anchor?.namespace; }
+    catch { return false; }
+  };
+  return {
+    accessiblePath: (directory: string) => {
+      const root = rootFor(directory);
+      return root ? (valid(root) ? root.via : "/proc/0/root") + directory : directory;
+    },
+    git: ((args: string[], cwd: string) => {
+      const target = args[0] === "worktree" && args[1] === "remove" ? args[2]! : cwd;
+      // Container Git would mark a valid host temp checkout prunable before
+      // its filesystem view is consulted. List in the host view as well.
+      const root = rootFor(target) ?? (args[0] === "worktree" && args[1] === "list" ? foreign[0] : undefined);
+      if (!root) return realGit(args, cwd);
+      if (!valid(root)) return Promise.resolve({ code: 1, stdout: "", stderr: "host temp namespace is unavailable" });
+      return run("nsenter", ["-t", String(root.anchor!.pid), "-m", "-p", "--", "/usr/bin/setpriv",
+        `--reuid=${process.getuid?.() ?? 0}`, `--regid=${process.getgid?.() ?? 0}`,
+        `--groups=${(process.getgroups?.() ?? []).join(",")}`, "--", "/bin/sh", "-c",
+        'cd "$1" || exit; shift; exec git "$@"', "sh", cwd, ...args], os.tmpdir());
+    }) satisfies GitRun,
+  };
+}
 
 /** Merged pull requests from the forge cache the forge sweep keeps (#2059):
     null until it holds a complete read of the repository with head commits. A
@@ -986,10 +1040,12 @@ export async function productionWorktreeSweepPorts(
     import("@/lib/scanner/describe"),
     import("@/lib/forge/cache"),
   ]);
+  const temp = sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
+  const access = hostTempWorktreeAccess(temp);
   return {
     mode,
     previous: readWorktreeSweepReport(),
-    git: realGit,
+    ...access,
     mergedPullRequests: productionMergedPullRequests({
       cache: forgeCacheMergedPullRequests(() => readForgeCache().data),
       gh: ghMergedPullRequests(run),
@@ -1001,8 +1057,8 @@ export async function productionWorktreeSweepPorts(
     repositories: projectCurationSnapshot().manualProjects.map((project) => project.root),
     conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
-    recordResolution: (worktree) => recordWorktreeResolution(worktree) !== null,
-    tempRoots: [...ownTempRoots(), statePath("scratch")],
+    recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,
+    tempRoots: [...new Set(temp.map(root => root.path))],
   };
 }
 

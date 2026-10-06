@@ -374,8 +374,6 @@ async function killSession(
   }
 }
 
-/** The "Agent sessions" dialog. Exported for the DOM test, which drives the
-    rows and the bulk buttons without waiting on the rail's poll. */
 /** Low free space on a volume Delegatus writes to, while its episode lasts
     and a volume is still below the warning threshold. */
 export function DiskPressureNotice({ pressure, edge = "px-3.5" }: { pressure: DiskPressure; edge?: string }) {
@@ -398,6 +396,8 @@ export function DiskPressureNotice({ pressure, edge = "px-3.5" }: { pressure: Di
   );
 }
 
+/** The "Agent sessions" dialog. Exported for the DOM test, which drives the
+    rows and the bulk buttons without waiting on the rail's poll. */
 export function CleanupPanel({
   sessions,
   now,

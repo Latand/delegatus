@@ -31,9 +31,11 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  *   `XDG_CONFIG_HOME`/`CLAUDE_CODE_TMPDIR`. A stage agent whose shell is idle
  *   still carries its scratch directory in `TMPDIR`, so it is kept.
  * - **Never a pipeline worktree**, or a directory holding one, or holding any
- *   git checkout: a merger batch, a review export or an attribution run left
- *   in a temp root is freed by the worktree sweep, which proves its commits
- *   kept elsewhere first (`src/lib/pipelines/worktreeSweep.ts`).
+ *   git checkout: registered linked merger, review and attribution checkouts
+ *   are freed by the worktree sweep after its commit preservation proof,
+ *   including host temp roots reached through an agent namespace. Independent
+ *   repositories and unreadable trees stay for a decision: their preservation
+ *   and ownership have not been proven. The report names these holds.
  *
  * In the Docker install the Viewer's `/tmp` is the container's own, while the
  * agents run on the host through the nsenter shims and fill the host's. The
@@ -235,6 +237,8 @@ export type TempSweepReport = {
   removed: TempSweepRemoval[];
   removedBytes: number;
   kept: { young: number; inUse: number; worktree: number; deferred: number };
+  /** Git or inspection holds beyond the pipeline worktree list. */
+  held?: { path: string; via: string; reason: "git-checkout" | "unreadable-tree" | "entry-limit"; bytes: number }[];
   errors: string[];
 };
 
@@ -316,7 +320,8 @@ function gitCheckoutMarker(entry: string, directory: boolean): boolean {
       fs.closeSync(fd);
     }
   } catch {
-    return false;
+    // Unreadable repository metadata cannot prove a disposable cache marker.
+    return true;
   }
 }
 
@@ -325,21 +330,21 @@ function gitCheckoutMarker(entry: string, directory: boolean): boolean {
     delete cannot prove them kept, so a root holding one stays: a linked
     checkout of a registered repository is the worktree sweep's to free, under
     its retention and remote proof. A tree too large to search stays too. */
-function containsGitCheckout(directory: string): boolean {
+function containsGitCheckout(directory: string): "git-checkout" | "unreadable-tree" | "entry-limit" | null {
   const pending = [directory];
   let visited = 0;
   try {
     while (pending.length) {
       const current = pending.pop()!;
       for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-        if (++visited > MEASURE_ENTRY_LIMIT) return true;
+        if (++visited > MEASURE_ENTRY_LIMIT) return "entry-limit";
         const child = path.join(current, entry.name);
-        if (entry.name === ".git" && gitCheckoutMarker(child, entry.isDirectory())) return true;
+        if (entry.name === ".git" && gitCheckoutMarker(child, entry.isDirectory())) return "git-checkout";
         if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") pending.push(child);
       }
     }
-    return false;
-  } catch { return true; }
+    return null;
+  } catch { return "unreadable-tree"; }
 }
 
 /** One sweep. Never throws for a single directory; its failure lands in `errors`. */
@@ -359,6 +364,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     removed: [],
     removedBytes: 0,
     kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
+    held: [],
     errors: [],
   };
   for (const root of roots) {
@@ -389,8 +395,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         report.kept.inUse += 1;
         continue;
       }
-      if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree)) || containsGitCheckout(reachable)) {
+      if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree))) {
         report.kept.worktree += 1;
+        continue;
+      }
+      const hold = containsGitCheckout(reachable);
+      if (hold) {
+        report.kept.worktree += 1;
+        report.held!.push({ path: candidate, via: root.via, reason: hold, bytes: await measureBytes(reachable) });
         continue;
       }
       if (report.removed.length >= maxRemovals) {
@@ -404,8 +416,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       try {
         const bytes = await measureBytes(reachable);
         /* The measurement yields; a checkout made meanwhile still keeps it. */
-        if (containsGitCheckout(reachable)) {
+        const finalHold = containsGitCheckout(reachable);
+        if (finalHold) {
           report.kept.worktree += 1;
+          report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
+          continue;
+        }
+        if (!namespaceStill(root.anchor, procRoot)) {
+          report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
           continue;
         }
         await fs.promises.rm(reachable, { recursive: true, force: true });

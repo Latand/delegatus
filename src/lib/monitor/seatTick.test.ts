@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { seatTickWakeMessage } from "./report";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
+import { observeDiskPressureReport } from "@/lib/state/diskPressure";
 
 import {
   DEFAULT_SEAT_TICK_POLICY,
@@ -1911,4 +1915,27 @@ test("disk pressure is shown once per episode despite free-space changes and age
   expect(repeat.verdict.kind).not.toBe("wake");
   const crossing = seatTickDecision({ ...next, signals: [{ id: "disk-space", episode: "2026-10-07T10:00:00Z", label: "Disk space low again" }] });
   expect(crossing.verdict.kind).toBe("wake");
+});
+
+test("a restarted disk reader joins the shared episode and does not wake the seat again", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-pressure-"));
+  const file = path.join(directory, "disk-pressure-report.json");
+  try {
+    const volumes = () => [{ roles: ["state"], freeBytes: 1024 ** 3, level: "critical" as const }];
+    // This reader predates the pressure episode; it has nothing to announce.
+    observeDiskPressureReport(file, () => [], "2026-10-06T10:00:00Z");
+    const opened = observeDiskPressureReport(file, volumes, "2026-10-06T10:20:00Z");
+    const check = input({ signals: [{ id: "disk-space", episode: opened.episode!, label: "Disk space low" }] });
+    const decision = seatTickDecision(check);
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+    const landed = seatTickWakeCommit(decision.state, plan(decision.verdict, check.changeFingerprint, 0), NOW);
+    const restarted = observeDiskPressureReport(file, volumes, "2026-10-06T10:40:00Z");
+    const next = input({ now: NOW + 2 * SEAT_TICK_WAKE_INTERVAL_MS,
+      state: JSON.parse(JSON.stringify({ ...landed, itemsShown: [] })),
+      signals: [{ id: "disk-space", episode: restarted.episode!, label: "Disk space low" }],
+    });
+    expect(restarted.episode).toBe(opened.episode);
+    expect(seatTickDecision(next).verdict.kind).not.toBe("wake");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

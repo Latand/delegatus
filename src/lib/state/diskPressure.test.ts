@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   DISK_CRITICAL_BYTES,
@@ -9,6 +12,8 @@ import {
   diskPressureWakeReady,
   diskVolumes,
   observeDiskPressure,
+  observeDiskPressureReport,
+  probeDisk,
   worktreeDiskWait,
   type DiskProbe,
 } from "./diskPressure";
@@ -32,6 +37,55 @@ test("roots on one volume are one row at the lowest free space, with a level per
     { roles: ["temp"], freeBytes: DISK_CRITICAL_BYTES - 1, level: "critical" },
     { roles: ["temp"], freeBytes: null, level: "unknown" },
   ]);
+});
+
+test("an empty small temp volume opens no episode, and nearly full still warns", () => {
+  const roots = [{ role: "temp", directory: "/tmp" }];
+  const volumes = (freeBytes: number) => diskVolumes(roots, () => ({ volume: "tmpfs", freeBytes, totalBytes: 4 * GiB }));
+  const healthy = volumes(3.9 * GiB);
+  expect(healthy[0]!.level).toBe("ok");
+  expect(observeDiskPressure(healthy, null, "2026-10-06T10:00:00Z").episode).toBeNull();
+  const warning = observeDiskPressure(volumes(0.2 * GiB), null, "2026-10-06T10:01:00Z");
+  expect(warning.volumes[0]!.level).toBe("warning");
+  expect(warning.episode).not.toBeNull();
+  expect(volumes(0.01 * GiB)[0]!.level).toBe("critical");
+  expect(observeDiskPressure(volumes(0.45 * GiB), warning, "2026-10-06T10:02:00Z").episode).toBe(warning.episode);
+  expect(observeDiskPressure(healthy, warning, "2026-10-06T10:03:00Z").episode).toBeNull();
+});
+
+test("provisioning checks its write destinations and ignores unrelated temp volumes", () => {
+  const visited: string[] = [];
+  const stub: DiskProbe = directory => {
+    visited.push(directory);
+    return directory === "/tmp" || directory === "/var/tmp"
+      ? { volume: "tmpfs", freeBytes: 1.8 * GiB, totalBytes: 2 * GiB }
+      : { volume: "disk", freeBytes: 500 * GiB, totalBytes: 1000 * GiB };
+  };
+  expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", stub)).toBeNull();
+  expect(visited).not.toContain("/tmp");
+  expect(visited).not.toContain("/var/tmp");
+  expect(visited.some(directory => directory.endsWith("/scratch"))).toBe(true);
+});
+
+test("a vanished namespace anchor is unknown and never falls back onto procfs", () => {
+  expect(probeDisk("/proc/2147483647/root/tmp/checkout")).toBeNull();
+});
+
+test("independent readers with a pre-episode cache join the persisted episode across restart", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-readers-"));
+  const file = path.join(directory, "disk-pressure-report.json");
+  const volume = (freeBytes: number) => diskVolumes([{ role: "state", directory: directory }], () => ({ volume: "disk", freeBytes }));
+  try {
+    const readerA = observeDiskPressureReport(file, () => volume(20 * GiB), "2026-10-06T10:00:00Z");
+    const readerB = structuredClone(readerA);
+    expect(readerB.episode).toBeNull();
+    const first = observeDiskPressureReport(file, () => volume(GiB), "2026-10-06T10:20:00Z");
+    const second = observeDiskPressureReport(file, () => volume(0.8 * GiB), "2026-10-06T10:40:00Z");
+    expect(second.episode).toBe(first.episode);
+    const restarted = observeDiskPressureReport(file, () => volume(0.7 * GiB), "2026-10-06T11:00:00Z");
+    expect(restarted.episode).toBe(first.episode);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBe(first.episode);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("a new worktree waits only below the critical threshold, naming the volume", () => {

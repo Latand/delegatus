@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import {
   isOwnedTempName,
@@ -275,7 +275,24 @@ test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside
   const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
   expect(report.removed).toHaveLength(0);
   expect(report.kept.worktree).toBe(1);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "git-checkout", bytes: expect.any(Number) })]);
   expect(fs.readFileSync(path.join(checkout, "local-work.txt"), "utf8")).toBe("unpublished work");
+});
+
+test("an unreadable temp tree stays with an explicit inspection hold", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-unreadable", 3 * DAY);
+  const original = fs.readdirSync;
+  const read = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]) === directory) throw new Error("fixture access denied");
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY });
+    expect(report.removed).toEqual([]);
+    expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "unreadable-tree" })]);
+    expect(fs.existsSync(directory)).toBe(true);
+  } finally { read.mockRestore(); }
 });
 
 test("an empty .git marker a cache writes is not a checkout, and its stale root goes", async () => {

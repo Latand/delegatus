@@ -4,6 +4,7 @@ import path from "node:path";
 import { stateDir, statePath } from "@/lib/configDir";
 import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 /**
  * Free space on the volumes Delegatus writes to: its state directory, the
@@ -31,21 +32,29 @@ const CONSUMER_CACHE_MS = 30 * 60_000;
 /** The wake waits this long for the consumer sizes before it goes without them. */
 const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
-export type DiskVolume = { roles: string[]; freeBytes: number | null; level: "ok" | "warning" | "critical" | "unknown" };
+export type DiskVolume = { roles: string[]; freeBytes: number | null; totalBytes?: number; level: "ok" | "warning" | "critical" | "unknown" };
 export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
 export type DiskPressure = { at: string; episode: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
 export type DiskRoot = { role: string; directory: string };
-export type DiskProbe = (directory: string) => { volume: string; freeBytes: number } | null;
+export type DiskProbe = (directory: string) => { volume: string; freeBytes: number; totalBytes?: number } | null;
+
+/** Small volumes use 10%, 12% and 2% of their capacity respectively. */
+function threshold(bytes: number, totalBytes?: number): number {
+  return totalBytes === undefined ? bytes : Math.min(bytes, totalBytes * bytes / (100 * 1024 ** 3));
+}
 
 /** Provisioning may name a checkout that does not exist yet. */
 export const probeDisk: DiskProbe = (directory) => {
   let current = path.resolve(directory);
+  // A dead namespace anchor must never fall back onto procfs.
+  const namespaceRoot = current.match(/^(\/proc\/\d+\/root)(?:\/|$)/)?.[1];
   for (;;) {
     try {
       const stat = fs.statSync(current);
       const disk = fs.statfsSync(current);
-      return { volume: String(stat.dev), freeBytes: disk.bavail * disk.bsize };
+      return { volume: String(stat.dev), freeBytes: disk.bavail * disk.bsize, totalBytes: disk.blocks * disk.bsize };
     } catch {
+      if (current === namespaceRoot) return null;
       const parent = path.dirname(current);
       if (parent === current) return null;
       current = parent;
@@ -64,21 +73,22 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
     if (row) {
       if (!row.roles.includes(root.role)) row.roles.push(root.role);
       if (free !== null) row.freeBytes = Math.min(row.freeBytes ?? free, free);
-    } else volumes.set(key, { roles: [root.role], freeBytes: free, level: "unknown" });
+    } else volumes.set(key, { roles: [root.role], freeBytes: free,
+      ...(observation?.totalBytes === undefined ? {} : { totalBytes: observation.totalBytes }), level: "unknown" });
   }
   return [...volumes.values()].map(row => ({ ...row, level: row.freeBytes === null ? "unknown"
-    : row.freeBytes < DISK_CRITICAL_BYTES ? "critical" : row.freeBytes < DISK_WARNING_BYTES ? "warning" : "ok" }));
+    : row.freeBytes < threshold(DISK_CRITICAL_BYTES, row.totalBytes) ? "critical" : row.freeBytes < threshold(DISK_WARNING_BYTES, row.totalBytes) ? "warning" : "ok" }));
 }
 
 function rootsForProvision(repoDir: string, worktreeDir: string): DiskRoot[] {
   return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
-    { role: "repository", directory: repoDir }, ...ownTempRoots().map(directory => ({ role: "temp", directory }))];
+    { role: "repository", directory: repoDir }, { role: "state", directory: statePath("scratch") }];
 }
 
 /** Admission only. A low volume never changes an existing agent's lifecycle. */
 export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk): string | null {
   const low = diskVolumes(rootsForProvision(repoDir, worktreeDir), probe).filter(row => row.level === "critical");
-  return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free`).join("; ")}; new checkout needs at least ${formatDiskBytes(DISK_CRITICAL_BYTES)} free; retries automatically` : null;
+  return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free (needs ${formatDiskBytes(threshold(DISK_CRITICAL_BYTES, row.totalBytes))})`).join("; ")}; retries automatically` : null;
 }
 
 export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(2)} GiB`; }
@@ -94,7 +104,7 @@ export function diskPressureLabel(pressure: DiskPressure): string {
 export function observeDiskPressure(volumes: DiskVolume[], prior: DiskPressure | null, at: string): DiskPressure {
   const low = volumes.some(row => row.level === "warning" || row.level === "critical");
   const unknown = volumes.some(row => row.level === "unknown");
-  const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < DISK_RECOVERY_BYTES);
+  const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < threshold(DISK_RECOVERY_BYTES, row.totalBytes));
   const episode = low ? prior?.episode ?? at : unknown || recovering ? prior?.episode ?? null : null;
   return { at, volumes, consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: DISK_WARNING_BYTES, criticalBytes: DISK_CRITICAL_BYTES, episode };
 }
@@ -107,6 +117,29 @@ export function diskPressureWakeReady(pressure: DiskPressure, now = Date.now()):
 }
 
 const caches = new Map<string, { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void> }>();
+
+function readReport(file: string): DiskPressure | null {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")) as DiskPressure; }
+  catch { return null; }
+}
+
+/** All readers join the same episode under the shared state-file lock. The
+    caller's in-memory observation cannot overwrite another process's episode.
+    Probe inside the lock so a delayed observation cannot close a newer one. */
+export function observeDiskPressureReport(file: string, probe: () => DiskVolume[], at: string): DiskPressure {
+  try {
+    return withFileTransactionSync(file, "disk pressure report is busy", () => {
+      const pressure = observeDiskPressure(probe(), readReport(file), at);
+      try { writeJsonDurably(file, pressure); }
+      catch { /* A full disk still needs a visible warning. */ }
+      return pressure;
+    });
+  } catch {
+    // A full disk can also prevent acquiring the file lock. This read-only
+    // observation preserves a persisted episode and cannot replace it.
+    return observeDiskPressure(probe(), readReport(file), at);
+  }
+}
 /** The current pressure, read from the volumes at most every 30 s. The
     consumer sizes are walked in the background and arrive on a later read. */
 export async function readDiskPressure(): Promise<DiskPressure> {
@@ -114,8 +147,7 @@ export async function readDiskPressure(): Promise<DiskPressure> {
   const file = statePath("disk-pressure-report.json");
   let cached = caches.get(directory);
   if (!cached) {
-    let prior: DiskPressure | null = null;
-    try { prior = JSON.parse(fs.readFileSync(file, "utf8")) as DiskPressure; } catch { /* First observation. */ }
+    const prior = readReport(file);
     cached = { pressure: prior ?? observeDiskPressure([], null, new Date().toISOString()), observedAt: 0, consumersAt: 0 };
     caches.set(directory, cached);
   }
@@ -134,10 +166,9 @@ export async function readDiskPressure(): Promise<DiskPressure> {
     ...worktrees.map(directory => ({ role: "worktrees", directory })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;
-  cached.pressure = observeDiskPressure(diskVolumes(roots), cached.pressure, new Date().toISOString());
+  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots), new Date().toISOString());
   if (previousEpisode !== cached.pressure.episode) {
     cached.consumersAt = 0;
-    try { writeJsonDurably(file, cached.pressure); } catch { /* Warning remains visible when writes fail. */ }
   }
   if (cached.pressure.episode && Date.now() - cached.consumersAt > CONSUMER_CACHE_MS && !cached.measuring) {
     const target = cached;
@@ -164,7 +195,11 @@ export async function readDiskPressure(): Promise<DiskPressure> {
       if (target.pressure.episode !== episode) return;
       target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
       target.consumersAt = Date.now();
-      try { writeJsonDurably(file, target.pressure); } catch { /* Available through the read surface. */ }
+      withFileTransactionSync(file, "disk pressure report is busy", () => {
+        const latest = readReport(file);
+        if (latest?.episode !== episode) return;
+        writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers });
+      });
     })().catch((error) => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
       .finally(() => { delete target.measuring; });
   }

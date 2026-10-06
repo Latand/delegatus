@@ -513,10 +513,10 @@ export function persistWorktreeMap(): void {
     that ran there keeps grouping under the parent repo afterwards. Returns the
     resolution on disk, or null when the checkout is not a linked worktree or
     the map could not be written: the caller must not remove it then. */
-export function recordWorktreeResolution(cwd: string): { repo: string; worktree: string } | null {
+export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { repo: string; worktree: string } | null {
   let info: { repo: string; worktree: string } | null = null;
   try {
-    const gitPath = path.join(cwd, ".git");
+    const gitPath = path.join(accessibleCwd, ".git");
     if (fs.lstatSync(gitPath).isFile()) info = parseWorktreeGitdir(cwd, fs.readFileSync(gitPath, "utf8"));
   } catch {
     return null;
