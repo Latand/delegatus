@@ -162,7 +162,7 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(build.needs).toBe("scope");
   expect(build.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
   expect(build.concurrency).toEqual({
-    group: "docker-image-${{ github.event_name == 'pull_request' && 'pr' || 'publish' }}-build",
+    group: "${{ github.event_name == 'pull_request' && 'docker-image-build' || 'docker-image-publish-build' }}",
     "cancel-in-progress": false, queue: "max",
   });
   expect(workflow.concurrency.group).toBe("docker-image-${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}");

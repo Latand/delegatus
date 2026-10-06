@@ -101,9 +101,10 @@ jobs:
     # One PR image build leaves runners for the two required privacy checks.
     # Publication has its own single-build slot, so main/tags bypass PR work.
     # At most two image builds run: one verification and one publication.
+    # Keep the existing PR slot name so older queued runs share the same cap.
     # Per-PR workflow cancellation removes superseded/closed runs from this
     # queue; queue:max retains verification for other still-open PRs and tags.
     concurrency:
-      group: docker-image-${{ github.event_name == 'pull_request' && 'pr' || 'publish' }}-build
+      group: ${{ github.event_name == 'pull_request' && 'docker-image-build' || 'docker-image-publish-build' }}
       cancel-in-progress: false
       queue: max
