@@ -191,9 +191,14 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       // Admitted work by identity. The journal is left out on purpose: every
       // event of a turn already running moves it, so it cannot fence new work.
       dispatchVersion: () => {
-        const records = admittedRecords(agentRegistry().snapshot());
+        const registry = agentRegistry().snapshot();
+        const records = admittedRecords(registry);
         if (!records) throw new Error("Runtime admission evidence is unavailable");
-        return createHash("sha256").update(JSON.stringify([records, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
+        const receiptOwners = Object.values(registry.receipts).map((receipt) => [
+          receipt.launchId, receipt.conversationId, receipt.state, receipt.artifactPath,
+          receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
+        ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+        return createHash("sha256").update(JSON.stringify([records, receiptOwners, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
       },
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();

@@ -173,9 +173,9 @@ function reviewRoundOwner(flow: Flow, round: Round, attemptConversationId: strin
       : { conversationId: round.reviewerConversationId, artifactPath: round.reviewerPath ?? null, historical };
   }
   const recordedProcess = Number.isInteger(round.reviewerPid) && (round.reviewerPid ?? 0) > 0;
-  // A materialized path can outlive its registry binding. Without a recorded
-  // process, the common reader gives it the same bounded verdict as a stage.
-  if (round.reviewerPath && (historical || !recordedProcess)) {
+  // A materialized path can outlive both its binding and recorded process.
+  // The common reader lets a replacement host retain its ownership.
+  if (round.reviewerPath) {
     return { conversationId: `flow:${flow.id}:round:${round.n}:reviewer`, artifactPath: round.reviewerPath, historical };
   }
   // A parked flow can still own a reviewer. Only active dispatch phases
@@ -184,6 +184,33 @@ function reviewRoundOwner(flow: Flow, round: Round, attemptConversationId: strin
   if (reviewerProcess?.(round) === "gone") return "gone";
   return round.spawnStartedAt || round.launchId || round.sessionId || round.reviewerPath || round.reviewerPane || round.reviewerPid != null
     ? "dispatching" : null;
+}
+
+type StageOwner = { conversationId: string; artifactPath: string | null; historical?: boolean };
+
+/** Flow custody survives a parent cursor parking, completing or disappearing. */
+function flowCustody(flow: Flow | undefined, attemptConversationId: string | null, reviewerProcess: QuietPorts["reviewerProcess"]) {
+  const owners: StageOwner[] = [];
+  let dispatching = false;
+  let currentRoundGone = false;
+  if (flow) for (const round of flow.rounds) {
+    const owner = reviewRoundOwner(flow, round, attemptConversationId, reviewerProcess);
+    if (owner === "dispatching") dispatching = true;
+    else if (owner === "gone") currentRoundGone ||= round === flow.rounds.at(-1);
+    else if (owner) owners.push(owner);
+  }
+  // The review attempt can still name its reviewer while the implementer fixes.
+  const phase = flow?.pausedState ?? flow?.state;
+  const review = flow?.rounds.at(-1);
+  const fixingDecision = phase === "needs_decision" && review?.verdict === "REQUEST_CHANGES" && review.relayedAt;
+  if (flow && (flow.implementerConversationId || flow.implementerPath)
+    && (["waiting_ready", "fixing", "relaying"].includes(phase ?? "") || fixingDecision)) {
+    owners.push({ conversationId: flow.implementerConversationId ?? `flow:${flow.id}:implementer`, artifactPath: flow.implementerPath });
+  }
+  // Accepted delivery retains custody until its controller settles it.
+  const relayInFlight = Boolean(review?.relayPendingSettlement
+    || (phase === "relaying" && review?.relayStartedAt && !review.relayedAt));
+  return { owners, dispatching, currentRoundGone, relayInFlight };
 }
 
 /* When each unresolved id or settled stage owner was first seen, per set of
@@ -230,6 +257,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (session.artifactPath) journalPaths.set(session.conversationId, session.artifactPath);
     }
     const stages: BlockingStage[] = [];
+    const checkedFlows = new Set<string>();
     const unresolved = new Set<string>();
     const settled = new Set<string>();
     const held = new Set<string>();
@@ -260,38 +288,15 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
         && !attempt.activation.owner && !attempt.launchId && !conversationId) continue;
       if (["running", "reviewing"].includes(cursor.state)) {
-        const owners: { conversationId: string; artifactPath: string | null; historical?: boolean }[] = [];
+        const { owners, dispatching, currentRoundGone, relayInFlight } = flowCustody(flow, conversationId, ports.reviewerProcess);
+        if (flow) checkedFlows.add(flow.id);
         const attemptOwnerId = conversationId ?? `stage:${pipeline.id}:${cursor.stageId}:attempt:${attempt?.n ?? 0}`;
         if (conversationId || attempt?.agentPath) owners.push({ conversationId: attemptOwnerId, artifactPath: attempt?.agentPath ?? null });
-        let dispatching = false;
-        let currentRoundGone = false;
-        if (flow) for (const round of flow.rounds) {
-          const owner = reviewRoundOwner(flow, round, conversationId, ports.reviewerProcess);
-          if (owner === "dispatching") dispatching = true;
-          else if (owner === "gone") currentRoundGone ||= round === flow.rounds.at(-1);
-          else if (owner) owners.push(owner);
-        }
         // A stage without a binding or readable transcript is an unresolved
         // owner too. Keep its identity stable across probes so its bound ages.
         if (!owners.length && !dispatching && !currentRoundGone && !awaitingAdmission) {
           owners.push({ conversationId: attemptOwnerId, artifactPath: null });
         }
-        // The attempt remains bound to its reviewer while the flow relays and
-        // fixes. That reviewer's death says nothing about the implementer.
-        const phase = flow?.pausedState ?? flow?.state;
-        const review = flow?.rounds.at(-1);
-        const fixingDecision = phase === "needs_decision" && review?.verdict === "REQUEST_CHANGES" && review.relayedAt;
-        if (flow && (flow.implementerConversationId || flow.implementerPath)
-          && (["waiting_ready", "fixing", "relaying"].includes(phase ?? "") || fixingDecision)) {
-          // Legacy flows may only name a transcript. The evidence reader falls
-          // back to that path; the flow key gives unresolved evidence its bound.
-          owners.push({ conversationId: flow.implementerConversationId ?? `flow:${flow.id}:implementer`, artifactPath: flow.implementerPath });
-        }
-        // Accepted delivery owns work before a host starts its turn. The flow
-        // controller clears this custody on settlement or a refused/timed-out
-        // delivery; process liveness cannot settle an accepted operation.
-        const relayInFlight = Boolean(review?.relayPendingSettlement
-          || (phase === "relaying" && review?.relayStartedAt && !review.relayedAt));
         // Every owner is asked, so each unresolved one starts its bound now.
         // The first review attempt may have no binding yet. A proven-gone
         // round releases it; absence of any owner evidence proves nothing.
@@ -309,6 +314,29 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         if (released) continue;
       }
       stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId });
+    }
+    for (const flow of flows) {
+      if (checkedFlows.has(flow.id)) continue;
+      const { owners, dispatching, relayInFlight } = flowCustody(flow, null, ports.reviewerProcess);
+      let blocks = dispatching || relayInFlight;
+      for (const owner of owners) {
+        const reading = await evidence(owner);
+        const verdict = reading ? judgeStageOwner(reading) : "blocks";
+        // Parked/finished flows have no verdict collection to wait for. Unknown
+        // ownership keeps the same diagnostic bound as an active stage.
+        const collecting = flow.state === "reviewing" && !owner.historical;
+        if (verdict === "blocks" || (verdict === "unresolved" && !pastBound(owner.conversationId))
+          || (verdict === "settled" && collecting && !pastBound(owner.conversationId, "settled"))) blocks = true;
+      }
+      if (!blocks) continue;
+      const parent = pipelines.find((pipeline) => pipeline.runs?.some((run) => run.attempts.some((attempt) => attempt.flowId === flow.id)));
+      const run = parent?.runs?.find((run) => run.attempts.some((attempt) => attempt.flowId === flow.id));
+      const pipelineId = parent?.id ?? `flow:${flow.id}`;
+      const stageId = run?.stageId ?? "review";
+      if (!stages.some((stage) => stage.pipelineId === pipelineId && stage.stageId === stageId)) {
+        stages.push({ pipelineId, stageId, cursor: flow.state, task: (parent?.task ?? flow.stateDetail ?? "").split("\n")[0]!.slice(0, 80),
+          conversationId: owners[0]?.conversationId ?? null });
+      }
     }
     blockers.stages = stages.length;
     work.push(...stages.map((stage) => `stage:${stage.pipelineId}:${stage.stageId}:${stage.conversationId ?? ""}`));

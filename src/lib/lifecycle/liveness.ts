@@ -1,4 +1,4 @@
-import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/accountLiveness";
+import { identityAlive, livenessProbe, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
@@ -263,7 +263,7 @@ export function defaultEvidenceByteBudget(limit: number): number {
 /** What a liveness read takes from the registry. The aliases are optional so an
     injected snapshot that predates them still reads; production always has them. */
 export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
-  & Partial<Pick<RegistryFile, "conversationAliases">>;
+  & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
 
 export interface AgentLivenessSources {
   now(): number;
@@ -590,9 +590,26 @@ export interface ConversationRegistryHost {
   processAlive: boolean;
 }
 
+/** Setup owns a conversation before its first transcript or host entry exists. */
+function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId: string | null, probe: LivenessProbe, artifactPath?: string) {
+  const ownerId = conversationId ? canonicalConversationId(registry, conversationId) : null;
+  let gone = false;
+  let unresolved = false;
+  for (const receipt of Object.values(registry.receipts ?? {})) {
+    if ((!ownerId || canonicalConversationId(registry, receipt.conversationId) !== ownerId)
+      && (!artifactPath || receipt.artifactPath !== artifactPath)) continue;
+    const evidence = receiptProcessEvidence(receipt, probe);
+    if (evidence?.state === "alive") return { state: "alive" as const,
+      kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid };
+    if (evidence?.state === "gone") gone = true;
+    else unresolved = true;
+  }
+  return gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null;
+}
+
 /**
  * Host evidence for a conversation's current generation, read off its registry
- * row alone (#2515).
+ * row and launch receipt (#2515).
  *
  * A liveness record needs a transcript the scanner can describe, so an id whose
  * transcript was deleted or moved has no record at all. The row still says who
@@ -607,11 +624,13 @@ export function conversationRegistryHost(
 ): ConversationRegistryHost | null {
   const conversation = canonicalConversation(registry, conversationId);
   const generation = conversation?.generations.at(-1);
-  if (!conversation || !generation) return null;
-  const entry = registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
-    ?? entryForPath(registry, generation.path);
-  if (!entry) return null;
-  const host = hostEvidence(entry, probe);
+  const entry = conversation && generation
+    ? registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] ?? entryForPath(registry, generation.path)
+    : null;
+  const registered = entry ? hostEvidence(entry, probe) : null;
+  const host = registered?.state === "alive" ? registered
+    : receiptHostEvidence(registry, conversationId, probe) ?? registered;
+  if (!host) return null;
   return {
     state: host.state,
     processAlive: host.state === "alive",
@@ -677,10 +696,15 @@ export function conversationIdForPath(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">, probe: LivenessProbe): Set<string> {
+function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
   for (const entry of Object.values(snapshot.entries)) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
+  }
+  for (const receipt of Object.values(snapshot.receipts ?? {})) {
+    if (receiptProcessEvidence(receipt, probe)?.state !== "alive") continue;
+    const path = receipt.artifactPath ?? canonicalConversation(snapshot, receipt.conversationId)?.generations.at(-1)?.path;
+    if (path) hosted.add(path);
   }
   return hosted;
 }
@@ -974,8 +998,10 @@ export async function agentLivenessSnapshot(
     const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
     const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
     const registeredHost = hostEvidence(registryEntry, sources.probe);
+    const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);
     // A current replacement host wins over the previous reviewer's death.
-    const host = registeredHost.state === "alive" ? registeredHost : reviewerHost ?? registeredHost;
+    const host = registeredHost.state === "alive" ? registeredHost : receiptHost?.state === "alive" ? receiptHost
+      : reviewerHost ?? receiptHost ?? registeredHost;
     const providerThrottle = turnState === "busy" && host.state === "alive"
       ? hostProviderRetry(registryEntry, now)
       : { retryAt: null, throttledAt: null };

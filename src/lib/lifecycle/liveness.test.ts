@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
+import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
 import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -1140,6 +1140,48 @@ test.each([
     }));
     expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([held ? candidate : fallback]);
     expect(snapshot.selection).toMatchObject({ recovered: held && !present ? 1 : 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
+  },
+);
+
+test.each([
+  { owner: "admission", state: "starting", alive: true, saved: "start", held: true },
+  { owner: "admission", state: "starting", alive: true, saved: null, held: true },
+  { owner: "admission", state: "starting", alive: false, saved: "start", held: false },
+  { owner: "admission", state: "starting", alive: true, saved: "reused", held: false },
+  { owner: "admission", state: "completed", alive: true, saved: "start", held: false },
+  { owner: "verified", state: "completed", alive: true, saved: "start", held: true },
+  { owner: "pane", state: "pane-bound", alive: true, saved: "start", held: true },
+].flatMap((owner) => [false, true].map((present) => ({ ...owner, present }))))(
+  "receipt custody shares fallback, record and inventory verdict: $owner $state alive=$alive saved=$saved present=$present",
+  async ({ owner, state, alive, saved, held, present }) => {
+    const candidate = "/transcripts/receipt-owned.jsonl";
+    const process = { pid: 4242, startIdentity: saved };
+    const receipt = {
+      launchId: "launch", conversationId: "conversation_old", artifactPath: candidate,
+      transport: "structured", state,
+      admissionOwner: owner === "admission" ? process : null,
+      verifiedHost: owner === "verified" ? { agent: process } : null,
+      pane: owner === "pane" ? { panePid: process } : null,
+    } as unknown as SpawnReceipt;
+    const registry = { entries: {}, receipts: { launch: receipt }, conversationAliases: { conversation_old: "conversation_canonical" },
+      conversations: { conversation_canonical: { id: "conversation_canonical", engine: "codex", generations: [{ id: "session", path: candidate }] } },
+    } as unknown as RegistryFile;
+    const probe = { now: () => NOW, pidAlive: () => alive, processIdentity: () => "start" };
+    expect(conversationRegistryHost(registry, "conversation_canonical", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
+    expect(conversationRegistryHost(registry, "conversation_old", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
+    const generation = publishedGeneration(present ? [fileEntry({ path: candidate, conversationId: "conversation_canonical", activity: "stalled" })] : []);
+    const shared = corpusSources(generation, {
+      probe, registrySnapshot: () => registry,
+      describeTranscript: async (target) => ({ path: target, project: "viewer", title: "candidate", engine: "codex", mtimeMs: FROZEN_AT,
+        sizeBytes: 4096, conversationId: "conversation_canonical", activity: null, activityReason: null }),
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: FROZEN_AT }),
+    });
+    const direct = await agentLivenessSnapshot({ conversationId: "conversation_canonical", limit: 1 }, shared);
+    expect(direct.conversations).toHaveLength(1);
+    expect(livenessRecordIsLive(direct.conversations[0]!)).toBe(held);
+    const corpus = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, shared);
+    expect(corpus.conversations.map((record) => record.transcriptPath)).toEqual(held ? [candidate] : []);
+    expect(corpus.selection.recovered).toBe(held && !present ? 1 : 0);
   },
 );
 

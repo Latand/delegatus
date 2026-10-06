@@ -212,6 +212,46 @@ test.each(["dead", "reused"] as const)("a %s structured claim owner releases an 
     .toMatchObject({ quiet: true, blockers: { turns: 0, discounted: 1 } });
 });
 
+test.each(["live", "unproven", "dead", "reused", "settled", "unowned"] as const)(
+"a fresh registering launch reads its %s receipt owner through production liveness", async (kind) => {
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: directory, transport: "structured", accountId: "fixture" });
+  if (begun.kind !== "created") throw new Error("fresh launch receipt unavailable");
+  const self = captureProcessIdentity(process.pid)!;
+  const disk = registry.snapshot();
+  const receipt = disk.receipts[begun.receipt.launchId]!;
+  receipt.admissionOwner = kind === "dead" ? deadProcess : kind === "unowned" ? null
+    : { ...self, startIdentity: kind === "unproven" ? null : kind === "reused" ? `${self.startIdentity}-replaced` : self.startIdentity };
+  writeFileSync(registry.filename, JSON.stringify(disk));
+  if (kind === "settled") registry.failSpawn(receipt.launchId, "owned test admission cancelled");
+  const journal = new RuntimeJournal(join(directory, `fresh-receipt-${kind}.sqlite`), { structuredHosts: true });
+  journal.executeOperation({ kind: "spawn", operationId: receipt.launchId, idempotencyKey: receipt.launchId,
+    conversationId: receipt.conversationId, engine: "codex", cwd: directory, "prompt": "", accountId: "fixture", parentConversationId: null });
+  const p = { ...ports([]), runtimeSnapshot: async () => journal.snapshot() };
+  const live = kind === "live" || kind === "unproven";
+  try {
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES - 1, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      const held = live || kind === "unowned" && at - now < FIVE_MINUTES;
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: !held, blockers: {
+        turns: held ? 1 : 0, unresolved: kind === "unowned" ? 1 : 0,
+      } });
+    }
+    if (live) {
+      registry.failSpawn(receipt.launchId, "owned test admission completed");
+      expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 0 } });
+    }
+    if (kind === "unowned") {
+      const before = quietDispatchVersion(p, now);
+      const owned = registry.snapshot();
+      owned.receipts[receipt.launchId]!.admissionOwner = self;
+      writeFileSync(registry.filename, JSON.stringify(owned));
+      expect(quietDispatchVersion(p, now)).not.toBe(before);
+      expect(await probeQuiet(snapshot, p, now + 12 * 60 * 60_000, true))
+        .toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0 } });
+    }
+  } finally { journal.close(); }
+});
+
 test("a dead host is discounted whether or not its registry row was ended", async () => {
   /* The row a startup leaves exactly as it was: still `live`, its process gone. */
   const stale = hosted("open", deadProcess);
@@ -379,6 +419,9 @@ test.each(["unbound", "bound", "unproven", "hosted"] as const)("a live %s review
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
       expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
     }
+    p.pipelines = () => [];
+    expect(await probeQuiet(snapshot, p, now + 12 * 60 * 60_000, true))
+      .toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
     child.kill();
     await child.exited;
     expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
@@ -730,14 +773,22 @@ for (const paused of [false, true]) {
         .toMatchObject({ status: "starting", pendingAction: "spawn" });
       expect(await agentActivity(fixture.reviewer.conversation.id))
         .toMatchObject([{ host: { state: paused ? "alive" : "unknown", kind: "headless" } }]);
+      // The production pipeline parks when its flow pauses or needs a decision.
+      Object.assign(fixture.stage, { state: "needs_decision", cursor: { stageId: "review", state: "needs_decision" } });
       for (const at of [Date.now(), Date.now() + 12 * 60 * 60_000]) {
         expect(await probeQuiet(snapshot, fixture.p, at, true)).toMatchObject(held);
       }
+      // Headless reviewers need no runtime journal turn or parent pipeline.
+      fixture.p.runtimeSnapshot = async () => ({ ...fixture.journal.snapshot(), sessions: [] });
+      const withoutJournal = { quiet: false, blockers: { turns: 0, stages: 1 } };
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject(withoutJournal);
+      fixture.p.pipelines = () => [];
+      expect(await probeQuiet(snapshot, fixture.p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject(withoutJournal);
       // The attempt can still name the previous round while the flow is parked.
       Object.assign(fixture.stage.runs[0]!.attempts[0]!, {
         conversationId: fixture.previous.conversation.id, agentPath: fixture.previous.artifactPath,
       });
-      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject(held);
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true)).toMatchObject(withoutJournal);
       if (paused) {
         const flow = loadFlows()[0]!;
         flow.rounds.at(-1)!.reviewerIdentity = `${identity.startIdentity}-replaced`;
@@ -756,8 +807,8 @@ for (const paused of [false, true]) {
   });
 }
 
-for (const unproven of [false, true]) {
-  test(`a ${unproven ? "unproven" : "live"} replacement host overrides a gone headless reviewer`, async () => {
+for (const unproven of [false, true]) for (const binding of ["conversation", "path"] as const) {
+  test(`a ${unproven ? "unproven" : "live"} replacement host overrides a gone ${binding}-bound headless reviewer`, async () => {
     const child = Bun.spawn(["sleep", "60"]);
     const identity = captureProcessIdentity(child.pid)!;
     const fixture = boundHeadlessReviewer(deadProcess, deadProcess.startIdentity);
@@ -769,10 +820,25 @@ for (const unproven of [false, true]) {
         eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0,
         activeTurnRef: "replacement-turn", pendingAttention: [], activeFlags: [],
       } });
+      if (binding === "path") {
+        const flow = loadFlows()[0]!;
+        flow.rounds.at(-1)!.reviewerConversationId = null;
+        saveFlows([flow]);
+      }
       expect(await fixture.p.turnLiveness!(fixture.session, {}))
         .toMatchObject({ headlessReviewerProcess: "gone", registryHost: { processAlive: true } });
       expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
         .toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+      fixture.p.runtimeSnapshot = async () => ({ ...fixture.journal.snapshot(), sessions: [] });
+      fixture.p.pipelines = () => [];
+      for (const at of [Date.now(), Date.now() + FIVE_MINUTES, Date.now() + 12 * 60 * 60_000]) {
+        expect(await probeQuiet(snapshot, fixture.p, at, true))
+          .toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
+      }
+      child.kill();
+      await child.exited;
+      expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
+        .toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
     } finally { saveFlows([]); fixture.journal.close(); child.kill(); await child.exited; }
   });
 }
@@ -815,6 +881,7 @@ test("review attack: a review stage remains owned by its live fixing implementer
     expect(result).toMatchObject({quiet: false, blockers: {stages: 1}});
     // The same continuation remains owned across parked flow projections and
     // for legacy flows that bind only the implementer's transcript path.
+    p.pipelines = () => [];
     for (const state of ["fixing", "paused", "needs_decision"] as const) {
       const active = loadFlows()[0]!;
       active.state = state;
@@ -881,6 +948,9 @@ test("review attack: accepted structured relay still holds its stage before the 
     writeDrain(drainFile(), {id: holdId, target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true});
     const result = await probeQuiet(snapshot, p, Date.now(), true);
     expect(result).toMatchObject({quiet: false, blockers: {stages: 1}});
+    p.pipelines = () => [];
+    expect(await probeQuiet(snapshot, p, Date.now(), true))
+      .toMatchObject({quiet: false, blockers: {stages: 1}});
     child.kill();
     await child.exited;
     const now = Date.now();
@@ -1239,6 +1309,9 @@ test.each(["unbound", "path", "hosted", "legacy-path"] as const)("a historical %
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
       expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
     }
+    p.pipelines = () => [];
+    expect(await probeQuiet(snapshot, p, now + 12 * 60 * 60_000, true))
+      .toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
     child.kill();
     await child.exited;
     expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
@@ -1291,7 +1364,9 @@ test("the admission fence observes historical reviewer custody and a path-only b
   } finally { saveFlows([]); }
 });
 
-test.each(["missing", "dead", "live"] as const)("a current path-only %s reviewer is judged through owner evidence", async (state) => {
+test.each((["missing", "dead", "live"] as const).flatMap((state) =>
+  (["running", "parked", "standalone"] as const).map((parent) => ({ state, parent }))))(
+"a current path-only $state reviewer with $parent parent is judged through owner evidence", async ({ state, parent }) => {
   const implementer = ended("open");
   const reviewer = state === "live" ? hosted("open", captureProcessIdentity(process.pid)!) : ended("open");
   if (state === "missing") rmSync(reviewer.artifactPath);
@@ -1309,9 +1384,11 @@ test.each(["missing", "dead", "live"] as const)("a current path-only %s reviewer
     delete disk.conversations[reviewer.conversation.id];
     delete disk.entries[`codex:${reviewer.key.sessionId}`];
   }
-  const p = { ...ports([], [lane("lane_current_path", "reviewing", {
+  const stage = lane("lane_current_path", "reviewing", {
     conversationId: implementer.conversation.id, agentPath: implementer.artifactPath, flowId: "flow_current_path",
-  })]), flows: loadFlows,
+  });
+  if (parent === "parked") Object.assign(stage, { state: "needs_decision", cursor: { stageId: "build", state: "needs_decision" } });
+  const p = { ...ports([], parent === "standalone" ? [] : [stage]), flows: loadFlows,
     turnLiveness: turnEvidenceReader(() => ({ ...production, registrySnapshot: () => disk })) };
   try {
     const now = Date.now();
