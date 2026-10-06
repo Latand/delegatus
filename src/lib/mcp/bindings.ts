@@ -102,6 +102,8 @@ import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
   applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
@@ -3543,10 +3545,16 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     for (const key of Object.keys(remotes)) keys.add(key);
     for (const key of keys) {
       if (!requireComplete && key === own) continue;
-      const repository = githubRepositoryOfRemote(requireComplete ? remotes[key] ?? null : recordedProjectRemote(key));
+      const remote = requireComplete ? remotes[key] ?? null : recordedProjectRemote(key);
+      const repository = githubRepositoryOfRemote(remote);
+      /* Private repository names belong to every forge and local remote.
+         Reuse the project resolver and the report's canonical text decoder. */
+      const remoteName = requireComplete && remote ? projectIdentityFromRemote(remote, process.cwd())?.displayName ?? "" : "";
+      const decodedName = canonicalSensitiveText(remoteName);
+      if (decodedName.error) throw new Error("Privacy repository name is unreadable");
       projects.push({
         repository,
-        names: [repository?.split("/")[1] ?? "", projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
+        names: [repository?.split("/")[1] ?? "", remoteName, decodedName.text, projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
       });
     }
   } catch (error) {

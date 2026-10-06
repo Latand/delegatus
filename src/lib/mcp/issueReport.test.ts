@@ -7,6 +7,8 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { issueReportApprovalReplies } from "@/lib/issueReports/approval";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
+import { recordProjectRemote } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
 import { TelegramBotService, productionTelegramBotDependencies } from "@/lib/telegram/bot/service";
 import type { TgUpdate } from "@/lib/telegram/bot/store";
@@ -605,6 +607,38 @@ test.each(["claude", "codex"])("retired %s account names remain private at both 
     const { digest } = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox });
     h.operatorSays((await shown(h, digest)).en);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+});
+
+test.each([
+  `https://${["gitlab", "com"].join(".")}/team/subgroup/HiddenWorkshop.git`,
+  `git@${["gitlab", "com"].join(".")}:team/HiddenWorkshop.git`,
+  `ssh://git@${["bitbucket", "org"].join(".")}/team/HiddenWorkshop.git`,
+  `https://${["forge", "example"].join(".")}/team/HiddenWorkshop.git`,
+  `https://${["forge", "example"].join(".")}/team/Hidden%57orkshop.git`,
+  `https://${["forge", "example"].join(".")}/team/Hidden%2557orkshop.git`,
+  `${["forge", "example"].join(".")}/team/HiddenWorkshop`,
+  `file://${["", "var", "repositories", "HiddenWorkshop.git"].join("/")}`,
+])("recorded repository names remain private for remote %s", async (remote) => {
+  const identity = projectIdentityFromRemote(remote, privacyState)!;
+  expect(identity.displayName).toMatch(/^Hidden(?:W|%57|%2557)orkshop$/);
+  recordProjectRemote(identity);
+  const h = harness({ controlRead: async () => ({ chats: [] }) });
+  const body = "HiddenWorkshop observed the failed launch.";
+  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+    const report = { title: REPORT.title, body: encoded };
+    const refused = await h.call(REPORTER, { action: "preview", ...report });
+    expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain("project");
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+    const { digest } = recordIssueReportPreview({ title: REPORT.title, body: encoded }, REPORTER.conversationId!, { directory: sandbox });
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
     expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
   }
   expect(h.published).toEqual([]);
