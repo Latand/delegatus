@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import type { CompanionEvent, Delivery, Payload, Recipient } from "./contract";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
@@ -28,6 +30,25 @@ const types = (events: readonly CompanionEvent[]) => events.map((event) => event
 const delegationTypes = (events: readonly CompanionEvent[]) => types(events).filter((type) => type.startsWith("delegation.") || type === "orchestrator.answer");
 
 describe("the explicit-request gate", () => {
+  test("the production Node runtime loads the gate and preserves polite requests in both languages", () => {
+    const source = new Bun.Transpiler({ loader: "ts" }).transformSync(readFileSync(new URL("./gate.ts", import.meta.url), "utf8"));
+    const result = spawnSync("node", ["--input-type=module"], {
+      input: `${source}\nconsole.log(JSON.stringify([
+        explicitDelegationRequest("Could you ask the orchestrator to review the plan?"),
+        explicitDelegationRequest("Можеш попросити оркестратора перевірити план?"),
+        explicitDelegationRequest("Ask the orchestrator?"),
+        explicitDelegationRequest("Попроси оркестратора?")
+      ]));`,
+      encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { admit: true }, { admit: true },
+      { admit: false, reason: "question" }, { admit: false, reason: "question" },
+    ]);
+  });
+
   const admitted = [
     "Ask the orchestrator to review the export plan.",
     "Please tell the orchestrator the search lane can merge.",

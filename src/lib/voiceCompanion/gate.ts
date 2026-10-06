@@ -83,10 +83,10 @@ const RETRACTION = new RegExp([
    politeness, then the verb. The polite question form ("could you ask…",
    "можеш попросити…") is the one question the grammar admits. */
 const EN_ADDRESS = String.raw`(?:(?:hey|ok|okay|so),?\s+)?(?:delegatus[,:]?\s+)?`;
-const EN_POLITE = String.raw`(?:please\s+|(?<ask>can|could|would|will)\s+you\s+(?:please\s+)?)?`;
+const EN_POLITE = String.raw`(?:please\s+|(?<askEn>can|could|would|will)\s+you\s+(?:please\s+)?)?`;
 const EN_VERB = String.raw`(?:ask|tell|send|forward|pass|delegate|give|hand|have|get|let|message)\b`;
 const UK_ADDRESS = String.raw`(?:(?:слухай|ок|окей),?\s+)?(?:делегатусе[,:]?\s+)?`;
-const UK_POLITE = String.raw`(?:будь\s+ласка,?\s+|(?<ask>можеш|можете|могли\s+б\s+ви)\s+(?:будь\s+ласка,?\s+)?)?`;
+const UK_POLITE = String.raw`(?:будь\s+ласка,?\s+|(?<askUk>можеш|можете|могли\s+б\s+ви)\s+(?:будь\s+ласка,?\s+)?)?`;
 const UK_VERB = String.raw`(?:попроси(?:ти)?|скажи|сказати|передай|передати|надішли|надіслати|відправ|відправити|доручи|доручити|перешли|переслати|напиши|написати|запитай|запитати|спитай|спитати)(?=[\s,]|$)`;
 const OPENING = new RegExp(`^(?:${EN_ADDRESS}${EN_POLITE}${EN_VERB}|${UK_ADDRESS}${UK_POLITE}${UK_VERB})`, "u");
 
@@ -124,7 +124,7 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
       const directive = sentence.slice(opening[0].length, sentence.search(ORCHESTRATOR));
       return { admit: false, reason: NEGATION.test(directive) ? "negated" : "not_addressed" };
     }
-    if (sentence.includes("?") && !request.groups?.ask) return { admit: false, reason: "question" };
+    if (sentence.includes("?") && !(request.groups?.askEn || request.groups?.askUk)) return { admit: false, reason: "question" };
     /* Taken back in the same breath: "ask the orchestrator to review it, actually don't send anything". */
     const tail = sentence.slice(request[0].length);
     if (RETRACTION.test(tail)) return { admit: false, reason: "retracted" };
