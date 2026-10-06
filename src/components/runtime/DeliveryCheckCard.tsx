@@ -55,7 +55,7 @@ export function DeliveryCheckCard({ operationId, text, status, statusShown, deta
   }, [body, expanded]);
   return (
     <div
-      className="flex min-w-0 flex-col gap-1 rounded-control bg-card/70 px-2 py-1.5 text-left"
+      className="flex min-w-0 flex-col gap-1 rounded-control bg-card/70 px-2 py-1 text-left"
       data-delivery-check-card
       data-operation={operationId}
       {...(body ? {} : { "data-receipt-standalone-row": "" })}

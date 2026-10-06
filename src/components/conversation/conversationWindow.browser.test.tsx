@@ -1881,7 +1881,7 @@ describe("delivery check card", () => {
   /*
    * The card for a delivery whose fate is unconfirmed, above the production
    * composer: an English handoff relayed by another project's orchestrator.
-   * Three widths, both languages, both schemes. `LLV_DELIVERY_CARD_SIDE=before`
+   * Three states and widths, both languages, both schemes. `LLV_DELIVERY_CARD_SIDE=before`
    * runs the same case over a checkout that still draws the earlier card and
    * records its geometry under `before`; the default records `after` and gates
    * it. Geometry goes to `evidence/delivery-check-card/card.json`; frames to
@@ -1898,16 +1898,19 @@ describe("delivery check card", () => {
     const out = path.resolve(".artifacts/delivery-check-card");
     fs.mkdirSync(out, { recursive: true });
     const served = await serveEvidenceFixture(out, FIXTURE);
-    const browser = await chromium.launch(LAUNCH);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserProcess = browserServer.process();
+    const browserPid = browserProcess.pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
     const readings: Record<string, unknown> = {};
     try {
-      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const state of ["failed", "uncertain", "delivering"] as const) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const { context, page, pageErrors } = await openFixture(browser,
-          `${served.base}?case=delivery-check-card&lang=${lang}`, { width: viewport.width, height: viewport.height },
+          `${served.base}?case=delivery-check-card&lang=${lang}&state=${state}`, { width: viewport.width, height: viewport.height },
           scheme, lang, "reduce", viewport.touch);
-        const key = `${viewport.name}-${lang}-${scheme}`;
+        const key = state === "failed" ? `${viewport.name}-${lang}-${scheme}` : `${state}-${viewport.name}-${lang}-${scheme}`;
         try {
-          const status = translate(lang, side === "before" ? "composer.deliveryChecking" : "composer.deliveryCheckEnded");
+          const status = translate(lang, side === "before" || state !== "failed" ? "composer.deliveryChecking" : "composer.deliveryCheckEnded");
           await page.locator("[data-runtime-receipt-stack] > summary").click();
           await page.locator("[data-receipt-discard]").waitFor();
           const read = () => page.evaluate((statusText) => {
@@ -1918,6 +1921,8 @@ describe("delivery check card", () => {
             const message = card.querySelector("[data-receipt-message]") as HTMLElement;
             const messageStyle = getComputedStyle(message);
             const buttons = [...card.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")].map(box);
+            const detail = card.querySelector("[data-receipt-uncertain-why]") as HTMLElement;
+            const detailStyle = getComputedStyle(detail);
             const field = document.querySelector("textarea")!;
             /* Elements whose own text is the status and that take up room. */
             const statusShown = [...stack.querySelectorAll("*")].filter((node) =>
@@ -1935,6 +1940,10 @@ describe("delivery check card", () => {
               messageLines: Math.round(message.getBoundingClientRect().height / parseFloat(messageStyle.lineHeight)),
               buttonHeights: buttons.map((button) => Math.round(button.height)),
               statusShown,
+              detailText: detail.textContent?.trim(),
+              detailLines: Math.round(detail.getBoundingClientRect().height / parseFloat(detailStyle.lineHeight)),
+              detailFullyVisible: detail.scrollHeight <= detail.clientHeight + 1 && detail.scrollWidth <= detail.clientWidth + 1,
+              discardDisabled: (card.querySelector("[data-receipt-discard]") as HTMLButtonElement).disabled,
               boilerplateShown: card.textContent!.includes("carries no operator authority"),
               /* Column cards only: room the card holds beyond its own rows. */
               cardSlack: cardStyle.flexDirection === "column" ? Math.round(card.getBoundingClientRect().height - used) : null,
@@ -1958,11 +1967,20 @@ describe("delivery check card", () => {
             expect(reading.cardSlack).toBeLessThanOrEqual(1);
             expect(reading.detailsScrolls).toBe(false);
             expect(reading.controlsInView).toBe(true);
+            expect(reading.discardDisabled).toBe(state === "delivering");
+            expect(reading.detailFullyVisible).toBe(true);
+            expect(reading.detailText).toBe(translate(lang, state === "delivering"
+              ? "composer.deliveryDiscardHandover" : state === "failed"
+                ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail"));
+            if (viewport.touch) {
+              if (state === "failed") expect(reading.card.height).toBeLessThanOrEqual(144);
+              expect(reading.detailLines).toBeLessThanOrEqual(2);
+            }
             /* The settled chips' size: a caption-height pill with a mouse, the
                44px touch target on a phone. */
             for (const height of reading.buttonHeights) {
               if (viewport.touch) expect(height).toBe(44);
-              else expect(height).toBeLessThanOrEqual(24);
+              else expect(height).toBe(23);
             }
             /* Nothing of the card reaches the field under it. */
             expect(reading.stack.bottom).toBeLessThanOrEqual(reading.field.top);
@@ -1979,8 +1997,10 @@ describe("delivery check card", () => {
             await page.locator("[data-receipt-message-toggle]").click();
             await page.locator("[data-receipt-uncertain-retry]").click();
             expect(await page.locator("[data-fixture-retries]").textContent()).toBe("1");
-            await page.locator("[data-receipt-discard]").click();
-            await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+            if (state !== "delivering") {
+              await page.locator("[data-receipt-discard]").click();
+              await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+            }
           }
         } finally { await context.close(); }
       }
@@ -1988,6 +2008,11 @@ describe("delivery check card", () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
       fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
-    } finally { await browser.close(); served.stop(); }
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`delivery check card: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
   }, 300_000);
 });

@@ -836,7 +836,7 @@ export const en = {
   "composer.deliveryNotDelivered": "Not delivered — send again",
   "composer.deliveryCheckingDetail": "Another status check will not send a second message.",
   "composer.deliveryCheckEnded": "Delivery unconfirmed",
-  "composer.deliveryCheckEndedDetail": "The message may already have arrived. Retry keeps its original identity; Discard stops further attempts.",
+  "composer.deliveryCheckEndedDetail": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
   "composer.relayLabel": "Agent relay · {project}",
   "composer.relayLabelTitle": "Sent by the orchestrator of project {project}. An agent relay carries no operator authority.",
   "composer.messageExpand": "Show all",

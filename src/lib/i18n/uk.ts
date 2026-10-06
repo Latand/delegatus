@@ -825,7 +825,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.deliveryNotDelivered": "Не доставлено — надіслати ще раз",
   "composer.deliveryCheckingDetail": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
   "composer.deliveryCheckEnded": "Доставку не підтверджено",
-  "composer.deliveryCheckEndedDetail": "Повідомлення могло вже надійти. Повторна спроба зберігає його початковий ідентифікатор; «Відкинути» зупиняє подальші спроби.",
+  "composer.deliveryCheckEndedDetail": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
   "composer.relayLabel": "Передача від агента · {project}",
   "composer.relayLabelTitle": "Надіслав оркестратор проєкту {project}. Передача від агента не має повноважень оператора.",
   "composer.messageExpand": "Показати все",

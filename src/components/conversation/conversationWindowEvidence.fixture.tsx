@@ -1091,6 +1091,8 @@ const CHECK_CARD_HANDOFF = [
 
 function DeliveryCheckCardFixture() {
   const { t } = useLocale();
+  const requestedState = params.get("state");
+  const status = requestedState === "uncertain" || requestedState === "delivering" ? requestedState : "failed";
   const [discarded, setDiscarded] = useState(false);
   const [retries, setRetries] = useState(0);
   const composer = useComposer({
@@ -1102,7 +1104,7 @@ function DeliveryCheckCardFixture() {
   });
   const receipt: RuntimeReceipt = {
     operationId: "check-card-operation", idempotencyKey: "check-card-key",
-    conversationId: "conversation_check_card", kind: "send", status: "failed",
+    conversationId: "conversation_check_card", kind: "send", status,
     text: relayMessageText(CHECK_CARD_HANDOFF, "Atlas"), at: new Date().toISOString(), revision: 1,
     reason: "delivery was started by an earlier executor", resend: "verify-first",
   };

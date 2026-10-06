@@ -35,7 +35,7 @@ function request(body: unknown, headers: Record<string, string> = { host: "127.0
 }
 
 for (const sqliteMode of ["off", "sqlite"] as const) {
-  for (const scenario of ["initial", "legacy-failure", "compacted-failure"] as const) {
+  for (const scenario of ["initial", "legacy-failure", "compacted-failure", "host-rejected"] as const) {
     for (const origin of [{ kind: "operator" }, {
       kind: "agent", role: "orchestrator", project: "repo-source", conversationId: "conversation_source",
     }] satisfies MessageOrigin[]) {
@@ -66,7 +66,10 @@ for (const sqliteMode of ["off", "sqlite"] as const) {
             capabilities: { steer: true, structuredAttention: true },
           } });
           journal.executeOperation({ kind: "send", operationId, idempotencyKey: key, conversationId: conversation.id, text, policy: "queue", origin });
-          if (scenario !== "initial") {
+          if (scenario === "host-rejected") {
+            journal.transitionOperation(operationId, "rejected", { reason: "structured host delivery failed" });
+            registry.recordDeliveryOutcome(held.id, "failed", "structured host delivery failed");
+          } else if (scenario !== "initial") {
             journal.transitionOperation(operationId, "delivering");
             journal.transitionOperation(operationId, "uncertain", { reason: "confirmation lost" });
             // Older writers recorded failure without the disposition. Current
@@ -88,6 +91,8 @@ for (const sqliteMode of ["off", "sqlite"] as const) {
           expect(await response.json()).toMatchObject({ receipt: { status: "failed", reason: "delivery-discarded" } });
           expect(response.status).toBe(200);
           expect((await discard()).status).toBe(200);
+          expect(journal.claimDeliveryAction(operationId, "retry")).toMatchObject({ winner: "discard", replayed: true });
+          expect(() => journal.retryOperation(operationId)).toThrow("discarded runtime operations cannot retry");
           const reopenedRegistry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode });
           reopened = reopenedRegistry;
           expect(sendReceiptFor(reopenedRegistry.deliverySnapshotForOperation(operationId), operationId))

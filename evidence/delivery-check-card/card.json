@@ -472,19 +472,19 @@
   "after": {
     "desktop-1440-en-light": {
       "stack": {
-        "top": 629,
+        "top": 633,
         "bottom": 796,
         "left": 16,
         "right": 1424,
-        "height": 167,
+        "height": 163,
         "width": 1408
       },
       "card": {
-        "top": 681,
+        "top": 685,
         "bottom": 789,
         "left": 24,
         "right": 1417,
-        "height": 108,
+        "height": 104,
         "width": 1393
       },
       "field": {
@@ -503,6 +503,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -511,19 +515,19 @@
     },
     "desktop-1440-en-dark": {
       "stack": {
-        "top": 629,
+        "top": 633,
         "bottom": 796,
         "left": 16,
         "right": 1424,
-        "height": 167,
+        "height": 163,
         "width": 1408
       },
       "card": {
-        "top": 681,
+        "top": 685,
         "bottom": 789,
         "left": 24,
         "right": 1417,
-        "height": 108,
+        "height": 104,
         "width": 1393
       },
       "field": {
@@ -542,6 +546,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -550,19 +558,19 @@
     },
     "desktop-1440-uk-light": {
       "stack": {
-        "top": 629,
+        "top": 633,
         "bottom": 796,
         "left": 16,
         "right": 1424,
-        "height": 167,
+        "height": 163,
         "width": 1408
       },
       "card": {
-        "top": 681,
+        "top": 685,
         "bottom": 789,
         "left": 24,
         "right": 1417,
-        "height": 108,
+        "height": 104,
         "width": 1393
       },
       "field": {
@@ -581,6 +589,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -589,19 +601,19 @@
     },
     "desktop-1440-uk-dark": {
       "stack": {
-        "top": 629,
+        "top": 633,
         "bottom": 796,
         "left": 16,
         "right": 1424,
-        "height": 167,
+        "height": 163,
         "width": 1408
       },
       "card": {
-        "top": 681,
+        "top": 685,
         "bottom": 789,
         "left": 24,
         "right": 1417,
-        "height": 108,
+        "height": 104,
         "width": 1393
       },
       "field": {
@@ -620,6 +632,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -628,19 +644,19 @@
     },
     "pane-1000-en-light": {
       "stack": {
-        "top": 529,
+        "top": 533,
         "bottom": 696,
         "left": 16,
         "right": 984,
-        "height": 167,
+        "height": 163,
         "width": 968
       },
       "card": {
-        "top": 581,
+        "top": 585,
         "bottom": 689,
         "left": 24,
         "right": 977,
-        "height": 108,
+        "height": 104,
         "width": 953
       },
       "field": {
@@ -659,6 +675,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -667,19 +687,19 @@
     },
     "pane-1000-en-dark": {
       "stack": {
-        "top": 529,
+        "top": 533,
         "bottom": 696,
         "left": 16,
         "right": 984,
-        "height": 167,
+        "height": 163,
         "width": 968
       },
       "card": {
-        "top": 581,
+        "top": 585,
         "bottom": 689,
         "left": 24,
         "right": 977,
-        "height": 108,
+        "height": 104,
         "width": 953
       },
       "field": {
@@ -698,6 +718,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -706,19 +730,19 @@
     },
     "pane-1000-uk-light": {
       "stack": {
-        "top": 529,
+        "top": 533,
         "bottom": 696,
         "left": 16,
         "right": 984,
-        "height": 167,
+        "height": 163,
         "width": 968
       },
       "card": {
-        "top": 581,
+        "top": 585,
         "bottom": 689,
         "left": 24,
         "right": 977,
-        "height": 108,
+        "height": 104,
         "width": 953
       },
       "field": {
@@ -737,6 +761,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -745,19 +773,19 @@
     },
     "pane-1000-uk-dark": {
       "stack": {
-        "top": 529,
+        "top": 533,
         "bottom": 696,
         "left": 16,
         "right": 984,
-        "height": 167,
+        "height": 163,
         "width": 968
       },
       "card": {
-        "top": 581,
+        "top": 585,
         "bottom": 689,
         "left": 24,
         "right": 977,
-        "height": 108,
+        "height": 104,
         "width": 953
       },
       "field": {
@@ -776,6 +804,10 @@
         23
       ],
       "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -784,19 +816,19 @@
     },
     "phone-390-en-light": {
       "stack": {
-        "top": 532.5,
+        "top": 536.5,
         "bottom": 736,
         "left": 16,
         "right": 374,
-        "height": 203.5,
+        "height": 199.5,
         "width": 358
       },
       "card": {
-        "top": 584.5,
+        "top": 588.5,
         "bottom": 729,
         "left": 24,
         "right": 367,
-        "height": 144.5,
+        "height": 140.5,
         "width": 343
       },
       "field": {
@@ -815,6 +847,10 @@
         44
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -823,19 +859,19 @@
     },
     "phone-390-en-dark": {
       "stack": {
-        "top": 532.5,
+        "top": 536.5,
         "bottom": 736,
         "left": 16,
         "right": 374,
-        "height": 203.5,
+        "height": 199.5,
         "width": 358
       },
       "card": {
-        "top": 584.5,
+        "top": 588.5,
         "bottom": 729,
         "left": 24,
         "right": 367,
-        "height": 144.5,
+        "height": 140.5,
         "width": 343
       },
       "field": {
@@ -854,6 +890,10 @@
         44
       ],
       "statusShown": 1,
+      "detailText": "Retry won't duplicate a delivered message. Discard clears this card and stops attempts.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -862,19 +902,19 @@
     },
     "phone-390-uk-light": {
       "stack": {
-        "top": 532.5,
+        "top": 536.5,
         "bottom": 736,
         "left": 16,
         "right": 374,
-        "height": 203.5,
+        "height": 199.5,
         "width": 358
       },
       "card": {
-        "top": 584.5,
+        "top": 588.5,
         "bottom": 729,
         "left": 24,
         "right": 367,
-        "height": 144.5,
+        "height": 140.5,
         "width": 343
       },
       "field": {
@@ -893,6 +933,10 @@
         44
       ],
       "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
@@ -900,6 +944,393 @@
       "overflowX": 0
     },
     "phone-390-uk-dark": {
+      "stack": {
+        "top": 536.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 199.5,
+        "width": 358
+      },
+      "card": {
+        "top": 588.5,
+        "bottom": 729,
+        "left": 24,
+        "right": 367,
+        "height": 140.5,
+        "width": 343
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 327,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-desktop-1440-en-light": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-desktop-1440-en-dark": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-desktop-1440-uk-light": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-desktop-1440-uk-dark": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-pane-1000-en-light": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-pane-1000-en-dark": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-pane-1000-uk-light": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-pane-1000-uk-dark": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-phone-390-en-light": {
       "stack": {
         "top": 532.5,
         "bottom": 736,
@@ -911,10 +1342,10 @@
       "card": {
         "top": 584.5,
         "bottom": 729,
-        "left": 24,
+        "left": 23,
         "right": 367,
         "height": 144.5,
-        "width": 343
+        "width": 344
       },
       "field": {
         "top": 741,
@@ -925,13 +1356,662 @@
         "width": 340
       },
       "messageAlign": "left",
-      "messageWidth": 327,
+      "messageWidth": 328,
       "messageLines": 2,
       "buttonHeights": [
         44,
         44
       ],
       "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-phone-390-en-dark": {
+      "stack": {
+        "top": 532.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 203.5,
+        "width": 358
+      },
+      "card": {
+        "top": 584.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 144.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "Another status check will not send a second message.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-phone-390-uk-light": {
+      "stack": {
+        "top": 532.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 203.5,
+        "width": 358
+      },
+      "card": {
+        "top": 584.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 144.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "uncertain-phone-390-uk-dark": {
+      "stack": {
+        "top": 532.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 203.5,
+        "width": 358
+      },
+      "card": {
+        "top": 584.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 144.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "Повторна перевірка статусу не надсилає повідомлення вдруге.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": false,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-desktop-1440-en-light": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-desktop-1440-en-dark": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-desktop-1440-uk-light": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-desktop-1440-uk-dark": {
+      "stack": {
+        "top": 614,
+        "bottom": 796,
+        "left": 16,
+        "right": 1424,
+        "height": 182,
+        "width": 1408
+      },
+      "card": {
+        "top": 666,
+        "bottom": 789,
+        "left": 23,
+        "right": 1417,
+        "height": 123,
+        "width": 1394
+      },
+      "field": {
+        "top": 803,
+        "bottom": 831,
+        "left": 27,
+        "right": 1347,
+        "height": 28,
+        "width": 1320
+      },
+      "messageAlign": "left",
+      "messageWidth": 1378,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-pane-1000-en-light": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-pane-1000-en-dark": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-pane-1000-uk-light": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-pane-1000-uk-dark": {
+      "stack": {
+        "top": 514,
+        "bottom": 696,
+        "left": 16,
+        "right": 984,
+        "height": 182,
+        "width": 968
+      },
+      "card": {
+        "top": 566,
+        "bottom": 689,
+        "left": 23,
+        "right": 977,
+        "height": 123,
+        "width": 954
+      },
+      "field": {
+        "top": 703,
+        "bottom": 731,
+        "left": 27,
+        "right": 907,
+        "height": 28,
+        "width": 880
+      },
+      "messageAlign": "left",
+      "messageWidth": 938,
+      "messageLines": 2,
+      "buttonHeights": [
+        23,
+        23
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 1,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-phone-390-en-light": {
+      "stack": {
+        "top": 517.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 218.5,
+        "width": 358
+      },
+      "card": {
+        "top": 569.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 159.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-phone-390-en-dark": {
+      "stack": {
+        "top": 517.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 218.5,
+        "width": 358
+      },
+      "card": {
+        "top": 569.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 159.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "The message is being handed over. Discard becomes available when the handover finishes.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-phone-390-uk-light": {
+      "stack": {
+        "top": 517.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 218.5,
+        "width": 358
+      },
+      "card": {
+        "top": 569.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 159.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
+      "boilerplateShown": false,
+      "cardSlack": 0,
+      "detailsScrolls": false,
+      "controlsInView": true,
+      "overflowX": 0
+    },
+    "delivering-phone-390-uk-dark": {
+      "stack": {
+        "top": 517.5,
+        "bottom": 736,
+        "left": 16,
+        "right": 374,
+        "height": 218.5,
+        "width": 358
+      },
+      "card": {
+        "top": 569.5,
+        "bottom": 729,
+        "left": 23,
+        "right": 367,
+        "height": 159.5,
+        "width": 344
+      },
+      "field": {
+        "top": 741,
+        "bottom": 773,
+        "left": 25,
+        "right": 365,
+        "height": 32,
+        "width": 340
+      },
+      "messageAlign": "left",
+      "messageWidth": 328,
+      "messageLines": 2,
+      "buttonHeights": [
+        44,
+        44
+      ],
+      "statusShown": 1,
+      "detailText": "Повідомлення передається агенту. Відкидання стане доступним, коли передача завершиться.",
+      "detailLines": 2,
+      "detailFullyVisible": true,
+      "discardDisabled": true,
       "boilerplateShown": false,
       "cardSlack": 0,
       "detailsScrolls": false,
