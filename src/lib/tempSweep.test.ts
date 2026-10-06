@@ -7,6 +7,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import {
   isOwnedTempName,
   recordTempSweep,
+  runTempSweep,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
@@ -325,6 +326,70 @@ test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside
   expect(report.kept.worktree).toBe(1);
   expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "git-checkout", bytes: expect.any(Number) })]);
   expect(fs.readFileSync(path.join(checkout, "local-work.txt"), "utf8")).toBe("unpublished work");
+});
+
+test.each(["process", "activity", "parent-redirect", "replacement"])("temp cleanup retains %s acquired during measurement", async change => {
+  const root = tempRoot();
+  const external = tempRoot();
+  const directory = aged(root, "llv-late-owner", 3 * DAY);
+  const scan: ProcessScan = { ownNamespace: null, processes: [] };
+  const original = fs.promises.readdir;
+  let injected = false;
+  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const entries = await original(...args);
+    if (String(args[0]) === directory && !injected) {
+      injected = true;
+      if (change === "process") scan.processes.push({ pid: 456789, namespace: null, stamped: true, paths: [path.join(directory, "file.txt")] });
+      else if (change === "activity") fs.writeFileSync(path.join(directory, "new.txt"), "new output");
+      else if (change === "parent-redirect") {
+        fs.renameSync(root, path.join(external, "original"));
+        const target = aged(external, "llv-late-owner", 3 * DAY);
+        fs.writeFileSync(path.join(target, "file.txt"), "external evidence");
+        const old = new Date(Date.now() - 3 * DAY);
+        fs.utimesSync(path.join(target, "file.txt"), old, old);
+        fs.symlinkSync(external, root, "dir");
+      } else {
+        fs.renameSync(directory, path.join(external, "original"));
+        aged(root, "llv-late-owner", 3 * DAY);
+      }
+    }
+    return entries;
+  }) as typeof fs.promises.readdir);
+  try {
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan, maxAgeMs: DAY });
+    expect(injected).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
+    if (change === "process") expect(report.kept.inUse).toBe(1);
+    if (change === "activity") {
+      expect(report.kept.young).toBe(1);
+      expect(fs.readFileSync(path.join(directory, "new.txt"), "utf8")).toBe("new output");
+    }
+    if (change === "parent-redirect") expect(fs.readFileSync(path.join(directory, "file.txt"), "utf8")).toBe("external evidence");
+  } finally { read.mockRestore(); }
+});
+
+test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp cleanup refreshes a real late %s holder", async holder => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-late-live", 3 * DAY);
+  const original = fs.promises.readdir;
+  let injected = false;
+  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const result = await original(...args);
+    if (String(args[0]) === directory && !injected) {
+      injected = true;
+      if (holder === "cwd") await started(spawn("sleep", ["60"], { cwd: directory }));
+      else await started(spawn("sh", ["-c", 'exec 3<"$1"; exec sleep 60', "fixture", path.join(directory, "file.txt")], { cwd: root }));
+    }
+    return result;
+  }) as typeof fs.promises.readdir);
+  try {
+    const report = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: root, via: "" }] }))!;
+    expect(injected).toBeTrue();
+    expect(report.removed).toEqual([]);
+    expect(report.kept.inUse).toBe(1);
+    expect(fs.readFileSync(path.join(directory, "file.txt"), "utf8")).toBe("export");
+  } finally { read.mockRestore(); }
 });
 
 test("an unreadable temp tree stays with an explicit inspection hold", async () => {

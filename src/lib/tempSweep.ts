@@ -250,6 +250,8 @@ export type TempSweepOptions = {
   scan?: ProcessScan;
   /** Pipeline worktrees; never removed, nor any directory holding one. */
   worktrees?: string[];
+  /** Retained checkouts already attributed by the worktree sweep report. */
+  accountedWorktrees?: string[];
   procRoot?: string;
   maxRemovals?: number;
 };
@@ -274,14 +276,22 @@ function newestMtimeMs(directory: string, own: fs.Stats): number {
 }
 
 /** Allocated bytes under a directory, without following symlinks; a lower bound past the entry limit. */
-async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false): Promise<number> {
+async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false, excluded: readonly string[] = []): Promise<number> {
   let bytes = 0;
+  const excludedDirectories = new Set<string>();
+  for (const candidate of excluded) {
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isDirectory()) excludedDirectories.add(`${stat.dev}:${stat.ino}`);
+    } catch { /* An absent checkout has no overlapping allocation. */ }
+  }
   try {
     const stat = await fs.promises.stat(directory);
     const identity = `${stat.dev}:${stat.ino}`;
     if (seen.has(identity)) return 0;
     seen.add(identity);
     if (includeRoot) bytes += stat.blocks * 512;
+    if (excludedDirectories.has(identity)) return bytes;
   } catch { return 0; }
   let visited = 0;
   const pending = [directory];
@@ -302,7 +312,7 @@ async function measureBytes(directory: string, seen = new Set<string>(), include
         if (seen.has(identity)) continue;
         seen.add(identity);
         bytes += stat.blocks * 512;
-        if (entry.isDirectory()) pending.push(child);
+        if (entry.isDirectory() && !excludedDirectories.has(identity)) pending.push(child);
       } catch {
         /* Gone mid-walk. */
       }
@@ -364,10 +374,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const now = options.now?.() ?? Date.now();
   const procRoot = options.procRoot ?? "/proc";
   const uid = options.uid === undefined ? (process.getuid?.() ?? null) : options.uid;
-  const scan = options.scan ?? scanProcesses(procRoot);
+  const readScan = () => options.scan ?? scanProcesses(procRoot);
+  const scan = readScan();
   const roots = options.roots ?? sweepRoots(scan, ownTempRoots(), procRoot);
   const inUse = scan.processes.flatMap((process) => process.paths.map((entry) => path.resolve(entry)));
   const worktrees = (options.worktrees ?? []).map((entry) => path.resolve(entry));
+  const accounted = (options.accountedWorktrees ?? []).map(entry => path.resolve(entry));
   const maxRemovals = options.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
   const report: TempSweepReport = {
     at: new Date(now).toISOString(),
@@ -383,6 +395,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const seenAllocations = new Set<string>();
   const candidates: { root: TempSweepRoot; candidate: string }[] = [];
   for (const root of roots) {
+    if (!namespaceStill(root.anchor, procRoot)) {
+      report.errors.push(`${root.path} (via ${root.via}): namespace is unavailable; skipped`);
+      continue;
+    }
     let names: string[];
     try {
       names = fs.readdirSync(root.via + root.path);
@@ -397,10 +413,16 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   }
   // Nested owned roots receive their own allocations before a parent walk.
   for (const { root, candidate } of candidates.sort((a, b) => b.candidate.split(path.sep).length - a.candidate.split(path.sep).length)) {
+    if (!namespaceStill(root.anchor, procRoot)) {
+      report.errors.push(`${root.path} (via ${root.via}): namespace changed before inspection; skipped`);
+      continue;
+    }
     const reachable = root.via + candidate;
     let stat: fs.Stats;
+    let originalPath: string;
     try {
       stat = fs.lstatSync(reachable);
+      originalPath = fs.realpathSync(reachable);
     } catch {
       continue;
     }
@@ -421,11 +443,18 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       report.kept.worktree += 1;
       continue;
     }
-    const hold = containsGitCheckout(reachable);
+    const hold = containsGitCheckout(reachable) ?? (accounted.some(checkout => inside(checkout, candidate)
+      && fs.existsSync(root.via + checkout)) ? "git-checkout" : null);
+    const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
     const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
     if (hold) {
       report.kept.worktree += 1;
-      report.held!.push({ path: candidate, via: root.via, reason: hold, bytes: await measureBytes(reachable, seenAllocations, includeRoot) });
+      const bytes = await measureBytes(reachable, seenAllocations, includeRoot, excluded);
+      if (!namespaceStill(root.anchor, procRoot)) {
+        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+        continue;
+      }
+      report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
       continue;
     }
     if (report.removed.length >= maxRemovals) {
@@ -437,8 +466,24 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       continue;
     }
     try {
-      const bytes = await measureBytes(reachable, seenAllocations, includeRoot);
-      /* The measurement yields; a checkout made meanwhile still keeps it. */
+      const bytes = await measureBytes(reachable, seenAllocations, includeRoot, excluded);
+      if (readScan().processes.some(process => process.paths.some(entry => inside(path.resolve(entry), candidate)))) {
+        report.kept.inUse += 1;
+        continue;
+      }
+      // Measurement yields to new owners and filesystem activity. Date and
+      // inspect the same physical tree again immediately before removal.
+      const current = fs.lstatSync(reachable);
+      if (!current.isDirectory() || (uid !== null && current.uid !== uid) || `${current.dev}:${current.ino}` !== identity
+        || fs.realpathSync(reachable) !== originalPath) {
+        report.errors.push(`${reachable}: temp directory changed during measurement; skipped`);
+        continue;
+      }
+      if ((options.now?.() ?? Date.now()) - newestMtimeMs(reachable, current) < options.maxAgeMs) {
+        report.kept.young += 1;
+        continue;
+      }
+      /* A checkout made meanwhile still keeps the measured tree. */
       const finalHold = containsGitCheckout(reachable);
       if (finalHold) {
         report.kept.worktree += 1;
@@ -502,27 +547,32 @@ function megabytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
-async function pipelineWorktrees(): Promise<string[]> {
-  const { loadPipelinesForList } = await import("@/lib/pipelines/store");
-  return loadPipelinesForList().map((pipeline) => pipeline.worktreeDir).filter((dir): dir is string => !!dir);
+async function cleanupWorktrees() {
+  const [{ loadPipelinesForList }, { readWorktreeSweepReport }] = await Promise.all([
+    import("@/lib/pipelines/store"), import("@/lib/pipelines/worktreeSweep"),
+  ]);
+  return {
+    worktrees: loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
+    accountedWorktrees: (readWorktreeSweepReport()?.kept ?? []).map(row => row.path),
+  };
 }
 
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
-export async function runTempSweep(env: NodeJS.ProcessEnv = process.env): Promise<TempSweepReport | null> {
+export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   if (maxAgeMs === null) return null;
-  let worktrees: string[];
+  let checkouts: Awaited<ReturnType<typeof cleanupWorktrees>>;
   try {
-    worktrees = await pipelineWorktrees();
+    checkouts = await cleanupWorktrees();
   } catch (error) {
     /* Without the worktree list nothing can be proven safe to remove. */
     console.error("[temp sweep] skipped: the pipeline worktrees could not be read", error instanceof Error ? error.message : String(error));
     return null;
   }
   const scratch = realDirectory(statePath("scratch"));
-  const scan = scanProcesses();
-  const roots = sweepRoots(scan, writableRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]));
-  const report = await sweepStaleTempDirs({ maxAgeMs, scan, roots, worktrees });
+  const roots = ports.roots ?? sweepRoots(scanProcesses(), writableRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]));
+  // Root discovery is one snapshot; deletion gets its own fresh process scan.
+  const report = await sweepStaleTempDirs({ maxAgeMs, ...ports, roots, ...checkouts });
   recordTempSweep(report);
   const { young, inUse, worktree, deferred } = report.kept;
   console.log(

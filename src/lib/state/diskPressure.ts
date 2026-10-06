@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
 import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
+import { systemBootEpoch } from "@/lib/processIdentity";
 
 /**
  * Free space on the volumes Delegatus writes to: its state directory, the
@@ -36,10 +38,10 @@ const CONSUMER_CACHE_MS = 30 * 60_000;
 /** The wake waits this long for the consumer sizes before it goes without them. */
 const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
-export type DiskVolume = { roles: string[]; freeBytes: number | null; totalBytes?: number; provisioning?: boolean; level: "ok" | "warning" | "critical" | "unknown" };
+export type DiskVolume = { volume?: string; views?: string[]; roles: string[]; freeBytes: number | null; totalBytes?: number; provisioning?: boolean; level: "ok" | "warning" | "critical" | "unknown" };
 export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
-export type DiskPressure = { at: string; episode: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
-export type DiskRoot = { role: string; directory: string; provisioning?: boolean };
+export type DiskPressure = { at: string; episode: string | null; kernelBoot?: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
+export type DiskRoot = { role: string; directory: string; provisioning?: boolean; view?: TempSweepRoot };
 export type DiskProbe = (directory: string) => { volume: string; freeBytes: number; totalBytes?: number } | null;
 
 /** Small volumes use 10%, 12% and 2% of their capacity respectively. */
@@ -66,19 +68,30 @@ export const probeDisk: DiskProbe = (directory) => {
   }
 };
 
+function tempViewAvailable(root: TempSweepRoot): boolean {
+  if (!root.via) return true;
+  if (!root.anchor) return false;
+  try { return fs.readlinkSync(path.join(path.dirname(root.via), "ns/mnt")) === root.anchor.namespace; }
+  catch { return false; }
+}
+
 /** One row per volume; available bytes are those this user can allocate. */
 export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probeDisk): DiskVolume[] {
   const volumes = new Map<string, DiskVolume>();
   for (const root of roots) {
-    const observation = probe(root.directory);
+    let observation = !root.view || tempViewAvailable(root.view) ? probe(root.directory) : null;
+    if (root.view && !tempViewAvailable(root.view)) observation = null;
     const key = observation?.volume ?? `unknown:${root.role}`;
     const free = observation?.freeBytes ?? null;
+    // A view identifies one monitored host temp root without exposing paths.
+    const view = root.view?.via && root.view.anchor ? `${root.view.anchor.namespace}:${createHash("sha256").update(root.view.path).digest("hex").slice(0, 16)}` : null;
     const row = volumes.get(key);
     if (row) {
       if (!row.roles.includes(root.role)) row.roles.push(root.role);
+      if (view && !row.views?.includes(view)) (row.views ??= []).push(view);
       if (root.provisioning) row.provisioning = true;
       if (free !== null) row.freeBytes = Math.min(row.freeBytes ?? free, free);
-    } else volumes.set(key, { roles: [root.role], freeBytes: free,
+    } else volumes.set(key, { ...(observation ? { volume: observation.volume } : {}), ...(view ? { views: [view] } : {}), roles: [root.role], freeBytes: free,
       ...(root.provisioning ? { provisioning: true } : {}),
       ...(observation?.totalBytes === undefined ? {} : { totalBytes: observation.totalBytes }), level: "unknown" });
   }
@@ -101,11 +114,9 @@ function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweep
   if (source.LLV_DOCKER_NSENTER_SHIMS === "1") for (const temp of tempRoots) {
     if (!temp.via || !temp.anchor) continue;
     if (namespaces.has(temp.anchor.namespace)) continue;
-    try {
-      if (fs.readlinkSync(path.join(path.dirname(temp.via), "ns/mnt")) !== temp.anchor.namespace) continue;
-    } catch { continue; }
+    if (!tempViewAvailable(temp)) continue;
     namespaces.add(temp.anchor.namespace);
-    for (const root of roots.slice(0, 3)) roots.push({ ...root, directory: temp.via + root.directory });
+    for (const root of roots.slice(0, 3)) roots.push({ ...root, directory: temp.via + root.directory, view: temp });
   }
   return roots;
 }
@@ -133,12 +144,22 @@ export function diskPressureLabel(pressure: DiskPressure): string {
 
 /** A stable episode makes a changing free-space value one warning. Recovery
     creates a new episode on the next crossing, including across restarts. */
-export function observeDiskPressure(volumes: DiskVolume[], prior: DiskPressure | null, at: string): DiskPressure {
+export function observeDiskPressure(volumes: DiskVolume[], prior: DiskPressure | null, at: string,
+  // Docker succession changes the PID namespace while the kernel boot stays.
+  kernelBoot = systemBootEpoch()?.split(":pidns:")[0] ?? null): DiskPressure {
+  // Losing a namespace view cannot prove its pressured volume recovered.
+  // Persist physical volume identities so a restart keeps that uncertainty.
+  const observed = new Set(volumes.map(row => row.volume).filter(Boolean));
+  const observedViews = new Set(volumes.filter(row => row.level !== "unknown").flatMap(row => row.views ?? []));
+  const missing = prior?.episode && prior.kernelBoot === kernelBoot ? prior.volumes.filter(row => row.volume && row.views?.length
+    && !observed.has(row.volume) && !row.views.every(view => observedViews.has(view))
+    && (row.level === "unknown" || (row.freeBytes !== null && row.freeBytes < threshold(DISK_RECOVERY_BYTES, row.totalBytes)))) : [];
+  volumes = [...volumes, ...missing.map(row => ({ ...row, freeBytes: null, level: "unknown" as const }))];
   const low = volumes.some(row => row.level === "warning" || row.level === "critical");
   const unknown = volumes.some(row => row.level === "unknown");
   const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < threshold(DISK_RECOVERY_BYTES, row.totalBytes));
   const episode = low ? prior?.episode ?? at : unknown || recovering ? prior?.episode ?? null : null;
-  return { at, volumes, consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: DISK_WARNING_BYTES, criticalBytes: DISK_CRITICAL_BYTES, episode };
+  return { at, kernelBoot, volumes, consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: DISK_WARNING_BYTES, criticalBytes: DISK_CRITICAL_BYTES, episode };
 }
 
 /** The wake item, once the consumer sizes measured in this episode are in,
@@ -212,9 +233,11 @@ export async function readDiskPressure(ports: {
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
   const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
   const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
+  const worktreeView = (directory: string) => tempRoots.find(root => root.via && root.anchor
+    && (directory === root.path || directory.startsWith(root.path + path.sep)));
   const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots),
-    ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory) })),
-    ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
+    ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
+    ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path, view: root }))];
   const previousEpisode = cached.pressure.episode;
   cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString());
   if (previousEpisode !== cached.pressure.episode) {
@@ -230,10 +253,15 @@ export async function readDiskPressure(ports: {
       const stateBytes = await exclusiveBytes(directory, worktreePaths, seenDirectories);
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
-      for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep))))
-        worktreeBytes += await exclusiveBytes(accessible(worktree), [directory], seenDirectories);
+      for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
+        const view = worktreeView(worktree);
+        if (view && !tempViewAvailable(view)) continue;
+        const bytes = await exclusiveBytes(accessible(worktree), [directory], seenDirectories);
+        if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
+      }
       let tempBytes = 0;
       for (const root of tempRoots) {
+        if (!tempViewAvailable(root)) continue;
         const base = root.via + root.path;
         try {
           for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
@@ -243,7 +271,9 @@ export async function readDiskPressure(ports: {
             // Scratch is part of state. Other owned roots can contain both a
             // checkout and independent role files; exclude only the checkout.
             if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
-            tempBytes += await exclusiveBytes(child, [directory, ...worktreePaths], seenDirectories);
+            if (!tempViewAvailable(root)) break;
+            const bytes = await exclusiveBytes(child, [directory, ...worktreePaths], seenDirectories);
+            if (tempViewAvailable(root)) tempBytes += bytes;
           }
         } catch { /* An inaccessible root has no attributable consumer count. */ }
       }

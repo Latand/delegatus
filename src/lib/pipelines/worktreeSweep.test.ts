@@ -26,6 +26,7 @@ import {
   parseWorktreeList,
   productionMergedPullRequests,
   realGit,
+  recordWorktreeSweep,
   runWorktreeSweep,
   startWorktreeSweep,
   stopWorktreeSweep,
@@ -1761,6 +1762,35 @@ test.each(["scripts/", "__pycache__/"])("bytecode directory %s containing a uniq
   expect(report.removed).toEqual([]);
   expect(report.kept[0]!.reason).toBe("ignored-files");
   expect(fs.readFileSync(log, "utf8")).toBe("unique evidence");
+});
+
+test.each(["intact", "missing-marker"])("worktree and temp reports partition role allocations with %s metadata", async marker => {
+  const { runTempSweep, tempSweepStatus } = await import("@/lib/tempSweep");
+  const root = repository(); remoteRepository(root);
+  const temp = path.join(caseDir, "temp");
+  const role = path.join(temp, "llv-review-export");
+  const { dir } = lane(root, path.join(role, "checkout"), "topic/private-export");
+  fs.writeFileSync(path.join(role, "role-output.txt"), "retained role output");
+  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  let report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first,
+    now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  if (marker === "missing-marker") {
+    fs.unlinkSync(path.join(dir, ".git"));
+    report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: report,
+      now: () => RETAIN_NOW + 2 * FINISHED_WORKTREE_RETENTION_MS }));
+  }
+  recordWorktreeSweep(report);
+  const temporary = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: temp, via: "" }],
+    scan: NO_PROCESSES, now: () => Date.now() + 10 * FINISHED_WORKTREE_RETENTION_MS }))!;
+  expect(temporary.removed).toEqual([]);
+  expect(temporary.held).toHaveLength(1);
+  const reported = Object.values(report.keptBytes).reduce((sum, bytes) => sum + (bytes ?? 0), 0)
+    + Object.values(tempSweepStatus(temporary)!.heldBytes).reduce((sum, bytes) => sum + bytes, 0);
+  expect(reported).toBeLessThanOrEqual(await exclusiveBytes(role));
+  expect(temporary.held![0]!.bytes).toBeGreaterThanOrEqual(fs.statSync(path.join(role, "role-output.txt")).blocks * 512);
+  expect(fs.existsSync(dir)).toBeTrue();
+  expect(fs.readFileSync(path.join(role, "role-output.txt"), "utf8")).toBe("retained role output");
 });
 
 test("a lane that settles again during measurement receives fresh retention", async () => {

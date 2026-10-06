@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,8 +36,8 @@ test("roots on one volume are one row at the lowest free space, with a level per
     { role: "temp", directory: "/elsewhere" },
   ], probe({ "/srv": DISK_WARNING_BYTES - 1, "/tmp": DISK_CRITICAL_BYTES - 1 }));
   expect(volumes).toEqual([
-    { roles: ["state", "worktrees"], freeBytes: DISK_WARNING_BYTES - 1, level: "warning" },
-    { roles: ["temp"], freeBytes: DISK_CRITICAL_BYTES - 1, level: "critical" },
+    { volume: "/srv", roles: ["state", "worktrees"], freeBytes: DISK_WARNING_BYTES - 1, level: "warning" },
+    { volume: "/tmp", roles: ["temp"], freeBytes: DISK_CRITICAL_BYTES - 1, level: "critical" },
     { roles: ["temp"], freeBytes: null, level: "unknown" },
   ]);
 });
@@ -161,6 +161,56 @@ test("independent readers with a pre-episode cache join the persisted episode ac
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test.skipIf(process.platform !== "linux")("a disappeared pressured volume preserves its episode across restart until that volume recovers", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-lost-volume-"));
+  const file = path.join(directory, "report.json");
+  const roots = [{ role: "state", directory: "/srv/state" }, { role: "temp", directory: "/var/tmp" }];
+  const via = path.join(directory, "proc/42/root");
+  const namespace = "mnt:[lost-volume]";
+  fs.mkdirSync(path.join(directory, "proc/42/ns"), { recursive: true });
+  fs.symlinkSync(namespace, path.join(directory, "proc/42/ns/mnt"));
+  const host = { role: "temp", directory: via + "/tmp", view: { path: "/tmp", via, anchor: { pid: 42, namespace } } };
+  const volumes = (includeHost: boolean, freeBytes = GiB) => diskVolumes(includeHost ? [...roots, host] : roots,
+    directory => ({ volume: directory === host.directory ? "host-temp" : "container", freeBytes: directory === host.directory ? freeBytes : 50 * GiB }));
+  try {
+    const first = observeDiskPressureReport(file, () => volumes(true), "2026-10-06T10:00:00Z");
+    const absent = observeDiskPressureReport(file, () => volumes(false), "2026-10-06T10:20:00Z");
+    expect(absent.episode).toBe(first.episode);
+    expect(absent.volumes).toContainEqual(expect.objectContaining({ volume: "host-temp", roles: ["temp"], freeBytes: null, level: "unknown" }));
+    const restarted = observeDiskPressureReport(file, () => volumes(false), "2026-10-06T10:40:00Z");
+    expect(restarted.episode).toBe(first.episode);
+    const returned = observeDiskPressureReport(file, () => volumes(true), "2026-10-06T11:00:00Z");
+    expect(returned.episode).toBe(first.episode);
+    const recovered = observeDiskPressureReport(file, () => volumes(true, 20 * GiB), "2026-10-06T11:20:00Z");
+    expect(recovered.episode).toBeNull();
+    expect(recovered.volumes.every(row => row.level === "ok")).toBeTrue();
+    expect(observeDiskPressureReport(file, () => volumes(true), "2026-10-06T11:40:00Z").episode).not.toBe(first.episode);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("healthy replacement volumes clear pressure while missing foreign views remain uncertain until a kernel reboot", () => {
+  const low = { volume: "old-temp", roles: ["temp"], freeBytes: GiB, level: "critical" as const };
+  const healthy = { volume: "new-temp", roles: ["temp"], freeBytes: 20 * GiB, level: "ok" as const };
+  const first = observeDiskPressure([low], null, "2026-10-06T10:00:00Z", "boot-A");
+  expect(observeDiskPressure([healthy], first, "2026-10-06T10:20:00Z", "boot-A").episode).toBeNull();
+  const host = observeDiskPressure([{ ...low, views: ["host-temp-view"] }], null, "2026-10-06T10:00:00Z", "boot-A");
+  const uncertain = observeDiskPressure([healthy], host, "2026-10-06T10:20:00Z", "boot-A");
+  expect(uncertain.episode).toBe(host.episode);
+  expect(observeDiskPressure([{ ...healthy, views: ["host-temp-view"] }], uncertain,
+    "2026-10-06T10:40:00Z", "boot-A").episode).toBeNull();
+  expect(observeDiskPressure([healthy], uncertain, "2026-10-06T10:40:00Z", "boot-B").episode).toBeNull();
+  expect(observeDiskPressure([low], uncertain, "2026-10-06T10:40:00Z", "boot-B").episode).toBe(host.episode);
+});
+
+test("a previously healthy volume disappearing does not prevent confirmed pressure recovery", () => {
+  const first = observeDiskPressure([
+    { volume: "state", roles: ["state"], freeBytes: GiB, level: "critical" },
+    { volume: "temp", roles: ["temp"], freeBytes: 50 * GiB, level: "ok" },
+  ], null, "2026-10-06T10:00:00Z");
+  expect(observeDiskPressure([{ volume: "state", roles: ["state"], freeBytes: 20 * GiB, level: "ok" }], first,
+    "2026-10-06T10:20:00Z").episode).toBeNull();
+});
+
 test("resources readers with independent stale caches and a restart preserve one episode", async () => {
   // The preload supplies an isolated state root; no production roots are read.
   const roots = [{ role: "state", directory: process.env.LLV_STATE_DIR! }];
@@ -274,12 +324,70 @@ test.skipIf(process.platform !== "linux")("host temp worktrees are probed and me
     const pressure = await readDiskPressure(options);
     expect(visited).toContain(reached);
     expect(visited).not.toContain(worktree);
-    expect(pressure.volumes).toContainEqual({ roles: ["worktrees", "temp"], freeBytes: GiB, level: "critical" });
+    expect(pressure.volumes).toContainEqual(expect.objectContaining({ volume: "host-temp", roles: ["worktrees", "temp"], freeBytes: GiB, level: "critical" }));
     await Promise.all([...caches.values()].map(row => row.measuring));
     const measured = await readDiskPressure(options);
     expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes).toBe(await exclusiveBytes(reached));
     expect(measured.consumers.find(row => row.kind === "temp")?.bytes).toBe(await exclusiveBytes(other));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each(["recycled", "gone", "during-probe", "during-measurement"])("a namespace anchor changed %s supplies no unrelated disk observation or consumers", async phase => {
+  const previous = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-stale-view-"));
+  const state = path.join(fixture, "state");
+  const via = path.join(fixture, "proc/42/root");
+  const anchor = path.join(fixture, "proc/42/ns/mnt");
+  const namespace = "mnt:[fixture-original]";
+  fs.mkdirSync(path.dirname(anchor), { recursive: true });
+  fs.symlinkSync(namespace, anchor);
+  fs.mkdirSync(state);
+  const owned = path.join(via, "tmp/llv-other-role");
+  fs.mkdirSync(owned, { recursive: true });
+  fs.writeFileSync(path.join(owned, "bulk"), Buffer.alloc(128 * 1024, 1));
+  process.env.LLV_STATE_DIR = state;
+  const changeAnchor = () => {
+    fs.unlinkSync(anchor);
+    if (phase !== "gone") fs.symlinkSync("mnt:[fixture-recycled]", anchor);
+  };
+  if (phase === "recycled" || phase === "gone") changeAnchor();
+  const caches = new Map();
+  const visited: string[] = [];
+  const original = fs.promises.readdir;
+  let injected = false;
+  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+    const result = await original(...args);
+    if (phase === "during-measurement" && String(args[0]) === state && !injected) {
+      injected = true;
+      changeAnchor();
+    }
+    return result;
+  }) as typeof fs.promises.readdir);
+  try {
+    const pressure = await readDiskPressure({ caches, worktrees: [], tempRoots: [{ path: "/tmp", via, anchor: { pid: 42, namespace } }],
+      now: () => Date.parse("2026-10-06T12:00:00Z"), probe: directory => {
+        visited.push(directory);
+        if (directory.startsWith(via) && phase === "during-probe") changeAnchor();
+        return { volume: directory.startsWith(via) ? "host" : "state", freeBytes: phase === "during-measurement"
+          ? directory.startsWith(via) ? 50 * GiB : GiB : directory.startsWith(via) ? GiB : 50 * GiB };
+      } });
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    if (phase === "during-measurement") {
+      expect(injected).toBeTrue();
+      const measured = await readDiskPressure({ caches, now: () => Date.parse("2026-10-06T12:00:00Z") });
+      expect(measured.consumers.find(row => row.kind === "temp")?.bytes).toBe(0);
+    } else {
+      expect(pressure.volumes).toContainEqual(expect.objectContaining({ roles: ["temp"], level: "unknown" }));
+      expect(pressure.episode).toBeNull();
+      if (phase !== "during-probe") expect(visited).not.toContain(via + "/tmp");
+    }
+  } finally {
+    read.mockRestore();
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test.skipIf(process.platform === "win32")("scratch, nested worktrees and other role files belong to one consumer category each", async () => {
