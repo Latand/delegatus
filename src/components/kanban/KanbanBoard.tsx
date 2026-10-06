@@ -14,7 +14,7 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
-import { latestAttempt, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, pipelineStateLabel, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import type { BranchGroup } from "@/components/projectModel";
@@ -1437,7 +1437,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!lane) return [];
       const head = card.pipelines.length > 1 ? pipelineTitle(t, entry.pipeline) : t("kanban.pipelineAct.menu");
       const group = `lane:${entry.pipeline.id}`;
-      return [{ type: "sep" }, { type: "head", label: head, group }, ...lane.items.filter((entryItem) => entryItem.type !== "head").map((entryItem) => ({ ...entryItem, group }))];
+      return [{ type: "sep" }, { type: "head", label: head, group, note: pipelineStateLabel(t, entry.pipeline.state) }, ...lane.items.filter((entryItem) => entryItem.type !== "head").map((entryItem) => ({ ...entryItem, group }))];
     });
     return {
       label: t("kanban.cardActions", { title }),

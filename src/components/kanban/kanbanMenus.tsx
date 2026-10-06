@@ -10,9 +10,9 @@ import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types"
    arrows walk the items, Tab and Escape close. */
 
 /* What an entry is and which group it belongs to, for a presenter that lays
-   the same entries out another way (`menuPresenter`); the menu itself reads
-   neither. */
-interface KanbanMenuMark { id?: string; group?: string }
+   the same entries out another way (`menuPresenter`), and on a group's heading
+   the state of what the group acts on; the menu itself reads none of them. */
+interface KanbanMenuMark { id?: string; group?: string; note?: string }
 
 export type KanbanMenuItem =
   | KanbanMenuMark & { type: "head"; label: string }

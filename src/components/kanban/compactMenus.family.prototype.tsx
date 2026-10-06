@@ -46,7 +46,8 @@ const RAIL_INSTALL = ["rail-menu-linked-settings", "rail-menu-external-relay", "
 const PHONE_CREATE = ["new-task", "new-agent", "new-pipeline"];
 const PHONE_GUIDES = ["setup-guide", "interface-walk", "agent-mapping", "dictation"];
 const PHONE_INSTALL = ["settings", "linked-settings", "external-relay", "self-update"];
-const CHAT_TURN = ["stop", "compact", "recheck"];
+/* Interrupt is urgent while the agent works, so it is never behind a section. */
+const CHAT_TURN = ["compact", "recheck"];
 const CHAT_MANAGE = ["rename", "crown", "handoff", "terminal", "host"];
 const MOVES = ["move-inbox", "move-assigned", "move-blocked", "move-done"];
 
@@ -88,14 +89,11 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
     container: "[data-mobile2-sheet='menu']:has([data-mobile2-chat-identity]) [role='menu']",
     sample: "button[data-mobile2-menu-row]",
     layouts: {
-      1: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
-      2: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
+      1: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background", "stop"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
+      2: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background", "stop"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
       3: {
-        placements: [{ rows: ["attention", "pipeline", "seat", "pinned", "background", "stop", "compact", "rename", "project", "close"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), { section: { id: "rare", title: RARE, rows: ["recheck", "crown", "handoff", "terminal", "host", "predecessor", "kill"] } }],
-        removed: [
-          { row: "reports", home: { en: "the Reports control in the conversation's header", uk: "кнопка «Звіти» в шапці розмови" } },
-          { row: "search", home: { en: "the search control in the phone's top bar", uk: "пошук у верхній панелі телефона" } },
-        ],
+        placements: [{ rows: ["attention", "pipeline", "seat", "pinned", "background", "stop", "compact", "rename", "search", "project", "close"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), { section: { id: "rare", title: RARE, rows: ["recheck", "crown", "handoff", "terminal", "host", "predecessor", "kill"] } }],
+        removed: [{ row: "reports", home: { en: "the Reports control in the conversation's header", uk: "кнопка «Звіти» в шапці розмови" } }],
       },
     },
   },
@@ -114,7 +112,10 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
     container: "[data-phone-task-menu-sheet]",
     sample: "button[data-phone-task-menu]",
     layouts: {
-      1: { placements: [{ rows: ["rename", "details", "links", "hide", "show"], cells: true }, { rows: ["priority", "colour", "board"] }] },
+      1: {
+        placements: [{ rows: ["rename", "details", "links", "hide", "show"], cells: true }, { rows: ["priority", "colour"] }],
+        removed: [{ row: "board", home: { en: "the ⋯ on the board itself, one Back away", uk: "⋯ на самій дошці, один крок «Назад»" } }],
+      },
       2: { placements: [{ rows: ["rename", "priority", "colour", "details", "links", "hide", "show", "board"] }] },
       3: {
         placements: [{ rows: ["rename", "priority", "colour", "details", "links", "hide", "show"] }],

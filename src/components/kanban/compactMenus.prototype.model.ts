@@ -10,7 +10,8 @@ export const MENU_VARIANTS: readonly MenuVariant[] = [1, 2, 3];
 
 export type MenuAction = Extract<KanbanMenuItem, { type: "item" | "radio" | "check" }>;
 export type MenuSwatches = Extract<KanbanMenuItem, { type: "swatches" }>;
-export type MenuEntry = MenuAction | MenuSwatches | { type: "sep" };
+/* A section inside a section is one more page: the pipelines of a card that holds several. */
+export type MenuEntry = MenuAction | MenuSwatches | { type: "sep" } | { type: "section"; section: MenuSection };
 
 export interface MenuSection {
   id: string;
@@ -20,6 +21,8 @@ export interface MenuSection {
   entries: MenuEntry[];
   /** The rows keep their second line (a lane's actions say what they stop). */
   hints: boolean;
+  /** A pipeline's row carries the pipeline mark and its state. */
+  lane?: boolean;
 }
 
 export type MenuNode =
@@ -30,16 +33,18 @@ export type MenuNode =
   | { node: "row"; action: MenuAction; hint: boolean }
   /* A named row that opens in place (`expand`) or replaces the list (`drill`). */
   | { node: "section"; section: MenuSection; open: "expand" | "drill" }
+  /* A section drawn as one row of its own controls: the colours and the icon. */
+  | { node: "inline"; section: MenuSection }
   | { node: "sep" };
 
 /** An entry a layout leaves out, with the place that already does the same. */
 export interface MenuRemoval { id: string; label: string; home: MenuHome }
-export type MenuHome = "fold" | "hiddenPill" | "holdWhenWaiting" | "unlinkWhenLinked";
+export type MenuHome = "fold" | "hiddenPill" | "statusChip" | "unlinkWhenLinked";
 
 export interface CompactLayout { width: number; nodes: MenuNode[]; removed: MenuRemoval[] }
 
 /** The words a layout adds; everything else is the board's own label. */
-export interface MenuWords { appearance: string; more: string; move: string; priority: string; task: string; closing: string; none: string }
+export interface MenuWords { appearance: string; more: string; move: string; priority: string; task: string; closing: string; none: string; pipelines: string }
 
 const isAction = (item: KanbanMenuItem): item is MenuAction => item.type === "item" || item.type === "radio" || item.type === "check";
 
@@ -47,9 +52,9 @@ function lanes(items: readonly KanbanMenuItem[]): MenuSection[] {
   const sections = new Map<string, MenuSection>();
   for (const item of items) {
     if (!item.group) continue;
-    const section = sections.get(item.group) ?? { id: item.group, title: "", value: null, entries: [], hints: true };
+    const section = sections.get(item.group) ?? { id: item.group, title: "", value: null, entries: [], hints: true, lane: true };
     sections.set(item.group, section);
-    if (item.type === "head") section.title = item.label;
+    if (item.type === "head") { section.title = item.label; section.value = item.note ?? null; }
     else section.entries.push(item);
   }
   return [...sections.values()];
@@ -69,18 +74,24 @@ function cardLayout(items: readonly KanbanMenuItem[], variant: MenuVariant, word
   const appearance: MenuSection = { id: "appearance", title: words.appearance, value: swatches ? swatches.names(swatches.value) : null, entries: present([swatches, icon]), hints: false };
   const priority: MenuSection = { id: "priority", title: words.priority, value: chosen(priorities), entries: priorities, hints: false };
   const section = (entry: MenuSection, open: "expand" | "drill"): MenuNode[] => (entry.entries.length ? [{ node: "section", section: entry, open }] : []);
+  const segments = (id: string, label: string, options: MenuAction[]): MenuNode[] => (options.length ? [{ node: "segments", id, label, options }] : []);
+  /* One row however many lanes the card holds: a single pipeline opens its
+     actions, several open their list first. A page keeps each action's second
+     line, so what Close and Pause stop is read before it is chosen. */
+  const pipelines: MenuNode[] = laneSections.length === 0 ? []
+    : laneSections.length === 1 ? section({ ...laneSections[0]!, value: null }, "drill")
+    : section({ id: "pipelines", title: words.pipelines, value: String(laneSections.length), entries: laneSections.map((lane) => ({ type: "section" as const, section: lane })), hints: false }, "drill");
 
   if (variant === 1) {
     return {
       width: 300,
       nodes: [
-        { node: "segments", id: "status", label: words.move, options: statuses },
+        ...segments("status", words.move, statuses),
         { node: "quick", actions: [rename, describe, links, hide].filter((action): action is MenuAction => action !== undefined) },
         { node: "sep" },
-        ...section(priority, "expand"),
+        ...segments("priority", words.priority, priorities),
         ...section(appearance, "expand"),
-        /* Opened in place, a lane's rows keep to one line; what each one stops is its tooltip. */
-        ...laneSections.flatMap((lane) => section({ ...lane, hints: false }, "expand")),
+        ...pipelines,
         ...section({ id: "more", title: words.more, value: null, entries: present([hold, collapse]), hints: false }, "expand"),
       ],
       removed: [],
@@ -94,7 +105,7 @@ function cardLayout(items: readonly KanbanMenuItem[], variant: MenuVariant, word
         ...section(priority, "drill"),
         ...section(appearance, "drill"),
         ...rows([rename, describe, links]),
-        ...laneSections.flatMap((lane) => section(lane, "drill")),
+        ...pipelines,
         ...rows([collapse]),
         { node: "sep" },
         ...rows([hide]),
@@ -102,21 +113,20 @@ function cardLayout(items: readonly KanbanMenuItem[], variant: MenuVariant, word
       removed: [],
     };
   }
-  /* Pruned: the fold beside the ⋯ already collapses the card, and a waiting
-     reason belongs to a card that waits. */
-  const waiting = statuses.find((item) => item.checked)?.status === "blocked";
+  /* Pruned: the fold beside the ⋯ already collapses the card, and the status
+     chip's menu already sets a waiting reason. */
   const removed: MenuRemoval[] = [];
   if (collapse) removed.push({ id: "collapse", label: collapse.label, home: "fold" });
-  if (hold && !waiting) removed.push({ id: "hold", label: hold.label, home: "holdWhenWaiting" });
+  if (hold) removed.push({ id: "hold", label: hold.label, home: "statusChip" });
   return {
-    width: 288,
+    width: 300,
     nodes: [
-      { node: "segments", id: "status", label: words.move, options: statuses },
-      ...(priorities.length ? [{ node: "segments" as const, id: "priority", label: words.priority, options: priorities }] : []),
+      ...segments("status", words.move, statuses),
+      ...segments("priority", words.priority, priorities),
       { node: "sep" },
-      ...section(appearance, "expand"),
-      ...rows([rename, describe, links, waiting ? hold : undefined]),
-      ...laneSections.flatMap((lane) => section(lane, "drill")),
+      ...(appearance.entries.length ? [{ node: "inline" as const, section: appearance }] : []),
+      ...rows([rename, describe, links]),
+      ...pipelines,
       { node: "sep" },
       ...rows([hide], true),
     ],
@@ -128,11 +138,11 @@ function columnLayout(items: readonly KanbanMenuItem[], variant: MenuVariant): C
   const actions = items.filter(isAction);
   const hidden = actions.find((item) => item.id === "showHidden");
   const bulk = actions.filter((item) => item.id !== "showHidden");
-  /* Pruned: the Hidden pill in the board's header opens the same tray, so the
-     row stays only where it would otherwise leave the menu empty. */
-  const pruned = variant === 3 && bulk.length > 0 && hidden !== undefined;
+  /* Pruned in 1 and 3: the Hidden pill in the board's header opens the same
+     tray, so the row stays only where it would otherwise leave the menu empty. */
+  const pruned = variant !== 2 && bulk.length > 0 && hidden !== undefined;
   return {
-    width: variant === 3 ? 288 : 300,
+    width: 300,
     nodes: [...bulk, ...(pruned || !hidden ? [] : [hidden])].map((action) => ({ node: "row" as const, action, hint: true })),
     removed: pruned ? [{ id: "showHidden", label: hidden.label, home: "hiddenPill" }] : [],
   };
@@ -149,8 +159,12 @@ function readerLayout(items: readonly KanbanMenuItem[], variant: MenuVariant, wo
     return {
       width: 300,
       nodes: [
-        { node: "quick", actions: present([full, copyLink, link, closeOnBoard]) },
-        ...(more.length ? [{ node: "sep" as const }, { node: "section" as const, section: { id: "more", title: words.more, value: null, entries: more, hints: true }, open: "expand" as const }] : []),
+        { node: "quick", actions: present([full, copyLink, link]) },
+        { node: "sep" },
+        /* Taking a card off the board is a full row that says what it does: as
+           an icon cell it sat under the pane's own close button and read as it. */
+        ...rows([closeOnBoard], true),
+        ...(more.length ? [{ node: "section" as const, section: { id: "more", title: words.more, value: null, entries: more, hints: true }, open: "expand" as const }] : []),
       ],
       removed: [],
     };
@@ -171,7 +185,7 @@ function readerLayout(items: readonly KanbanMenuItem[], variant: MenuVariant, wo
   /* Pruned: Unlink is offered only while there is a link of the operator's own to take off. */
   const unlinkable = unlink && !unlink.disabled;
   return {
-    width: 288,
+    width: 300,
     nodes: [
       ...rows([full, copyLink, link, unlinkable ? unlink : undefined, handoff]),
       ...(closeOnBoard || stopHost ? [{ node: "sep" as const }] : []),
@@ -191,13 +205,38 @@ export function compactLayout(kind: string | undefined, items: readonly KanbanMe
   return null;
 }
 
+const within = (section: MenuSection): MenuEntry[] => section.entries.flatMap((entry) => (entry.type === "section" ? within(entry.section) : entry.type === "sep" ? [] : [entry]));
+
 /** Every action a layout shows, wherever it sits. */
 export function layoutActions(layout: CompactLayout): MenuEntry[] {
   return layout.nodes.flatMap((node): MenuEntry[] => {
     if (node.node === "segments") return node.options;
     if (node.node === "quick") return node.actions;
     if (node.node === "row") return [node.action];
-    if (node.node === "section") return node.section.entries.filter((entry) => entry.type !== "sep");
+    if (node.node === "section" || node.node === "inline") return within(node.section);
     return [];
   });
+}
+
+/** Every state a layout can be in, as the path of sections opened to reach it; the resting state is the empty path. */
+export function layoutStates(layout: CompactLayout): string[][] {
+  const states: string[][] = [[]];
+  const walk = (section: MenuSection, path: string[]) => {
+    states.push(path);
+    for (const entry of section.entries) if (entry.type === "section") walk(entry.section, [...path, entry.section.id]);
+  };
+  for (const node of layout.nodes) if (node.node === "section") walk(node.section, [node.section.id]);
+  return states;
+}
+
+/** The section a path of opened sections ends at. */
+export function sectionAt(layout: CompactLayout, path: readonly string[]): MenuSection | null {
+  let entries: MenuSection[] = layout.nodes.flatMap((node) => (node.node === "section" ? [node.section] : []));
+  let found: MenuSection | null = null;
+  for (const id of path) {
+    found = entries.find((section) => section.id === id) ?? null;
+    if (!found) return null;
+    entries = found.entries.flatMap((entry) => (entry.type === "section" ? [entry.section] : []));
+  }
+  return found;
 }

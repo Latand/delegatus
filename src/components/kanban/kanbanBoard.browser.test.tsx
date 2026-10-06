@@ -17966,12 +17966,17 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
    * the phone at 390×844, light and dark, en and uk.
    *
    * Each state reports its box, whether it scrolls, whether it stays inside
-   * the window and every label it had to cut. A variant fails when its card
-   * menu rests wider than 300 px or taller than 360 px, when a state leaves
-   * the window, when a label is cut, or when an entry of today's menu is
-   * neither in the variant nor on its named list of removals. The taps to
-   * eight frequent actions are counted by walking the menu, and on one frame
-   * per variant four of them are carried out and read back from the board.
+   * the window and every label it had to cut. A variant fails when any state
+   * of a card's menu is wider than 300 px, taller than 360 px or scrolls (read
+   * on a card with one pipeline, a waiting card and a card holding five
+   * pipelines), when opening a
+   * section moves the menu or the row that was pressed (read on every card of
+   * the fixture, where it stands and at the bottom of the window), when a
+   * state leaves the window, when a label is cut, or when an entry of today's
+   * menu is neither in the variant nor on its named list of removals. The
+   * taps to eight frequent actions are counted by walking the menu, and on
+   * one frame per variant four of them are carried out and read back from the
+   * board.
    *
    * Frames carry their variant number in a strip above the application
    * frame. They and the contact sheets go to `LLV_COMPACT_MENUS_OUT` (default
@@ -17992,7 +17997,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
   const ONLY_SCHEMES = pick("LLV_COMPACT_MENUS_SCHEMES");
   const NARROWED = Boolean(ONLY || ONLY_FRAMES || ONLY_LANGS || ONLY_SCHEMES);
   const VARIANTS = [0, 1, 2, 3].filter((variant) => !ONLY || ONLY.includes(variant));
-  const NAMES = ["TODAY", "VARIANT 1 · quick row + sections that open in place", "VARIANT 2 · one level of drill-in", "VARIANT 3 · pruned, inline pickers"];
+  const NAMES = ["TODAY", "VARIANT 1 · quick row, segments, sections · recommended", "VARIANT 2 · drill-in pages", "VARIANT 3 · pruned, pickers in the row"];
   const FRAMES = ([
     { name: "1440", width: 1440, height: 900, phone: false },
     { name: "1000", width: 1000, height: 700, phone: false },
@@ -18015,6 +18020,8 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     /** Each row of the surface as it is drawn: its label and its box. */
     items: [label: string, width: number, height: number][];
     file: string;
+    /** How far opening this state moved the menu's corner or the row that was pressed, in px. */
+    shift?: number;
   }
 
   /** The open surface: its box, whether anything in it scrolls, the controls a pointer meets and the labels it cut. */
@@ -18065,6 +18072,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     const failures: string[] = [];
     const taps: Record<string, Record<string, number | string>> = {};
     const acted: Record<string, Record<string, boolean>> = {};
+    const stability: Record<string, { cards: number; openings: number; maxShift: number }> = {};
     const url = (variant: number, scenario = "stages") => `${server.base}?scenario=${scenario}${variant ? `&menus=${variant}` : ""}`;
 
     type Where = { variant: number; frame: (typeof FRAMES)[number]; scheme: Scheme; lang: "en" | "uk" };
@@ -18085,23 +18093,73 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       return entry;
     }
 
-    /** Opens each section of an open surface in turn, captures it and closes it again. */
+    /** Where the open menu's corner is and where the row that opens `id` sits. */
+    const corner = (page: Page, id: string | null) => page.evaluate((section) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu");
+      if (!menu) return null;
+      const box = menu.getBoundingClientRect();
+      const row = section ? menu.querySelector<HTMLElement>(`[data-cm-section="${CSS.escape(section)}"]`)?.getBoundingClientRect() ?? null : null;
+      return { left: box.left, top: box.top, row: row ? row.top : null, paged: Boolean(menu.querySelector("[data-cm-back]")) };
+    }, id);
+    /** Opens one section of the open card-style menu and says how far that moved the menu's corner, or the pressed row where it is still drawn. */
+    async function openSection(page: Page, id: string): Promise<number> {
+      const before = await corner(page, id);
+      await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+      await page.waitForTimeout(100);
+      const after = await corner(page, id);
+      if (!before || !after) return Number.NaN;
+      const moved = Math.max(Math.abs(after.left - before.left), Math.abs(after.top - before.top));
+      return Math.round(Math.max(moved, before.row !== null && after.row !== null ? Math.abs(after.row - before.row) : 0) * 10) / 10;
+    }
+    const leaveSection = async (page: Page, id: string) => {
+      if (await page.locator(`${MENU} [data-cm-back]`).count()) await jsClick(page, `${MENU} [data-cm-back]`); else await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+      await page.waitForTimeout(70);
+    };
+    const sectionIds = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .menu [data-cm-section]")].map((element) => element.dataset.cmSection!));
+
+    /** Opens each section of an open surface in turn, a page's own sections too, captures it and closes it again. */
     async function walk(page: Page, where: Where, selector: string, surface: string, sectionAttr: "data-cm-section" | "data-cmf-section"): Promise<Reading[]> {
-      const head = sectionAttr === "data-cm-section" ? `${selector} [data-cm-section]` : `${selector} [data-cmf-head="section"]`;
-      const ids = await page.evaluate(([target, attr]) => [...document.querySelectorAll<HTMLElement>(target!)].map((element) => element.getAttribute(attr!)!), [head, sectionAttr]);
       const out: Reading[] = [];
+      if (sectionAttr === "data-cm-section") {
+        const into = async (trail: string[]) => {
+          const ids = await sectionIds(page);
+          for (const [index, id] of ids.entries()) {
+            const shift = await openSection(page, id);
+            /* A pipeline's page is named by its place in the list, never by its id. */
+            const step = id.startsWith("lane:") ? (trail.length ? `pipeline ${index + 1}` : "pipeline") : id;
+            const name = `open ${[...trail, step].join(", ")}`;
+            const reading = await capture(page, where, selector, surface, name);
+            if (reading) { reading.shift = shift; out.push(reading); }
+            if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${surface} ${name}: opening it moved the menu or the pressed row by ${shift} px`);
+            if ((await corner(page, null))?.paged) await into([...trail, step]);
+            await leaveSection(page, id);
+          }
+        };
+        await into([]);
+        return out;
+      }
+      const head = `${selector} [data-cmf-head="section"]`;
+      const ids = await page.evaluate(([target, attr]) => [...document.querySelectorAll<HTMLElement>(target!)].map((element) => element.getAttribute(attr!)!), [head, sectionAttr]);
       for (const id of ids) {
         const opener = `${head}[${sectionAttr}="${id}"]`;
         await jsClick(page, opener);
         await page.waitForTimeout(120);
-        const reading = await capture(page, where, selector, surface, `open ${id.replace(/^lane:.*/, "pipeline")}`);
+        const reading = await capture(page, where, selector, surface, `open ${id}`);
         if (reading) out.push(reading);
-        const back = sectionAttr === "data-cm-section" ? `${selector} [data-cm-back]` : `${selector} [data-cmf-head="back"]`;
+        const back = `${selector} [data-cmf-head="back"]`;
         if (await page.locator(back).count()) await jsClick(page, back); else await jsClick(page, opener);
         await page.waitForTimeout(80);
       }
       return out;
     }
+    /** No state of a card's menu is over 300×360 or scrolls. */
+    const bounded = (where: Where, states: (Reading | null)[]) => {
+      for (const state of states) {
+        if (!state) continue;
+        if (state.box[2] > 300.5 || state.box[3] > 360.5) failures.push(`${keyOf(where)} ${state.surface} ${state.state}: ${state.box[2]}×${state.box[3]} is over 300×360`);
+        if (state.scrolls) failures.push(`${keyOf(where)} ${state.surface} ${state.state}: scrolls`);
+      }
+    };
 
     async function settleBoard(page: Page) {
       /* A narrow board shows one column behind tabs: the first card in the document may be in a closed one. */
@@ -18167,11 +18225,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         await openCardMenu(page, "t-links");
         const rest = await capture(page, where, MENU, "card", "rest");
         const opened = variant ? await walk(page, where, MENU, "card", "data-cm-section") : [];
-        if (variant && rest) {
-          if (rest.box[2] > 300.5 || rest.box[3] > 360.5) failures.push(`${keyOf(where)} card rest: ${rest.box[2]}×${rest.box[3]} is over 300×360`);
-          if (rest.scrolls) failures.push(`${keyOf(where)} card rest: scrolls`);
-          if (variant === 2) for (const state of opened) if (state.box[3] > 360.5 || state.scrolls) failures.push(`${keyOf(where)} card ${state.state}: ${state.box[3]} px${state.scrolls ? ", scrolls" : ""}`);
-        }
+        if (variant) bounded(where, [rest, ...opened]);
         /* Taps to eight frequent actions, counted from the closed menu. */
         const targets: [string, string][] = [
           ["move to Done", t("kanban.status.done")], ["move to Waiting", t("kanban.status.blocked")], ["hide from board", t("kanban.hideFromBoard")],
@@ -18220,11 +18274,13 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
           await capture(page, where, MENU, "card", state);
           if (variant) {
             /* And with its tallest section open, where a menu that grows has to move. */
-            const lane = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .menu [data-cm-section]")].map((element) => element.dataset.cmSection!).find((id) => id.startsWith("lane:")) ?? null);
+            const lane = (await sectionIds(page)).find((section) => section.startsWith("lane:")) ?? null;
             if (lane) {
-              await jsClick(page, `${MENU} [data-cm-section="${lane}"]`);
-              await page.waitForTimeout(120);
-              await capture(page, where, MENU, "card", `${state}, pipeline open`);
+              const shift = await openSection(page, lane);
+              const reading = await capture(page, where, MENU, "card", `${state}, pipeline open`);
+              if (reading) reading.shift = shift;
+              if (!(shift <= 0.5)) failures.push(`${keyOf(where)} card ${state}, pipeline open: opening it moved the menu by ${shift} px`);
+              bounded(where, [reading]);
             }
           }
           await closeMenu(page);
@@ -18295,20 +18351,73 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       for (const [name, ok] of Object.entries(done)) if (!ok) failures.push(`${keyOf(where)}: «${name}» through the menu did not reach the board`);
     }
 
-    /** A card that holds two pipelines: what the menu does as lanes accumulate. */
-    async function manyLanes(variant: number) {
-      const frame = FRAMES.find((entry) => entry.name === "1440");
-      if (!frame || !LANGS.includes("uk") || !SCHEMES.includes("light")) return;
-      const where: Where = { variant, frame, scheme: "light", lang: "uk" };
-      const { context, page } = await openFixture(browser, url(variant, "work-links"), frame, "light", "uk", "reduce");
-      try {
-        await settleBoard(page);
-        await openCardMenu(page, "t-many");
-        await capture(page, where, MENU, "card-two-pipelines", "rest");
-      } catch (error) {
-        failures.push(`${keyOf(where)} two pipelines: ${brief(error)}`);
-      } finally {
-        await context.close();
+    /** Every state of the menu on the cards that stretch it: a waiting card with a pipeline and a card holding five pipelines. */
+    async function stretched(variant: number) {
+      const cases = [["stages", "t-limits", "card-waiting"], ["work-links", "t-many", "card-many"]] as const;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const lang of LANGS) {
+        if (!SCHEMES.includes("light")) continue;
+        const where: Where = { variant, frame, scheme: "light", lang };
+        for (const [scenario, id, surface] of cases) {
+          await alive();
+          const { context, page } = await openFixture(browser, url(variant, scenario), frame, "light", lang, "reduce");
+          try {
+            await settleBoard(page);
+            await openCardMenu(page, id);
+            const rest = await capture(page, where, MENU, surface, "rest");
+            if (variant) bounded(where, [rest, ...await walk(page, where, MENU, surface, "data-cm-section")]);
+          } catch (error) {
+            failures.push(`${keyOf(where)} ${surface}: ${brief(error)}`);
+            fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+            await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}-${surface}.png`) }).catch(() => {});
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    }
+
+    /** Every card of the fixture, where it stands and at the bottom of the window: opening a section moves neither the menu nor the pressed row. */
+    async function steady(variant: number) {
+      if (!variant || !SCHEMES.includes("light")) return;
+      const lang = LANGS.includes("uk") ? "uk" : LANGS[0];
+      if (!lang) return;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) {
+        const where: Where = { variant, frame, scheme: "light", lang };
+        const tally = { cards: 0, openings: 0, maxShift: 0 };
+        for (const scenario of ["stages", "work-links"]) {
+          await alive();
+          const { context, page } = await openFixture(browser, url(variant, scenario), frame, "light", lang, "reduce");
+          try {
+            await settleBoard(page);
+            const ids = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id^='task:']")].filter((element) => element.querySelector("[data-menu]")).map((element) => element.dataset.id!.slice(5)));
+            for (const id of ids) {
+              for (const block of ["center", "end"] as const) {
+                await showCard(page, id);
+                await page.evaluate(([selector, how]) => document.querySelector(selector!)?.scrollIntoView({ block: how as ScrollLogicalPosition }), [`${card(id)} [data-menu]`, block] as const);
+                await page.waitForTimeout(60);
+                /* A Done card ages off the board, or folds behind the column's count, while the walk is on its way to it. */
+                if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) break;
+                if (block === "center") tally.cards += 1;
+                await openCardMenu(page, id);
+                for (const section of await sectionIds(page)) {
+                  const shift = await openSection(page, section);
+                  tally.openings += 1;
+                  if (!(shift <= tally.maxShift)) tally.maxShift = shift;
+                  if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${section}: opening it moved the menu or the pressed row by ${shift} px`);
+                  const inside = await read(page, MENU);
+                  if (inside && !inside.inside) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${section}: leaves the window ${JSON.stringify(inside.box)}`);
+                  await leaveSection(page, section);
+                }
+                await closeMenu(page);
+              }
+            }
+          } catch (error) {
+            failures.push(`${keyOf(where)} steadiness in ${scenario}: ${brief(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        stability[keyOf(where)] = tally;
       }
     }
 
@@ -18386,8 +18495,8 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         }
         await alive();
         await act(variant);
-        await alive();
-        await manyLanes(variant);
+        await stretched(variant);
+        await steady(variant);
       }
     } finally {
       await browser.close();
@@ -18477,7 +18586,9 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         { name: "Card menu · 1440×900 · uk · light: today, then the variant at rest and with each section open", tiles: await pair("1440", "light", "uk", "card", walkStates("card")) },
         { name: "Card menu · 1440×900 · en · dark", tiles: await pair("1440", "dark", "en", "card", walkStates("card", "1440", "dark", "en")) },
         { name: "Card menu · 1000×700 · uk · dark", tiles: await pair("1000", "dark", "uk", "card", walkStates("card", "1000", "dark", "uk")) },
-        { name: "A card holding two pipelines · 1440×900 · uk · light", tiles: await pair("1440", "light", "uk", "card-two-pipelines", null) },
+        { name: "A waiting card with a pipeline · 1440×900 · uk · light: every state", tiles: await pair("1440", "light", "uk", "card-waiting", null) },
+        { name: "A card holding five pipelines · 1440×900 · uk · light: at rest, the list, each pipeline", tiles: await pair("1440", "light", "uk", "card-many", null) },
+        { name: "The same card · 1000×700 · en · light", tiles: await pair("1000", "light", "en", "card-many", null) },
         { name: "A card at the bottom and at the right edge of the window · 1440×900 · uk · light (whole frames)", tiles: await pair("1440", "light", "uk", "card", edges, 0.42) },
         { name: "The same at 1000×700 · en · light (whole frames)", tiles: await pair("1000", "light", "en", "card", edges, 0.42) },
         { name: "A column's menu and a conversation's menu · 1440×900 · uk · light", tiles: [...await pair("1440", "light", "uk", "column", null), ...await pair("1440", "light", "uk", "conversation", null)] },
@@ -18508,7 +18619,10 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         tallest,
         await across("Card menu at rest · 1440×900 · en · dark", "1440", "dark", "en", "card", "rest"),
         await across("Card menu at rest · 1000×700 · uk · light", "1000", "light", "uk", "card", "rest"),
-        await across("A card holding two pipelines · 1440×900 · uk · light", "1440", "light", "uk", "card-two-pipelines", "rest"),
+        await across("A waiting card with a pipeline, at rest · 1440×900 · uk · light", "1440", "light", "uk", "card-waiting", "rest"),
+        await across("A card holding five pipelines, at rest · 1440×900 · uk · light", "1440", "light", "uk", "card-many", "rest"),
+        await across("The same card, its pipelines listed · 1440×900 · uk · light", "1440", "light", "uk", "card-many", "open pipelines"),
+        await across("The same card, one pipeline's actions · 1440×900 · uk · light", "1440", "light", "uk", "card-many", "open pipelines, pipeline 1"),
         await across("A card at the bottom of the window · 1440×900 · uk · light (whole frames)", "1440", "light", "uk", "card", "bottom card", 0.4),
         await across("A card at the right edge · 1440×900 · uk · light (whole frames)", "1440", "light", "uk", "card", "right-edge card", 0.4),
         await across("A column's menu (In progress) · 1440×900 · uk · light", "1440", "light", "uk", "column", "assigned"),
@@ -18524,7 +18638,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       if (fs.existsSync(path.join(OUT, file))) sheets.push(file);
     }
 
-    const summary = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", variants: NAMES, taps, acted, reach, sheets, failures, readings: readings.map(({ labels, items, ...entry }) => { void labels; return entry.variant === 0 && entry.state === "rest" ? { ...entry, items } : entry; }) };
+    const summary = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", variants: NAMES, taps, acted, stability, reach, sheets, failures, readings: readings.map(({ labels, items, ...entry }) => { void labels; return entry.variant === 0 && entry.state === "rest" ? { ...entry, items } : entry; }) };
     fs.writeFileSync(path.join(OUT, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
     if (!NARROWED) {
       fs.mkdirSync(EVIDENCE, { recursive: true });
