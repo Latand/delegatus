@@ -348,6 +348,8 @@ async function dispatchRuntimeCommand(
         if (!admitted.ok) {
           return NextResponse.json({
             error: admitted.error,
+            ...(command.kind === "inject" && admitted.admission === "refused"
+              ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
             ...(admitted.code ? { code: admitted.code } : {}),
             ...(admitted.seatConversationId ? { seatConversationId: admitted.seatConversationId } : {}),
             ...(admitted.operationId ? { operationId: admitted.operationId } : {}),

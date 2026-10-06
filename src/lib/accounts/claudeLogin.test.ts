@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { foreignAccountHolder } from "./accountMutation.fixture";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-login-test-"));
 const OLD_STATE = process.env.LLV_STATE_DIR; const OLD_HOME = process.env.LLV_CLAUDE_HOME;
@@ -141,6 +142,20 @@ test("lock contention defers a stdout transition without terminating the Claude 
   expect(observedSignals).toEqual([]);
   for (let attempt = 0; attempt < 20 && saved.at(-1)?.[0] !== "awaiting_code"; attempt += 1) await Bun.sleep(10);
   expect(saved.at(-1)).toEqual(["awaiting_code"]);
+});
+
+test("ClaudeLoginSupervisor.persist commits a stdout transition behind a short foreign holder before returning", async () => {
+  const account = createManagedClaudeAccount("Short holder");
+  const saved: string[][] = [];
+  const supervisor = new ClaudeLoginSupervisor(ports(), { load: () => [], save: rows => { saved.push(rows.map(row => row.phase)); } });
+  supervisor.start(account.id);
+  const holder = await foreignAccountHolder();
+  try {
+    holder.releaseAfter(8);
+    child.stdout.emit("data", "Open https://claude.ai/authorize?state=fixture");
+    expect(saved.at(-1)).toEqual(["awaiting_code"]);
+    expect(signals).toEqual([]);
+  } finally { await holder.close(); }
 });
 
 test("the browser, code, verification, and canceling phases are durable and stdout-only", async () => {

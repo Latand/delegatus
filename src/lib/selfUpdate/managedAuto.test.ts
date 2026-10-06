@@ -11,6 +11,9 @@ import { LOST_AFTER_MS, readManagedRecord, writeManagedRecord, type ManagedRecor
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, type Revision } from "./types";
 import { activeDrain, writeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS } from "./drain";
+import { launchHoldRefusal } from "./launchHold";
+import { updateOperatorSettings } from "@/lib/operator/settings";
+import { UNRESOLVED_TURN_GRACE_MS } from "./quiet";
 
 const root = mkdtempSync("/var/tmp/self-update-managed-auto-");
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -602,6 +605,58 @@ test("managed green merge waits for a quiet minute and requests the manual deplo
   expect(readManagedRecord(join(h.dir, "managed.json"))?.trigger).toBe("auto");
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
+  service.stop();
+});
+
+test("a drain whose journal holds only dead-host and unresolved turns deploys and releases launches (#2515)", async () => {
+  const h = scenario();
+  const held = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  const blockers = () => readAuto(join(h.dir, "auto.json")).lastBlockers;
+  /* What the incident's journal held: rows that say a turn is running, none
+     with a host behind it, and one the registry no longer knows. */
+  const rows = Array.from({ length: 93 }, (_, index) => ({ conversationId: `conversation_stale-${index}`, sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }));
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: rows }) as never;
+  h.deps.quiet!.turnLiveness = async ({ conversationId }) => conversationId.endsWith("-92")
+    ? { record: null, registryHost: null }
+    : { record: { lifecycle: "stalled", reason: "host_gone_turn_open", turnState: "busy", host: { state: "gone" } }, registryHost: { state: "gone", processAlive: false } };
+  const service = h.service();
+  await service.autoTick();
+  /* The update holds launches at once, and names the one row it cannot resolve. */
+  expect(held()).not.toBeNull();
+  expect(blockers()).toMatchObject({ turns: 1, stages: 0, discounted: 92, unresolved: 1, unresolvedBlocking: 1 });
+  expect(launchHoldRefusal(held()!, blockers()).error)
+    .toBe("new launches are held while the automatic update waits for 1 running turn to finish (1 turn has no liveness record and stops counting within 5 minutes)");
+  h.advance(UNRESOLVED_TURN_GRACE_MS - 1);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(0);
+  /* Past the bound nothing live remains, so the quiet minute runs and the update deploys. */
+  h.advance(1);
+  await service.autoTick();
+  expect(blockers()).toMatchObject({ turns: 0, discounted: 92, unresolved: 1, unresolvedBlocking: 0 });
+  expect(launchHoldRefusal(held()!, blockers()).waitingFor).toBe("one quiet minute before it starts; no turn or stage is running");
+  expect(h.requests).toHaveLength(0);
+  h.advance(60_000);
+  await service.autoTick();
+  expect(h.requests).toHaveLength(1);
+  expect(h.requests[0]?.revision).toBe(TARGET);
+  h.finish("succeeded");
+  await service.snapshot();
+  expect(held()).toBeNull();
+  service.stop();
+});
+
+test("a turn that is really running holds the drain for as long as it runs (#2515)", async () => {
+  const h = scenario();
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_work", sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }] }) as never;
+  h.deps.quiet!.turnLiveness = async () => ({ record: { lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy", host: { state: "alive" } }, registryHost: { state: "alive", processAlive: true } });
+  const service = h.service();
+  for (const wait of [0, UNRESOLVED_TURN_GRACE_MS, 60_000, 3 * 60 * 60_000]) {
+    h.advance(wait);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).lastBlockers).toMatchObject({ turns: 1, discounted: 0, unresolved: 0 });
+  }
   service.stop();
 });
 
@@ -1288,4 +1343,15 @@ test("a successful operator receipt predating the cohort cannot release its new 
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(id);
     expect(h.requests).toHaveLength(0);
   } finally { service.stop(); }
+});
+
+test("an update refusal names the live work in the operator's Ukrainian locale", () => {
+  const blocker = { turns: 2, stages: 3, busy: false, operatorActiveAt: null, unreadable: null, memoryMb: null };
+  try {
+    expect(updateOperatorSettings({ locale: "uk" })).not.toBeNull();
+    expect(launchHoldRefusal({ target: TARGET, since: "2026-01-01T00:00:00Z" }, blocker)).toMatchObject({
+      error: "Нові запуски призупинено: автоматичне оновлення чекає на завершення 2 активних ходів і 3 етапів пайплайнів",
+      waitingFor: "завершення 2 активних ходів і 3 етапів пайплайнів", blockers: blocker,
+    });
+  } finally { updateOperatorSettings({ locale: "en" }); }
 });

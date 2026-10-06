@@ -20,7 +20,7 @@ import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "@/lib/self
 import { endRestartGate, restartGateFile } from "@/lib/selfUpdate/restartGate";
 import type { LauncherRecord } from "@/lib/selfUpdate/launcher";
 import type { AgentRegistry as AgentRegistryType } from "@/lib/agent/registry";
-import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import { accountManager } from "@/lib/accounts/manager";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -2497,9 +2497,11 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
   const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
-  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+  const record: LauncherRecord = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
     releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
-    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+    port: 45123, socket: path.join(dir, "runtime-host.sock"), updatedAt: new Date(now).toISOString(),
+    web: { state: "healthy", pid: 101, startIdentity: "web-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null },
+    runtimeHost: { state: "healthy", pid: 102, startIdentity: "host-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null } };
   writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
   fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
   const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,
@@ -5248,7 +5250,7 @@ test("a busy account mutation waits between ticks and claims one host on the sam
   expect(hostClaims).toBe(0);
   expect(pipeline).toMatchObject({
     state: "running",
-    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+    stateDetail: expect.stringMatching(/^stage spawn deferred: The account store is temporarily busy; try again shortly\.; retry at /),
     cursor: { stageId: "plan", state: "pending" },
   });
   const waitingAttempt = pipeline.runs[0]!.attempts.at(-1)!;
@@ -5493,7 +5495,7 @@ test("a busy-looking failure after reservation stays in unknown receipt recovery
 
   const parked = loadPipelines()[0]!;
   expect(spawnCalls).toBe(1);
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: "account mutation is busy in this process; retry shortly" });
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: ACCOUNT_STORE_BUSY_MESSAGE });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
     launchId: "launch-unknown-busy",
@@ -15469,7 +15471,7 @@ test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute 
   expect(spawnCalls).toBe(8);
   expect(pipeline).toMatchObject({
     state: "running",
-    stateDetail: expect.stringMatching(/^stage spawn deferred: account mutation is busy in this process; retry at /),
+    stateDetail: expect.stringMatching(/^stage spawn deferred: The account store is temporarily busy; try again shortly\.; retry at /),
   });
   expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 8, budgetMs: 600_000, retryMaxMs: 60_000 });
   expect(scheduled.at(-1)).toBe(60_000);

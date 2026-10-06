@@ -30,12 +30,12 @@ function recordBody(value: unknown): Record<string, unknown> | null {
     false when a launch receipt already owns the key, or the key cannot carry a
     fence, so recovery keeps the original outcome unknown rather than reading a
     refusal that nothing durable backs. */
-function refusal(
+async function refusal(
   body: Record<string, unknown>,
   reason: string,
   dependencies: SpawnValidationDependencies,
-): NextResponse {
-  const fence = fenceSpawnAdmissionRejection(body, 400, reason, dependencies);
+): Promise<NextResponse> {
+  const fence = await fenceSpawnAdmissionRejection(body, 400, reason, dependencies);
   return NextResponse.json({
     admissible: false,
     fenced: fence?.kind === "fenced",

@@ -1,3 +1,4 @@
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, appendFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,7 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, test } from "bun:test";
 
 import {
   CodexAppServerHost,
@@ -17,6 +18,15 @@ import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
 import { structuredContent } from "./structuredContent";
 import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server";
+
+// Command/control tests use a fake interpreter and its explicit inventory.
+let restoreFeatureReader: () => void;
+beforeEach(() => {
+  restoreFeatureReader = setCodexFeatureReaderForTest(() => parseCodexFeatures(
+    "multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true",
+  ));
+});
+afterEach(() => restoreFeatureReader());
 
 /* An isolated, short scratch root. Nothing here reads or writes the operator's
    own state: the rollout each test uses is created under it and removed after. */

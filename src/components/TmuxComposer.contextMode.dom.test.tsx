@@ -469,7 +469,7 @@ test("a manual press turns context off and Enter then sends a normal message", a
 
 test("a refusal withdraws the row and gives the draft back", async () => {
   turn = "running";
-  injectAnswer = { ok: false, status: 409, error: "attention" };
+  injectAnswer = { ok: false, status: 409, delivery: "refused", error: "attention" };
   const { host, root } = await mount();
   await type(host, "words that must survive");
   await settle(() => press(textarea(host), "Enter"));
@@ -680,7 +680,7 @@ for (const fate of ["refused", "uncertain", "failed-operation"] as const) {
   test(`task injection ${fate} follows admission rules and preserves later chips`, async () => {
     turn = "running";
     holdInjection = true;
-    injectAnswer = fate === "refused" ? { ok: false, error: "refused" }
+    injectAnswer = fate === "refused" ? { ok: false, delivery: "refused", error: "refused" }
       : fate === "uncertain" ? { ok: false, error: "network" }
       : { ok: false, error: "failed", operationId: "inject-failed" };
     const { host, root } = await mount("viewer");
@@ -725,7 +725,7 @@ test("editing a recovered task receipt restores chips and operator words for the
 test("a refused injection retains its task snapshot when later chips fill the cap, then editing restores it", async () => {
   turn = "running";
   holdInjection = true;
-  injectAnswer = { ok: false, error: "refused" };
+  injectAnswer = { ok: false, delivery: "refused", error: "refused" };
   const { host, root } = await mount("viewer");
   try {
     await settle(() => { addTaskChip("viewer", CHIP); });
@@ -792,7 +792,7 @@ test("a fresh phone seat recovers receipt tasks even with no unsent chips to tri
 
 
 test("a refused task injection keeps original words and refs together when a later draft exists", async () => {
-  turn = "running"; holdInjection = true; injectAnswer = { ok: false, error: "refused" };
+  turn = "running"; holdInjection = true; injectAnswer = { ok: false, delivery: "refused", error: "refused" };
   const { host, root } = await mount("viewer");
   try {
     await settle(() => { addTaskChip("viewer", CHIP); });

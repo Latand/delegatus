@@ -847,10 +847,11 @@ function isPipelineShape(value: unknown): value is Pipeline {
   const runs = pipeline.runs as Pipeline["runs"];
   /* A draft is a scratchpad the operator assembles on the canvas (#136), so it
      may hold 0–8 stages (v2 legacy shells are seeded on migration, but a raw
-     empty draft still loads and stays off the board projection). Every
-     non-draft state keeps the 1–8 invariant (#353: the minimum graph is one
-     implement conversation). */
-  const minStages = pipeline.state === "draft" ? 0 : 1;
+     empty draft still loads and stays off the board projection). Closing or
+     deleting that draft preserves its empty graph in the closed record
+     (#1789). Every other state keeps the 1–8 invariant (#353: the minimum
+     started graph is one implement conversation). */
+  const minStages = pipeline.state === "draft" || pipeline.state === "closed" ? 0 : 1;
   if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
   const ids = stages.map((stage) => stage.id);
   if (new Set(ids).size !== ids.length) return false;

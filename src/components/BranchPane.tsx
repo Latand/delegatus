@@ -194,6 +194,10 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const paneRef = useRef<HTMLElement | null>(null);
+  /* The row that steps between the operator's own messages
+     (docs/design/own-message-steps.md): the feed draws it, into this slot
+     straight above the composer. */
+  const [stepsMount, setStepsMount] = useState<HTMLDivElement | null>(null);
   const badge = engineBadge(file);
   const state = paneState(file);
   const tone = PANE_TONES[state];
@@ -491,6 +495,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
           setFollow={noop}
           compact
           onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
+          stepsMount={stepsMount}
         />
         {/* Unified control strip (issue #241): the single action surface, mounted
             once here so it exists on every surface — including `noComposer`
@@ -499,6 +504,7 @@ export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noCompose
             (the dormant-node contract): the strip returns on activation, and
             active review panes keep it regardless of `noComposer`. */}
         {dormant || isMobile || neverStarted ? null : <AgentControlStrip file={file} />}
+        {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
         {composerMount && !superseded && !neverStarted ? <div ref={composerMount} className="contents" /> : null}
         {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} />}
       </section>

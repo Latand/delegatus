@@ -21,6 +21,7 @@ import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { codexSubagentArgs } from "./codexSpawnPolicy";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -143,7 +144,7 @@ export interface ResumeSpec {
   printMode?: true;
   launchProfile?: LaunchProfile;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
-  codexPublication?: { home: string; command: string; mcpServers: string[] };
+  codexPublication?: { home: string; command: string; mcpServers: string[]; subcommand?: string };
   claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
@@ -153,7 +154,7 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
   const source = { ...process.env, CODEX_HOME: input.home };
   const policy = await readCodexShellPolicy(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
-  return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}`, input.mcpServers) };
+  return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
 }
 
 export function withSpawnCapability(spec: ResumeSpec, capability: string, source: NodeJS.ProcessEnv = process.env): ResumeSpec {
@@ -450,7 +451,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
   else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
   if (options.readOnly) args.push("--sandbox", "read-only");
-  if (!options.allowSubagents) args.push("--disable", "multi_agent");
+  args.push(...codexSubagentArgs(args[0], options.allowSubagents, process.env, true));
   const command = args.map(shellQuote).join(" ");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
@@ -602,11 +603,12 @@ export function resumeSpecForSession(
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
-  if (!options.allowSubagents) command += " --disable multi_agent";
-  command += ` resume ${sessionId}`;
+  command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
+  // Publication must stay with the other global options before resume.
+  const subcommand = ` resume ${sessionId}`;
   return {
-    command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
-    codexPublication: { home, command, mcpServers },
+    command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}${subcommand}`, mcpServers),
+    codexPublication: { home, command, mcpServers, subcommand },
     cwd,
     windowName: "codex-resume",
     engine: "codex",

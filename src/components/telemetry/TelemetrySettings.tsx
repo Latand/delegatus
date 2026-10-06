@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Z } from "@/components/layers";
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
+import { OpenRouterKeySetting } from "@/components/asks/OpenRouterKeySetting";
 import { MemorySetting } from "@/components/memory/MemorySetting";
 import { VoiceCompanionSetting } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -57,6 +58,7 @@ export function TelemetrySettingsHost({ project }: { project?: string }) {
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
         {project && <MemorySetting project={project} />}
+        <OpenRouterKeySetting />
         {phone ? null : <VoiceCompanionSetting />}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
       </section>

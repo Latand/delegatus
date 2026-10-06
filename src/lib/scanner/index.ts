@@ -29,6 +29,7 @@ import { assignTranscriptPids } from "./transcripts";
 import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { waitingInputProbe } from "./waitingInput";
+import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
 
 function applyProcessState(entry: FileEntry, holders: Map<string, number>) {
   if (entry.root === "claude-tasks" && entry.path.endsWith(".output")) {
@@ -386,6 +387,7 @@ async function listFilesInternal(
     stable: workflows observe the flow state from the same controller tick. */
 export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
   await linkEntries(entries, { persist: true });
+  observeCodexSubagentTranscripts(agentRegistry(), entries);
   await yieldToRuntime();
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.
