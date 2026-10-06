@@ -317,3 +317,51 @@ test("a draft on a signed-out account opens that account's sign-in instead of la
     window.removeEventListener("llv:open-accounts", listen);
   }
 });
+
+/** Every accessible name and visible line of the draft, its popover and its sheet that speaks of a conversation's next message. */
+function nextMessageNames(): string[] {
+  const names: string[] = [];
+  for (const root of document.querySelectorAll("[data-draft-pane], [data-runtime-popover], [data-runtime-sheet]")) {
+    for (const element of [root, ...root.querySelectorAll("*")]) {
+      const name = element.getAttribute("aria-label");
+      if (name) names.push(name);
+    }
+    names.push(root.textContent ?? "");
+  }
+  return names.filter((name) => /next message|наступне повідомлення/i.test(name));
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`a new agent's runtime control names what the launch starts with, never a next message (${locale})`, async () => {
+    setLocale(locale);
+    installFetch([]);
+    const host = mount(`draft-names-${locale}`);
+    await settle();
+    expect(pill(host).getAttribute("aria-label")).toStartWith(locale === "en" ? "Model and reasoning the new agent starts with — " : "Модель і міркування, з якими стартує новий агент — ");
+    expect(await openAccounts(host)).toEqual(["account-anna", "account-bob"]);
+    expect(document.querySelector("[data-runtime-popover]")!.getAttribute("aria-label")).toBe(locale === "en" ? "Model and reasoning the new agent starts with" : "Модель і міркування, з якими стартує новий агент");
+    expect(nextMessageNames()).toEqual([]);
+  });
+
+  test(`on the phone the new agent's sheet names its accounts by the launch, never a next message (${locale})`, async () => {
+    setLocale(locale);
+    installFetch([]);
+    const desktop = dom.matchMedia;
+    (dom as unknown as { matchMedia(query: string): unknown }).matchMedia = (query: string) => ({
+      matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    });
+    try {
+      const host = mount(`draft-sheet-names-${locale}`);
+      await settle();
+      click(pill(host));
+      await settle();
+      const rows = () => [...document.querySelectorAll("[data-runtime-sheet] [data-runtime-sheet-account]")].map((row) => [row.getAttribute("data-runtime-sheet-account"), row.getAttribute("aria-label")]);
+      expect(rows()).toEqual(locale === "en"
+        ? [["anna", "anna"], ["bob", "Start the agent on bob"], ["carol", "Sign in to carol — it takes no message until it returns"]]
+        : [["anna", "anna"], ["bob", "Запустити агента на bob"], ["carol", "Увійти в carol — він не бере повідомлень, доки не повернеться"]]);
+      expect(nextMessageNames()).toEqual([]);
+    } finally {
+      (dom as unknown as { matchMedia: unknown }).matchMedia = desktop;
+    }
+  });
+}

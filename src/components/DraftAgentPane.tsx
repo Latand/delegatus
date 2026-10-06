@@ -833,6 +833,32 @@ export function DraftAgentPane({
   useEffect(() => {
     if (sent) paneRef.current?.closest<HTMLElement>(".card")?.scrollIntoView?.({ block: "start", inline: "nearest", behavior: "auto" });
   }, [sent]);
+  /* Before Send the form changes height in place (the recording panel, the attachment tiles, a refused file's
+     line), and a draft opened low in its column grows past the window's lower edge. Each change brings the
+     whole form back into sight at the nearest edge, with a margin of its card under it, before the frame is
+     painted and once more in the next one, after the browser's scroll anchoring had its say; a form already
+     in sight scrolls nothing. */
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const form = formRef.current;
+    const view = form?.ownerDocument.defaultView;
+    if (sent || !form || !view || typeof view.ResizeObserver === "undefined") return;
+    let height = form.offsetHeight;
+    let frame = 0;
+    const reveal = () => form.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "instant" });
+    const observer = new view.ResizeObserver(() => {
+      if (form.offsetHeight === height) return;
+      height = form.offsetHeight;
+      reveal();
+      view.cancelAnimationFrame(frame);
+      frame = view.requestAnimationFrame(reveal);
+    });
+    observer.observe(form);
+    return () => {
+      observer.disconnect();
+      view.cancelAnimationFrame(frame);
+    };
+  }, [sent]);
 
   return (
     /* `reader-host` is the board's own opt-out from its button reset (kanbanBoard.css), the one a conversation uses. */
@@ -859,8 +885,9 @@ export function DraftAgentPane({
         : isMobile ? <div key="room" className="min-h-0 flex-1" /> : null}
       <form
         key="form"
+        ref={formRef}
         data-draft-form=""
-        className="flex min-w-0 shrink-0 flex-col gap-1.5"
+        className="flex min-w-0 shrink-0 scroll-mb-3 flex-col gap-1.5"
         aria-label={t("draft.promptAria")}
         onSubmit={(event) => {
           event.preventDefault();

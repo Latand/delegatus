@@ -100,6 +100,7 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   const panelProps = {
     t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
     accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) }) : "",
+    menuLabel: t("draft.runtimePill"),
     face: { model: launch.model, effort, fast },
     speedShown: engine === "codex",
     speedDetail: fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
@@ -135,7 +136,7 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
         phone={isMobile}
         open={open}
         disabled={disabled}
-        label={`${t("composer.runtimePill")} — ${text}${picked ? ` → ${picked}` : ""}`}
+        label={`${t("draft.runtimePill")} — ${text}${picked ? ` → ${picked}` : ""}`}
         text={text}
         nextAccount={picked || null}
         onToggle={() => (open ? close() : pillRef.current ? show(pillRef.current.ownerDocument) : undefined)}

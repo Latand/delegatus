@@ -1014,6 +1014,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.accountStartsOn": "стартує на {account}",
   "draft.sheetTitle": "Новий агент",
   "draft.sheetSummary": "Агент стартує на: {runtime}",
+  "draft.runtimePill": "Модель і міркування, з якими стартує новий агент",
+  "draft.accountStartAria": "Запустити агента на {account}",
   "draft.folderUnknown": "Тека цього проєкту ще не відома, тому агент тут не стартує. Надсилання запрацює, щойно дошка знайде теку.",
   "draft.sourceFolderPending": "Шукаю теку розмови, яку продовжує цей агент. Надсилання запрацює, щойно вона знайдеться.",
   "draft.sourceFolderUnknown": "Теку розмови, яку продовжує цей агент, не вдалося знайти, тому агент не може в ній стартувати.",

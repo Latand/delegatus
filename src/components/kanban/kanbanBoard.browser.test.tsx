@@ -18333,6 +18333,28 @@ describe("creating a new agent: the composer alone, and the conversation after S
               expect(within(await box(draft.locator("[data-draft-form]"))), `${label(state)} the composer in the window`).toBe(true);
               return read;
             };
+            /* The form grows before Send (the recording panel, the picture's tile, a refused file's line), and
+               a draft opened low in its column keeps the whole of it in the window as it does. */
+            const formInSight = async (state: string) => {
+              /* The form is brought into sight in the frame its height changed in; measure once that frame is drawn. */
+              await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+              const form = await box(draft.locator("[data-draft-form]"));
+              expect(within(form), `${label(state)} the whole form in the window: ${JSON.stringify(form)} of ${width}x${height}`).toBe(true);
+              return form;
+            };
+            /* The runtime control of a new agent says what the launch starts on: no name inside the draft, its
+               popover or its sheet speaks of a conversation's next message. */
+            const nextMessageNames = () => page.evaluate((marks) => {
+              const names: string[] = [];
+              for (const root of document.querySelectorAll<HTMLElement>("[data-draft-pane], [data-runtime-popover], [data-runtime-sheet]")) {
+                for (const element of [root, ...root.querySelectorAll<HTMLElement>("*")]) {
+                  const name = element.getAttribute("aria-label");
+                  if (name) names.push(name);
+                }
+                names.push(root.innerText);
+              }
+              return names.filter((name) => marks.some((mark) => name.toLowerCase().includes(mark)));
+            }, ["next message", "наступне повідомлення"]);
             /* After Send the pane is the conversation: the first message is a row of the feed from the first
                frame, the loading shape stands where the answer will be, and no status sentence stands in. */
             const opening = async (state: string, text: string) => {
@@ -18396,8 +18418,13 @@ describe("creating a new agent: the composer alone, and the conversation after S
             /* A launch that carries a picture: its count is under the first message from the press, as the
                conversation draws it, so the row keeps its height when the launch answers. */
             const withPicture = async (words: string) => {
+              /* A file the launch cannot carry is refused by name, in a line the form grows by. */
+              await draft.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
+              await draft.locator('[data-testid="composer-status"]').filter({ hasText: "notes.txt" }).first().waitFor({ timeout: 10_000 });
+              const refusedForm = await formInSight(`${pass}-refused-file`);
               await draft.locator('input[type="file"]').setInputFiles(picture);
               await page.locator('[data-testid="attachment-tile"][data-status="ready"]').first().waitFor({ timeout: 10_000 });
+              const attachedForm = await formInSight(`${pass}-attached`);
               if (words) await prompt.fill(words);
               await prompt.press("Enter");
               const count = tr("composer.imagesCount", { count: 1 });
@@ -18406,7 +18433,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
               const answered = await receipt(`${pass}-receipt`, words || count, sent);
               const posted = await launches();
               const launchedWith = { count: posted.length, images: (posted[0]?.images as unknown[] | undefined)?.length ?? 0, prompt: posted[0]?.prompt };
-              readings.push({ view: view.name, scheme, lang, state: pass, caption, launchedWith, sent, receipt: answered, pageErrors });
+              readings.push({ view: view.name, scheme, lang, state: pass, refusedForm, attachedForm, caption, launchedWith, sent, receipt: answered, pageErrors });
               expect(caption, `${label(`${pass}-sent`)} the picture's count under the first message`).toBe(1);
               expect(launchedWith, `${label(`${pass}-sent`)} what was launched`).toEqual({ count: 1, images: 1, prompt: words });
             };
@@ -18545,6 +18572,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
                 await shoot("picker");
                 sheetTitle = (await runtimeSheet.locator("h2").innerText()).trim();
                 expect(sheetTitle, `${label("picker")} the sheet says it is a new agent`).toBe(tr("draft.sheetTitle"));
+                expect(await nextMessageNames(), `${label("picker")} the sheet speaks of no next message`).toEqual([]);
                 await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: "Claude · Fable" }).click();
                 await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: /^high$/ }).click();
                 await runtimeSheet.locator('[data-runtime-sheet-account="account-c"]').click();
@@ -18562,6 +18590,8 @@ describe("creating a new agent: the composer alone, and the conversation after S
                 await popover.locator('[data-runtime-value="tier-high"]').click();
                 await pill.click();
                 await popover.locator('[data-runtime-value="account"]').click();
+                await popover.locator('[data-runtime-value="account-account-c"]').waitFor({ timeout: 5_000 });
+                expect(await nextMessageNames(), `${label("picker")} the popover speaks of no next message`).toEqual([]);
                 await popover.locator('[data-runtime-value="account-account-c"]').click();
               }
               await settle();
@@ -18576,6 +18606,9 @@ describe("creating a new agent: the composer alone, and the conversation after S
                 expect(await page.locator('[data-runtime-sheet] [data-runtime-sheet-account="account-c"]').getAttribute("data-runtime-account-next"), `${label("chosen")} the sheet marks the account`).toBe("true");
                 await page.locator("[data-runtime-sheet] [data-runtime-sheet-close]").click();
               } else expect(face, `${label("chosen")} the pill names the account`).toContain("Account C");
+              const pillName = await pill.getAttribute("aria-label");
+              expect(pillName, `${label("chosen")} the pill's name says what the agent starts with`).toContain(tr("draft.runtimePill"));
+              expect(await nextMessageNames(), `${label("chosen")} the draft speaks of no next message`).toEqual([]);
               await composerOnly("chosen");
               /* Dictation: the composer's own microphone, then «stop and launch» sends what was said. */
               await draft.locator("button:has(svg.lucide-mic)").first().click();
@@ -18584,6 +18617,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
               await page.waitForTimeout(900);
               await settle();
               await shoot("dictation");
+              const dictatingForm = await formInSight("dictation");
               await stop.click();
               const sent = await opening("sent", SPOKEN[lang]);
               const answered = await receipt("receipt", SPOKEN[lang], sent);
@@ -18594,7 +18628,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
               expect(launchedWith, `${label("sent")} what was launched`).toEqual({ count: 1, engine: "claude", model: "fable", effort: "high", accountId: "account-c", cwd: "/repo", role: null });
               /* The window names the account the pill chose, from the launch's answer on. */
               expect({ receipt: answered.account, loaded: done.account }, `${label("receipt")} the account the window names`).toEqual({ receipt: "Account C", loaded: "Account C" });
-              readings.push({ view: view.name, scheme, lang, state: pass, empty, defaultFace, sheetTitle, face, launchedWith, sent, receipt: answered, loaded: done, pageErrors });
+              readings.push({ view: view.name, scheme, lang, state: pass, empty, defaultFace, sheetTitle, face, pillName, dictatingForm, launchedWith, sent, receipt: answered, loaded: done, pageErrors });
             }
             expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
           } catch (error) {

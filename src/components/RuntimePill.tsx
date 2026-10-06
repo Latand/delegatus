@@ -932,6 +932,9 @@ interface PanelProps {
   /** The account line where nothing runs yet: a new agent's composer says which account it starts on, and
       its rows carry no «current» and «next message» marks, which are a running conversation's. */
   accountStart?: string | null;
+  /** The panels' accessible name where they do not set a conversation's next message: a new agent's
+      composer names what the launch starts on. */
+  menuLabel?: string | null;
   /** The accounts a caller lists itself, for an engine the accounts store does not carry: a new agent on
       Copilot chooses among its draft's own. A conversation passes none and keeps the store's list. */
   ownAccounts?: readonly AccountOption[] | null;
@@ -950,7 +953,7 @@ interface PanelProps {
 }
 
 export function RuntimePopover({
-  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
+  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, menuLabel = null, ownAccounts = null, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
 }: PanelProps & {
@@ -1042,7 +1045,7 @@ export function RuntimePopover({
     <div
       ref={rootRef}
       role="menu"
-      aria-label={t("composer.runtimePill")}
+      aria-label={menuLabel ?? t("composer.runtimePill")}
       data-runtime-popover
       onKeyDown={onKeyDown}
       onPointerDown={(event) => event.stopPropagation()}
@@ -1174,7 +1177,7 @@ function buildRows({
         label: option.label,
         /* While a pick waits, the running account is the way back, and says so as the action it is: the head
            above already names it as the one the conversation runs on (#1846 critique). */
-        ...(option.id !== accountChoice.runsOn || accountStart
+        ...(option.id !== accountChoice.runsOn || accountStart !== null
           ? {}
           : accountChoice.next === accountChoice.runsOn
             ? { detail: t("mobile2.composer.accountCurrent") }
@@ -1296,7 +1299,7 @@ function MenuRow({
 // ---------------------------------------------------------------------------
 
 export function RuntimeSheet({
-  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
+  t, engine, modelOptions, account, nameOf, accountChoice, accountStart = null, menuLabel = null, ownAccounts = null, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null, heading = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
 }: PanelProps & {
@@ -1337,7 +1340,7 @@ export function RuntimeSheet({
         ref={sheetRef}
         role="dialog"
         aria-modal="true"
-        aria-label={heading?.title ?? t("composer.runtimePill")}
+        aria-label={heading?.title ?? menuLabel ?? t("composer.runtimePill")}
         tabIndex={-1}
         data-runtime-sheet
         data-mobile2-sheet="model"
@@ -1537,11 +1540,13 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
               : !authenticated
                 ? t("mobile2.composer.accountSignInAria", { account: option.label })
                 : next
-                  ? start ? option.label : t("mobile2.composer.accountNextAria", { account: option.label })
+                  ? start !== null ? option.label : t("mobile2.composer.accountNextAria", { account: option.label })
                   : switching
                     ? t("mobile2.composer.accountSwitchingAria", { account: option.label })
                     : cancels
                     ? t("mobile2.composer.accountCancelSwitchAria", { account: option.label })
+                    : start !== null
+                    ? t("draft.accountStartAria", { account: option.label })
                     : t("mobile2.composer.accountReadyAria", { account: option.label })}
             onClick={() => {
               if (inert) return;
@@ -1557,7 +1562,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
           >
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
             {/* Where the conversation runs, wherever that row ends up. */}
-            {current && !start ? (
+            {current && start === null ? (
               <span className="shrink-0 text-label font-semibold text-muted" data-runtime-account-current-tag>
                 {t("mobile2.composer.accountCurrent")}
               </span>
@@ -1575,7 +1580,7 @@ function AccountSection({ t, engine, account, nameOf, limit, choice, start = nul
               <span className="shrink-0 text-label font-semibold text-muted">{t("mobile2.composer.accountNeedsSignIn")}</span>
             ) : next ? (
               <>
-                {start ? null : <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>}
+                {start !== null ? null : <span className="shrink-0 text-label font-semibold text-accent">{t("mobile2.composer.accountNext")}</span>}
                 <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
               </>
             ) : switching ? (

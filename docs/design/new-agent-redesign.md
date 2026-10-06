@@ -353,7 +353,16 @@ else. What differs from sections 1 to 8:
   «The agent starts on: …» under it; its account rows carry no «current» and
   «next message» marks, which belong to a running conversation. The phone's
   chip names no account, as a conversation's chip names none; the desktop face
-  names a picked account after an arrow.
+  names a picked account after an arrow. The accessible names say the same:
+  the pill, its popover and the sheet are «Model and reasoning the new agent
+  starts with», and an account row reads «Start the agent on …», so nothing in
+  the draft speaks of a next message.
+- **The form stays in the window while it grows.** A draft opened low in its
+  column (at 1440x900 under the orchestrator's window, its form at y 784-866)
+  grows before Send by the recording panel, the picture's tiles or a refused
+  file's line. Each change of its height brings the whole form back into sight
+  at the nearest edge, with a margin of its card under it; a form already in
+  sight scrolls nothing.
 - **Nothing moves when the launch answers.** From the press the pane is laid
   out as the launched card will be: on a card that holds only the draft, the
   task's title, status and description rows; then the conversation window's
