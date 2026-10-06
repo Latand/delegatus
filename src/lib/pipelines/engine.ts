@@ -5408,7 +5408,12 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
+  // Once stage progress clears a delivered wait, its continuation journal
+  // excludes the recovered cuts. A zero-time successor still owns its first cut.
+  const evidenceStartedAt = !attempt.providerWait
+    ? attempt.providerRecoveries?.findLast(recovery => recovery.action === "continue")?.at ?? attempt.startedAt
+    : attempt.startedAt;
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, evidenceStartedAt, undefined, attempt.providerWait?.turnTs);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -5462,7 +5467,8 @@ async function tickRunStage(
     }
     // Native journaling can expose the wake's prompt before its limit notice.
     // Keep its recovery witness and let that turn finish before any delivery.
-    if (durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)) return;
+    if (durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)
+      && (!durable.message || durable.message.ts <= attempt.providerWait!.turnTs)) return;
     const newerNormalTurn = !notice && attempt.providerWait && durable?.turn === "terminal"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const newerStageOutput = !notice && attempt.providerWait && durable?.message
@@ -6764,13 +6770,14 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   }
   const confirmUnchangedCut = async () => {
     const state = await providerCutActivity(pipeline, attempt, ports, persist);
-    if (state === "unchanged") return true;
+    if (state === "unchanged" && (!attempt.conversationId
+      || ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true)) return true;
     if (state === "newer") {
       cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
     } else {
       const now = ports.now();
       if (bookControllerWaitRound(attempt, now, now, ports,
-        { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
+        { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: 30_000 }) === "exhausted") {
         cancelProviderStageRetry(pipeline, attempt, "automatic provider retry could not confirm unchanged cut evidence; waiting for operator decision");
       }
     }

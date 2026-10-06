@@ -19570,17 +19570,18 @@ test.each(["claude", "codex"] as const)("an exhausted %s cut tries a stale allow
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
 });
 
-test("an exhausted provider limit retries the stage after its native reset across a Viewer restart", async () => {
+test.each(["none", "failed", "delivered", "pending"] as const)("an exhausted provider limit retries the stage after its native reset across a Viewer restart (delivery=%s)", async delivery => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", null, true);
   f.advance(Date.parse("2026-10-05T18:30:00Z") - f.now());
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
   savePipelines([lane]);
-  readFixtures(f.h, { "/codex/stage-1.jsonl": stageTranscript("exhausted-native-reset", [{
+  const file = stageTranscript("exhausted-native-reset", [{
     type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
     message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
       content: [{ type: "text", text: "You've hit your session limit · resets 10pm (Europe/Kyiv)" }] },
-  }]) });
+  }]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
   await tickPipelines([], f.h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   expect(loadPipelines()[0]!.stateDetail).toContain("Автоповтор");
@@ -19595,8 +19596,30 @@ test("an exhausted provider limit retries the stage after its native reset acros
   f.advance(Date.parse("2026-10-05T19:00:59Z") - f.now());
   await tickPipelines([], restarted);
   expect(f.h.spawnInputs).toHaveLength(1);
+  let outstanding = delivery !== "none";
+  restarted.conversationDeliveryOutstanding = () => outstanding;
   f.advance(1_000);
   await tickPipelines([], restarted);
+  if (outstanding) {
+    for (let tick = 0; tick < 4; tick++) {
+      f.advance(30_000);
+      await tickPipelines([], restarted);
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    }
+    if (delivery === "delivered") {
+      fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: f.h.ports.now(),
+        message: { content: "Wait for my review" } }) + "\n");
+    }
+    if (delivery === "pending") f.advance(11 * 60_000);
+    else outstanding = false;
+    f.advance(30_000);
+    await tickPipelines([], restarted);
+    if (delivery === "delivered" || delivery === "pending") {
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeUndefined();
+      return;
+    }
+  }
   await tickPipelines([], restarted);
   const retried = loadPipelines()[0]!;
   expect(retried.runs[0]!.attempts).toHaveLength(2);
@@ -21677,7 +21700,7 @@ test.each([false, true])("fresh quota target preflight failure retains reset ret
 
 
 for (const mode of ["running", "pinned-park", "pool-park"] as const) {
-  test.each(["operator", "task-notification", "wakeup"] as const)(`${mode} quota cut distinguishes a newer %s turn`, async origin => {
+  test.each(["operator", "task-notification", "scheduled"] as const)(`${mode} quota cut distinguishes a newer %s turn`, async origin => {
     const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, mode !== "pool-park");
     const lane = loadPipelines()[0]!;
     if (mode !== "running") lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(),
@@ -21697,7 +21720,8 @@ for (const mode of ["running", "pinned-park", "pool-park"] as const) {
     records.push({ type: "queue-operation", operation: "enqueue", timestamp: f.h.ports.now() });
     records.push({ type: "user", timestamp: f.h.ports.now(),
       ...(origin === "operator" ? { turnOrigin: "sdk", promptSource: "sdk" }
-        : { origin: { kind: origin }, turnOrigin: origin === "wakeup" ? "wakeup" : "task_notification", promptSource: "system" }),
+        : origin === "scheduled" ? { isMeta: true, turnOrigin: "scheduled", promptSource: "system" }
+        : { origin: { kind: origin }, turnOrigin: "task_notification", promptSource: "system" }),
       message: { role: "user", content: origin === "operator" ? "Please continue" : `<${origin}>background work ended</${origin}>` } });
     // Tick in the gap between native prompt publication and its limit notice.
     fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
@@ -22200,7 +22224,7 @@ for (const parked of [false, true]) {
 }
 
 for (const mode of ["running", "pinned-park", "pool-park"] as const) {
-  for (const wrapper of ["task-notification", "wakeup", "task", "bare-task"] as const) {
+  for (const wrapper of ["task-notification", "scheduled-trigger", "task", "bare-task"] as const) {
     test.each(["native-human", "ledger-human", "harness"] as const)(`Claude ${mode} ${wrapper} %s authorship controls quota recovery`, async author => {
       const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, mode !== "pool-park");
       const lane = loadPipelines()[0]!;
@@ -22443,5 +22467,67 @@ for (const engine of ["claude", "codex"] as const) {
       expect(loadPipelines()[0]!.state).toBe("running");
       expect(attempt.providerRecoveryBudget?.tries).toBe(1);
     } else expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["reply-before", "control-before", "large-work", "reply-after", "control-after"] as const)(`${engine} stage progress makes the next provider cut own cancellation (%s)`, async activity => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, true);
+    f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
+    const firstAt = f.now();
+    const notice = (at: number, reset: string) => engine === "claude"
+      ? { ...providerQuotaRecord(engine, at), message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: `You've hit your session limit · resets ${reset} (Europe/Kyiv)` }] } }
+      : providerQuotaRecord(engine, at);
+    const firstReset = Date.parse("2026-10-05T19:00:00Z") / 1000;
+    const secondReset = Date.parse("2026-10-05T23:00:00Z") / 1000;
+    const quota = (at: number, reset: number) => ({ type: "event_msg", timestamp: new Date(at).toISOString(), payload: { type: "token_count", rate_limits: { primary: { used_percent: 100, resets_at: reset } } } });
+    const records: Record<string, unknown>[] = engine === "claude" ? [notice(firstAt, "10pm")] : [quota(firstAt, firstReset), notice(firstAt, "10pm")];
+    const file = stageTranscript(`next-provider-cut-${engine}-${activity}`, records);
+    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+    await tickPipelines([], f.h.ports);
+    f.advance(Date.parse("2026-10-05T19:01:30Z") - f.now());
+    await tickPipelines([], f.h.ports);
+    expect(f.sends).toHaveLength(1);
+    f.advance(1000);
+    const text = "Continue the same stage";
+    const prompt = engine === "claude" ? { type: "user", uuid: "continued-stage", timestamp: f.h.ports.now(), message: { content: text } }
+      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
+    records.push(prompt, engine === "claude" ? { type: "assistant", timestamp: f.h.ports.now(), message: { stop_reason: null, content: [{ type: "text", text: "Working on the stage" }] } }
+      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "agent_message", message: "Working on the stage" } });
+    fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+    if (engine === "claude") await stampPipelinePrompt(file, "continued-stage", text);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+    f.advance(Date.parse("2026-10-05T20:02:00Z") - f.now());
+    if (activity === "reply-before") records.push(engine === "claude" ? { type: "user", timestamp: f.h.ports.now(), message: { content: "Continue reviewing" } }
+      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: "Continue reviewing" } });
+    if (activity === "control-before") {
+      await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+      await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+    }
+    if (activity === "large-work") {
+      const work = { type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(1100) };
+      for (let row = 0; row < 8500; row++) records.push(work);
+    }
+    f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now());
+    if (engine === "codex") records.push(quota(f.now(), secondReset));
+    records.push(notice(f.now(), "2am"));
+    fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+    f.h.setConversationActive(false);
+    await tickPipelines([], { ...f.h.ports });
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.turnTs).toBe(f.now());
+    f.advance(1000);
+    if (activity === "reply-after") {
+      fs.appendFileSync(file, JSON.stringify(engine === "claude" ? { type: "user", timestamp: f.h.ports.now(), message: { content: "Wait for my review" } }
+        : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: "Wait for my review" } }) + "\n");
+    }
+    if (activity === "control-after") {
+      await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
+      await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+    }
+    f.advance(secondReset * 1000 + 60000 - f.now());
+    await tickPipelines([], { ...f.h.ports });
+    expect(f.sends).toHaveLength(activity.endsWith("after") ? 1 : 2);
+    expect(f.h.spawnInputs).toHaveLength(1);
   });
 }

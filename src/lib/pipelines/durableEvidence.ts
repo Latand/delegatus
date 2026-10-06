@@ -34,7 +34,7 @@ export type StageTurnEvidence = {
   /** Delivered prompts in this verified tail. Harness wakes and controller
       continuations retain quota recovery; external prompts withdraw it. */
   prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
-  /** Earliest native provider cut belonging to this attempt. */
+  /** Earliest native provider cut in the requested recovery window. */
   firstProviderCutAt?: number | null;
   /** Verified record order after the requested cut (or this attempt's first cut). */
   externalPromptAfterCut?: boolean;
@@ -320,8 +320,8 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
     const author = provenance[stringValue(record.uuid) ?? ""];
     const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
-    if (!human && (kind === "task" || kind === "task-notification" || kind === "wakeup"
-      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup")) return [{ ts, recordIndex, origin: "harness" as const }];
+    if (!human && (kind === "task" || kind === "task-notification" || kind === "scheduled-trigger"
+      || record.turnOrigin === "task_notification" || record.turnOrigin === "scheduled")) return [{ ts, recordIndex, origin: "harness" as const }];
     // Native human rows may have no authorship fields. Their prose alone
     // cannot establish a harness wake or a metadata envelope.
     const metadata = record.isMeta === true || record.isCompactSummary === true || "interruptedMessageId" in record
@@ -460,7 +460,7 @@ export async function durableStageTurnEvidence(
       || reportProse !== null && message !== null && turn.state !== "unknown"
       || Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime;
     // Backdated context cannot prove coverage of the cancellation boundary.
-    // The verified recovery window must reach the first provider cut.
+    // The verified recovery window must reach the requested provider cut.
     const promptsCovered = !Number.isFinite(promptBoundary) || !evidenceRead.prefixTruncated;
     if (reportCovered && promptsCovered) break;
     if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
@@ -475,7 +475,7 @@ export async function durableStageTurnEvidence(
     evidenceRead = expanded;
   }
   if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
-    const window = await readRecoveryWindow(transcriptPath, codex, startedTime, snapshot);
+    const window = await readRecoveryWindow(transcriptPath, codex, promptBoundary, snapshot);
     if (window) {
       evidenceRead = { integrity: "complete", prefixTruncated: true, records: window.records };
       recoveryWindowVerified = true;
