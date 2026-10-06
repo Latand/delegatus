@@ -1861,9 +1861,10 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
             };
           });
           await shot(page, "production", "hidden-tray", scheme);
-          if (tray.count !== "5") failures.push(`tray ${scheme}: hidden count ${tray.count}`);
+          /* t-queue, done four days ago, is past the board's three days (8fcf1be0a). */
+          if (tray.count !== "6") failures.push(`tray ${scheme}: hidden count ${tray.count}`);
           if (JSON.stringify(tray.groups.map((group) => group.id).sort()) !== JSON.stringify(["t-compact", "t-merge-a", "t-verify-a"])) failures.push(`tray ${scheme}: groups ${JSON.stringify(tray.groups)}`);
-          if (JSON.stringify(tray.empty) !== JSON.stringify(["t-old"])) failures.push(`tray ${scheme}: empty ${JSON.stringify(tray.empty)}`);
+          if (JSON.stringify(tray.empty) !== JSON.stringify(["t-queue", "t-old"])) failures.push(`tray ${scheme}: empty ${JSON.stringify(tray.empty)}`);
           if (JSON.stringify(tray.closed) !== JSON.stringify(["Spike: a virtualized Done column"])) failures.push(`tray ${scheme}: closed ${JSON.stringify(tray.closed)}`);
           frames[`hidden-tray-${scheme}`] = { production: tray };
         }, `tray ${scheme}`);
@@ -1926,7 +1927,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         const items = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')].map((item) => ({ label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", why: item.querySelector(".why")?.textContent ?? null, disabled: item.getAttribute("aria-disabled") === "true" })));
         await shot(page, "production", "column-menu-done");
         const hide = items.find((item) => item.label.startsWith("Hide finished"));
-        if (hide?.label !== "Hide finished tasks (3)" || hide.why !== "Keeps 1 task whose agent is still working.") failures.push(`done column menu: ${JSON.stringify(items)}`);
+        if (hide?.label !== "Hide finished tasks (2)" || hide.why !== "Keeps 1 task whose agent is still working.") failures.push(`done column menu: ${JSON.stringify(items)}`);
         frames["column-menu-done"] = { production: items };
       }, "done column menu");
       await prototype("colmenu=done", "light", async (page) => {
@@ -1969,19 +1970,19 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await shot(page, "production", "flow-bulk-hide");
         await page.waitForFunction(() => {
           const writes = (window as unknown as { evidence: Evidence }).evidence.taskWrites;
-          return writes.length === 3 && writes.every((write) => write.answeredAt > 0);
+          return writes.length === 2 && writes.every((write) => write.answeredAt > 0);
         }, undefined, { timeout: 10_000 });
         const writes = await evidenceOf(page, (evidence) => evidence.taskWrites.map((write) => ({ ...write })));
         const sequential = writes.every((write, index) => index === 0 || write.startedAt >= writes[index - 1]!.answeredAt);
         await page.click('[data-kanban-receipt] .act:has-text("Undo")');
-        await page.waitForFunction(() => document.querySelectorAll('.column[data-status="done"] .card').length === 4, undefined, { timeout: 5_000 });
+        await page.waitForFunction(() => document.querySelectorAll('.column[data-status="done"] .card').length === 3, undefined, { timeout: 5_000 });
         await page.waitForFunction(() => {
           const writes = (window as unknown as { evidence: Evidence }).evidence.taskWrites;
-          return writes.length === 6 && writes.every((write) => write.answeredAt > 0);
+          return writes.length === 4 && writes.every((write) => write.answeredAt > 0);
         }, undefined, { timeout: 10_000 });
-        const stored = await evidenceOf(page, (evidence) => ["t-interrupt", "t-voice", "t-queue"].map((id) => Boolean(evidence.storedTask(id)?.groupHidden)));
+        const stored = await evidenceOf(page, (evidence) => ["t-interrupt", "t-voice"].map((id) => Boolean(evidence.storedTask(id)?.groupHidden)));
         if (JSON.stringify(left) !== JSON.stringify(["task:t-attach"])) failures.push(`bulk hide: Done keeps ${JSON.stringify(left)}`);
-        if (!receiptList.includes("Hidden 3 finished tasks · kept 1 with a working agent")) failures.push(`bulk hide: receipts ${JSON.stringify(receiptList)}`);
+        if (!receiptList.includes("Hidden 2 finished tasks · kept 1 with a working agent")) failures.push(`bulk hide: receipts ${JSON.stringify(receiptList)}`);
         if (!sequential) failures.push(`bulk hide: writes overlapped ${JSON.stringify(writes)}`);
         if (stored.some(Boolean)) failures.push(`bulk hide: undo left stored hides ${JSON.stringify(stored)}`);
         flows.bulkHide = { left, receipts: receiptList, sequential, writes: writes.map((write) => ({ id: write.id, tookMs: Math.round(write.answeredAt - write.startedAt) })), undoneStored: stored };
@@ -2119,7 +2120,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await page.waitForTimeout(300);
         const back = await page.evaluate((selector) => {
           const element = document.querySelector<HTMLElement>(selector)!;
-          return { column: element.closest<HTMLElement>(".column")?.dataset.status ?? null, needs: Boolean(element.querySelector(".activity .needs")), line: element.querySelector("[data-resurfaced] .msg")?.textContent ?? null };
+          /* "Needs you" is the card's amber edge since #2072. */
+          return { column: element.closest<HTMLElement>(".column")?.dataset.status ?? null, needs: element.dataset.attention === "needs", line: element.querySelector("[data-resurfaced] .msg")?.textContent ?? null };
         }, card("t-merge-a"));
         const receiptList = await receipts(page);
         await page.waitForTimeout(350);
@@ -2172,8 +2174,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
           mutations: await evidenceOf(page, (evidence) => evidence.boardMutations.filter((mutation) => mutation.kind === "restore")),
           receipts: await receipts(page),
         };
-        if (shown.column !== "assigned" || shown.count !== "4") failures.push(`tray show: ${JSON.stringify(shown)}`);
-        if (restored.count !== "3" || JSON.stringify(restored.mutations) !== JSON.stringify([{ kind: "restore", path: "/repo/old-spike.jsonl", placement: "manual" }])) failures.push(`tray restore: ${JSON.stringify(restored)}`);
+        if (shown.column !== "assigned" || shown.count !== "5") failures.push(`tray show: ${JSON.stringify(shown)}`);
+        if (restored.count !== "4" || JSON.stringify(restored.mutations) !== JSON.stringify([{ kind: "restore", path: "/repo/old-spike.jsonl", placement: "manual" }])) failures.push(`tray restore: ${JSON.stringify(restored)}`);
         flows.tray = { shown, restored };
       }, "tray flow");
 
@@ -2242,13 +2244,14 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
       await production("light", async (page) => {
         await page.click('[data-colmenu="done"]');
         await page.click('.menu [role="menuitem"]:has-text("Hide finished")');
-        await writesSettled(page, 3);
+        await writesSettled(page, 2);
         const order = await evidenceOf(page, (evidence) => evidence.taskWrites.map((write) => write.id));
         await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.refuseNextTaskPatch = true; });
         await page.click('[data-kanban-receipt] .act:has-text("Undo")');
-        await writesSettled(page, 6);
+        await writesSettled(page, 4);
         await page.waitForTimeout(400);
-        const titles: Record<string, string> = { "t-interrupt": "Universal interrupt and stop for every engine", "t-voice": "Keep the orchestrator role when voice is enabled", "t-queue": "Preserve native queue recovery through journal compaction" };
+        /* Two finished tasks are on the board to hide: t-queue left it after three days (8fcf1be0a). */
+        const titles: Record<string, string> = { "t-interrupt": "Universal interrupt and stop for every engine", "t-voice": "Keep the orchestrator role when voice is enabled" };
         const refusedTitle = titles[order[0]!]!;
         const short = refusedTitle.length > 48 ? `${refusedTitle.slice(0, 46).trimEnd()}…` : refusedTitle;
         const after = {
@@ -2259,8 +2262,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await shot(page, "production", "flow-bulk-undo-refused");
         const retry = await page.locator(`[data-kanban-receipt].error:has-text("${short}") .act`).textContent().catch(() => null);
         if (!after.receipts.includes(`Couldn't show «${short}»: refused by the evidence fixture`) || retry !== "Retry") failures.push(`bulk undo refusal: ${JSON.stringify({ after, retry })}`);
-        if (!after.receipts.includes("2 tasks are back on the board") || after.receipts.some((text) => text.startsWith("3 tasks"))) failures.push(`bulk undo count: ${JSON.stringify(after.receipts)}`);
-        if (after.done.length !== 3 || after.done.includes(`task:${order[0]}`)) failures.push(`bulk undo board: ${JSON.stringify(after.done)}`);
+        if (!after.receipts.includes("1 task is back on the board") || after.receipts.some((text) => text.startsWith("2 tasks"))) failures.push(`bulk undo count: ${JSON.stringify(after.receipts)}`);
+        if (after.done.length !== 2 || after.done.includes(`task:${order[0]}`)) failures.push(`bulk undo board: ${JSON.stringify(after.done)}`);
         flows.bulkUndoRefused = { order, after, retry };
       }, "bulk undo refusal flow");
 
@@ -2298,7 +2301,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await page.keyboard.press("h");
         const hidden = await columnOf(page, "t-onboarding");
         await page.keyboard.press("u");
-        await page.waitForTimeout(100);
+        /* U undoes from the board's history (#1856), once the hide it undoes has saved. */
+        await page.waitForFunction((selector) => Boolean(document.querySelector(selector)), card("t-onboarding"), { timeout: 5_000 }).catch(() => {});
         const undone = await columnOf(page, "t-onboarding");
         if (rename.editor !== "title" || describe.editor !== "description" || !colour.menu || colour.swatches !== 9 || hidden !== null || undone !== "inbox") failures.push(`keys: ${JSON.stringify({ rename, describe, colour, hidden, undone })}`);
         flows.keys = { rename, describe, colour, hidden, undone };
@@ -2755,8 +2759,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       title: text(sheet.querySelector("header h2")),
       progress: text(sheet.querySelector("header .progress")),
       navChips: sheet.querySelectorAll(".navchip").length,
-      /* The loop is the chip strip's loop chip, or the graph's fail edge. */
-      loops: [...sheet.querySelectorAll(".gs-nav .ploop, .gs-graph .pelabel.fail")].map(text),
+      /* The loop is the chip strip's loop chip, or the graph's fail edge: a
+         strip under the failing stage since #2277, an edge label in the prototype. */
+      loops: [...sheet.querySelectorAll(".gs-nav .ploop, .gs-graph .pelabel.fail, .gs-graph .pstrip")].map(text),
       graphDir: sheet.querySelector<HTMLElement>(".gs-graph .pgraph")?.dataset.dir ?? null,
       graphNodes: sheet.querySelectorAll(".gs-graph .pnode").length,
       headControls: [...sheet.querySelectorAll<HTMLElement>(".lane-bar button")].map((button) => (button.closest("header") ? "" : "outside:") + (button.getAttribute("aria-label") ?? text(button))),
@@ -2900,8 +2905,9 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "stages-retry", "light");
         frames["stages-retry"] = { production: sheet };
         const byStage = new Map(sheet?.panes.map((pane) => [pane.stage, pane] as const));
-        if (JSON.stringify(byStage.get("implement")?.attempts) !== JSON.stringify(["#1 · passed", "#2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(byStage.get("implement")?.attempts)}`);
-        if (JSON.stringify(byStage.get("verify")?.attempts) !== JSON.stringify(["#1 · failed", "#2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(byStage.get("verify")?.attempts)}`);
+        /* One attempt caption everywhere since #2277. */
+        if (JSON.stringify(byStage.get("implement")?.attempts) !== JSON.stringify(["attempt 1 · passed", "attempt 2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(byStage.get("implement")?.attempts)}`);
+        if (JSON.stringify(byStage.get("verify")?.attempts) !== JSON.stringify(["attempt 1 · failed", "attempt 2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(byStage.get("verify")?.attempts)}`);
         if (sheet?.loops.length !== 1) failures.push(`stages retry: loops ${JSON.stringify(sheet?.loops)}`);
         /* Hidden, the graph gives way to the chips, whose loop chip says the rounds. */
         await page.click(".gsheet [data-sheet-graph]");
@@ -2928,7 +2934,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "stage-details", "light");
         frames["stage-details"] = { production: detail };
         if (detail?.bubble !== "Check both anchors against the published notes before approving." || detail.status !== "First message · not sent yet" || !detail.edit || detail.composerDisabled) failures.push(`stage details: ${JSON.stringify(detail)}`);
-        if (detail?.event !== "Starts when Builder passes · last stage") failures.push(`stage details event: ${detail?.event}`);
+        /* A stage is named by its stage, the role preset second (#1865). */
+        if (detail?.event !== "Starts when Implement passes · last stage") failures.push(`stage details event: ${detail?.event}`);
         if (detail?.added !== "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract") failures.push(`stage details added line: ${detail?.added}`);
         await page.click(`${panel} [data-draft-added] summary`);
         await page.waitForTimeout(250);
@@ -2939,7 +2946,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }, panel);
         await shot(page, "production", "stage-details-added", "light");
         flows.addedAtStart = { summary: detail?.added, open: added.open, height: added.height, head: added.text.split("\n").slice(0, 3) };
-        if (!added.open || !added.text.startsWith("[previous stage output: not produced yet]\n\nPinned task:\nRepair old links in the release notes") || !added.text.includes("Finish the completed turn with one fenced JSON object")) failures.push(`added at start: ${JSON.stringify(added).slice(0, 400)}`);
+        if (!added.open || !added.text.startsWith("[previous stage output: not produced yet]\n\nPinned task:\nRepair old links in the release notes") || !added.text.includes("end the turn with one fenced JSON object as the final block")) failures.push(`added at start: ${JSON.stringify(added).slice(0, 400)}`);
         await page.click(`${panel} [data-draft-added] summary`);
 
         await page.click(`${panel} [data-draft-edit]`);
@@ -2996,7 +3003,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }), card("t-links"));
         await shot(page, "production", "flow-stage-reader", "light");
         flows.startedDuringSave = { notice, promoted };
-        if (notice.message !== "Reviewer started with its previous first message. Your edit was not delivered." || notice.kept !== "Too late for this one." || notice.receipts.length) failures.push(`started during save: ${JSON.stringify(notice)}`);
+        if (notice.message !== "Review started with its previous first message. Your edit was not delivered." || notice.kept !== "Too late for this one." || notice.receipts.length) failures.push(`started during save: ${JSON.stringify(notice)}`);
         if (promoted.panel || promoted.reader !== "conversation_links-review") failures.push(`started during save, promoted: ${JSON.stringify(promoted)}`);
       });
 
@@ -3064,7 +3071,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
         await page.waitForSelector(`${section} [data-pipeline-acting="pause"]`, { timeout: 2_000 });
         const pending = await page.locator(`${section} [data-pipeline-acting]`).textContent();
-        await page.waitForSelector(`${section} .pstate-chip[data-pstate="paused"]`, { timeout: 5_000 });
+        /* The lane's state is its block's own since #2072; running draws no word. */
+        await page.waitForSelector(`${section}[data-lane-state="paused"]`, { timeout: 5_000 });
         const pausedReceipt = await page.locator("[data-kanban-receipt] .msg").last().textContent();
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the runtime host did not answer" }; });
         await page.click(laneMenu);
@@ -3074,7 +3082,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
         await shot(page, "production", "pipeline-refused", "light");
         await page.click("[data-kanban-receipt].error .act");
-        await page.waitForSelector(`${section} .pstate-chip[data-pstate="running"]`, { timeout: 5_000 });
+        await page.waitForSelector(`${section}[data-lane-state="running"]`, { timeout: 5_000 });
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
         await page.click(laneMenu);
@@ -3104,7 +3112,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
         await page.click(`${card("t-links")} [data-menu]`);
-        await page.locator('.menu [role="menuitem"]', { hasText: "Skip Builder" }).first().click();
+        await page.locator('.menu [role="menuitem"]', { hasText: "Skip Implement" }).first().click();
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
         await page.evaluate(() => (window as unknown as Hook).evidence.moveCursor("p-links", "review"));
@@ -3116,8 +3124,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const writes = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.map((patch) => patch.body));
         const reads = await page.evaluate(() => (window as unknown as Hook).evidence.pipelineReads.length);
         flows.movedCursor = { refused, notSent, writes, reads };
-        if (refused !== "Skip Builder was refused: the stage worktree has uncommitted changes") failures.push(`moved cursor, refusal: ${refused}`);
-        if (notSent !== "Skip Builder was not sent: the pipeline now waits on Reviewer.") failures.push(`moved cursor, retry: ${notSent}`);
+        if (refused !== "Skip Implement was refused: the stage worktree has uncommitted changes") failures.push(`moved cursor, refusal: ${refused}`);
+        if (notSent !== "Skip Implement was not sent: the pipeline now waits on Review.") failures.push(`moved cursor, retry: ${notSent}`);
         const guarded = { action: "skip-stage", expectedStageId: "implement", expectedAttempt: 1 };
         if (JSON.stringify(writes) !== JSON.stringify([guarded, guarded]) || reads !== 1) failures.push(`moved cursor, requests: ${JSON.stringify({ writes, reads })}`);
       });
@@ -3373,7 +3381,8 @@ describe("#1695 K6a account chips and pickers", () => {
           await shot(page, "production", "account-picker", scheme);
           frames[`account-picker-${scheme}`] = { production: measure };
           if (!measure) return void failures.push(`conversation picker ${scheme}: the picker did not open`);
-          if (measure.head !== "Account · Verifier · Claude") failures.push(`conversation picker ${scheme}: head ${measure.head}`);
+          /* The stage's name, not its role's (#1865). */
+          if (measure.head !== "Account · Verify · Claude") failures.push(`conversation picker ${scheme}: head ${measure.head}`);
           if (JSON.stringify(measure.now.slice(0, 2)) !== JSON.stringify([["Current turn on", "Account A · Max · 72% of 5h"], ["Stage setting", "Project's choice"]])) failures.push(`conversation picker ${scheme}: summary ${JSON.stringify(measure.now)}`);
           const tags = measure.rows.map((row) => [row.name, row.tag, row.checked, row.disabled]);
           if (JSON.stringify(tags.slice(0, 3)) !== JSON.stringify([["Account A · Max", "current", true, false], ["Account C · Max", "", false, false], ["Account G · Pro", "outside this project's accounts", false, false]])) failures.push(`conversation picker ${scheme}: rows ${JSON.stringify(tags)}`);
@@ -3462,7 +3471,7 @@ describe("#1695 K6a account chips and pickers", () => {
           if (!waiting.includes("Account G is outside this project's accounts; the switch is recorded as your choice") || waiting.some((line) => line.includes("now runs on"))) failures.push(`pending switch: receipts ${JSON.stringify(waiting)}`);
           if (JSON.stringify(migrationRequests.map((entry) => entry.body)) !== JSON.stringify([{ action: "withdraw", operationId: "account-switch-1" }]) || changedRequests.length !== 2 || changedRequests[1]?.accountId !== "account-c") failures.push(`change: ${JSON.stringify({ migrationRequests, changedRequests })}`);
           if (!changedChip.includes("Account C")) failures.push(`change: chip ${changedChip}`);
-          if (committed !== "Account C" || !(flows.conversationSwitch as { receipts: string[] }).receipts.includes("Verifier now runs on Account C")) failures.push(`change: after commit ${committed} ${JSON.stringify((flows.conversationSwitch as { receipts: string[] }).receipts)}`);
+          if (committed !== "Account C" || !(flows.conversationSwitch as { receipts: string[] }).receipts.includes("Verify · 2 now runs on Account C")) failures.push(`change: after commit ${committed} ${JSON.stringify((flows.conversationSwitch as { receipts: string[] }).receipts)}`);
         });
       }
       await prototype("readers=c-search-ver-2&scrollto=t-search&seat=collapsed", "light", "prototype pending switch", async (page) => {
@@ -4123,8 +4132,9 @@ describe("#1765 pipelines named on the card", () => {
    * distinct, no raw `conversation_<uuid>` is anywhere on it, and the completed
    * rows sit behind one «3 completed» disclosure that opens to the three of
    * them, newest first. At 390 px the phone draws its own board instead of the
-   * kanban card (mobile v2), so what is gated there is that surface: its
-   * pipeline rows are named by their task, and no raw id is drawn.
+   * kanban card: the status columns since #2072, whose card opens the task
+   * screen with the task's lanes, so what is gated there is that surface: its
+   * lanes are named, and no raw id is drawn.
    *
    * Both widths gate the removals: no readiness, launch-history, idle-worker or
    * quiet drawer anywhere on the page, and no floating «N · M waiting» pill.
@@ -4195,10 +4205,10 @@ describe("#1765 pipelines named on the card", () => {
   /** The phone's own board at 390 px, plus the same absences. */
   const measurePhone = (page: Page) => page.evaluate((): PhoneMeasure => {
     const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-    const board = document.querySelector("[data-mobile2-board]") ? "mobile2" : document.querySelector("[data-kanban-board]") ? "kanban" : "none";
+    const board = document.querySelector("[data-phone-kanban], [data-phone-task-lane]") ? "phone" : document.querySelector("[data-kanban-board]") ? "kanban" : "none";
     return {
       board,
-      pipelineRows: [...document.querySelectorAll('[data-mobile2-row="pipeline"]')].map((row) => text(row)),
+      pipelineRows: [...document.querySelectorAll("[data-phone-task-lane] .pblock")].map((row) => row.getAttribute("aria-label") ?? text(row)),
       rawConversationIds: [...new Set((document.body.textContent ?? "").match(/conversation[_-][0-9a-f-]{8,}/gi) ?? [])],
       retired: {
         readiness: document.querySelectorAll('[data-testid="task-readiness"]').length,
@@ -4263,8 +4273,9 @@ describe("#1765 pipelines named on the card", () => {
         if (completedOrder.join() !== "p-many-pill,p-many-collapse,p-many-report") failures.push(`${label}: completed order ${completedOrder.join()}`);
         /* The report line reads as role, outcome and age. */
         if (!(expanded?.reportLines ?? []).some((line) => /^Builder passed · /.test(line))) failures.push(`${label}: stage report lines ${JSON.stringify(expanded?.reportLines)}`);
-        /* The header's own counts are untouched by the removals. */
-        if (folded.headerCounts.length !== 3) failures.push(`${label}: header counts ${JSON.stringify(folded.headerCounts)}`);
+        /* The header's own count is untouched by the removals: one, since
+           the header says each fact once (#1855). */
+        if (folded.headerCounts.length !== 1) failures.push(`${label}: header counts ${JSON.stringify(folded.headerCounts)}`);
         for (const measured of [folded, expanded!]) checkRemovals(label, measured, failures);
         if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
       } catch (error) {
@@ -4277,15 +4288,18 @@ describe("#1765 pipelines named on the card", () => {
     const phone = async () => {
       const label = "390";
       const viewport = { width: 390, height: 844 };
-      const opened = await openFixture(browser, base, viewport, "light");
+      const opened = await openFixture(browser, base, viewport, "light", undefined, "no-preference", true);
       try {
-        await opened.page.waitForSelector('[data-mobile2-row="pipeline"]', { state: "attached", timeout: 20_000 });
+        await opened.page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await opened.page.locator('[data-phone-card="task:t-many"]').click();
+        await opened.page.waitForSelector("[data-phone-task-lane] .pblock", { state: "attached", timeout: 20_000 });
         await opened.page.waitForTimeout(500);
         const measured = await measurePhone(opened.page);
         await opened.page.screenshot({ path: path.join(OUT, `issue-1765-${label}.png`), fullPage: true });
         frames[label] = { viewport, measured };
-        if (measured.board !== "mobile2") failures.push(`${label}: the phone drew ${measured.board}`);
-        if (!measured.pipelineRows.length) failures.push(`${label}: the phone board drew no pipeline row`);
+        if (measured.board !== "phone") failures.push(`${label}: the phone drew ${measured.board}`);
+        if (measured.pipelineRows.length < 2) failures.push(`${label}: the task screen drew ${measured.pipelineRows.length} lanes`);
+        if (measured.pipelineRows.some((row) => !row || /^Pipeline\b/.test(row))) failures.push(`${label}: a lane is not named: ${JSON.stringify(measured.pipelineRows)}`);
         checkRemovals(label, measured, failures);
         if (opened.pageErrors.length) failures.push(`${label}: page errors ${opened.pageErrors.join(" | ")}`);
       } catch (error) {
@@ -4320,9 +4334,9 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
    * findings went to one more build, and whose build wrote a new head. At
    * 1280 px the lane row's state word says needs review and its answer names
    * the last verdict, the reviewed head and the unreviewed current head; the
-   * card never reads completed. At 390 px the phone queues the lane under
-   * Needs you as a pipeline card with a «needs review» badge and the heads line
-   * shortened to the unreviewed head (#2072 §3.4).
+   * card never reads completed. At 390 px the phone's status columns (#2072)
+   * draw the lane on its task's card, needing the operator: a «review budget
+   * spent» badge and the one line on why it stopped (#2187 S2).
    *
    * Measurements go to `evidence/issue-1938/board.json`; frames to
    * `.artifacts/issue-1938/`, which is not committed.
@@ -4354,7 +4368,8 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
             const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
             /* In the head row, or on the chain row where the chain is the head (#2148). */
             const chip = row?.querySelector<HTMLElement>(".pb-head .pstate-word, .pb-tail .pstate-word");
-            const note = row?.querySelector<HTMLElement>("[data-review-heads]");
+            /* A stop after the last fix says why in one line and keeps both heads in its tooltip (#2187 S2). */
+            const note = row?.querySelector<HTMLElement>('[data-review-stop="stop-after-fix"]');
             const title = row?.querySelector<HTMLElement>(".pb-title");
             const box = (node: HTMLElement | null | undefined) => node ? (({ x, y, width, height }) => ({ x, y, width, height }))(node.getBoundingClientRect()) : null;
             return {
@@ -4362,6 +4377,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
               state: chip?.dataset.pstate ?? null,
               chip: text(chip),
               note: text(note),
+              noteTitle: note?.getAttribute("title") ?? null,
               label: row?.getAttribute("aria-label") ?? "",
               cardText: text(card),
               chipBox: box(chip),
@@ -4375,9 +4391,9 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
           if (!measured.drawn) failures.push(`1280 ${scheme}: the lane was not drawn on its card`);
           if (measured.state !== "needs_review") failures.push(`1280 ${scheme}: the chip's state is ${measured.state}`);
           if (measured.chip !== STATE) failures.push(`1280 ${scheme}: the chip reads ${JSON.stringify(measured.chip)}`);
-          if (measured.note !== HEADS) failures.push(`1280 ${scheme}: the note reads ${JSON.stringify(measured.note)}`);
+          if (measured.note !== en["pipelineBlock.stop.afterFix"] || measured.noteTitle !== HEADS) failures.push(`1280 ${scheme}: the note reads ${JSON.stringify(measured.note)} over ${JSON.stringify(measured.noteTitle)}`);
           if (!measured.label.includes(HEADS)) failures.push(`1280 ${scheme}: the row's label omits the heads: ${JSON.stringify(measured.label)}`);
-          if (!measured.noteBox?.width || measured.noteClipped) failures.push(`1280 ${scheme}: the heads line is not fully drawn: ${JSON.stringify(measured.noteBox)}`);
+          if (!measured.noteBox?.width || measured.noteClipped) failures.push(`1280 ${scheme}: the stop line is not fully drawn: ${JSON.stringify(measured.noteBox)}`);
           if (/completed/i.test(measured.cardText)) failures.push(`1280 ${scheme}: the card says completed`);
           if (opened.pageErrors.length) failures.push(`1280 ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
         } finally {
@@ -4385,31 +4401,36 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
         }
       }
 
-      const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light");
+      const phone = await openFixture(browser, base, { width: 390, height: 844 }, "light", undefined, "no-preference", true);
       try {
-        const ROW = '[data-mobile2-pipeline-row="p-review-spent"]';
+        const PHONE_CARD = '[data-phone-card="task:t-review-spent"]';
+        const ROW = `${PHONE_CARD} .pblock[data-pipeline="p-review-spent"]`;
         await phone.page.waitForSelector(ROW, { state: "attached", timeout: 20_000 });
         await phone.page.locator(ROW).first().evaluate((element) => element.scrollIntoView({ block: "center" }));
         await phone.page.waitForTimeout(500);
-        const measured = await phone.page.evaluate((selector) => {
+        const measured = await phone.page.evaluate(({ card, selector }) => {
           const row = document.querySelector<HTMLElement>(selector);
+          const badge = document.querySelector<HTMLElement>(`${card} [data-phone-card-badge]`);
           const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
           const meta = row?.querySelector<HTMLElement>("[data-pipeline-reason]");
           return {
-            state: row?.dataset.mobile2State ?? null,
+            state: row?.dataset.laneState ?? null,
+            needs: document.querySelector<HTMLElement>(card)?.dataset.needs ?? null,
+            badge: text(badge),
+            badgeState: badge?.dataset.pstate ?? null,
             text: text(row),
             meta: text(meta),
             width: row?.getBoundingClientRect().width ?? null,
             overflows: row ? row.scrollWidth > row.clientWidth : null,
           };
-        }, ROW);
-        await phone.page.locator(ROW).first().screenshot({ path: path.join(OUT, "issue-1938-390.png") });
+        }, { card: PHONE_CARD, selector: ROW });
+        await phone.page.locator(PHONE_CARD).first().screenshot({ path: path.join(OUT, "issue-1938-390.png") });
         await phone.page.screenshot({ path: path.join(OUT, "issue-1938-390-board.png"), fullPage: true });
         frames["390"] = measured;
         if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
-        const SHORT = translate("en", "pipelineBlock.reason.review", { current: "9b2e7d4c" });
-        if (!measured.meta.startsWith(SHORT)) failures.push(`390: the card's reason omits the unreviewed head: ${JSON.stringify(measured.meta)}`);
-        if (!measured.text.includes(en["mobile2.pipelines.badgeReview"])) failures.push(`390: the row has no needs review badge: ${JSON.stringify(measured.text)}`);
+        if (measured.needs !== "1" || measured.badgeState !== "needs_review" || !measured.badge.startsWith(en["needs.laneReview"])) failures.push(`390: the card has no review-budget badge: ${JSON.stringify(measured)}`);
+        if (!measured.meta.startsWith(en["pipelineBlock.stop.afterFix"])) failures.push(`390: the card's reason does not say the fix is unreviewed: ${JSON.stringify(measured.meta)}`);
+        if (/completed/i.test(measured.text)) failures.push(`390: the card says completed: ${JSON.stringify(measured.text)}`);
         if (measured.overflows) failures.push("390: the row overflows its width");
         if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
       } finally {
