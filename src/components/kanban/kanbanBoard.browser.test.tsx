@@ -18152,6 +18152,32 @@ describe("floating voice companion", () => {
         if (area > 0) { textArea += area; textCovered.add(node.nodeValue.trim().slice(0, 24)); }
       }
     }
+    /* The tracks of a conversation's row controls: a control in the feed can stand anywhere along the feed as
+       rows arrive and as it scrolls. Counted: the feed's controls whose width, carried over the feed's whole
+       height, meets what the companion reserves. */
+    let rowControls = 0;
+    const rowTrackHits: string[] = [];
+    for (const feed of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+      const view = feed.getBoundingClientRect();
+      for (const node of feed.querySelectorAll<HTMLElement>(selector)) {
+        const box = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        if (box.width < 1 || box.height < 1 || style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
+        rowControls += 1;
+        const track = { left: Math.max(box.left, view.left), right: Math.min(box.right, view.right), top: view.top, bottom: view.bottom };
+        if (reserved.some((area) => areaOver(area, track) > 0)) rowTrackHits.push(`${node.tagName.toLowerCase()}@${Math.round(box.left)}`);
+      }
+    }
+    /* The strip the feed shows under itself, with the way back to its end, while the reader is away from it:
+       44 px that are the strip when it is there and the feed's last 44 px when it is not. The px² of that room
+       under what the companion reserves. */
+    let tailRoomArea = 0;
+    for (const feed of document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")) {
+      const view = feed.getBoundingClientRect();
+      const strip = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].find((node) => Math.abs(node.getBoundingClientRect().top - view.bottom) < 2);
+      const room = strip ? strip.getBoundingClientRect() : { left: view.left, right: view.right, top: view.bottom - 44, bottom: view.bottom };
+      for (const area of reserved) tailRoomArea += areaOver(area, room);
+    }
     const inside = (box: DOMRect) => box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight;
     const laneBox = lane?.getBoundingClientRect();
     const bubbles = [...root.querySelectorAll<HTMLElement>("[data-floater] > .vc-bubble")].map((bubble) => {
@@ -18174,6 +18200,7 @@ describe("floating voice companion", () => {
       pointerHits, trapped, passed, clipped: cutLabels, pageOverflows: document.documentElement.scrollWidth > innerWidth,
       handles, handleArea: Math.round(handleArea), handleGap: Number.isFinite(handleGap) ? Math.round(handleGap) : null,
       textUnderCharacter: Math.round(textArea), textCovered: [...textCovered],
+      rowControls, rowTrackHits, tailRoomArea: Math.round(tailRoomArea),
     };
   }, PROTECT);
   type Reading = Awaited<ReturnType<typeof readCompanion>>;
@@ -18189,13 +18216,15 @@ describe("floating voice companion", () => {
     expect(reading.minClearance ?? 8, `${label}: clearance`).toBeGreaterThanOrEqual(8);
     expect(reading.handleArea, `${label}: area over resize handles and dragging surfaces`).toBe(0);
     expect(reading.handleGap ?? 8, `${label}: clearance from resize handles and dragging surfaces`).toBeGreaterThanOrEqual(8);
+    expect(reading.rowTrackHits, `${label}: tracks of the conversation's row controls under what the companion reserves`).toEqual([]);
+    expect(reading.tailRoomArea, `${label}: area over the room of the feed's way-back strip`).toBe(0);
     if (reading.layout === "collapsed" && !reading.yielded) expect(reading.textUnderCharacter, `${label}: page text under the collapsed shape (${reading.textCovered.join(" | ")})`).toBe(0);
     if (reading.layout === "expanded" && reading.floaters === 0 && !options.textMayLie) expect(reading.textUnderCharacter, `${label}: page text under the open character (${reading.textCovered.join(" | ")})`).toBe(0);
   };
 
   /* A page-side sampler for the recorded runs: every 120 ms, where every bubble and call element is. */
   const startSampler = (page: Page) => page.evaluate((selector) => {
-    const summary = { samples: 0, maxBubbles: 0, maxCalls: 0, maxFloaters: 0, maxBubbleLines: 0, maxBubbleWidth: 0, samplesOutsideViewport: 0, samplesOutsideLane: 0, samplesOverControls: 0 };
+    const summary = { samples: 0, maxBubbles: 0, maxCalls: 0, maxFloaters: 0, maxBubbleLines: 0, maxBubbleWidth: 0, maxBubbleSlackPx: 0, slackestBubble: "", controlUnder: "", samplesOutsideViewport: 0, samplesOutsideLane: 0, samplesOverControls: 0 };
     (window as unknown as { __voiceSampler: typeof summary }).__voiceSampler = summary;
     const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
     const timer = setInterval(() => {
@@ -18217,19 +18246,33 @@ describe("floating voice companion", () => {
       for (const { element, box } of bubbles) {
         const range = document.createRange();
         range.selectNodeContents(element.querySelector(".vc-text")!);
-        summary.maxBubbleLines = Math.max(summary.maxBubbleLines, new Set([...range.getClientRects()].map((line) => Math.round(line.top))).size);
+        const lines = new Set([...range.getClientRects()].map((line) => Math.round(line.top))).size;
+        summary.maxBubbleLines = Math.max(summary.maxBubbleLines, lines);
         summary.maxBubbleWidth = Math.max(summary.maxBubbleWidth, Math.round(box.width));
+        /* The bubble is as tall as its text: its lines at the line height, the note of a cut under them, and
+           its padding and border. Anything more is an empty line it kept. */
+        const style = getComputedStyle(element);
+        const note = element.querySelector<HTMLElement>(".vc-cut");
+        const expected = lines * Number.parseFloat(style.lineHeight) + (note ? note.offsetHeight + Number.parseFloat(getComputedStyle(note).marginTop) : 0)
+          + Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
+        const slack = Math.round(Math.abs((element as HTMLElement).offsetHeight - expected) * 10) / 10;
+        if (slack > summary.maxBubbleSlackPx) { summary.maxBubbleSlackPx = slack; summary.slackestBubble = `${lines} lines in ${(element as HTMLElement).offsetHeight} px: ${element.querySelector(".vc-text")!.textContent!.slice(0, 40)}`; }
       }
       if (floaters.some(({ box }) => box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight)) summary.samplesOutsideViewport += 1;
       if (lane && floaters.some(({ box }) => box.left < lane.left - 1 || box.right > lane.right + 1 || box.top < lane.top - 1 || box.bottom > lane.bottom + 1)) summary.samplesOutsideLane += 1;
-      const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter((node) => !root.contains(node)).map((node) => node.getBoundingClientRect()).filter((box) => box.width >= 1 && box.height >= 1);
-      if (floaters.some(({ box }) => controls.some((control) => Math.min(box.right, control.right) > Math.max(box.left, control.left) && Math.min(box.bottom, control.bottom) > Math.max(box.top, control.top)))) summary.samplesOverControls += 1;
+      const controls = [...document.querySelectorAll<HTMLElement>(selector)].filter((node) => !root.contains(node)).map((node) => ({ node, control: node.getBoundingClientRect() })).filter(({ control }) => control.width >= 1 && control.height >= 1);
+      const over = controls.filter(({ control }) => floaters.some(({ box }) => Math.min(box.right, control.right) > Math.max(box.left, control.left) && Math.min(box.bottom, control.bottom) > Math.max(box.top, control.top)));
+      if (over.length) {
+        summary.samplesOverControls += 1;
+        /* Which control it was: a row that flashes through the feed is gone before anyone can look. */
+        summary.controlUnder ||= over.map(({ node, control }) => `${node.tagName.toLowerCase()}.${String(node.getAttribute("class") ?? "").split(" ")[0]} at ${Math.round(control.left)},${Math.round(control.top)} ${Math.round(control.width)}x${Math.round(control.height)}`).join("; ");
+      }
     }, 120);
     (window as unknown as { __voiceSamplerStop: () => void }).__voiceSamplerStop = () => clearInterval(timer);
   }, PROTECT);
   const stopSampler = (page: Page) => page.evaluate(() => {
     (window as unknown as { __voiceSamplerStop: () => void }).__voiceSamplerStop();
-    return (window as unknown as { __voiceSampler: Record<string, number> }).__voiceSampler;
+    return (window as unknown as { __voiceSampler: Record<string, number> & { slackestBubble: string; controlUnder: string } }).__voiceSampler;
   });
 
   /* A page-side reading of every frame of the lane, for the recorded runs. Positions are taken against the lane's
@@ -18382,13 +18425,15 @@ describe("floating voice companion", () => {
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("placement.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion", browser: "Chromium (headless)",
-      rule: "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; the character, open or collapsed, also keeps 8 px from every line of the page's text; a shorter lane is tried before the companion collapses; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place",
+      rule: "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; in a conversation's feed a control counts along its whole track (its width over the feed's height), since rows arrive and the feed scrolls, and the host reserves the 44 px under the feed where its way-back strip appears; the character, open or collapsed, also keeps 8 px from every line of the page's text; a shorter lane is tried before the companion collapses; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place",
       controls: `${PROTECT}, and every element that shows a cursor other than auto, default or text (resize handles, dragging surfaces)`,
-      required: { overlapArea: 0, pointerHits: 0, trappedLanePoints: 0, handleArea: 0, handleGap: ">= 8", textUnderCharacter: 0, sameBlockInEveryLoad: true },
+      required: { overlapArea: 0, pointerHits: 0, trappedLanePoints: 0, handleArea: 0, handleGap: ">= 8", textUnderCharacter: 0, rowTrackHits: [], tailRoomArea: 0, sameBlockInEveryLoad: true },
       readings: {
         pointerHits: "points of what the companion reserves, every 4 px, that land on a control or on any cursor other than auto, default or text once the companion is out of the hit test",
         handleArea: "px² of elements with a resize, grab or move cursor under what the companion reserves; handleGap is the distance to the nearest",
         textUnderCharacter: "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 in both states",
+        rowTrackHits: "controls of the orchestrator conversation's feed whose track meets the character or its lane; rowControls is how many such controls the feed held",
+        tailRoomArea: "px² of what the companion reserves over the feed's way-back strip, or over the last 44 px of the feed while the strip is not shown",
       },
       cases,
     });
@@ -18838,6 +18883,9 @@ describe("floating voice companion", () => {
             });
             observer.observe(document.body, { subtree: true, childList: true });
           });
+          const blockOf = () => page.evaluate(() => { const box = document.querySelector<HTMLElement>("[data-voice-companion] .vc-block, [data-voice-companion] .vc-shape")!.getBoundingClientRect(); return { x: Math.round(box.x), y: Math.round(box.y) }; });
+          const characterAtTalk = await blockOf();
+          const places = new Set<string>();
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
           let proposal: unknown = null;
@@ -18865,6 +18913,8 @@ describe("floating voice companion", () => {
               if (name === "delegation" && !shots.some((file) => file.endsWith("answered.png")) && await page.locator('[data-voice-companion][data-delegation-stage="answered"]').count()) await shot("answered");
               if (name === "interrupt" && !shots.some((file) => file.endsWith("cut.png")) && await page.locator("[data-companion-cut]").count()) await shot("cut");
             }
+            const at = await blockOf();
+            places.add(`${at.x},${at.y}`);
             if ((await voiceOf(page)).finished) break;
           }
           const after = await voiceOf(page);
@@ -18883,13 +18933,17 @@ describe("floating voice companion", () => {
           expect(pageErrors, label).toEqual([]);
           const placement = await readCompanion(page);
           expectFree(placement, `${label}: after the scenario`, { textMayLie: true });
+          /* From Talk to the end of the script the character stands where it stood. */
+          expect([...places], `${label}: the character kept its place through the conversation`).toEqual([`${characterAtTalk.x},${characterAtTalk.y}`]);
+          const stood = { character: characterAtTalk, placesDuringConversation: places.size, pageTextUnderCharacterAtEndPx2: placement.textUnderCharacter, rowControlsInConversation: placement.rowControls };
           if (recorded) {
             const samples = await stopSampler(page);
             expect(samples.samplesOutsideViewport, `${label}: an element outside the viewport`).toBe(0);
             expect(samples.samplesOutsideLane, `${label}: an element outside its lane`).toBe(0);
-            expect(samples.samplesOverControls, `${label}: an element over a control`).toBe(0);
+            expect(samples.samplesOverControls, `${label}: an element over a control (${samples.controlUnder})`).toBe(0);
             expect(samples.maxBubbleLines, `${label}: bubble lines`).toBeLessThanOrEqual(4);
             expect(samples.maxBubbleWidth, `${label}: bubble width`).toBeLessThanOrEqual(280);
+            expect(samples.maxBubbleSlackPx, `${label}: a bubble taller or shorter than its text (${samples.slackestBubble})`).toBeLessThanOrEqual(2);
             /* Read for every run and required after the last, so the record holds all sixteen whatever one of them shows. */
             const motion = await stopMotionProbe(page);
             if (motion.entries === 0) laneFaults.push(`${label}: no element was seen entering`);
@@ -18905,7 +18959,7 @@ describe("floating voice companion", () => {
             await context.close();
             await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, ...(relay ? { delegatedRowAsItAppeared: relay } : {}) });
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, stoodWhileRecorded: stood, ...(relay ? { delegatedRowAsItAppeared: relay } : {}) });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -18947,7 +19001,7 @@ describe("floating voice companion", () => {
             label, scenario: name, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, motion: "no-preference", recordingDuringMeasurement: false,
             idle: { frames: idle.length, medianMs: two(frame), p95Ms: two(percentile(idle, 0.95)), maxMs: two(Math.max(...idle)) },
             windows, conversation: read(deltasIn(idleTo, meter.stamps.at(-1)!)), hiddenTabSamples: meter.hidden,
-            contract: { dispatches: after.dispatches, events: after.events.length, proposal },
+            contract: { dispatches: after.dispatches, events: after.events.length, proposal }, stood,
           });
         } finally { await context.close().catch(() => undefined); }
       }
@@ -18971,7 +19025,9 @@ describe("floating voice companion", () => {
         order: "one chronology: the element that arrived last, speech or call, stands beside the character; the orchestrator's answer is an element of its own and arrives there too",
         leaving: "from the far end only: when an element's time is up and nothing older is left, or when a fifth bubble, a fifth call or the lane's height sends the oldest away with everything older than it",
         reading: "every animation frame of the recorded run, against the lane's end at the character and by each element's far edge: towardCharacterFrames counts frames in which an element moved more than 1 px toward the character; overlapFrames counts frames in which the visible parts of two elements of opacity >= 0.5 (leaving ones included) overlap by more than 2 px; entriesAwayFromCharacter counts arrivals (the elements first seen in one frame) whose nearest element stood more than 2 px from the character's end; orphanLastLines lists bubbles of more than two words whose last line holds one word; a rise is a run of frames in which an element keeps moving, ended by two frames at rest, and riseMaxFrameShare is the largest step of one frame as a share of its rise, over the rises of 8 px or more; a rise cut short by its element leaving the lane is counted in risesCutByLeaving and not read; a frame that came more than 1.5 intervals late is counted in lateFramesInRises and its step is read per interval it stood for, since this run is recorded and the frame times come from the other one; awayMaxStepPx is the largest step of any frame in px, late frames included",
-        required: { towardCharacterFrames: 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [], riseMaxFrameShare: `<= ${RISE_SHARE_LIMIT}` },
+        required: { towardCharacterFrames: 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [], riseMaxFrameShare: `<= ${RISE_SHARE_LIMIT}`, placesDuringConversation: 1, maxBubbleSlackPx: "<= 2", samplesOverControls: 0 },
+        place: "stood, on every run: where the character stood at Talk, how many places it stood in until the script ended (required: 1), and the px² of the page's text under the character at the end. Over a conversation the text figure is an accepted cost: the feed fills under a character that holds its place, and at rest, once the lane is empty, the character moves off the text again",
+        bubbleHeight: "geometry.maxBubbleSlackPx, sampled every 120 ms: the largest difference between a bubble's height and its text lines at the line height plus the note of a cut, padding and border (required: <= 2 px)",
         delegatedRow: "delegatedRowAsItAppeared, on the delegation runs: the visible area of the delegated row in the orchestrator's conversation in the frame it appeared, and how much of it lay under the lane's elements and under the character; an accepted cost of standing over the conversation, reported and not required to be 0",
       },
       limitations: [

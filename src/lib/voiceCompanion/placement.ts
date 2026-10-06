@@ -12,6 +12,10 @@
  *    lane is tried before giving up; with no free place for any lane the
  *    companion collapses to its small shape, which takes the nearest free
  *    place for itself.
+ *  - A control inside a surface that fills with rows (a conversation's feed)
+ *    is an obstacle along its whole track, its width over the surface's
+ *    height: the component adds those rectangles, since a row that arrives or
+ *    a scroll can put the control anywhere on it.
  *  - The lane sits on the side of the character that faces the middle of the
  *    screen, and the bubbles rise upward; near an edge the lane flips to the
  *    other side, and near the top the bubbles run downward, so nothing leaves
@@ -189,9 +193,13 @@ const bare = (word: string) => word.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{
  * carries at least two words on, so the next bubble never starts as a lone
  * word, and no bubble ends on a function word. The cut is chosen from what
  * came before it, so every bubble but the last stays as it is while a line
- * still streams; the last one gives up the carried words when it closes.
+ * still streams. The last one would give up the carried words when it closes;
+ * with `streams`, it holds only the words no later cut can carry on (those up
+ * to the cut the limit would choose now, two words back at the least), so what
+ * a bubble has shown it keeps, and the rest joins it or opens the next bubble
+ * once the line has said which. A bubble with nothing settled yet is left out.
  */
-export function splitSpeech(text: string, maxChars = BUBBLE_MAX_CHARS): string[] {
+export function splitSpeech(text: string, maxChars = BUBBLE_MAX_CHARS, streams = false): string[] {
   const chunks: string[] = [];
   let current: string[] = [];
   const length = (words: readonly string[]) => words.join("").trimEnd().length;
@@ -208,8 +216,23 @@ export function splitSpeech(text: string, maxChars = BUBBLE_MAX_CHARS): string[]
     }
     current.push(word);
   }
+  /* A sentence that ended a bubble of 48 characters closes it with the next word: nothing of it moves on. */
+  const closing = current.join("").trim().length >= BUBBLE_SENTENCE_BREAK && /[.!?…]["”»)]?\s+$/u.test(current.join(""));
+  if (streams && !closing) current = current.slice(0, settledCut(current) + 1);
   if (current.join("").trim()) chunks.push(current.join("").trim());
   return chunks;
+}
+
+/** The index of the last word of an open bubble that every later cut leaves in it, or -1: the choice
+    `clauseCut` would make among the words that already have two after them. More words only add later choices. */
+function settledCut(words: readonly string[]): number {
+  const reach = words.length - 1 - BUBBLE_CARRY_WORDS;
+  const closes = (index: number) => !FUNCTION_WORDS.has(bare(words[index]!));
+  const size = (index: number) => words.slice(0, index + 1).join("").trimEnd().length;
+  const clause = (index: number) => /[,;:—–]\s*$/u.test(words[index]!) || CLAUSE_OPENERS.has(bare(words[index + 1]!));
+  for (let index = reach; index >= 0; index -= 1) if (closes(index) && clause(index) && size(index) >= BUBBLE_CLAUSE_BREAK) return index;
+  for (let index = reach; index >= 1; index -= 1) if (closes(index)) return index;
+  return -1;
 }
 
 /** The index of the last word a bubble that overflowed keeps; the words after it move on with `next`. */

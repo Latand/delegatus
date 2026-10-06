@@ -783,6 +783,28 @@ describe("geometry", () => {
     expect(splitSpeech("x".repeat(150))).toEqual(["x".repeat(150)]);
   });
 
+  test("a streaming line's bubbles only ever gain words: none gives a word back, and the finished line is split as before", () => {
+    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain"] as const) {
+      const text = scenarioText(locale)[key];
+      const words = text.match(/\S+\s*/gu)!;
+      let shown: string[] = [];
+      for (let count = 1; count <= words.length; count += 1) {
+        const next = splitSpeech(words.slice(0, count).join(""), BUBBLE_MAX_CHARS, true);
+        expect(next.length, `${locale} ${key} at ${count}: a bubble went away`).toBeGreaterThanOrEqual(shown.length);
+        for (const [index, chunk] of shown.entries()) expect(next[index]!.startsWith(chunk), `${locale} ${key} at ${count}: "${chunk}" became "${next[index]}"`).toBe(true);
+        for (const chunk of next) expect(chunk.length).toBeLessThanOrEqual(BUBBLE_MAX_CHARS);
+        shown = next;
+      }
+      /* The line ends: what was held back joins the last bubble or is the next one. */
+      const whole = splitSpeech(text);
+      for (const [index, chunk] of shown.entries()) expect(whole[index]!.startsWith(chunk), `${locale} ${key}: "${chunk}" against "${whole[index]}"`).toBe(true);
+    }
+    /* Nothing is settled in the first words; a bubble that would have given up its tail holds it back instead. */
+    expect(splitSpeech("The plan", BUBBLE_MAX_CHARS, true)).toEqual([]);
+    expect(splitSpeech("The orchestrator replied. The plan holds, with one gap: last month's saved", BUBBLE_MAX_CHARS, true)).toEqual(["The orchestrator replied. The plan holds, with one gap:"]);
+    expect(splitSpeech("The orchestrator replied. The plan holds, with one gap: last month's saved")).toEqual(["The orchestrator replied. The plan holds, with one gap: last month's saved"]);
+  });
+
   test("a cursor of its own marks a control: resize handles and dragging surfaces count, text and plain boxes do not", () => {
     for (const cursor of ["ew-resize", "ns-resize", "col-resize", "grab", "grabbing", "move", "pointer", "not-allowed"]) expect(isPassiveCursor(cursor), cursor).toBe(false);
     for (const cursor of ["auto", "default", "text", "none", ""]) expect(isPassiveCursor(cursor), cursor).toBe(true);
