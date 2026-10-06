@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
-import { newRound, reserveReviewerSpawn } from "@/lib/flows/engine";
+import { newRound, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
@@ -20,6 +20,7 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { RuntimeJournal } from "../../runtime-host/journal";
 
 import { productionDeps, turnEvidenceReader } from "./instance";
+import { flowAwaitingAdmission } from "./drain";
 import { probeQuiet, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
@@ -200,6 +201,62 @@ function reviewFlow(id: string, implementerPath: string, state: string, round: R
     rounds: [{ n: 2, reviewerPath: null, findingsPath: null, triggeredBy: "button", readyNote: null, verdict: null, findingsCount: null,
       startedAt: at, error: null, ...round }] }] as never);
 }
+
+test.each(["unbound", "bound", "unproven"] as const)("a live %s reviewer still owns a stage after its verdict queues a held relay", async (binding) => {
+  const previous = ended("open");
+  const reviewer = ended("open");
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const flowId = `flow_held_relay_${binding}`;
+  const findingsPath = join(directory, `${binding}-findings.md`);
+  writeFileSync(findingsPath, "VERDICT: REQUEST_CHANGES\n\nFix the bug.\n");
+  reviewFlow(flowId, previous.artifactPath, "reviewing", {
+    reviewerPid: identity.pid, reviewerIdentity: binding === "unproven" ? null : identity.startIdentity,
+    ...(binding === "unbound" ? {} : { reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id }),
+    findingsPath, spawnStartedAt: new Date().toISOString(),
+  });
+  // No journal row protects this reviewer. The attempt still names the old
+  // round while the real flow tick reads a verdict from a running process.
+  const p = { ...ports([], [lane("lane_held_relay", "reviewing", {
+    conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId,
+  })]), flows: loadFlows };
+  try {
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    await tickFlows([{ path: previous.artifactPath, engine: "codex", root: "codex-sessions", cwd: directory, project: "fixture" } as never]);
+    const relaying = loadFlows()[0]!;
+    expect(relaying).toMatchObject({ state: "relaying", rounds: [{ verdict: "REQUEST_CHANGES", reviewerPid: identity.pid }] });
+    expect(flowAwaitingAdmission(relaying)).toBe(true);
+    expect(captureProcessIdentity(child.pid)).toMatchObject(identity);
+    expect(await probeQuiet(snapshot, p, Date.now(), false)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
+    }
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally {
+    saveFlows([]);
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("an undispatched relay with settled dead owners leaves the drain quiet immediately", async () => {
+  const reviewer = ended("settled");
+  const implementer = ended("settled");
+  const flowId = "flow_held_relay_dead";
+  reviewFlow(flowId, implementer.artifactPath, "relaying", {
+    reviewerPath: reviewer.artifactPath, reviewerConversationId: reviewer.conversation.id,
+    reviewerPid: deadProcess.pid, reviewerIdentity: deadProcess.startIdentity, verdict: "REQUEST_CHANGES",
+  });
+  const p = { ...ports([], [lane("lane_held_relay_dead", "reviewing", {
+    conversationId: reviewer.conversation.id, agentPath: reviewer.artifactPath, flowId,
+  })]), flows: loadFlows };
+  try {
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  } finally { saveFlows([]); }
+});
 
 test("a review stage still bound to the ended previous reviewer is held by its flow's new round", async () => {
   const previous = ended("open");

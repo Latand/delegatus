@@ -249,7 +249,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       const conversationId = attempt?.conversationId ?? null;
       const flow = cursor.state === "reviewing" && attempt?.flowId
         ? flows.find((flow) => flow.id === attempt.flowId) : undefined;
-      if (draining && flow && flowAwaitingAdmission(flow)) continue;
+      const awaitingAdmission = draining && !!flow && flowAwaitingAdmission(flow);
       // Reserved custody has no engine yet. The drain holds it before claiming
       // an owner; a claimed/reserving/dispatching launch still blocks admission.
       if (draining && cursor.state === "spawning" && attempt?.activation?.phase === "reserved"
@@ -277,11 +277,16 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         // Every owner is asked, so each unresolved one starts its bound now.
         // The first review attempt may have no binding yet. A proven-gone
         // round releases it; absence of any owner evidence proves nothing.
-        let released = !relayInFlight && round !== "dispatching" && (owners.length > 0 || round === "gone");
+        // A held next action owns no work, but the reviewer can still be
+        // running after its findings moved the flow to relaying. Read every
+        // existing owner before discounting the held action. A settled owner
+        // needs no verdict-collection grace here: that action is already held.
+        let released = !relayInFlight && round !== "dispatching" && (awaitingAdmission || owners.length > 0 || round === "gone");
         for (const owner of owners) {
           const reading = await evidence(owner);
           const verdict = reading ? judgeStageOwner(reading) : "blocks";
-          if (verdict === "blocks" || (verdict !== "released" && !pastBound(owner.conversationId, verdict))) released = false;
+          if (verdict === "blocks" || (verdict !== "released" && !(awaitingAdmission && verdict === "settled")
+            && !pastBound(owner.conversationId, verdict))) released = false;
         }
         if (released) continue;
       }

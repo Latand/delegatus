@@ -381,6 +381,13 @@ Two consequences shape the rule:
    nothing and keeps the stage counted.
    Process ownership follows the recorded reviewer across `needs_decision`
    and `paused`, including when the attempt still names the previous round.
+   It also follows the reviewer into `relaying`: the flow can read findings
+   before that process exits. A relay waiting for admission discounts only
+   its next action after checking existing owners. A live or unproven owner
+   keeps the stage counted; a settled dead owner needs no collection grace
+   for an action already held, and an unresolved owner retains the same
+   five-minute diagnostic bound. An undispatched action with no owners
+   leaves the drain quiet.
    The review attempt remains bound to its reviewer during findings relay and
    fixing. The stage also reads its implementer through the same liveness
    evidence, including legacy flows that only name a transcript path and parked
