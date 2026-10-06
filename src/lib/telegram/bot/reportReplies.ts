@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { agentRegistry } from "@/lib/agent/registry";
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 
 import { bridgeDirectiveBody, bridgeDirectiveId } from "@/lib/bridge/directive";
@@ -64,13 +64,13 @@ export const productionReportReplyPorts: ReportReplyPorts = {
     // A migration hold has not reached the runtime journal. Fence only a
     // still-held row under the same lock its assignment uses.
     if (deliveryId) {
-      const withdrawn = withAccountMutationLock(() => {
+      const withdrawn = await withAccountMutationLockAsync(() => {
         const registry = agentRegistry();
         const row = registry.readOnlySnapshot().heldDeliveries[deliveryId];
         if (row?.state !== "held" || row.command.operationId !== operationId) return false;
         registry.terminalizeHeldDelivery(deliveryId, "Telegram reply recipient rotated before delivery");
         return true;
-      });
+      }, { caller: "report reply withdrawal" });
       if (withdrawn) return "withdrawn";
     }
     const client = runtimeHostClient();

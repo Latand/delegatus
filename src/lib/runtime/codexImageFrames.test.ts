@@ -177,6 +177,13 @@ test("escape sequences at the cut point stay atomic and the frame stays valid JS
   }
 });
 
+test("escapes in later strings of one chunk survive strings without any", () => {
+  const line = JSON.stringify({ result: { plain: "abc", quoted: 'say "hi"', more: "none", path: "a\\b\\c", tab: "x\ty", end: "z" } });
+  for (const chunk of [undefined, 1, 4, 9]) {
+    expect(reduce(line, budgets(), chunk)).toBe(line);
+  }
+});
+
 test("a surrogate pair is never split in front of the marker", () => {
   const line = JSON.stringify({ result: { text: `${"x".repeat(31)}😀${"y".repeat(64)}` } });
   const reduced = reduce(line);

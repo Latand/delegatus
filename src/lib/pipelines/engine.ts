@@ -1,3 +1,4 @@
+import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -6430,10 +6431,6 @@ function isStructuredSpawnPark(pipeline: Pipeline, attempt: PipelineStageAttempt
 
 function isStructuredDeliveryControllerFailure(failure: string): boolean {
   return failure.includes("structured delivery controller is unavailable");
-}
-
-function isAccountMutationContention(failure: string): boolean {
-  return failure.startsWith("account mutation is busy");
 }
 
 /** The pipeline spawn adapter's wording for every socket-level runtime-host

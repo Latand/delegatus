@@ -4,7 +4,7 @@ import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, Corr
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       });
     }
     if (typeof body.label !== "string") return NextResponse.json({ error: "label must be a string" }, { status: 400 });
-    const account = createManagedCodexAccount(body.label);
+    const account = await withAccountMutationLockAsync(() => createManagedCodexAccount(body.label as string), { caller: "Codex account create", holder: "Codex catalog create" });
     return await withManagedCodexLogin(account, async () => {
       const challenge = await managedCodexRuntime().startLogin(account);
       return NextResponse.json({
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
       });
     });
   } catch (error) {
+    if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
     if (error instanceof CodexLoginBusyError) return NextResponse.json({ error: error.message, code: "login_busy" }, { status: 409 });
     if (error instanceof AccountHistoryInventoryBlockedError) {
       return NextResponse.json({ error: "Codex account history inventory blocked cleanup", code: "account_removal_blocked", blockers: ["filesystem_history"], history: error.report }, { status: 409 });
@@ -62,8 +63,9 @@ export async function DELETE(req: NextRequest) {
   try { body = await req.json() as { id?: unknown; force?: unknown; cleanupOrphans?: unknown }; } catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   if (body.cleanupOrphans === true) {
     if (body.id !== undefined) return NextResponse.json({ error: "cleanup accepts no account id", code: "invalid_request" }, { status: 400 });
-    try { return NextResponse.json(cleanupOrphanedCodexHomes()); }
+    try { return NextResponse.json(await withAccountMutationLockAsync(() => cleanupOrphanedCodexHomes(), { caller: "Codex orphan cleanup", holder: "Codex catalog cleanup" })); }
     catch (error) {
+      if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
       if (error instanceof CorruptCodexAccountsError) return NextResponse.json({ error: "Codex accounts require registry repair", code: "accounts_locked" }, { status: 409 });
       return NextResponse.json({ error: "Codex orphan cleanup failed", code: "cleanup_failed" }, { status: 500 });
     }

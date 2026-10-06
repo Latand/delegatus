@@ -149,7 +149,7 @@ function structuredClaimOwner(identity: ProcessIdentity): string {
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
-function structuredClaimIdentity(owner: string): ProcessIdentity | null {
+export function structuredClaimIdentity(owner: string): ProcessIdentity | null {
   if (!owner.startsWith(STRUCTURED_CLAIM_PREFIX)) return null;
   try {
     const identity = JSON.parse(owner.slice(STRUCTURED_CLAIM_PREFIX.length)) as Partial<ProcessIdentity>;
@@ -7016,15 +7016,32 @@ export class AgentRegistry {
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
   }
 
-  /** Atomically claims a stale structured row and advances its writer fence. */
+  /** Atomically claims a stale structured row and advances its writer fence.
+      Resume setup may seed a missing entry for imported history in this lock. */
   claimStructuredHost(
     key: SessionKey,
     owner: ProcessIdentity,
-    options: { allowUnhosted?: boolean; reclaimUnverifiedOwner?: boolean } = {},
+    options: {
+      allowUnhosted?: boolean;
+      reclaimUnverifiedOwner?: boolean;
+      setupHost?: StructuredHostColumns;
+      setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
+    } = {},
   ): AgentRegistryEntry | null {
     return this.mutate((file) => {
-      const entry = file.entries[sessionKeyId(key)];
-      if (!entry?.structuredHost) return null;
+      const keyId = sessionKeyId(key);
+      const existing = file.entries[keyId];
+      const entry: AgentRegistryEntry | null = existing ?? (options.allowUnhosted === true && options.setupHost && options.setupEntry
+        ? { ...clone(options.setupEntry), key, status: "unhosted" as const, host: null,
+          claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
+        : null);
+      if (!entry) return null;
+      const terminal = entry.status === "unhosted" || entry.status === "dead";
+      // A dead-host cleanup clears these columns. Resume setup must publish
+      // its writer claim before starting the replacement host, under this lock.
+      const structuredHost = entry.structuredHost
+        ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
+      if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
@@ -7035,22 +7052,28 @@ export class AgentRegistry {
          claim owner remains the writer fence. A host can publish `dead` before
          its late reap releases that claim, and its live writer must finish
          before a successor advances the epoch. */
-      const terminal = entry.status === "unhosted" || entry.status === "dead";
-      const liveHost = entry.structuredHost.process;
+      const liveHost = structuredHost.process;
       if (!terminal && liveHost && this.ownerAlive(liveHost)) return null;
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);
         const reclaimUnverifiedOwner = options.reclaimUnverifiedOwner === true
-          && entry.structuredHost.process === null
+          && structuredHost.process === null
           && priorOwner?.startIdentity === null
           && owner.startIdentity !== null;
         if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
       }
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost.writerClaimEpoch = entry.claimEpoch;
+      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
       entry.updatedAt = now();
+      if (!existing) {
+        const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
+        const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+        file.entries[keyId] = entry;
+        reboundEntryMcpGrant(file, key, this.mcpGrantPolicy);
+        advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
+      }
       return clone(entry);
     });
   }
@@ -9474,7 +9497,9 @@ export class AgentRegistry {
 
   /** Terminalizes the reservation after the runtime journal has fenced its
       operation. This includes a never-actuated hold and an unverified failure
-      the operator explicitly chose to discard. */
+      the operator explicitly chose to discard. After reservation compaction,
+      writes the retained owner and returns null; callers verify the outcome
+      through deliverySnapshotForOperation. */
   discardDeliveryForOperation(
     conversationId: ViewerConversationId,
     operationId: string,
@@ -9489,15 +9514,33 @@ export class AgentRegistry {
         : Object.values(file.heldDeliveries).find((candidate) =>
           candidate.command.operationId === operationId
           && resolveConversationAlias(file, candidate.conversationId) === canonicalId);
-      if (!delivery
-        || delivery.command.operationId !== operationId
+      // A legacy failure with no disposition retains duplicate risk, exactly
+      // like an explicit unverified failure. The owner survives compaction and
+      // is the durable record in that case; there is no reservation to mutate.
+      // An explicit unverified disposition also covers account switches after
+      // an attempt; the migration reason alone cannot establish a known loss.
+      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
+        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
+          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+      if (!delivery) {
+        if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.terminalState === "failed"
+          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          owner.terminalReason = reason.slice(0, 240);
+          owner.terminalDisposition = disposition;
+          owner.settledAt = now();
+          owner.evidenceText = "";
+        }
+        return null;
+      }
+      if (delivery.command.operationId !== operationId
         || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) return null;
       if (delivery.state === "delivered") return clone(delivery);
       const discardable = delivery.state === "held"
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && (delivery.error === reason || owner?.terminalDisposition === "unverified"));
+          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]

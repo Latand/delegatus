@@ -29,6 +29,7 @@ import {
   type RuntimeEvent,
   type RuntimeEventInput,
   RuntimeIdempotencyConflictError,
+  RuntimeSessionFenceError,
   newOperationId,
   runtimeCompactCapability,
   isStructuredHostKind,
@@ -457,6 +458,12 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const previousPublished = Number(this.meta("published_seq"));
+      /* Read inside the write transaction, so no other writer can land
+         between this comparison and the event it admits. */
+      if (input.expectedSessionRevision !== undefined && (input.scope.type !== "session"
+        || this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision)) {
+        throw new RuntimeSessionFenceError("the session row changed after this event's writer read it");
+      }
       const event = this.appendInTransaction(input);
       this.db.exec("COMMIT");
       this.compactIfNeeded();
@@ -654,9 +661,9 @@ export class RuntimeJournal {
         this.db.exec("COMMIT");
         return recorded;
       }
-      const actionStatuses: readonly RuntimeReceiptStatus[] = action === "retry"
-        ? ["pending", "queued", "failed", "uncertain", "rejected"]
-        : ["pending", "queued", "failed", "uncertain"];
+      // A host refusal can leave an unverified failure in the Viewer. Either
+      // operator action still needs this same durable retry/discard fence.
+      const actionStatuses: readonly RuntimeReceiptStatus[] = ["pending", "queued", "failed", "uncertain", "rejected"];
       if (!actionStatuses.includes(receipt.status)) {
         throw new Error(`runtime delivery cannot ${action} after its outcome is resolved`);
       }

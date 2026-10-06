@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 
 import {
-  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
+  FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
   isDeclaredRepository, mintInstallationToken, parseRepository, runGh, runGit,
 } from "./forge-app-token.mjs";
 
@@ -105,6 +105,35 @@ describe("minting", () => {
     expect((error as Error).message).toContain(expected);
     expect((error as Error).message).toContain("never with a person's credentials");
     expect(github.calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  /* #2518: an approved bug report is filed on a token of its own. */
+  test("an issue token is asked for issues and metadata alone, and a push token never carries them", async () => {
+    const granted = { ...FORGE_APP_PERMISSIONS, issues: "write" };
+    const github = fakeGitHub({
+      [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "Acme" }, suspended_at: null, permissions: granted } },
+      "POST app/installations/42/access_tokens": { status: 201, body: { token: ISSUED, expires_at: "2030-01-01T01:00:00Z", permissions: { ...FORGE_APP_ISSUE_PERMISSIONS } } },
+    });
+    expect(await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_PERMISSIONS)).toMatchObject({ token: ISSUED, repository: REPO });
+    expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions: { issues: "write", metadata: "read" } });
+    expect(FORGE_APP_PERMISSIONS).not.toHaveProperty("issues");
+  });
+
+  test("an installation that was not granted issues refuses the issue token before any token exists", async () => {
+    const github = fakeGitHub();
+    const error = await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_PERMISSIONS).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForgeAppRefusal);
+    expect((error as Error).message).toContain("never with a person's credentials");
+    expect(github.calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  test("an issue token that came back with other permissions is revoked and refused", async () => {
+    const github = fakeGitHub({
+      [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "Acme" }, suspended_at: null, permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } } },
+    });
+    const error = await mintInstallationToken(REPO, ports({ github }), FORGE_APP_ISSUE_PERMISSIONS).catch((caught: unknown) => caught);
+    expect((error as Error).message).toContain("unexpected permissions");
+    expect(github.calls.at(-1)).toMatchObject({ method: "DELETE", target: "installation/token", token: ISSUED });
   });
 
   test("a token that reaches more than the one repository is revoked and refused", async () => {

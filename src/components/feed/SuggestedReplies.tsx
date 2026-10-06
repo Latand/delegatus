@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
+import { isIssueReportApprovalReply } from "@/lib/issueReports/approvalReply";
 import {
   MAX_REPLY_SUGGESTIONS,
   type ReplySuggestion,
@@ -44,6 +45,10 @@ import { answerPendingQuestionWithText, subscribeQuestionAnswers } from "./Quest
  * moment the pending question is answered any other way (an option row, a
  * typed answer): a chip left live under an answered question would re-post
  * the reply and be refused.
+ *
+ * One chip never sends: the reply that approves a bug report publishes it, and
+ * a publication cannot be taken back. That draft lands in the composer on the
+ * phone as it does on the desktop, and the operator sends it.
  */
 
 export interface SuggestedRepliesProps {
@@ -303,7 +308,7 @@ export function SuggestedReplies({ file, revision, items, outbox, floating = fal
             type="button"
             data-reply-suggestion
             title={reply.text}
-            onClick={() => sendFromPhone(reply.text)}
+            onClick={() => (isIssueReportApprovalReply(reply.text) ? appendComposerDraft(cardId, reply.text) : sendFromPhone(reply.text))}
             className="inline-flex h-11 shrink-0 items-center px-px focus-visible:outline-none"
           >
             <span className="inline-flex h-8 max-w-[70vw] items-center truncate whitespace-nowrap rounded-full border border-border bg-card px-3 text-ui font-semibold text-secondary">
