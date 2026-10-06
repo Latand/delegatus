@@ -19023,6 +19023,165 @@ async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: s
   return { h, sends, cut, now: () => now, advance: (ms: number) => { now += ms; }, resetsAt };
 }
 
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut retains the source reset retry`, async cause => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+      "You've hit your session limit", 60 * 60_000);
+    const unavailable: string[][] = [];
+    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+    f.h.ports.claudeAccountReset = id => id === LIMITED_ACCOUNT ? f.resetsAt : null;
+    f.h.ports.resolveProjectSpawn = (_engine, request) => {
+      unavailable.push(request.unavailableIds ?? []);
+      const target = [SPARE_ACCOUNT, LIMITED_ACCOUNT].find(id => !request.unavailableIds?.includes(id));
+      return target ? { kind: "available", account: { engine, accountId: target, kind: "managed",
+        home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: null, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT] };
+    };
+    const baseSpawn = f.h.ports.spawnAgent;
+    f.h.ports.spawnAgent = async (input, reserved) => ({ ...await baseSpawn(input, reserved), paneId: null });
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+    f.advance(60_000);
+    const lane = loadPipelines()[0]!;
+    const spare = lane.runs[0]!.attempts.at(-1)!;
+    // Exhaust the bounded transient continuations on the target.
+    if (cause === "capacity") {
+      spare.providerRecoveryBudget!.tries = 3;
+      savePipelines([lane]);
+    }
+    if (cause === "auth-window") {
+      // Earlier quota evidence must never make an authentication failure reusable.
+      spare.usageLimitedAccounts!.push({ accountId: SPARE_ACCOUNT, engine, resetsAt: Math.floor((f.now() + 10 * 60_000) / 1_000),
+        limitedAt: f.now() - 30_000, turnId: "earlier-spare-window" });
+      savePipelines([lane]);
+    }
+    f.h.setConversationActive(false);
+    f.h.durableTurns.set(spare.agentPath!, { turn: "terminal", message: null, terminalProviderMessage: {
+      ts: f.now(), errorClass: cause !== "capacity" ? engine === "claude" ? "authentication_failed" : "unauthorized"
+        : engine === "claude" ? "overloaded" : "other",
+      text: cause !== "capacity" ? "OAuth session expired and could not be refreshed" : "Selected model is at capacity. Please try a different model.",
+    } });
+    await tickPipelines([], f.h.ports);
+    const parked = loadPipelines()[0]!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
+      resumeAt: new Date(f.resetsAt! * 1_000 + 60_000).toISOString(), stageRetry: { fallback: false },
+    });
+    expect(parked.stateDetail).toMatch(/Automatic retry|Автоповтор/);
+    while (f.now() < f.resetsAt! * 1_000 + 60_000) {
+      f.advance(30_000);
+      await tickPipelines([], f.h.ports);
+    }
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(3);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(LIMITED_ACCOUNT);
+    expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
+    expect(unavailable.at(-1)).toContain(SPARE_ACCOUNT);
+    expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 2 * 60_000);
+  });
+}
+
+test.each([false, true])("provider waiting schedules one wake per horizon, parked=%s", async parked => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 6 * 60 * 60_000, true);
+  const scheduled: number[] = [];
+  f.h.ports.scheduleTick = delay => { scheduled.push(delay); };
+  if (parked) {
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+    savePipelines([lane]);
+  }
+  await tickPipelines([], f.h.ports);
+  for (let tick = 0; tick < 10; tick++) {
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+  }
+  expect(scheduled).toEqual([15 * 60_000]);
+  f.advance(10 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(scheduled).toEqual([15 * 60_000, 15 * 60_000]);
+});
+
+test("parked provider waiting keeps controller cycles within watchdog plus horizon wakes", async () => {
+  const { FlowPipelineController } = await import("./controller");
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 6 * 60 * 60_000, true);
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
+  const wakeups: number[] = [];
+  let scheduled = 0;
+  let cycles = 0;
+  let passes = 0;
+  f.h.ports.scheduleTick = delay => { scheduled++; wakeups.push(f.now() + delay); };
+  const controller = new FlowPipelineController({
+    now: f.now,
+    tickPipelines: async entries => { passes++; return await tickPipelines(entries, f.h.ports); },
+    tickFlows: async () => ({ changed: false }),
+    publishHeartbeat: heartbeat => { cycles = Math.max(cycles, heartbeat.cycle); },
+  });
+  await controller.tick("startup");
+  const until = f.now() + 5.5 * 60 * 60_000;
+  let watchdog = f.now() + 30_000;
+  while (f.now() < until) {
+    wakeups.sort((a, b) => a - b);
+    const next = Math.min(watchdog, wakeups[0] ?? Infinity);
+    f.advance(next - f.now());
+    if (next === watchdog) {
+      watchdog += 30_000;
+      await controller.tick("watchdog");
+    } else {
+      wakeups.shift();
+      await controller.tick("signal");
+    }
+  }
+  expect(scheduled).toBeLessThanOrEqual(24);
+  expect(cycles).toBeLessThanOrEqual(660 + 30);
+  expect(passes).toBeLessThanOrEqual(2 * (660 + 30) + 8);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  // Restart has no in-memory timers. Its watchdog still retries durably on time.
+  wakeups.length = 0;
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT,
+    kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+  const restarted = { ...f.h.ports, scheduleTick: () => {} };
+  f.advance(f.resetsAt! * 1_000 + 59_000 - f.now());
+  await tickPipelines([], restarted);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  f.advance(30_000);
+  await tickPipelines([], restarted);
+  await tickPipelines([], restarted);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
+  expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 90_000);
+}, 60_000);
+
+test.each([false, true])("a newer native operator turn cancels running reset continuation, tool=%s", async tool => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", null, true);
+  f.advance(Date.parse("2026-10-05T18:30:00Z") - f.now());
+  const records = [{ type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
+    message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence",
+      content: [{ type: "text", text: "You've hit your session limit · resets 10pm (Europe/Kyiv)" }] } }];
+  const transcript = stageTranscript("running-reset-operator-answer", records);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": transcript });
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.resumeAt).toBe("2026-10-05T19:01:00.000Z");
+  fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: "2026-10-05T19:00:20Z",
+    message: { role: "user", content: "Continue the stage" } }) + "\n");
+  if (tool) fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: "2026-10-05T19:00:25Z",
+    message: { role: "assistant", stop_reason: null, content: [{ type: "tool_use", id: "operator-tool", name: "Read", input: {} }] } }) + "\n");
+  f.h.setConversationActive(true);
+  f.advance(Date.parse("2026-10-05T19:01:05Z") - f.now());
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+  fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: f.h.ports.now(),
+    message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: PASS_TEXT }] } }) + "\n");
+  f.h.setConversationActive(false);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+});
+
 // A reset crossed after the cut opens one new account window in the chain.
 for (const engine of ["claude", "codex"] as const) {
   test.each([

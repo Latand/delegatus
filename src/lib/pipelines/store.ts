@@ -238,6 +238,8 @@ function isAttempt(value: unknown, index: number): boolean {
         || ["claude", "codex", "copilot"].includes(String((attempt.providerRecoveryBudget as Record<string, unknown>).engine)))
       && ((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts === undefined
         || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts))
+      && ((attempt.providerRecoveryBudget as Record<string, unknown>).failedAccounts === undefined
+        || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).failedAccounts))
       && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
       && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
     )) &&
@@ -1115,7 +1117,9 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
             ...(attempt.usageLimitedAccounts
               ? { usageLimitedAccounts: attempt.usageLimitedAccounts.map((limited) => ({ ...limited })) }
               : {}),
-            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget, ...(attempt.providerRecoveryBudget.triedAccounts ? { triedAccounts: [...attempt.providerRecoveryBudget.triedAccounts] } : {}) } : undefined,
+            providerRecoveryBudget: attempt.providerRecoveryBudget ? { ...attempt.providerRecoveryBudget,
+              ...(attempt.providerRecoveryBudget.triedAccounts ? { triedAccounts: [...attempt.providerRecoveryBudget.triedAccounts] } : {}),
+              ...(attempt.providerRecoveryBudget.failedAccounts ? { failedAccounts: [...attempt.providerRecoveryBudget.failedAccounts] } : {}) } : undefined,
             providerWait: attempt.providerWait ? { ...attempt.providerWait, condition: { ...attempt.providerWait.condition },
               ...(attempt.providerWait.stageRetry ? { stageRetry: { ...attempt.providerWait.stageRetry } } : {}),
               ...(attempt.providerWait.failedAccounts ? { failedAccounts: [...attempt.providerWait.failedAccounts] } : {}) } : undefined,

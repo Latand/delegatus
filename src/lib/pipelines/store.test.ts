@@ -1048,7 +1048,8 @@ test("malformed provider waits and histories are rejected at the persistence bou
     lane.runs[0]!.attempts[0]!.providerWait = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }
-  for (const bad of [{}, { tries: -1, startedAt: "2026-10-02T10:00:00Z" }, { tries: 1, startedAt: "invalid" }]) {
+  for (const bad of [{}, { tries: -1, startedAt: "2026-10-02T10:00:00Z" }, { tries: 1, startedAt: "invalid" },
+    { tries: 1, startedAt: "2026-10-02T10:00:00Z", failedAccounts: [42] }]) {
     const lane = providerStoreFixture();
     lane.runs[0]!.attempts[0]!.providerRecoveryBudget = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
@@ -1077,7 +1078,7 @@ test("provider evidence timestamps accept finite fractional milliseconds and rej
 
 test("loaded provider recovery state does not alias the cached persisted record", async () => isolatedDelivery(() => {
   const lane = providerStoreFixture();
-  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z", triedAccounts: ["account-a"] };
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 2, startedAt: "2026-10-02T00:00:00Z", triedAccounts: ["account-a"], failedAccounts: ["account-c"] };
   lane.runs[0]!.attempts[0]!.providerWait!.capacityProbes = 1;
   lane.runs[0]!.attempts[0]!.providerWait!.stageRetry = { controlGeneration: null, detail: "automatic retry" };
   savePipelines([lane]);
@@ -1086,6 +1087,7 @@ test("loaded provider recovery state does not alias the cached persisted record"
   first.providerWait!.failedAccounts!.push("account-other");
   first.providerRecoveryBudget!.tries = 3;
   first.providerRecoveryBudget!.triedAccounts!.push("account-b");
+  first.providerRecoveryBudget!.failedAccounts!.push("account-d");
   first.providerWait!.capacityProbes = 2;
   first.providerWait!.stageRetry!.detail = "mutated";
   first.providerRecoveries![0]!.condition.label = "mutated";
@@ -1095,6 +1097,7 @@ test("loaded provider recovery state does not alias the cached persisted record"
   expect(second.providerWait!.failedAccounts).toEqual([]);
   expect(second.providerRecoveryBudget!.tries).toBe(2);
   expect(second.providerRecoveryBudget!.triedAccounts).toEqual(["account-a"]);
+  expect(second.providerRecoveryBudget!.failedAccounts).toEqual(["account-c"]);
   expect(second.providerWait!.capacityProbes).toBe(1);
   expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
 }));

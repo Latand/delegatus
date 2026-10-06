@@ -1175,6 +1175,23 @@ function pipelineSurvivorRefusal(pipeline: Pipeline): { error: string; status: n
   return null;
 }
 
+let pipelineWakeTimer: ReturnType<typeof setTimeout> | null = null;
+let pipelineWakeAt = 0;
+
+/** One process wake suffices for all lanes. An earlier deadline replaces it. */
+function schedulePipelineTick(delayMs: number): void {
+  const due = Date.now() + Math.max(0, delayMs);
+  if (pipelineWakeTimer && pipelineWakeAt <= due) return;
+  if (pipelineWakeTimer) clearTimeout(pipelineWakeTimer);
+  pipelineWakeAt = due;
+  pipelineWakeTimer = setTimeout(() => {
+    pipelineWakeTimer = null;
+    providerWakeups.delete(schedulePipelineTick);
+    requestPipelineTick();
+  }, Math.max(0, delayMs));
+  pipelineWakeTimer.unref?.();
+}
+
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies } = {},
 ): PipelinePorts {
@@ -1287,10 +1304,7 @@ export function defaultPipelinePorts(
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
-    scheduleTick: (delayMs) => {
-      const timer = setTimeout(() => requestPipelineTick(), delayMs);
-      timer.unref?.();
-    },
+    scheduleTick: schedulePipelineTick,
     spawnReceiptState: (launchId) => registry.snapshotSpawns([launchId])[launchId]?.state ?? null,
     spawnReceipt: (launchId) => {
       const current = snapshot();
@@ -1900,9 +1914,8 @@ function knownReset(...candidates: Array<number | null | undefined>): number | n
   return resets.length ? Math.min(...resets) : null;
 }
 
-/** A quota budget limits continuations of this attempt. Its next reset still
-    owes a fresh stage retry, durably fenced against operator control changes. */
-function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string): void {
+/** Future authorized quota windows, including a source behind a failed spare. */
+function providerRetryReset(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): number | null {
   const wait = attempt.providerWait!;
   const now = unixMs(ports.now());
   const stage = pipeline.stages.find(item => item.id === pipeline.cursor?.stageId);
@@ -1910,10 +1923,40 @@ function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttemp
   let allowed: string[] | null | undefined;
   try { allowed = ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine); }
   catch { /* Keep the current cut's reset when authorization cannot be read. */ }
-  const resetCandidates = [wait.resetsAt, ...usageLimitsOn(attempt, attempt.effectiveRole.engine)
-    .filter(item => (!pinned || item.accountId === pinned) && (!allowed || allowed.includes(item.accountId)))
+  const quotaCut = wait.condition.kind === "usage_limit";
+  const resetCandidates = [quotaCut ? wait.resetsAt : null, ...usageLimitsOn(attempt, attempt.effectiveRole.engine)
+    .filter(item => (!pinned || item.accountId === pinned) && (!allowed || allowed.includes(item.accountId))
+      && !providerFailedAccountsOn(attempt, attempt.effectiveRole.engine).includes(item.accountId)
+      && (quotaCut || item.accountId !== wait.accountId && !wait.failedAccounts?.includes(item.accountId)))
     .map(item => item.resetsAt)];
-  const resetsAt = knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
+  return knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
+}
+
+const providerWakeups = new WeakMap<NonNullable<PipelinePorts["scheduleTick"]>, number>();
+
+/** Reconcile shares the outstanding wake across passes and lanes. The watchdog
+    also reads durable resumeAt, including after a restart without this cache. */
+function scheduleProviderWake(ports: PipelinePorts, resumeAt: string): void {
+  const schedule = ports.scheduleTick;
+  if (!schedule) return;
+  const now = unixMs(ports.now());
+  const delay = Math.max(0, Math.min(15 * 60_000, unixMs(resumeAt) - now));
+  const pending = providerWakeups.get(schedule);
+  if (pending !== undefined && pending > now && pending <= now + delay) return;
+  providerWakeups.set(schedule, now + delay);
+  schedule(delay);
+}
+
+/** A quota budget limits continuations of this attempt. Its next reset still
+    owes a fresh stage retry, durably fenced against operator control changes. */
+function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string): void {
+  const wait = attempt.providerWait!;
+  const now = unixMs(ports.now());
+  if (wait.failedAccounts?.length) {
+    const budget = attempt.providerRecoveryBudget ??= { tries: wait.tries, startedAt: wait.startedAt, engine: attempt.effectiveRole.engine };
+    budget.failedAccounts = [...new Set([...providerFailedAccountsOn(attempt, attempt.effectiveRole.engine), ...wait.failedAccounts])];
+  }
+  const resetsAt = providerRetryReset(pipeline, attempt, ports);
   const reset = resetsAt !== null ? resetsAt * 1_000 + 60_000 : 0;
   const fallback = reset <= now;
   if (fallback && (attempt.providerFallbackRetries ?? 0) >= 1) {
@@ -1927,7 +1970,7 @@ function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttemp
   wait.stageRetry = { controlGeneration: pipeline.controlGeneration ?? null, detail: message, fallback };
   attempt.completedAt = ports.now();
   park(pipeline, message, attempt, reason);
-  ports.scheduleTick?.(Math.max(0, Math.min(15 * 60_000, unixMs(wait.resumeAt) - now)));
+  scheduleProviderWake(ports, wait.resumeAt);
 }
 
 /** Shared with manual retry-stage: retain the checkout and cursor relay, and
@@ -1952,10 +1995,16 @@ function providerTriedAccountsOn(attempt: PipelineStageAttempt, engine: FlowEngi
   return (budget?.engine ?? attempt.effectiveRole.engine) === engine ? budget?.triedAccounts ?? [] : [];
 }
 
+function providerFailedAccountsOn(attempt: PipelineStageAttempt, engine: FlowEngine): string[] {
+  const budget = attempt.providerRecoveryBudget;
+  return (budget?.engine ?? attempt.effectiveRole.engine) === engine ? budget?.failedAccounts ?? [] : [];
+}
+
 /** A tried account gets one new launch window only when its recorded reset
     crossed after its latest cut. Repeated cuts naming an already elapsed
     reset keep the chain fence, even when a cached observation says recovered. */
 function providerAccountHasNewWindow(pipeline: Pipeline, attempt: PipelineStageAttempt, engine: FlowEngine, accountId: string, ports: PipelinePorts): boolean {
+  if (providerFailedAccountsOn(attempt, engine).includes(accountId)) return false;
   const limited = usageLimitsOn(attempt, engine).find(item => item.accountId === accountId);
   return Boolean(limited && limited.limitedAt != null && limited.resetsAt !== null
     && limited.resetsAt * 1_000 > limited.limitedAt
@@ -1964,7 +2013,7 @@ function providerAccountHasNewWindow(pipeline: Pipeline, attempt: PipelineStageA
 }
 
 function providerSpentAccountsOn(pipeline: Pipeline, attempt: PipelineStageAttempt, engine: FlowEngine, ports: PipelinePorts): string[] {
-  return providerTriedAccountsOn(attempt, engine)
+  return [...new Set([...providerTriedAccountsOn(attempt, engine), ...providerFailedAccountsOn(attempt, engine)])]
     .filter(id => !providerAccountHasNewWindow(pipeline, attempt, engine, id, ports));
 }
 
@@ -1974,7 +2023,7 @@ function providerPendingSpentAccountsOn(pipeline: Pipeline, attempt: PipelineSta
   const target = providerTargetAccountOn(attempt, engine);
   const source = attempt.accountId;
   return providerSpentAccountsOn(pipeline, attempt, engine, ports)
-    .filter(id => id !== target && (target !== undefined || id !== source));
+    .filter(id => providerFailedAccountsOn(attempt, engine).includes(id) || id !== target && (target !== undefined || id !== source));
 }
 
 function providerTargetAccountOn(attempt: PipelineStageAttempt, engine: FlowEngine): string | undefined {
@@ -2066,7 +2115,10 @@ async function recoverProviderCut(
     const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
     const same = wait?.condition.kind === notice.condition.kind;
     const budget = attempt.providerRecoveryBudget ??= { tries: wait?.tries ?? 0, startedAt: wait?.startedAt ?? now, engine };
-    if (budget.engine !== undefined && budget.engine !== engine) delete budget.triedAccounts;
+    if (budget.engine !== undefined && budget.engine !== engine) {
+      delete budget.triedAccounts;
+      delete budget.failedAccounts;
+    }
     budget.engine = engine;
     const tries = budget.tries;
     // The closing turn's reset names the exhausted window; a cached reset
@@ -2148,7 +2200,10 @@ async function recoverProviderCut(
   const parkCut = (reason: string) => {
     recordProviderRecovery(attempt, "park", condition, reason, now);
     attempt.completedAt = now;
-    if (condition.kind === "usage_limit") parkProviderUsageLimit(pipeline, attempt, reason, ports);
+    const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
+      && providerRetryReset(pipeline, attempt, ports) !== null;
+    if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
+    if (condition.kind === "usage_limit" || sourceReset) parkProviderUsageLimit(pipeline, attempt, reason, ports);
     else park(pipeline, reason, attempt);
   };
   if (condition.kind === "usage_limit" && !pinned && !target && !wait.actionAt && triedAccounts.length > 1) {
@@ -2180,7 +2235,7 @@ async function recoverProviderCut(
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
-    ports.scheduleTick?.(Math.min(15 * 60_000, unixMs(wait.resumeAt) - time));
+    scheduleProviderWake(ports, wait.resumeAt);
     return true;
   }
   if (target) {
@@ -5285,7 +5340,7 @@ async function tickRunStage(
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const newerStageOutput = !notice && attempt.providerWait && durable?.message
       && durable.message.ts > attempt.providerWait.turnTs;
-    const newerActiveTurn = !notice && attempt.providerWait?.actionAt && durable?.turn === "busy"
+    const newerActiveTurn = !notice && attempt.providerWait && durable?.turn === "busy"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
       && (!notice || notice.ts <= attempt.providerWait.turnTs);
@@ -6502,7 +6557,9 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   if (!attempt || !wait || !retry) return false;
   if (!stage || stage.kind !== "run"
     || attempt.state !== "needs_decision" || attempt.historical || attempt.verdict || attempt.report || attempt.activation
-    || wait.condition.kind !== "usage_limit" || retry.controlGeneration !== (pipeline.controlGeneration ?? null)
+    || wait.condition.kind !== "usage_limit"
+      && (retry.fallback !== false || !["auth_required", "transient"].includes(wait.condition.kind))
+    || retry.controlGeneration !== (pipeline.controlGeneration ?? null)
     || pipeline.stateDetail !== retry.detail || attempt.error !== retry.detail) {
     cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled; waiting for operator decision");
     return true;
@@ -6530,7 +6587,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
-  if (remaining > 0) { ports.scheduleTick?.(Math.min(15 * 60_000, remaining)); return false; }
+  if (remaining > 0) { scheduleProviderWake(ports, wait.resumeAt); return false; }
   const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
   if (elsewhere) {
     cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
@@ -6566,7 +6623,8 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       // window remain fenced when this fresh attempt is admitted.
       next.usageLimitedAccounts = attempt.usageLimitedAccounts;
       next.providerRecoveryBudget = { tries: 0, startedAt: ports.now(), engine: attempt.effectiveRole.engine,
-        triedAccounts: [...providerTriedAccountsOn(attempt, attempt.effectiveRole.engine)] };
+        triedAccounts: [...providerTriedAccountsOn(attempt, attempt.effectiveRole.engine)],
+        failedAccounts: [...providerFailedAccountsOn(attempt, attempt.effectiveRole.engine)] };
     }
   }
   clearEngineTaskNote(pipeline);

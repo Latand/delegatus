@@ -381,7 +381,11 @@ export type PipelineStageAttempt = {
       engine. Entries written before it was recorded omit it. */
   usageLimitedAccounts?: Array<{ accountId: string; engine?: FlowEngine; resetsAt: number | null; limitedAt?: number | null; turnId?: string }>;
   /** Recovery expenditure survives condition changes and host relaunches. */
-  providerRecoveryBudget?: { tries: number; startedAt: string; engine?: FlowEngine; triedAccounts?: string[] };
+  providerRecoveryBudget?: {
+    tries: number; startedAt: string; engine?: FlowEngine; triedAccounts?: string[];
+    /** Auth and exhausted target failures remain excluded across quota resets. */
+    failedAccounts?: string[];
+  };
   /** Unknown-reset fallback is spent across automatic stage replacements. Manual retry starts anew. */
   providerFallbackRetries?: number;
   providerWait?: {
