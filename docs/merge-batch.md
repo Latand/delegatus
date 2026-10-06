@@ -43,6 +43,9 @@ pre-existing failure. Main movement invalidates that sample. Files and tests
 introduced by the candidate have no baseline
 observation; the gate judges them on the candidate alone. It never copies new
 candidate tests onto main for baseline evidence.
+When revalidation discovers another selected file, its native main result is
+sampled once and added to the pinned baseline without resampling earlier files.
+Files absent on main are recorded as sampled with no baseline observations.
 
 An assertion failing only on the candidate gets three fresh runs of its file.
 Every full rerun is compared with the pinned baseline, including failures first
@@ -77,6 +80,14 @@ labels these failures `test change regression` and records the native samples.
 Only files with proven faulty test changes are replaced with the remaining
 batch's native versions before revalidation. All other candidate detectors stay
 installed, so removing a healthy test author cannot hide an implementation bug.
+Each rebuilt batch also runs its current native test versions, including
+assertions and files restored by removing a PR. Selection includes the original
+batch's changed test paths and the remaining batch's touched/sibling tests,
+even when no test file survived in the initial candidate. Versions identical to
+the retained corpus reuse that run; differing native versions get a separate
+sample. New failures in either version follow the same bounded confirmation and
+attribution procedure, retaining that version during PR-removal probes. Healthy
+regression detectors remain in the retained corpus throughout revalidation.
 A failure that neither search can attribute stops the pass.
 The preserved-corpus search costs at most one combined sample plus one
 sample per PR for each such assertion. Removal and confirmation observations

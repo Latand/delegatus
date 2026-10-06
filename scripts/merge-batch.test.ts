@@ -432,7 +432,10 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
     if (args[0] === "api" && args[1]!.includes("/pulls/")) return "https://github.com/example/fixture.git";
     if (args[0] === "pr" && args[1] === "view" && Number(args[2]) !== 99) return f.gh(args);
     if (args[0] === "pr" && args[1] === "create") {
-      expect(readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8")).toContain("Closes #112");
+      const body = readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8");
+      for (const row of batch.rows.filter((row: { status: string }) => row.status === "clean")) {
+        for (const issue of row.view.closingIssuesReferences) expect(body).toContain(`Closes #${issue.number}`);
+      }
       return "https://github.com/example/fixture/pull/99";
     }
     if (args[0] === "pr" && args[1] === "view") {
@@ -534,6 +537,150 @@ test("one run lands the healthy PR after attributing a faulty new test to its au
   expect(report(state)).toContain("#13 | culprit test change regression");
   expect(existsSync(join(f.repo, "new.test.ts"))).toBeFalse();
 }, 30_000);
+
+for (const restored of ["assertion", "file"] as const) {
+  test(`removing one culprit restores a native ${restored} that withholds a second culprit before landing`, async () => {
+    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    f.seed("a.js", "exports.value = 1;\n");
+    f.seed("b.js", "exports.value = 1;\n");
+    const aTest = "const { test, expect } = require('bun:test');\nconst a = require('./a.js');\ntest('A', () => expect(a.value).toBe(1));\n";
+    const bTest = "const b = require('./b.js');\ntest('B', () => expect(b.value).toBe(1));\n";
+    const firstTestFile = restored === "assertion" ? "check.test.ts" : "a.test.ts";
+    f.seed(firstTestFile, restored === "assertion" ? aTest + bTest : aTest);
+    if (restored === "file") f.seed("restored.test.ts", "const { test, expect } = require('bun:test');\n" + bTest);
+    f.addPr(12, "a.js", "exports.value = 2;\n");
+    git(f.repo, ["checkout", "topic-12"]);
+    if (restored === "assertion") writeFileSync(join(f.repo, "check.test.ts"), aTest);
+    else rmSync(join(f.repo, "restored.test.ts"));
+    git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Remove second detector"]);
+    const first = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${first}:refs/pull/12/head`, `${first}:refs/heads/topic-12`]);
+    f.views.get(12)!.headRefOid = first;
+    git(f.repo, ["checkout", "main"]);
+    const second = f.addPr(13, "b.js", "exports.value = 2;\n");
+    const healthy = f.addPr(14, "healthy.txt", "healthy");
+    await f.batch.build(`12@${first},13@${second},14@${healthy}`);
+    const gated = await f.batch.gate();
+    expect(gated.rows.map(row => row.status)).toEqual(["culprit", "culprit", "clean"]);
+    const evidence = gated.testDecisions!.flatMap(decision => decision.attributed).find(entry => entry.test.name === "B")!;
+    expect(evidence.prs).toEqual([13]);
+    expect(evidence.confirmation).toEqual(["fail", "fail", "fail"]);
+    expect(evidence.removals.find(sample => sample.removed.join() === "13")!.outcome).toBe("pass");
+    const landed = await f.batch.land();
+    expect(landed.rows.map(row => row.status)).toEqual(["culprit", "culprit", "merged"]);
+    expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 14 (#14)");
+    for (const [number, head] of [[12, first], [13, second]] as const) {
+      expect(landed.rows.find(row => row.number === number)!.head).toBe(head);
+      expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
+    }
+    const native = await commandRunner(f.repo, [process.execPath, "test", `./${firstTestFile}`, ...(restored === "file" ? ["./restored.test.ts"] : [])]);
+    expect(native.code).toBe(0);
+    expect(native.output).toContain("2 pass");
+    expect(report(landed)).toContain("#13 | culprit test regression");
+  }, 30_000);
+}
+
+for (const outcome of ["regression", "pre-existing", "between-test error"] as const) {
+  test(`a non-test culprit restores the only selected native file and preserves its ${outcome} verdict`, async () => {
+    const f = landingFixture("green", async (cwd, args, env) => {
+      if (args[0] === "git" && args[1] === "bisect") {
+        // Supply recorded non-test attribution; the native test samples below
+        // still use real Git subjects and Bun, with no forge outside the fixture.
+        const state = f.batch.read();
+        git(cwd, ["update-ref", "refs/bisect/bad", state.rows[0]!.commit]);
+        return { code: 0, output: "" };
+      }
+      if (args[1] === "bun" && args[2] === "test") return commandRunner(cwd, args.slice(1), env);
+      if (args.some(arg => arg.endsWith("/eslint-changes.ts")) && existsSync(join(cwd, "bad.js"))) return { code: 1, output: "fixture lint regression" };
+      return successfulCommand(args);
+    });
+    f.seed("b.js", `exports.value = ${outcome === "pre-existing" ? 2 : 1};\n`);
+    const contents = "const { test, expect } = require('bun:test');\nconst b = require('./b.js');\ntest('B', () => expect(b.value).toBe(1));\n"
+      + (outcome === "between-test error" ? "if (b.value === 2) throw new Error('restored fixture error');\n" : "");
+    f.seed("b.test.ts", contents);
+    f.addPr(12, "bad.js", "exports.fixture = true;\n");
+    git(f.repo, ["checkout", "topic-12"]);
+    rmSync(join(f.repo, "b.test.ts"));
+    git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Remove sole detector"]);
+    const first = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${first}:refs/pull/12/head`, `${first}:refs/heads/topic-12`]);
+    f.views.get(12)!.headRefOid = first;
+    git(f.repo, ["checkout", "main"]);
+    const second = f.addPr(13, "b.js", `exports.value = ${outcome === "pre-existing" ? 3 : 2};\n`);
+    const healthy = f.addPr(14, "healthy.txt", "healthy");
+    await f.batch.build(`12@${first},13@${second},14@${healthy}`);
+    if (outcome === "between-test error") {
+      await expect(f.batch.gate()).rejects.toThrow("between-test error");
+      expect(f.batch.read().gated).toBeNull();
+      await expect(f.batch.land()).rejects.toThrow("Run gate before land");
+      expect(f.calls.some(args => args[0] === "pr" && args[1] === "create")).toBeFalse();
+      return;
+    }
+    const gated = await f.batch.gate();
+    expect(Object.keys(gated.testCorpus!)).toEqual([]);
+    expect(gated.testBaseline!.files).toEqual(["b.test.ts"]);
+    if (outcome === "pre-existing") {
+      expect(gated.rows.map(row => row.status)).toEqual(["culprit", "clean", "clean"]);
+      expect(report(gated)).toContain("Pre-existing failures (permitted):\n- b.test.ts");
+      expect(gated.testDecisions!.flatMap(decision => decision.attributed)).toHaveLength(0);
+    } else {
+      expect(gated.rows.map(row => row.status)).toEqual(["culprit", "culprit", "clean"]);
+      expect(gated.testDecisions!.flatMap(decision => decision.attributed)[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+    }
+    const landed = await f.batch.land();
+    expect(landed.rows[2]!.status).toBe("merged");
+    expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-12"]).split(/\s/)[0]).toBe(first);
+    if (outcome === "regression") expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(second);
+  }, 30_000);
+}
+
+for (const mode of ["green", "behind"] as const) {
+  test(`native selection retains a deleted test path after a reviewed head moves (${mode})`, async () => {
+    let moved = false;
+    const f = landingFixture(mode, async (cwd, args, env) => {
+      if (args[1] === "bun" && args[2] === "test") {
+        if (!moved && readFileSync(join(cwd, "a.js"), "utf8").includes("2")) {
+          moved = true;
+          f.views.get(12)!.headRefOid = f.base;
+        }
+        return commandRunner(cwd, args.slice(1), env);
+      }
+      return successfulCommand(args);
+    });
+    f.seed("a.js", "exports.value = 1;\n");
+    f.seed("b.js", "exports.value = 1;\n");
+    f.seed("a.test.ts", "const { test, expect } = require('bun:test');\nconst a = require('./a.js');\ntest('A', () => expect(a.value).toBe(1));\n");
+    f.seed("restored.test.ts", "const { test, expect } = require('bun:test');\nconst b = require('./b.js');\ntest('B', () => expect(b.value).toBe(1));\n");
+    const author = f.addPr(12, "restored.test.ts", "removed");
+    git(f.repo, ["checkout", "topic-12"]);
+    rmSync(join(f.repo, "restored.test.ts"));
+    git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Delete detector"]);
+    const removed = git(f.repo, ["rev-parse", "HEAD"]);
+    git(f.repo, ["push", "origin", `${removed}:refs/pull/12/head`, `${removed}:refs/heads/topic-12`]);
+    f.views.get(12)!.headRefOid = removed;
+    git(f.repo, ["checkout", "main"]);
+    const second = f.addPr(13, "b.js", "exports.value = 2;\n");
+    const first = f.addPr(14, "a.js", "exports.value = 2;\n");
+    const healthy = f.addPr(15, "healthy.txt", "healthy");
+    expect(author).not.toBe(removed);
+    await f.batch.build(`12@${removed},13@${second},14@${first},15@${healthy}`);
+    const gated = await f.batch.gate();
+    expect(gated.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "culprit", "clean"]);
+    expect(gated.testPaths).toContain("restored.test.ts");
+    expect(gated.rows[0]!.paths).toEqual([]);
+    if (mode === "behind") {
+      await expect(f.batch.land()).rejects.toThrow("Main moved more than three times");
+      expect(f.batch.read().testPaths).toContain("restored.test.ts");
+      expect(f.batch.read().testBaseline!.files).toContain("restored.test.ts");
+      return;
+    }
+    const landed = await f.batch.land();
+    expect(landed.rows[3]!.status).toBe("merged");
+    expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 15 (#15)");
+    expect((await commandRunner(f.repo, [process.execPath, "test", "./a.test.ts", "./restored.test.ts"])).code).toBe(0);
+  }, 60_000);
+}
 
 for (const mode of ["new", "modified"] as const) {
   test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {

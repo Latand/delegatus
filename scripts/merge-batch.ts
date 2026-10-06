@@ -333,7 +333,8 @@ export type RunState = {
   resolving?: { number: number; work: string; main: string };
   mergeIntent?: string;
   testCorpus?: Record<string, string>;
-  testBaseline?: { base: string; run: TestRun };
+  testPaths?: string[];
+  testBaseline?: { base: string; run: TestRun; files?: string[] };
   testDecisions?: BatchTestDecision[];
 };
 export type CommandResult = { code: number; output: string; report?: string };
@@ -534,7 +535,7 @@ export class MergeBatch {
     this.save(state);
   }
 
-  private async gateCommand(cwd: string, gate: Gate, useStableTestCorpus = true): Promise<CommandResult> {
+  private async gateCommand(cwd: string, gate: Gate, useStableTestCorpus: boolean | Record<string, string> = true): Promise<CommandResult> {
     if (gate.id === "privacy") {
       const state = this.read();
       const baseIndex = gate.args.indexOf("--base");
@@ -549,10 +550,12 @@ export class MergeBatch {
       const modern = args[1] === "scripts/eslint-changes.ts";
       args = ["bun", join(import.meta.dir, "eslint-changes.ts"), "--base", modern ? args[3]! : this.read().base, ...args.slice(modern ? 4 : 3)];
     }
+    const corpus = gate.id === "tests" && useStableTestCorpus
+      ? typeof useStableTestCorpus === "object" ? useStableTestCorpus : this.read().testCorpus
+      : undefined;
     if (gate.id === "tests" || gate.id === "eslint") {
       const prefix = gate.id === "tests" ? 2 : 4;
       let files = args.slice(prefix).filter((path) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile());
-      const corpus = gate.id === "tests" && useStableTestCorpus ? this.read().testCorpus : undefined;
       if (corpus) files = args.slice(prefix).filter(path => Object.hasOwn(corpus, path.replace(/^\.\//, "")));
       if (!files.length) return gate.id === "tests" && args.length > prefix
         ? { code: 1, output: "Stable regression test corpus is unavailable at this bisect subject" }
@@ -560,7 +563,6 @@ export class MergeBatch {
       args = [...args.slice(0, prefix), ...files];
     }
     const stateDir = mkdtempSync(join("/var/tmp", "merge-gate-state-"));
-    const corpus = gate.id === "tests" && useStableTestCorpus ? this.read().testCorpus : undefined;
     const backups = new Map<string, Buffer | null>();
     const createdDirectories: string[] = [];
     try {
@@ -611,7 +613,7 @@ export class MergeBatch {
     }
   }
 
-  private async testSample(cwd: string, files: string[], stable: boolean): Promise<TestRun & { present: TestSite[] }> {
+  private async testSample(cwd: string, files: string[], stable: boolean | Record<string, string>): Promise<TestRun & { present: TestSite[] }> {
     const started = performance.now();
     const sample: TestRun & { present: TestSite[] } = { failures: [], passed: [], completed: [], elapsedMs: 0, present: [] };
     for (const file of files) {
@@ -632,7 +634,7 @@ export class MergeBatch {
     return sample;
   }
 
-  private async testSubject(state: RunState, files: string[], removed?: number[], stable = !!removed): Promise<TestRun & { present: TestSite[] }> {
+  private async testSubject(state: RunState, files: string[], removed?: number[], stable: boolean | Record<string, string> = !!removed): Promise<TestRun & { present: TestSite[] }> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     try {
@@ -648,16 +650,25 @@ export class MergeBatch {
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
-  private async testGate(state: RunState): Promise<boolean> {
-    const files = Object.keys(state.testCorpus ?? {});
-    const candidate = await this.testSample(state.work, files, true);
-    const baseline = state.testBaseline?.base === state.base ? state.testBaseline.run : await this.testSubject(state, files);
-    state.testBaseline = { base: state.base, run: baseline };
+  private async testGate(state: RunState, corpus = state.testCorpus ?? {}): Promise<boolean> {
+    const files = Object.keys(corpus);
+    const candidate = await this.testSample(state.work, files, corpus);
+    const pinned = state.testBaseline?.base === state.base ? state.testBaseline : undefined;
+    const sampled = pinned?.files ?? pinned?.run.completed ?? [];
+    const missing = files.filter(file => !sampled.includes(file));
+    const extra = missing.length ? await this.testSubject(state, missing) : undefined;
+    const baseline: TestRun = {
+      failures: [...(pinned?.run.failures ?? []), ...(extra?.failures ?? [])],
+      passed: [...(pinned?.run.passed ?? []), ...(extra?.passed ?? [])],
+      completed: [...(pinned?.run.completed ?? []), ...(extra?.completed ?? [])],
+      elapsedMs: (pinned?.run.elapsedMs ?? 0) + (extra?.elapsedMs ?? 0),
+    };
+    state.testBaseline = { base: state.base, run: baseline, files: [...sampled, ...missing] };
     this.save(state);
     const decision = await attributeBatchTests(baseline, candidate, state.rows.filter(row => row.status === "clean").map(row => row.number),
-      files => this.testSample(state.work, files, true), (removed, files) => this.testSubject(state, files, removed), {
+      files => this.testSample(state.work, files, corpus), (removed, files) => this.testSubject(state, files, removed, corpus), {
         owners: test => state.rows.filter(row => row.status === "clean" && row.paths.includes(test.file)).map(row => row.number),
-        independent: test => literalAssertionFile(Buffer.from(state.testCorpus![test.file]!, "base64").toString("utf8")),
+        independent: test => literalAssertionFile(Buffer.from(corpus[test.file]!, "base64").toString("utf8")),
         without: async (removed, test) => {
           const run = await this.testSubject(state, [test.file], removed, false);
           return { run, absent: !run.present.some(site => testIdentity(site) === testIdentity(test)) };
@@ -685,19 +696,44 @@ export class MergeBatch {
     return false;
   }
 
+  private nativeTestCorpus(state: RunState): Record<string, string> {
+    const tests = localGateCommands(state.work, state.base).find(gate => gate.id === "tests");
+    const restored = touchedTests(state.testPaths ?? state.rows.flatMap(row => row.paths), path => {
+      const absolute = join(state.work, path);
+      return existsSync(absolute) && statSync(absolute).isFile();
+    });
+    const files = new Set([...Object.keys(state.testCorpus ?? {}), ...restored, ...(tests?.args.slice(2).map(path => path.replace(/^\.\//, "")) ?? [])]);
+    const corpus: Record<string, string> = {};
+    for (const file of files) {
+      const absolute = join(state.work, file);
+      if (!existsSync(absolute)) continue;
+      const contents = readFileSync(absolute).toString("base64");
+      // Identical versions were already exercised by the preserved-corpus run.
+      if (contents !== state.testCorpus?.[file]) corpus[file] = contents;
+    }
+    return corpus;
+  }
+
   async gate(): Promise<RunState> {
     const state = this.read();
     this.assertTip(state);
     // A fresh refusal must not leave an earlier approval usable by land.
     state.gated = null;
+    state.testPaths ??= state.rows.flatMap(row => row.paths);
     this.save(state);
     if (!state.testCorpus) {
       state.gates = localGateCommands(state.work, state.base);
       const tests = state.gates.find((gate) => gate.id === "tests");
-      if (tests) state.testCorpus = Object.fromEntries(tests.args.slice(2).map((path) => [
+      state.testCorpus = Object.fromEntries((tests?.args.slice(2) ?? []).map((path) => [
         path.replace(/^\.\//, ""), readFileSync(join(state.work, path)).toString("base64"),
       ]));
       this.save(state);
+    }
+    // Another gate's culprit can have deleted every selected test file. Keep
+    // a test stage so native discovery still runs when that removal restores it.
+    if (!state.gates.some(gate => gate.id === "tests")) {
+      const privacy = state.gates.findIndex(gate => gate.id === "privacy");
+      state.gates.splice(privacy < 0 ? state.gates.length : privacy, 0, { id: "tests", args: ["bun", "test"] });
     }
     while (state.rows.some((row) => row.status === "clean")) {
       this.save(state);
@@ -705,6 +741,11 @@ export class MergeBatch {
       for (const gate of state.gates) {
         if (gate.id === "tests") {
           if (!await this.testGate(state)) { failed = gate; break; }
+          // A removed implementation PR can restore assertions or whole files
+          // that the earlier corpus omitted. Confirm and attribute those using
+          // this batch's native snapshot, retaining it during removal probes.
+          const native = this.nativeTestCorpus(state);
+          if (Object.keys(native).length && !await this.testGate(state, native)) { failed = gate; break; }
           continue;
         }
         const result = await this.gateCommand(state.work, gate);
